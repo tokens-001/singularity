@@ -1,0 +1,64 @@
+# Agent 注册表
+#
+# 审计修了什么 (原稿只有 model/level/entry):
+#   max_turns        —— 各层打回上限不同, 不写死全局 (审计 Q2)
+#   request_template —— E+ API 请求体模板, entry 只是 URL (审计 6.1)
+#   roles            —— 按任务激活, security-review 预留给 diff_review 升级 (审计 1.2)
+#   relay_path       —— E+ 产出暂存, apply 前不落盘 (审计 6.5)
+#
+# 为什么用 toml 不用 yaml:
+#   tomllib 是 Python 3.11+ stdlib, 零外部依赖; yaml 要装 pyyaml。
+#   注册表是配置不是代码, 不需要 yaml 的锚点/引用等高级特性。
+
+# entry 语义按 type 分叉 (审计 6.1):
+#   claude-cli → argv 模板 (shlex 拆分, shell=False), {prompt} 占位
+#   zhipu-api  → 仅 URL, 请求体在 request_template
+#
+# Opus 审查修: entry 必须填真实二进制路径, 不能填 shell 别名
+#   shell=False 的 /bin/sh 不认识 zsh alias → command not found
+
+[[agents.E]]
+model = "deepseek-v4-pro"
+type = "claude-cli"
+entry = "/Users/jingzhe/.claude/local/claude --exclude-dynamic-system-prompt-sections -p {prompt}"
+max_turns = 2
+default = true
+roles = ["daily"]
+sandbox = "worktree"
+
+[[agents.D]]
+model = "claude-opus-4-8"
+type = "claude-cli"
+entry = "/opt/homebrew/bin/claude --model claude-opus-4-8 -p {prompt}"
+max_turns = 2
+default = true
+roles = ["architecture", "security-review"]
+mode = "planner"   # 只读架构分析: 出方案不落盘, apply 前不碰文件
+sandbox = "worktree"  # OS 级加固: worktree 创建后 chmod 锁定, dispatch 后解锁
+
+# D 层需要切换到 Anthropic API: 设 API key, 解绑 DeepSeek 劫持变量, 挂代理
+[agents.D.env]
+ANTHROPIC_API_KEY = "{ANTHROPIC_API_KEY_OPS}"
+HTTPS_PROXY = "http://127.0.0.1:7892"
+
+[agents.D.env_unset]
+keys = ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"]
+
+[[agents.E_plus]]
+model = "glm-5.2"
+type = "zhipu-api"
+entry = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+api_key_env = "ZHIPU_API_KEY"
+max_turns = 3
+default = true
+roles = ["builder"]
+
+# E+ 请求体模板 (审计 6.1: entry 只是 URL, 请求体在此)
+[agents.E_plus.request_template]
+model = "glm-5.2"
+temperature = 0.4
+max_tokens = 8192
+
+[[agents.E_plus.request_template.messages]]
+role = "user"
+content = "{prompt}"
