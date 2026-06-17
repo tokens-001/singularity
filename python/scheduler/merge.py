@@ -12,10 +12,12 @@ drain 二层冲突检测:
 线程安全: submit 多线程可调 (Lock), drain 只主线程调。
 修复 #6: 依赖判定用 tracker._read(d).status==DONE, 不依赖 self._merged。
 修复 #9: 结果在 drain 完成冲突判定后才生成。
+修复 #12: parked 状态持久化到 .qidian/parked/, 重启可恢复。
 """
 
 from __future__ import annotations
 
+import json
 import threading
 from collections import deque
 from dataclasses import dataclass, field
@@ -35,6 +37,24 @@ class MergeRequest:
     depends_on: list[str] = field(default_factory=list)
     status: str = "queued"  # queued | merging | merged | conflict | failed
 
+    def to_dict(self) -> dict:
+        return {
+            "task_id": self.task_id, "branch": self.branch,
+            "base_ref": self.base_ref,
+            "changed_files": sorted(self.changed_files),
+            "depends_on": self.depends_on, "status": self.status,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "MergeRequest":
+        return cls(
+            task_id=d["task_id"], branch=d["branch"],
+            base_ref=d.get("base_ref", ""),
+            changed_files=set(d.get("changed_files", [])),
+            depends_on=d.get("depends_on", []),
+            status=d.get("status", "conflict"),
+        )
+
 
 @dataclass
 class MergeResult:
@@ -42,6 +62,10 @@ class MergeResult:
     status: str             # merged | conflict | failed
     new_head: str = ""
     conflict_files: list[str] = field(default_factory=list)
+
+
+def _parked_path(task_id: str):
+    return config.PARKED_DIR / f"{task_id}.json"
 
 
 class MergeQueue:
@@ -52,6 +76,19 @@ class MergeQueue:
         self._merged_files: set[str] = set()
         self._parked: dict[str, MergeRequest] = {}
         self._lock = threading.Lock()
+        self._recover_parked()  # 重启恢复
+
+    def _recover_parked(self) -> None:
+        """从磁盘恢复 parking 状态 (进程重启不丢失)。"""
+        config.PARKED_DIR.mkdir(parents=True, exist_ok=True)
+        for p in config.PARKED_DIR.glob("*.json"):
+            try:
+                d = json.loads(p.read_text(encoding="utf-8"))
+                req = MergeRequest.from_dict(d)
+                if req.branch:  # branch ref 必须还有效
+                    self._parked[req.task_id] = req
+            except (json.JSONDecodeError, KeyError, OSError):
+                pass
 
     def submit(self, req: MergeRequest) -> None:
         with self._lock:
@@ -131,6 +168,15 @@ class MergeQueue:
     def _park(self, req: MergeRequest, conflicts: list[str], reason: str = "") -> MergeResult:
         req.status = "conflict"
         self._parked[req.task_id] = req
+        # 持久化到磁盘, 进程重启可恢复
+        try:
+            config.PARKED_DIR.mkdir(parents=True, exist_ok=True)
+            _parked_path(req.task_id).write_text(
+                json.dumps(req.to_dict(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
         tracker.transition(
             req.task_id, TaskStatus.CONFLICT_HELD,
             error=f"merge 冲突 parking: {reason or conflicts}",
@@ -142,6 +188,11 @@ class MergeQueue:
     def resolve(self, task_id: str, strategy: str = "manual") -> MergeResult:
         """人工解决后重新合。strategy: manual(已手动改完) | abort(放弃)。"""
         req = self._parked.pop(task_id, None)
+        # 清理磁盘持久化
+        try:
+            _parked_path(task_id).unlink(missing_ok=True)
+        except OSError:
+            pass
         if req is None:
             return MergeResult(task_id=task_id, status="failed", conflict_files=["无 parking 记录"])
 
