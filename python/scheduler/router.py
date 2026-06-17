@@ -83,6 +83,14 @@ def route(task: str) -> RouteResult:
             result.matched_signals.append(f"complexity@{prio}: {pat.pattern} → {level}")
             break
 
+    # Step 1b: E+ 降级 —— 单文件或简单任务不配 E+ (省钱)
+    if result.level == "E+":
+        single_file = bool(re.search(r"\.\w{1,6}\s*(文件|$)", task))
+        very_short = len(task) <= 15
+        if single_file or very_short:
+            result.level = "E"
+            result.matched_signals.append("降级 E+: 单文件/简单任务 → E")
+
     # 任务类型独立扫描 (v1 仅记录)
     _scan_task_type(task, result)
 
