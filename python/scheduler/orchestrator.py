@@ -28,6 +28,7 @@ from . import validator as val_mod
 from . import neijinglu as nj_mod
 from . import witness
 from . import memory as mem_mod
+from . import pre_search as pre_mod
 from .executors.worktree import (
     Worktree, create as wt_create, cleanup as wt_cleanup,
     merge_back as wt_merge_back, commit_wt, changed_files_between,
@@ -84,6 +85,8 @@ class BatchOutput:
     validation: object = None
     merge_request: "Optional[MergeRequest]" = None
     planner_decomposed: bool = False  # planner 分解了子任务 (parent 不该 DONE)
+    pre_search_skipped: bool = False
+    pre_search_reason: str = ""
 
 
 def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
@@ -357,6 +360,11 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
             )
         else:
             route = router_mod.route(task.description)
+
+        # ── I 层预检 (知识库 + MAGMA 记忆) ──
+        pre = pre_mod.pre_search(task.description, route)
+        pre_mod.apply_escalation(route, pre)
+
         tracker.transition(
             task.id, TaskStatus.ROUTED,
             route_level=route.level, route_gate=route.gate_required,
@@ -367,6 +375,8 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
 
         ctx = RunContext(batch_id=task.id, snapshot_ref=snap.ref, merge_queue=None)
         batch = _run_with_retry(task, ctx, agents)
+        batch.pre_search_skipped = pre.skipped
+        batch.pre_search_reason = pre.reason
 
         # 主线程写终态 (修复 #3: 无 merge_request → 直接 DONE)
         validation = batch.validation
@@ -390,7 +400,8 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
             tracker.transition(task.id, TaskStatus.FAILED, error=f"{validation.verdict}: {term_reason}")
             reason = f"failed: {term_reason}"
 
-        _save_trace(task, route, snap, disp_result, validation, validation.action == "rollback")
+        _save_trace(task, route, snap, disp_result, validation, validation.action == "rollback",
+                    pre_search_skipped=pre.skipped, pre_search_reason=pre.reason)
         results.append((task.id, reason, validation))
 
     return results
@@ -429,6 +440,11 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                     )
                 else:
                     route = router_mod.route(t.description)
+
+                # ── I 层预检 (知识库 + MAGMA 记忆) ──
+                pre = pre_mod.pre_search(t.description, route)
+                pre_mod.apply_escalation(route, pre)
+
                 if tracker.cas(
                     t.id, TaskStatus.ROUTED, TaskStatus.DISPATCHED,
                     route_level=route.level, route_gate=route.gate_required,
@@ -439,7 +455,7 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                     tracker.transition(t.id, TaskStatus.RUNNING, snapshot_id=snap.id)
                     dispatched.add(t.id)
                     fut = pool.submit(_run_with_retry, t, ctx, agents)
-                    running_futures[fut] = (t, route, snap)
+                    running_futures[fut] = (t, route, snap, pre)
 
             if not running_futures and not pending_batches:
                 remaining = tracker.ready_tasks(exclude=dispatched)
@@ -451,12 +467,15 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
             if running_futures:
                 done, _ = wait(running_futures.keys(), return_when=FIRST_COMPLETED)
                 for fut in done:
-                    t, route, snap = running_futures.pop(fut)
+                    t, route, snap, pre = running_futures.pop(fut)
                     batch = fut.result()
+                    batch.pre_search_skipped = pre.skipped
+                    batch.pre_search_reason = pre.reason
 
                     if batch.planner_decomposed:
                         _materialize_in_main(batch, t)
-                        _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False)
+                        _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
+            pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason)
                         results.append((t.id, f"decomposed: {batch.term_reason}", batch.validation))
                         continue
 
@@ -470,18 +489,21 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                             # 无 merge_request (planner/无wt) → 直接 DONE
                             tracker.transition(t.id, TaskStatus.DONE)
                             _maybe_complete_parents(t.id)
-                            _save_trace(t, route, snap, batch.dispatch_result, validation, False)
+                            _save_trace(t, route, snap, batch.dispatch_result, validation, False,
+            pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason)
                             results.append((t.id, f"pass: {batch.term_reason}", validation))
                     elif validation.action == "rollback":
                         snap_mod.rollback(batch_snap)
                         tracker.transition(t.id, TaskStatus.ROLLED_BACK, error=f"{validation.verdict}: {batch.term_reason}")
                         _release_ref(t.id)
-                        _save_trace(t, route, snap, batch.dispatch_result, validation, True)
+                        _save_trace(t, route, snap, batch.dispatch_result, validation, True,
+            pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason)
                         results.append((t.id, f"rolled_back: {batch.term_reason}", validation))
                     else:
                         tracker.transition(t.id, TaskStatus.FAILED, error=f"{validation.verdict}: {batch.term_reason}")
                         _release_ref(t.id)
-                        _save_trace(t, route, snap, batch.dispatch_result, validation, False)
+                        _save_trace(t, route, snap, batch.dispatch_result, validation, False,
+            pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason)
                         results.append((t.id, f"failed: {batch.term_reason}", validation))
 
             # ⑥ drain (主线程), 合成功的 task 标 DONE (修复 #9: drain 后才定终态)
@@ -494,7 +516,8 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                             tracker.transition(t.id, TaskStatus.DONE)
                             _maybe_complete_parents(t.id)
                             _release_ref(t.id)
-                            _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False)
+                            _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
+            pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason)
                             results.append((t.id, f"merged: {mr.new_head[:8]}", batch.validation))
                         elif mr.status == "conflict":
                             # CONFLICT_HELD 已在 mq._park 标过, 保留 ref 等人; 非终态不存 trace
@@ -502,7 +525,8 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                         else:
                             tracker.transition(t.id, TaskStatus.FAILED, error=f"merge {mr.status}")
                             _release_ref(t.id)
-                            _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False)
+                            _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
+            pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason)
                             results.append((t.id, f"merge_failed", batch.validation))
 
     return results
@@ -638,12 +662,15 @@ def _save_planner_patch(task_id: str, content: str) -> None:
     patch_path.write_text(content, encoding="utf-8")
 
 
-def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool) -> None:
+def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
+                pre_search_skipped: bool = False, pre_search_reason: str = "") -> None:
     try:
         report = nj_mod.build_report(
             task=task.description, route=route,
             executor_result=disp_result.executor_result if disp_result else None,
             validation=validation, snapshot=snap, rolled_back=rolled_back,
+            pre_search_skipped=pre_search_skipped,
+            pre_search_reason=pre_search_reason,
         )
         nj_mod.save_trace(report, task.id)
     except Exception:  # noqa: BLE001
