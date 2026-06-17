@@ -58,16 +58,28 @@ def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True) ->
                    "--domain", "decision", "--json"]
             if use_hybrid:
                 cmd.append("--hybrid")
-            proc = subprocess.run(
-                cmd,
-                capture_output=True, text=True,
-                timeout=config.PRE_SEARCH_TIMEOUT,
+
+            # 使用 Popen + 线程定时器确保超时 (subprocess.run 的 timeout
+            # 在 macOS 上可能因子进程僵尸而不触发)
+            import threading
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                start_new_session=True,  # 独立进程组, kill 时整组杀
             )
+            timer = threading.Timer(config.PRE_SEARCH_TIMEOUT,
+                                    lambda: proc.kill() if proc.poll() is None else None)
+            timer.start()
+            try:
+                stdout, stderr = proc.communicate(timeout=config.PRE_SEARCH_TIMEOUT)
+            finally:
+                timer.cancel()
+
             if proc.returncode != 0:
                 res.skipped = True
-                res.reason = f"search.py exit={proc.returncode}: {proc.stderr[:120]}"
+                rc = proc.returncode or -1
+                res.reason = f"search.py exit={rc}: {(stderr or '')[:120]}"
             else:
-                data = json.loads(proc.stdout)
+                data = json.loads(stdout)
                 results = data.get("results", [])[: config.STRONG_D_TOPK]
                 res.top_decisions = [
                     {"id": r["id"], "title": r.get("title", ""), "score": r.get("score", 0)}
@@ -82,9 +94,13 @@ def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True) ->
                         f"强 D 命中: decision 域 {len(strong)} 条 score>"
                         f"{config.STRONG_D_MIN_SCORE} → 升 D"
                     )
-        except subprocess.TimeoutExpired:
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError):
             res.skipped = True
             res.reason = f"超时 {config.PRE_SEARCH_TIMEOUT}s"
+            try:
+                proc.kill()
+            except Exception:
+                pass
         except (json.JSONDecodeError, KeyError) as e:
             res.skipped = True
             res.reason = f"解析失败: {e}"

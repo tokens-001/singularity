@@ -27,7 +27,7 @@ TRACE_DIR = QIDIAN_DIR / "traces"
 AGENTS_TOML = SCHEDULER_DIR / "agents.toml"  # stdlib tomllib, 不依赖 pyyaml
 
 # ── 超时 ──────────────────────────────────────────────────────────────
-PRE_SEARCH_TIMEOUT = 5.0      # 秒; I 层是辅助不是硬依赖, 超时降级 (审计 2.4)
+PRE_SEARCH_TIMEOUT = 15.0     # 秒; 首次调用需加载句向量模型(24MB)+ChromaDB, 给足时间
 VALIDATE_TIMEOUT = 30.0
 GATE_TIMEOUT = 120.0          # eval.py 要跑 30 条 golden, 不快
 CLAUDE_CLI_TIMEOUT = 300.0
