@@ -51,9 +51,13 @@ ZHIPU_BACKOFF_BASE = 1.0       # 1s, 2s, 4s
 MAX_SNAPSHOTS = 5              # 文件拷贝兜底时保留最近 N 个 (审计 4.3)
 MIN_DISK_MB = 500              # 启动前剩余空间检查 (审计 4.4)
 
+# ── ChromaDB 语义搜索 ──────────────────────────────────────────────────
+CHROMA_DIR = ENGINE_DIR / "data" / "chroma"
+
 # ── gate (审计 1a: 引擎文件改动强制回归) ──────────────────────────────
 GATE_TRIGGER_FILES = {
     "core.py", "tokenizer.py", "graph.py", "search.py",  # 引擎核心
+    "embedder.py", "hybrid.py", "ingest.py",  # 语义搜索
 }
 GATE_TRIGGER_DIR_PARTS = ("qidian-knowledge",)  # 路径含此段 + 上面文件才触发
 

@@ -1,0 +1,30 @@
+{"query": "验证层优先 原则", "expect": ["P001"], "domain": "principle"}
+{"query": "Agent 三层架构 D层 决策", "expect": ["I009"], "domain": "insight"}
+{"query": "AI产品骨架 四层", "expect": ["P003"], "domain": "principle"}
+{"query": "委身论 爱情", "expect": ["008"], "domain": "case"}
+{"query": "多Agent协作平台 项目二", "expect": ["Q009", "Q014"], "domain": "question"}
+{"query": "中文分词 ngram", "expect": ["I011"], "domain": "insight"}
+{"query": "分级表达 筛选机制", "expect": ["007"], "domain": "case"}
+{"query": "判例助手 项目复盘", "expect": ["I006"], "domain": "insight"}
+{"query": "第二个项目选什么", "expect": ["Q009"], "domain": "question"}
+{"query": "完美防御 诞生", "expect": ["016"], "domain": "case"}
+{"query": "双AI协作 人做编排者", "expect": ["P005", "I004"], "domain": "principle"}
+{"query": "岗位校准 AI产品经理", "expect": ["D008"], "domain": "decision"}
+{"query": "WorkBuddy 拆解", "expect": ["I012"], "domain": "insight"}
+{"query": "能量审计 工具", "expect": ["011"], "domain": "case"}
+{"query": "正面指标 弱主动供给者", "expect": ["012"], "domain": "case"}
+{"query": "选择题反馈 优先", "expect": ["P002", "D002"], "domain": "principle"}
+{"query": "停止开发 进入验证", "expect": ["D004"], "domain": "decision"}
+{"query": "SDF学习法", "expect": ["021"], "domain": "case"}
+{"query": "技能模块化 三层分离", "expect": ["P004", "D003"], "domain": "principle"}
+{"query": "信任三部曲", "expect": ["022"], "domain": "case"}
+{"query": "意识本质 认知重构", "expect": ["001"], "domain": "case"}
+{"query": "专属智能体定制", "expect": ["018"], "domain": "case"}
+{"query": "认知债 知识生产", "expect": ["I005"], "domain": "insight"}
+{"query": "认知需要冻结容器", "expect": ["I003"], "domain": "insight"}
+{"query": "情绪低谷 人际判断", "expect": ["I013"], "domain": "insight"}
+{"query": "对外输出 原则", "expect": ["015"], "domain": "case"}
+{"query": "天工造物 架构参考", "expect": ["I011"], "domain": "insight"}
+{"query": "结构审计 I010", "expect": ["I010"], "domain": "insight"}
+{"query": "Design Copilot 项目三", "expect": ["Q014"], "domain": "question"}
+{"query": "关系建设期 方法论", "expect": ["010"], "domain": "case"}

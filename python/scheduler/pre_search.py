@@ -31,8 +31,8 @@ class PreSearchResult:
             self.top_decisions = []
 
 
-def pre_search(task: str, route_result: RouteResult) -> PreSearchResult:
-    """调 search.py 查 decision 域, 强 D 命中则升 D。"""
+def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = False) -> PreSearchResult:
+    """调 search.py 查 decision 域, 强 D 命中则升 D。use_hybrid → BM25+语义 RRF。"""
     res = PreSearchResult()
     if not config.SEARCH_SCRIPT.exists():
         res.skipped = True
@@ -40,9 +40,12 @@ def pre_search(task: str, route_result: RouteResult) -> PreSearchResult:
         return res
 
     try:
+        cmd = ["python3", str(config.SEARCH_SCRIPT), task,
+               "--domain", "decision", "--json"]
+        if use_hybrid:
+            cmd.append("--hybrid")
         proc = subprocess.run(
-            ["python3", str(config.SEARCH_SCRIPT), task,
-             "--domain", "decision", "--json"],
+            cmd,
             capture_output=True, text=True,
             timeout=config.PRE_SEARCH_TIMEOUT,
         )

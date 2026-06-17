@@ -8,3 +8,8 @@ __pycache__/
 data/case_data/
 sessions/
 .memory-backup/
+
+# 知识引擎生成数据
+python/qidian-knowledge/data/chroma/
+python/qidian-knowledge/data/.eval_baseline
+python/qidian-knowledge/data/index/corpus.json

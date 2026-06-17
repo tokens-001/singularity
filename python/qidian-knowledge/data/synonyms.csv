@@ -1,0 +1,19 @@
+# 工程/认知同义词表
+# 格式: 归一目标,同义词1|同义词2|...
+验证层,校验层|validator|检查层
+D层,决策层|decision
+I层,校验层|中间层|validator
+E层,执行层|execution
+原则,骨架|principle|p文件
+决策,决定|decision|d文件
+洞察,insight|i文件|方法论
+Opus,opus|claude opus
+DeepSeek,deepseek|ds
+判例助手,case_analyzer|法律ai
+Agent,智能体|agent
+协作,合作|分工|编排
+委身论,委身|commitment
+认知债,认知债务|知识债
+真实暴露,暴露|自我暴露
+分级,分级表达|分级筛选
+完美防御,防御机制|防御
