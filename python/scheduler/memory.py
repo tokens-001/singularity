@@ -458,6 +458,9 @@ def traverse(
         candidates: list[tuple[str, float, list[tuple[str, str]]]] = []
 
         for task_id, cum_score, path in beam:
+            # 保留当前节点自身 (锚点不会被挤出 top-K)
+            candidates.append((task_id, cum_score, path))
+
             neighbors = _expand_node(task_id, edges, events)
 
             for neighbor_id, edge_type in neighbors:
@@ -485,40 +488,51 @@ def traverse(
 
                 candidates.append((neighbor_id, new_score, new_path))
 
-        if not candidates:
-            break
+        if len(candidates) <= len(beam):
+            break  # 无新节点可扩展
 
-        # 保留 top-K
+        # 保留 top-K (含锚点自身)
         candidates.sort(key=lambda x: -x[1])
-        beam = candidates[:beam_width]
+        # 去重: 同一节点取最高分
+        seen: dict[str, int] = {}
+        deduped: list[tuple[str, float, list]] = []
+        for tid, score, p in candidates:
+            if tid not in seen:
+                seen[tid] = len(deduped)
+                deduped.append((tid, score, p))
+            elif score > deduped[seen[tid]][1]:
+                deduped[seen[tid]] = (tid, score, p)
+        beam = deduped[:beam_width]
         visited.update(tid for tid, _, _ in beam)
 
     # 格式化结果
     results: list[dict] = []
+    anchor_ids = {a[0] for a in anchors}
     for task_id, score, path in beam:
         node = events.get(task_id)
         if not node:
             continue
-        # 检查是否被锚点覆盖(已在 anchors 中且 path 为空 → 跳过, 它本身就是入口)
-        anchor_ids = {a[0] for a in anchors}
-        if task_id in anchor_ids and not path:
+        is_anchor = task_id in anchor_ids
+        if not path:
             results.append({
                 "task_id": task_id,
                 "description": node.content[:120],
                 "score": round(score, 4),
                 "path": [],
-                "graph_sources": ["anchor"],
+                "graph_sources": ["anchor"] if is_anchor else [],
                 "timestamp": node.timestamp,
             })
-        elif path:
-            # 收集路径上的边类型
+        else:
             edge_types = list(set(et for _, et in path))
+            sources = edge_types.copy()
+            if is_anchor:
+                sources.insert(0, "anchor")
             results.append({
                 "task_id": task_id,
                 "description": node.content[:120],
                 "score": round(score, 4),
                 "path": [(src[-8:] if len(src) >= 8 else src, et) for src, et in path],
-                "graph_sources": edge_types,
+                "graph_sources": sources,
                 "timestamp": node.timestamp,
             })
 
