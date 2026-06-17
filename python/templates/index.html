@@ -5,676 +5,1033 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>奇点 Agent 调度平台</title>
 <style>
+/* ═══════════════════════════════════════════════════════
+   Token System — 奇点调度指挥中心
+   三层 Agent 体系的颜色是设计的骨架:
+     E  (DeepSeek) → cyan    #39d2c0  日常执行
+     D  (Opus)     → purple  #a371f7  架构设计
+     E+ (GLM)      → orange  #d2991d  代码建造
+   状态颜色附着在这三色体系上，不做无意义的彩色。
+   ═══════════════════════════════════════════════════════ */
 :root {
-  --bg: #0d1117;
-  --bg2: #161b22;
-  --bg3: #21262d;
-  --border: #30363d;
-  --text: #c9d1d9;
-  --text2: #8b949e;
-  --blue: #58a6ff;
-  --green: #3fb950;
-  --red: #f85149;
-  --orange: #d2991d;
-  --purple: #a371f7;
-  --cyan: #39d2c0;
+  --bg:      #0b0e14;
+  --bg2:     #13171f;
+  --bg3:     #1a1f2b;
+  --border:  #252a35;
+  --text:    #cdd6e0;
+  --text2:   #6b7280;
+  --cyan:    #39d2c0;
+  --purple:  #a371f7;
+  --orange:  #d2991d;
+  --red:     #f44747;
+  --green:   #4ec97a;
+  --blue:    #4a8cf7;
 }
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
-  background: var(--bg); color: var(--text);
-  line-height: 1.5; padding: 16px;
-}
-h1 { font-size: 20px; margin-bottom: 4px; }
-h2 { font-size: 14px; color: var(--text2); margin-bottom: 16px; font-weight: normal; }
-.header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
-.refresh { font-size: 12px; color: var(--text2); }
-.refresh.live { color: var(--green); }
 
-/* ── Status Cards ── */
-.cards { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+  background: var(--bg); color: var(--text);
+  line-height: 1.5; min-height: 100vh;
+}
+
+/* ── Top Bar ── */
+.topbar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 24px; border-bottom: 1px solid var(--border);
+  background: var(--bg2); position: sticky; top: 0; z-index: 50;
+}
+.topbar h1 { font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+.topbar h1 span { color: var(--purple); }
+.topbar .live { font-size: 11px; color: var(--text2); font-family: 'SF Mono', 'Fira Code', monospace; }
+.topbar .live.on { color: var(--cyan); }
+
+/* ── Tab Bar ── */
+.tab-bar {
+  display: flex; gap: 0; padding: 0 24px;
+  background: var(--bg2); border-bottom: 1px solid var(--border);
+  position: sticky; top: 49px; z-index: 49;
+}
+.tab {
+  padding: 10px 18px; font-size: 12px; font-weight: 500;
+  color: var(--text2); cursor: pointer; border-bottom: 2px solid transparent;
+  transition: color .15s, border-color .15s; letter-spacing: .02em;
+  font-family: inherit;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--cyan); border-bottom-color: var(--cyan); }
+
+/* ── Tab Content ── */
+.tab-content { display: none; padding: 20px 24px; }
+.tab-content.active { display: block; }
+
+/* ── Cards ── */
+.cards { display: flex; gap: 10px; flex-wrap: wrap; }
 .card {
   background: var(--bg2); border: 1px solid var(--border);
-  border-radius: 8px; padding: 12px 16px; min-width: 100px; flex: 1;
+  border-radius: 6px; padding: 14px 18px; min-width: 110px; flex: 1;
 }
-.card .count { font-size: 28px; font-weight: bold; }
-.card .label { font-size: 11px; color: var(--text2); margin-top: 2px; }
-.card.pending .count { color: var(--blue); }
-.card.running .count { color: var(--cyan); animation: pulse 1.5s infinite; }
+.card .count { font-size: 30px; font-weight: 700; font-family: 'SF Mono', monospace; transition: color .3s; }
+.card .label { font-size: 10px; color: var(--text2); margin-top: 4px; text-transform: uppercase; letter-spacing: .05em; }
+.card.pending .count { color: var(--text2); }
+.card.running .count { color: var(--cyan); }
 .card.done .count { color: var(--green); }
 .card.failed .count { color: var(--red); }
 .card.conflict .count { color: var(--orange); }
-@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+.card.held .count { color: var(--purple); }
 
-/* ── Sections ── */
+/* ── Pulse ── */
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+.pulse { animation: pulse 1.8s ease-in-out infinite; }
+
+/* ── Section ── */
 .section {
   background: var(--bg2); border: 1px solid var(--border);
-  border-radius: 8px; margin-bottom: 16px; overflow: hidden;
+  border-radius: 6px; margin-bottom: 14px; overflow: hidden;
 }
 .section-title {
-  font-size: 13px; font-weight: bold; padding: 10px 16px;
+  font-size: 11px; font-weight: 600; padding: 10px 16px;
   background: var(--bg3); border-bottom: 1px solid var(--border);
   display: flex; justify-content: space-between; align-items: center;
+  text-transform: uppercase; letter-spacing: .06em; color: var(--text2);
 }
-.section-body { padding: 12px 16px; }
+.section-body { padding: 14px 16px; }
 
-/* ── Agent Load ── */
-.agent-loads { display: flex; gap: 16px; }
-.agent-load {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 13px;
-}
-.agent-load .dot {
-  width: 8px; height: 8px; border-radius: 50%;
-}
-.agent-load .dot.e { background: var(--cyan); }
-.agent-load .dot.d { background: var(--purple); }
-.agent-load .dot.ep { background: var(--orange); }
+/* ── Agent Row ── */
+.agent-row { display: flex; gap: 20px; align-items: center; font-size: 12px; }
+.agent-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+.e-dot { background: var(--cyan); }
+.d-dot { background: var(--purple); }
+.ep-dot { background: var(--orange); }
 
 /* ── Table ── */
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th { text-align: left; padding: 8px 12px; background: var(--bg3); color: var(--text2); font-weight: normal; font-size: 11px; text-transform: uppercase; }
-td { padding: 6px 12px; border-top: 1px solid var(--border); }
-tr:hover { background: rgba(88,166,255,.05); cursor: pointer; }
-tr.expanded { background: rgba(88,166,255,.08); }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th { text-align: left; padding: 7px 10px; background: var(--bg3); color: var(--text2);
+     font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+td { padding: 6px 10px; border-top: 1px solid var(--border); }
+tr:hover { background: rgba(163,113,247,.04); }
+tr.expanded { background: rgba(163,113,247,.06); }
+
+/* ── Badges ── */
 .badge {
-  display: inline-block; padding: 1px 8px; border-radius: 10px;
-  font-size: 11px; font-weight: bold;
+  display: inline-block; padding: 1px 7px; border-radius: 3px;
+  font-size: 10px; font-weight: 600; letter-spacing: .02em;
+  transition: background .3s, color .3s;
 }
-.badge.pending { background: rgba(88,166,255,.15); color: var(--blue); }
-.badge.routed { background: rgba(88,166,255,.2); color: var(--blue); }
+.badge.pending { background: rgba(107,114,128,.15); color: var(--text2); }
+.badge.routed { background: rgba(74,140,247,.15); color: var(--blue); }
 .badge.dispatched { background: rgba(163,113,247,.2); color: var(--purple); }
-.badge.running { background: rgba(57,210,192,.2); color: var(--cyan); }
-.badge.validating { background: rgba(163,113,247,.2); color: var(--purple); }
-.badge.done { background: rgba(63,185,80,.15); color: var(--green); }
-.badge.failed { background: rgba(248,81,73,.15); color: var(--red); }
-.badge.rolled_back { background: rgba(248,81,73,.1); color: var(--red); }
+.badge.running { background: rgba(57,210,192,.15); color: var(--cyan); }
+.badge.validating { background: rgba(163,113,247,.15); color: var(--purple); }
+.badge.done { background: rgba(78,201,122,.15); color: var(--green); }
+.badge.failed { background: rgba(244,71,71,.15); color: var(--red); }
+.badge.rolled_back { background: rgba(244,71,71,.1); color: var(--red); }
 .badge.decomposed { background: rgba(210,153,29,.15); color: var(--orange); }
-.badge.blocked { background: rgba(139,148,158,.15); color: var(--text2); }
+.badge.blocked { background: rgba(107,114,128,.12); color: var(--text2); }
 .badge.conflict_held { background: rgba(210,153,29,.2); color: var(--orange); }
 
 .level-tag {
-  display: inline-block; padding: 1px 6px; border-radius: 4px;
-  font-size: 10px; font-weight: bold; margin-left: 4px;
+  display: inline-block; padding: 1px 5px; border-radius: 2px;
+  font-size: 9px; font-weight: 700; letter-spacing: .04em; margin-left: 4px;
 }
-.level-tag.e { background: rgba(57,210,192,.2); color: var(--cyan); }
-.level-tag.d { background: rgba(163,113,247,.2); color: var(--purple); }
-.level-tag.ep { background: rgba(210,153,29,.2); color: var(--orange); }
+.level-e { background: rgba(57,210,192,.18); color: var(--cyan); }
+.level-d { background: rgba(163,113,247,.18); color: var(--purple); }
+.level-ep { background: rgba(210,153,29,.18); color: var(--orange); }
+
+/* ── Buttons ── */
+.btn {
+  padding: 5px 12px; border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg3); color: var(--text); cursor: pointer; font-size: 11px;
+  font-family: inherit; letter-spacing: .02em; transition: all .12s;
+}
+.btn:hover { border-color: var(--text2); }
+.btn.cyan { border-color: rgba(57,210,192,.3); color: var(--cyan); }
+.btn.cyan:hover { background: rgba(57,210,192,.1); }
+.btn.purple { border-color: rgba(163,113,247,.3); color: var(--purple); }
+.btn.purple:hover { background: rgba(163,113,247,.1); }
+.btn.orange { border-color: rgba(210,153,29,.3); color: var(--orange); }
+.btn.orange:hover { background: rgba(210,153,29,.1); }
+.btn.red { border-color: rgba(244,71,71,.3); color: var(--red); }
+.btn.red:hover { background: rgba(244,71,71,.1); }
+.btn.sm { padding: 3px 8px; font-size: 10px; }
+
+/* ── Form ── */
+.form-row { display: flex; gap: 8px; }
+textarea, input, select {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 8px 10px; color: var(--text);
+  font-family: inherit; font-size: 12px; width: 100%;
+  transition: border-color .15s;
+}
+textarea:focus, input:focus, select:focus { outline: none; border-color: var(--purple); }
+textarea { resize: vertical; min-height: 50px; }
+
+/* ── FilterBar ── */
+.filter-bar { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+.filter-bar select { width: auto; }
+
+/* ═══════════════════════════════════════════════════════
+   SVG State Machine — 签名元素
+   ═══════════════════════════════════════════════════════ */
+.flow-svg { width: 100%; height: auto; display: block; }
+.flow-node { cursor: pointer; transition: opacity .2s; }
+.flow-node:hover { opacity: .85; }
+.flow-node text { fill: var(--text); font-family: 'SF Mono', monospace; font-size: 10px; text-anchor: middle; }
+.flow-node .count { font-size: 16px; font-weight: 700; }
+.flow-label { font-size: 9px; fill: var(--text2); text-anchor: middle; }
+
+/* ── Timeline ── */
+.timeline { position: relative; padding-left: 16px; border-left: 1px solid var(--border); }
+.tl-node { position: relative; padding: 4px 0 14px 16px; }
+.tl-node::before {
+  content: ''; position: absolute; left: -20px; top: 5px;
+  width: 7px; height: 7px; border-radius: 50%; background: var(--border);
+}
+.tl-node.active::before { background: var(--cyan); }
+.tl-node.done::before { background: var(--green); }
+.tl-node.failed::before { background: var(--red); }
+.tl-node .tl-from { font-size: 10px; color: var(--text2); }
+.tl-node .tl-to { font-size: 12px; font-weight: 600; margin-left: 4px; }
+.tl-node .tl-meta { font-size: 10px; color: var(--text2); margin-top: 2px; display: block; }
+
+/* ═══════════════════════════════════════════════════════
+   Decision Cards — 透明化
+   ═══════════════════════════════════════════════════════ */
+.decision-card {
+  border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-bottom: 12px;
+}
+.decision-card .dc-header {
+  padding: 8px 14px; font-size: 11px; font-weight: 600; letter-spacing: .04em;
+  background: var(--bg3); border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.dc-header.route { color: var(--purple); border-left: 3px solid var(--purple); }
+.dc-header.presearch { color: var(--cyan); border-left: 3px solid var(--cyan); }
+.dc-header.validation { color: var(--green); border-left: 3px solid var(--green); }
+.decision-card .dc-body { padding: 10px 14px; font-size: 11px; }
+.dc-body .signal-row { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 3px; }
+.signal-row .sig-icon { font-size: 10px; flex-shrink: 0; }
+.dc-body .kb-hit { padding: 2px 0; font-family: 'SF Mono', monospace; font-size: 10px; }
+.dc-body .magma-hit { padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 10px; }
+.dc-body .magma-hit:last-child { border-bottom: none; }
+pre.agent-out { background: var(--bg); border: 1px solid var(--border); border-radius: 3px;
+  padding: 8px 10px; font-size: 10px; max-height: 240px; overflow-y: auto;
+  white-space: pre-wrap; font-family: 'SF Mono', monospace; color: var(--text2); }
 
 /* ── Detail Panel ── */
 .detail { display: none; }
 .detail.open { display: table-row; }
-.detail td { padding: 16px 20px; background: rgba(0,0,0,.2); }
-.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; font-size: 13px; }
-.detail-grid dt { color: var(--text2); font-size: 11px; }
-.detail-grid dd { margin-bottom: 8px; word-break: break-all; }
-.detail-actions { margin-top: 12px; display: flex; gap: 8px; }
-.dag-tree { font-family: monospace; font-size: 12px; white-space: pre; color: var(--text2); }
-.error-block { background: rgba(248,81,73,.1); border: 1px solid rgba(248,81,73,.3); border-radius: 4px; padding: 8px 12px; margin-top: 8px; font-size: 12px; max-height: 120px; overflow-y: auto; }
+.detail td { padding: 16px 20px; background: rgba(0,0,0,.3); }
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 20px; font-size: 12px; }
+.detail-grid dt { color: var(--text2); font-size: 10px; }
+.detail-grid dd { margin-bottom: 6px; word-break: break-all; }
+.detail-actions { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
 
-/* ── Buttons ── */
-.btn {
-  padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border);
-  background: var(--bg3); color: var(--text); cursor: pointer; font-size: 12px;
-  font-family: inherit;
+.error-block { background: rgba(244,71,71,.08); border: 1px solid rgba(244,71,71,.25);
+  border-radius: 4px; padding: 8px 10px; margin-top: 6px; font-size: 11px; max-height: 100px; overflow-y: auto; }
+
+.dag-tree { font-family: 'SF Mono', monospace; font-size: 11px; white-space: pre; color: var(--text2); }
+
+/* ── Loop Control ── */
+.loop-bar {
+  display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+  margin-bottom: 14px;
 }
-.btn:hover { background: var(--border); }
-.btn.primary { background: var(--blue); color: #000; border-color: var(--blue); }
-.btn.primary:hover { opacity: .8; }
-.btn.danger { background: var(--red); color: #fff; border-color: var(--red); }
-.btn.small { padding: 3px 8px; font-size: 11px; }
+.loop-indicator { width: 7px; height: 7px; border-radius: 50%; }
+.loop-indicator.off { background: var(--text2); }
+.loop-indicator.on { background: var(--green); animation: pulse 2s infinite; }
+.loop-status { font-size: 11px; font-weight: 600; }
+.loop-status.off { color: var(--text2); }
+.loop-status.on { color: var(--green); }
+.event-feed { max-height: 180px; overflow-y: auto; font-size: 10px; font-family: 'SF Mono', monospace; }
+.event-row { padding: 2px 0; border-bottom: 1px solid var(--border); display: flex; gap: 8px; }
+.event-row .ev-ts { color: var(--text2); flex-shrink: 0; }
+.event-row .ev-task { color: var(--cyan); }
+.event-row .ev-system { color: var(--purple); }
+.event-row .ev-error { color: var(--red); }
+.event-row .ev-idle { color: var(--text2); }
 
-/* ── Forms ── */
-.form-row { display: flex; gap: 8px; }
-textarea, input, select {
-  background: var(--bg); border: 1px solid var(--border);
-  border-radius: 6px; padding: 8px 12px; color: var(--text);
-  font-family: inherit; font-size: 13px; width: 100%;
-}
-textarea:focus, input:focus, select:focus { outline: none; border-color: var(--blue); }
-textarea { resize: vertical; min-height: 60px; }
-select { width: auto; }
+/* ── Intervention ── */
+.check-col { width: 2em; }
+.intervention-row { display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.intervention-row:last-child { border-bottom: none; }
+.held-tag { font-size: 9px; color: var(--purple); border: 1px solid rgba(163,113,247,.3);
+  padding: 1px 5px; border-radius: 2px; margin-left: 4px; }
 
-/* ── Filter Bar ── */
-.filter-bar { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
-.filter-bar select { width: auto; }
-
-/* ── Memory Panel ── */
-.mem-card { font-size: 12px; margin-bottom: 8px; }
-.mem-card .source { color: var(--text2); font-size: 10px; }
-.mem-card .sim { color: var(--blue); }
-
-/* ── Trace View ── */
-.trace-modal {
+/* ── Trace Modal ── */
+.modal-overlay {
   display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0,0,0,.7); z-index: 100; overflow-y: auto;
+  background: rgba(0,0,0,.75); z-index: 100; overflow-y: auto;
 }
-.trace-modal.open { display: flex; justify-content: center; align-items: flex-start; padding: 40px 20px; }
-.trace-content {
-  background: var(--bg2); border: 1px solid var(--border);
-  border-radius: 8px; padding: 20px; max-width: 800px; width: 100%;
-}
-.trace-content pre { white-space: pre-wrap; font-size: 12px; max-height: 500px; overflow-y: auto; }
+.modal-overlay.open { display: flex; justify-content: center; align-items: flex-start; padding: 50px 20px; }
+.modal-box { background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; max-width: 780px; width: 100%; }
+.modal-box pre { white-space: pre-wrap; font-size: 11px; max-height: 500px; overflow-y: auto;
+  font-family: 'SF Mono', monospace; }
 
 /* ── Responsive ── */
 @media (max-width: 768px) {
   .cards { flex-direction: column; }
   .detail-grid { grid-template-columns: 1fr; }
-  .agent-loads { flex-direction: column; }
+  .tab-bar { overflow-x: auto; }
 }
 </style>
 </head>
 <body>
 
-<div class="header">
-  <div>
-    <h1>⚡ 奇点 Agent 调度平台</h1>
-    <h2 id="clock">加载中...</h2>
+<!-- ═══════════════════════════════════════════════════════
+     Top Bar
+     ═══════════════════════════════════════════════════════ -->
+<div class="topbar">
+  <h1>⚡ <span>奇点</span> 调度指挥中心</h1>
+  <div class="live on" id="live-indicator">● ONLINE</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     Tab Bar
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-bar" id="tab-bar">
+  <div class="tab active" data-tab="overview">总览</div>
+  <div class="tab" data-tab="flow">任务流</div>
+  <div class="tab" data-tab="decisions">决策链</div>
+  <div class="tab" data-tab="intervene">干预面板</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     Tab 1: 总览
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content active" id="tab-overview">
+
+  <div class="cards" id="status-cards"></div>
+
+  <!-- Loop Control -->
+  <div class="loop-bar">
+    <span class="loop-indicator off" id="loop-dot"></span>
+    <span class="loop-status off" id="loop-label">调度循环 · 未启动</span>
+    <span style="font-size:10px;color:var(--text2)" id="loop-info"></span>
+    <span style="flex:1"></span>
+    <button class="btn cyan sm" id="btn-loop-start" onclick="startLoop()">▶ 启动</button>
+    <button class="btn red sm" id="btn-loop-stop" onclick="stopLoop()" style="display:none">■ 停止</button>
   </div>
-  <div class="refresh live" id="refresh-indicator">● 实时</div>
-</div>
 
-<!-- Status Cards -->
-<div class="cards" id="status-cards"></div>
-
-<!-- Agent Load + Timing -->
-<div class="section">
-  <div class="section-title">Agent 负载</div>
-  <div class="section-body">
-    <div class="agent-loads" id="agent-loads"></div>
-    <div style="margin-top:8px;font-size:12px;color:var(--text2)" id="timing-stats"></div>
+  <div class="section" id="event-section" style="display:none">
+    <div class="section-title">实时事件</div>
+    <div class="section-body event-feed" id="event-feed"></div>
   </div>
-</div>
 
-<!-- Token Stats -->
-<div class="section" id="token-section" style="display:none">
-  <div class="section-title">Token 消耗</div>
-  <div class="section-body" id="token-stats"></div>
-</div>
+  <div style="display:flex;gap:14px;flex-wrap:wrap">
+    <div class="section" style="flex:2;min-width:280px">
+      <div class="section-title">新建任务</div>
+      <div class="section-body">
+        <div class="form-row">
+          <textarea id="new-task-desc" placeholder="描述任务，回车提交..."
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();submitTask()}"></textarea>
+          <button class="btn purple" onclick="submitTask()" style="flex-shrink:0">提交</button>
+        </div>
+      </div>
+    </div>
 
-<!-- Task Table -->
-<div class="section">
-  <div class="section-title">
-    <span>任务列表 <span style="color:var(--text2);font-weight:normal" id="task-count"></span></span>
-    <div style="display:flex;gap:8px">
-      <button class="btn small" onclick="refreshAll()">↻ 刷新</button>
+    <div class="section" style="flex:1;min-width:200px">
+      <div class="section-title">Agent 负载</div>
+      <div class="section-body">
+        <div class="agent-row" id="agent-row"></div>
+        <div style="margin-top:6px;font-size:11px;color:var(--text2)" id="timing-line"></div>
+      </div>
     </div>
   </div>
-  <div class="section-body">
-    <div class="filter-bar">
-      <select id="filter-status" onchange="renderTasks()">
-        <option value="">全部状态</option>
-      </select>
-      <select id="filter-level" onchange="renderTasks()">
-        <option value="">全部级别</option>
-        <option value="E">E (DeepSeek)</option>
-        <option value="D">D (Opus)</option>
-        <option value="E+">E+ (GLM)</option>
-      </select>
-    </div>
-    <table>
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>描述</th>
-          <th>状态</th>
-          <th>级别</th>
-          <th>等待</th>
-        </tr>
-      </thead>
-      <tbody id="task-table"></tbody>
-    </table>
+
+  <div class="section" id="token-section" style="display:none">
+    <div class="section-title">Token 统计</div>
+    <div class="section-body" id="token-body"></div>
   </div>
+
 </div>
 
-<!-- New Task -->
-<div class="section">
-  <div class="section-title">新建任务</div>
-  <div class="section-body">
-    <div class="form-row">
-      <textarea id="new-task-desc" placeholder="输入任务描述..."></textarea>
-      <button class="btn primary" onclick="submitTask()" style="flex-shrink:0">提交</button>
+<!-- ═══════════════════════════════════════════════════════
+     Tab 2: 任务流
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tab-flow">
+
+  <!-- SVG 状态机图 -->
+  <div class="section">
+    <div class="section-title">状态机 <span style="color:var(--text2);font-weight:normal;text-transform:none">点击节点过滤任务</span></div>
+    <div class="section-body" id="flow-diagram"></div>
+  </div>
+
+  <!-- 任务表 + 详情 -->
+  <div class="section">
+    <div class="section-title">
+      任务列表 <span style="font-weight:normal;text-transform:none" id="task-count"></span>
+      <button class="btn sm" onclick="refreshAll()">↻</button>
+    </div>
+    <div class="section-body">
+      <div class="filter-bar">
+        <select id="f-status" onchange="renderTasks()"><option value="">全部状态</option></select>
+        <select id="f-level" onchange="renderTasks()">
+          <option value="">全部级别</option>
+          <option value="E">E · DeepSeek</option>
+          <option value="D">D · Opus</option>
+          <option value="E+">E+ · GLM</option>
+        </select>
+        <label style="font-size:11px;color:var(--text2);display:flex;align-items:center;gap:4px">
+          <input type="checkbox" id="f-held" onchange="renderTasks()"> 仅扣留
+        </label>
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr>
+            <th>ID</th><th>描述</th><th>状态</th><th>级别</th><th>优先级</th><th>等待</th>
+          </tr></thead>
+          <tbody id="task-tbody"></tbody>
+        </table>
+      </div>
     </div>
   </div>
-</div>
 
-<!-- Conflicts -->
-<div class="section" id="conflict-section" style="display:none">
-  <div class="section-title" style="color:var(--orange)">⚠ 合并冲突</div>
-  <div class="section-body" id="conflict-list"></div>
-</div>
-
-<!-- Memory Query -->
-<div class="section">
-  <div class="section-title">🧠 MAGMA 多图记忆</div>
-  <div class="section-body">
-    <div class="form-row" style="margin-bottom:8px">
-      <input id="mem-query" placeholder="查询记忆（描述或文件名）..." onkeydown="if(event.key==='Enter')queryMemory()">
-      <button class="btn" onclick="queryMemory()">搜索</button>
-    </div>
-    <div id="mem-stats" style="font-size:11px;color:var(--text2);margin-bottom:8px"></div>
-    <div id="mem-results"></div>
+  <!-- 冲突 -->
+  <div class="section" id="conflict-section" style="display:none">
+    <div class="section-title" style="color:var(--orange)">冲突</div>
+    <div class="section-body" id="conflict-body"></div>
   </div>
+
 </div>
 
-<!-- Trace Modal -->
-<div class="trace-modal" id="trace-modal" onclick="if(event.target===this)closeTrace()">
-  <div class="trace-content" id="trace-content"></div>
+<!-- ═══════════════════════════════════════════════════════
+     Tab 3: 决策链
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tab-decisions">
+
+  <div class="section">
+    <div class="section-title">选择任务</div>
+    <div class="section-body">
+      <div class="form-row">
+        <select id="dc-task-picker" onchange="loadDecisions()">
+          <option value="">-- 选择已完成任务 --</option>
+        </select>
+        <button class="btn purple" onclick="loadDecisions()">加载决策链</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="decision-cards"></div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     Tab 4: 干预面板
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tab-intervene">
+
+  <div class="section">
+    <div class="section-title">队列管理 <span style="font-weight:normal;text-transform:none">扣留 / 覆盖路由 / 释放</span></div>
+    <div class="section-body">
+      <div style="margin-bottom:8px;display:flex;gap:6px">
+        <button class="btn purple sm" onclick="batchHold()">扣留选中</button>
+        <button class="btn cyan sm" onclick="batchRelease()">释放选中</button>
+        <select id="batch-level" style="width:auto;font-size:11px">
+          <option value="">覆盖级别...</option>
+          <option value="E">E</option>
+          <option value="D">D</option>
+          <option value="E+">E+</option>
+        </select>
+        <button class="btn orange sm" onclick="batchOverride()">覆盖选中</button>
+      </div>
+      <div id="queue-list"><span style="color:var(--text2);font-size:11px">加载中...</span></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">活跃任务 <span style="font-weight:normal;text-transform:none">取消运行中</span></div>
+    <div class="section-body" id="active-list"><span style="color:var(--text2);font-size:11px">加载中...</span></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">失败/可重试 <span style="font-weight:normal;text-transform:none">手动重试</span></div>
+    <div class="section-body" id="failed-list"><span style="color:var(--text2);font-size:11px">加载中...</span></div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     Trace Modal
+     ═══════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="trace-modal" onclick="if(event.target===this)closeTrace()">
+  <div class="modal-box" id="trace-content"></div>
 </div>
 
 <script>
 // ═══════════════════════════════════════════════════════
 // State
 // ═══════════════════════════════════════════════════════
-let tasks = [];
-let statusData = {};
-let conflicts = [];
-let expandedTask = null;
+let tasks=[], statusData={}, conflicts=[], expandedTask=null, activeTab='overview', flowClickFilter='';
+let _lastTasksHash='', _lastFlowHash='';  // 避免无脑重绘
 
-const STATUS_MAP = {
-  pending:'待处理',routed:'已路由',dispatched:'已分发',
-  running:'运行中',validating:'验证中',done:'完成',
-  failed:'失败',rolled_back:'已回滚',decomposed:'已分解',
-  blocked:'阻塞',conflict_held:'冲突'
+const STATUS_CN = {
+  pending:'待处理',routed:'已路由',dispatched:'已分发',running:'运行中',
+  validating:'验证中',done:'完成',failed:'失败',rolled_back:'已回滚',
+  decomposed:'已分解',blocked:'阻塞',conflict_held:'冲突'
 };
 
 // ═══════════════════════════════════════════════════════
-// API calls
+// Tab Switching
 // ═══════════════════════════════════════════════════════
-async function api(path, opts) {
-  try {
-    const r = await fetch(path, opts);
-    return await r.json();
-  } catch(e) { return {error: e.message}; }
+document.getElementById('tab-bar').addEventListener('click',e=>{
+  if(!e.target.classList.contains('tab'))return;
+  activeTab = e.target.dataset.tab;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  e.target.classList.add('active');
+  document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
+  document.getElementById('tab-'+activeTab).classList.add('active');
+  if(activeTab==='decisions') populateDecisionsPicker();
+  if(activeTab==='intervene') renderIntervention();
+  if(activeTab==='flow') renderFlowDiagram();
+});
+
+// ═══════════════════════════════════════════════════════
+// API
+// ═══════════════════════════════════════════════════════
+async function api(path,opts){
+  try{const r=await fetch(path,opts);return await r.json();}
+  catch(e){return{error:e.message}};
 }
 
 // ═══════════════════════════════════════════════════════
 // Refresh
 // ═══════════════════════════════════════════════════════
-async function refreshAll() {
-  const ind = document.getElementById('refresh-indicator');
-  ind.className = 'refresh live';
-  ind.textContent = '● 刷新中...';
+async function refreshAll(){
+  const ind=document.getElementById('live-indicator');
+  ind.className='live'; ind.textContent='◆';
 
-  const [s, t, c] = await Promise.all([
-    api('/api/status'),
-    api('/api/tasks'),
-    api('/api/conflicts'),
+  const [s,t,c]=await Promise.all([
+    api('/api/status'),api('/api/tasks'),api('/api/conflicts')
   ]);
+  statusData=s; conflicts=c.conflicts||[];
+  const newTasks=t.tasks||[];
 
-  statusData = s;
-  tasks = t.tasks || [];
-  conflicts = c.conflicts || [];
+  // 数据没变就跳过 DOM 重绘
+  const tasksHash=JSON.stringify(newTasks);
+  const flowHash=JSON.stringify(s.counts||{});
+  const tasksChanged=tasksHash!==_lastTasksHash;
+  const flowChanged=flowHash!==_lastFlowHash;
 
-  renderStatusCards();
-  renderAgentLoads();
-  renderTiming();
-  renderTokens();
-  renderTasks();
-  renderConflicts();
-  updateClock();
+  tasks=newTasks; _lastTasksHash=tasksHash;
+  renderStatusCards(); renderAgentRow(); renderTokenStats();
 
-  ind.textContent = '● 实时';
+  if(tasksChanged){ renderTasks(); renderConflicts(); }
+  if(activeTab==='intervene') renderIntervention();
+  if(activeTab==='flow'&&flowChanged){ _lastFlowHash=flowHash; renderFlowDiagram(); }
+
+  ind.className='live on'; ind.textContent='●';
 }
 
 // ═══════════════════════════════════════════════════════
 // Status Cards
 // ═══════════════════════════════════════════════════════
-function renderStatusCards() {
-  const counts = statusData.counts || {};
-  const cards = [
-    {key:'pending',label:'待处理',cls:'pending'},
-    {key:'running',label:'运行中',cls:'running',use:statusData.running_total||0},
-    {key:'done',label:'已完成',cls:'done'},
-    {key:'failed',label:'失败',cls:'failed'},
-    {key:'conflict_held',label:'冲突',cls:'conflict'},
+function renderStatusCards(){
+  const counts=statusData.counts||{};
+  const heldCount=tasks.filter(t=>t.held).length;
+  const cards=[
+    {k:'pending',label:'待处理',cls:'pending'},
+    {k:'running',label:'运行中',cls:'running',n:statusData.running_total||0},
+    {k:'done',label:'已完成',cls:'done'},
+    {k:'failed',label:'失败',cls:'failed'},
+    {k:'conflict_held',label:'冲突',cls:'conflict'},
+    {k:'held',label:'扣留',cls:'held',n:heldCount},
   ];
-
-  document.getElementById('status-cards').innerHTML = cards.map(c => {
-    const n = c.use !== undefined ? c.use : (counts[c.key]||0);
-    return `<div class="card ${c.cls}"><div class="count">${n}</div><div class="label">${c.label}</div></div>`;
+  document.getElementById('status-cards').innerHTML=cards.map(c=>{
+    const n=c.n!==undefined?c.n:(counts[c.k]||0);
+    return `<div class="card ${c.cls}"><div class="count${c.k==='running'?' pulse':''}">${n}</div><div class="label">${c.label}</div></div>`;
   }).join('');
 
   // Populate filter dropdown
-  const sel = document.getElementById('filter-status');
-  if (sel.options.length <= 1) {
-    const allStatuses = [...new Set(tasks.map(t=>t.status))].sort();
-    allStatuses.forEach(s => {
-      if (!sel.querySelector(`[value="${s}"]`)) {
-        const o = document.createElement('option');
-        o.value = s; o.textContent = STATUS_MAP[s] || s;
-        sel.appendChild(o);
+  const sel=document.getElementById('f-status');
+  if(sel.options.length<=1){
+    [...new Set(tasks.map(t=>t.status))].sort().forEach(s=>{
+      if(!sel.querySelector(`[value="${s}"]`)){
+        const o=document.createElement('option');o.value=s;o.textContent=STATUS_CN[s]||s;sel.appendChild(o);
       }
     });
   }
 }
 
 // ═══════════════════════════════════════════════════════
-// Agent Loads
+// Agent Row
 // ═══════════════════════════════════════════════════════
-function renderAgentLoads() {
-  const agents = statusData.agents || {};
-  const loads = statusData.heartbeat_levels || {};
-  document.getElementById('agent-loads').innerHTML = ['E','D','E+'].map(l => {
-    const n = loads[l] || 0;
-    const model = agents[l] && agents[l][0] ? agents[l][0].model : '';
-    const cls = l==='E'?'e':l==='D'?'d':'ep';
-    return `<div class="agent-load"><span class="dot ${cls}"></span> ${l} (${model}): <b>${n}</b> 个任务</div>`;
+function renderAgentRow(){
+  const agents=statusData.agents||{};
+  const loads=statusData.heartbeat_levels||{};
+  document.getElementById('agent-row').innerHTML=['E','D','E+'].map(l=>{
+    const n=loads[l]||0; const model=agents[l]&&agents[l][0]?agents[l][0].model:'';
+    const c=l==='E'?'e-dot':l==='D'?'d-dot':'ep-dot';
+    return `<span><span class="agent-dot ${c}"></span>${l} ${model} <b>${n}</b></span>`;
   }).join('');
+  document.getElementById('timing-line').textContent=
+    `等待 ${statusData.avg_wait||'--'} · 完成 ${statusData.avg_done||'--'}`+
+    (statusData.stalled&&statusData.stalled.length?` · ⚠ ${statusData.stalled.length} 卡住`:'');
 }
 
-function renderTiming() {
-  document.getElementById('timing-stats').textContent =
-    `平均等待: ${statusData.avg_wait||'--'} | 平均完成: ${statusData.avg_done||'--'}` +
-    (statusData.stalled && statusData.stalled.length ? ` | ⚠ 卡住: ${statusData.stalled.join(', ')}` : '');
+function renderTokenStats(){
+  const tt=statusData.token_totals;
+  if(!tt||!Object.keys(tt).length){document.getElementById('token-section').style.display='none';return;}
+  document.getElementById('token-section').style.display='';
+  const total=Object.values(tt).reduce((a,b)=>a+b,0);
+  document.getElementById('token-body').innerHTML=`<b>合计</b> ${fmtTokens(total)} · `+
+    Object.entries(tt).map(([l,t])=>`${l}: ${fmtTokens(t)}`).join(' · ');
+}
+function fmtTokens(n){if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return Math.round(n/1e3)+'K';return String(n);}
+
+// ═══════════════════════════════════════════════════════
+// Flow Diagram — SVG 状态机
+// ═══════════════════════════════════════════════════════
+function renderFlowDiagram(){
+  const counts=statusData.counts||{};
+  const nodes=[
+    {id:'pending',label:'PENDING',x:20,y:55},
+    {id:'routed',label:'ROUTED',x:170,y:55},
+    {id:'dispatched',label:'DISPATCHED',x:320,y:55},
+    {id:'running',label:'RUNNING',x:470,y:25},
+    {id:'done',label:'DONE',x:640,y:25},
+    {id:'failed',label:'FAILED',x:640,y:85},
+    {id:'conflict_held',label:'CONFLICT',x:790,y:85},
+    {id:'decomposed',label:'DECOMPOSED',x:790,y:25},
+  ];
+  const colors={
+    pending:'#6b7280',routed:'#4a8cf7',dispatched:'#a371f7',
+    running:'#39d2c0',done:'#4ec97a',failed:'#f44747',
+    conflict_held:'#d2991d',decomposed:'#d2991d',
+  };
+
+  let svg=`<svg class="flow-svg" viewBox="0 0 950 120">`;
+  // Arrows
+  const arrows=[
+    ['pending','routed'],['routed','dispatched'],['dispatched','running'],
+    ['running','done'],['running','failed'],['running','decomposed'],['running','conflict_held'],
+  ];
+  arrows.forEach(([a,b])=>{
+    const na=nodes.find(n=>n.id===a), nb=nodes.find(n=>n.id===b);
+    const x1=na.x+72,x2=nb.x,y1=na.y+12,y2=nb.y+12;
+    svg+=`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#252a35" stroke-width="1.5"/>`;
+    // arrowhead
+    const ang=Math.atan2(y2-y1,x2-x1);
+    svg+=`<polygon points="${x2-4},${y2-2.5} ${x2},${y2} ${x2-4},${y2+2.5}"
+     transform="rotate(${ang*180/Math.PI},${x2},${y2})" fill="#252a35"/>`;
+  });
+
+  // Nodes
+  nodes.forEach(n=>{
+    const c=colors[n.id]||'#6b7280';
+    const cnt=counts[n.id]||0;
+    const highlight=flowClickFilter===n.id?'stroke-width="2" stroke="'+c+'"':'';
+    svg+=`<g class="flow-node" onclick="flowClick('${n.id}')" ${highlight}>
+      <rect x="${n.x}" y="${n.y}" width="72" height="24" rx="4" fill="rgba(19,23,31,.9)" stroke="${cnt>0?c:'#252a35'}"/>
+      <text x="${n.x+36}" y="${n.y+14}" fill="${cnt>0?c:'#6b7280'}" font-size="9">${n.label}</text>
+      <text x="${n.x+36}" y="${n.y+44}" class="count" fill="${cnt>0?c:'#252a35'}">${cnt}</text>
+    </g>`;
+  });
+  svg+=`</svg>`;
+  document.getElementById('flow-diagram').innerHTML=svg;
 }
 
-function renderTokens() {
-  const tt = statusData.token_totals;
-  if (!tt || !Object.keys(tt).length) {
-    document.getElementById('token-section').style.display = 'none';
-    return;
-  }
-  document.getElementById('token-section').style.display = '';
-  const total = Object.values(tt).reduce((a,b)=>a+b,0);
-  document.getElementById('token-stats').innerHTML =
-    `<b>总计:</b> ${fmtTokens(total)} &nbsp; ` +
-    Object.entries(tt).map(([l,t]) => `${l}: ${fmtTokens(t)}`).join(' | ');
-}
-
-function fmtTokens(n) {
-  if (n >= 1e6) return (n/1e6).toFixed(1)+'M';
-  if (n >= 1e3) return Math.round(n/1e3)+'K';
-  return String(n);
+function flowClick(nodeId){
+  flowClickFilter=flowClickFilter===nodeId?'':nodeId;
+  document.getElementById('f-status').value=flowClickFilter;
+  renderFlowDiagram();
+  renderTasks();
 }
 
 // ═══════════════════════════════════════════════════════
 // Task Table
 // ═══════════════════════════════════════════════════════
-function renderTasks() {
-  const fs = document.getElementById('filter-status').value;
-  const fl = document.getElementById('filter-level').value;
+function renderTasks(){
+  const fs=document.getElementById('f-status').value;
+  const fl=document.getElementById('f-level').value;
+  const fh=document.getElementById('f-held').checked;
 
-  let filtered = tasks;
-  if (fs) filtered = filtered.filter(t => t.status === fs);
-  if (fl) filtered = filtered.filter(t => t.route_level === fl);
+  let filtered=tasks;
+  if(fs) filtered=filtered.filter(t=>t.status===fs);
+  if(fl) filtered=filtered.filter(t=>t.route_level===fl);
+  if(fh) filtered=filtered.filter(t=>t.held);
 
-  document.getElementById('task-count').textContent = `(${filtered.length} 条)`;
+  document.getElementById('task-count').textContent=`${filtered.length} 条`;
 
-  const tbody = document.getElementById('task-table');
-  tbody.innerHTML = filtered.map(t => {
-    const idShort = t.id ? t.id.slice(-8) : '?';
-    const desc = (t.description||'').slice(0,80);
-    const status = STATUS_MAP[t.status] || t.status || '?';
-    const wait = t.wait_sec != null ? fmtDur(t.wait_sec) : '--';
-    const lvl = t.route_level || '';
-    const lvlCls = lvl==='E'?'e':lvl==='D'?'d':lvl==='E+'?'ep':'';
-
-    return `
-      <tr onclick="toggleDetail('${t.id}')" id="row-${t.id}">
-        <td style="font-family:monospace;font-size:11px">${idShort}</td>
-        <td>${esc(desc)}</td>
-        <td><span class="badge ${t.status}">${status}</span></td>
-        <td>${lvl?`<span class="level-tag ${lvlCls}">${lvl}</span>`:'--'}</td>
-        <td style="font-size:11px;color:var(--text2)">${wait}</td>
-      </tr>
-      <tr class="detail" id="detail-${t.id}"><td colspan="5"></td></tr>
-    `;
-  }).join('') || '<tr><td colspan="5" style="color:var(--text2);text-align:center;padding:20px">暂无任务</td></tr>';
+  const tbody=document.getElementById('task-tbody');
+  tbody.innerHTML=filtered.map(t=>{
+    const idShort=(t.id||'').slice(-8);
+    const desc=(t.description||'').slice(0,70);
+    const status=STATUS_CN[t.status]||t.status||'?';
+    const wait=fmtDur(t.wait_sec||0);
+    const lvl=t.route_level||'';
+    const lvls=lvl==='E'?'level-e':lvl==='D'?'level-d':lvl==='E+'?'level-ep':'';
+    const heldMark=t.held?' ◈':'';
+    return `<tr onclick="toggleDetail('${t.id}')" id="row-${t.id}">
+      <td style="font-family:'SF Mono',monospace;font-size:10px;color:var(--text2)">${idShort}${heldMark}</td>
+      <td>${esc(desc)}</td>
+      <td><span class="badge ${t.status}">${status}</span></td>
+      <td>${lvl?`<span class="level-tag ${lvls}">${lvl}</span>`:'--'}</td>
+      <td style="font-size:11px;color:var(--text2)">${t.priority||0}</td>
+      <td style="font-size:10px;color:var(--text2)">${wait}</td>
+    </tr><tr class="detail" id="detail-${t.id}"><td colspan="6"></td></tr>`;
+  }).join('')||`<tr><td colspan="6" style="color:var(--text2);text-align:center;padding:24px">-- 暂无任务 --</td></tr>`;
 }
 
-async function toggleDetail(taskId) {
-  const detailRow = document.getElementById('detail-' + taskId);
-  const row = document.getElementById('row-' + taskId);
-
-  if (detailRow.classList.contains('open')) {
-    detailRow.classList.remove('open');
-    row.classList.remove('expanded');
-    expandedTask = null;
-  } else {
-    // Close previous
-    if (expandedTask) {
-      const prev = document.getElementById('detail-' + expandedTask);
-      if (prev) prev.classList.remove('open');
-      const prevRow = document.getElementById('row-' + expandedTask);
-      if (prevRow) prevRow.classList.remove('expanded');
-    }
-    expandedTask = taskId;
-    row.classList.add('expanded');
-
-    // Fetch detail
-    const data = await api('/api/tasks/' + taskId);
-    if (data.error) {
-      detailRow.querySelector('td').innerHTML = `<div class="error-block">${esc(data.error)}</div>`;
-      detailRow.classList.add('open');
-      return;
-    }
-
-    const parents = (data._dag_parents||[]).map(p =>
-      `${p.id.slice(-8)} ${esc((p.description||'').slice(0,30))} [${STATUS_MAP[p.status]||p.status}]`
-    );
-    const children = (data._dag_children||[]).map(c =>
-      `${c.id.slice(-8)} ${esc((c.description||'').slice(0,30))} [${STATUS_MAP[c.status]||c.status}]`
-    );
-
-    const created = data.created_at ? new Date(data.created_at*1000).toLocaleString('zh-CN') : '--';
-    const updated = data.updated_at ? new Date(data.updated_at*1000).toLocaleString('zh-CN') : '--';
-
-    detailRow.querySelector('td').innerHTML = `
-      <div class="detail-grid">
-        <div><dt>任务 ID</dt><dd style="font-family:monospace">${data.id||taskId}</dd></div>
-        <div><dt>状态</dt><dd><span class="badge ${data.status}">${STATUS_MAP[data.status]||data.status}</span></dd></div>
-        <div><dt>描述</dt><dd>${esc(data.description||'')}</dd></div>
-        <div><dt>路由级别</dt><dd>${data.route_level||'--'} ${data.route_locked?'🔒':''}</dd></div>
-        <div><dt>任务类型</dt><dd>${data.route_type||'--'}</dd></div>
-        <div><dt>优先级</dt><dd>${data.priority||0}</dd></div>
-        <div><dt>重试</dt><dd>${data.retry_count||0}/${data.max_retries||3}</dd></div>
-        <div><dt>创建时间</dt><dd>${created}</dd></div>
-        <div><dt>更新时间</dt><dd>${updated}</dd></div>
-        <div><dt>等待时间</dt><dd>${fmtDur(data.wait_sec||0)}</dd></div>
-        <div><dt>执行时长</dt><dd>${data.duration_sec != null ? fmtDur(data.duration_sec) : '--'}</dd></div>
-        <div><dt>快照</dt><dd style="font-family:monospace;font-size:11px">${data.snapshot_id||'--'}</dd></div>
-      </div>
-      ${parents.length ? `<div style="margin-top:8px"><dt>依赖 (depends_on)</dt><dd class="dag-tree">${parents.join('\n')}</dd></div>` : ''}
-      ${children.length ? `<div style="margin-top:4px"><dt>子任务 (children)</dt><dd class="dag-tree">${children.join('\n')}</dd></div>` : ''}
-      ${data.error ? `<div class="error-block">⚠ ${esc(data.error)}</div>` : ''}
-      <div class="detail-actions">
-        ${data._has_trace ? `<button class="btn small" onclick="event.stopPropagation();viewTrace('${taskId}')">📄 查看 Trace</button>` : ''}
-        <button class="btn small danger" onclick="event.stopPropagation();rollbackTask('${taskId}')">↩ 回滚</button>
-      </div>
-    `;
-    detailRow.classList.add('open');
+async function toggleDetail(taskId){
+  const detailRow=document.getElementById('detail-'+taskId);
+  const row=document.getElementById('row-'+taskId);
+  if(detailRow.classList.contains('open')){
+    detailRow.classList.remove('open');row.classList.remove('expanded');expandedTask=null;return;
   }
-}
-
-// ═══════════════════════════════════════════════════════
-// Submit Task
-// ═══════════════════════════════════════════════════════
-async function submitTask() {
-  const desc = document.getElementById('new-task-desc').value.trim();
-  if (!desc) return;
-  const r = await api('/api/tasks', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({description: desc}),
-  });
-  if (r.ok) {
-    document.getElementById('new-task-desc').value = '';
-    refreshAll();
-  } else {
-    alert('创建失败: ' + (r.error || '未知错误'));
+  if(expandedTask){
+    const prev=document.getElementById('detail-'+expandedTask);
+    if(prev)prev.classList.remove('open');
+    const pr=document.getElementById('row-'+expandedTask);
+    if(pr)pr.classList.remove('expanded');
   }
-}
+  expandedTask=taskId;row.classList.add('expanded');
 
-// ═══════════════════════════════════════════════════════
-// Rollback
-// ═══════════════════════════════════════════════════════
-async function rollbackTask(taskId) {
-  if (!confirm(`确定回滚任务 ${taskId.slice(-8)}？`)) return;
-  const r = await api('/api/tasks/' + taskId + '/rollback', {method:'POST'});
-  if (r.ok) refreshAll();
-  else alert('回滚失败: ' + (r.error || '未知错误'));
-}
+  const [data,tl]=await Promise.all([
+    api('/api/tasks/'+taskId),api('/api/tasks/'+taskId+'/timeline')
+  ]);
+  if(data.error){detailRow.querySelector('td').innerHTML=`<div class="error-block">${esc(data.error)}</div>`;detailRow.classList.add('open');return;}
 
-// ═══════════════════════════════════════════════════════
-// Trace View
-// ═══════════════════════════════════════════════════════
-async function viewTrace(taskId) {
-  const data = await api('/api/tasks/' + taskId + '/trace');
-  const modal = document.getElementById('trace-modal');
-  const content = document.getElementById('trace-content');
-  if (data.error) {
-    content.innerHTML = `<h2>Trace 不可用</h2><p>${esc(data.error)}</p><button class="btn" onclick="closeTrace()">关闭</button>`;
-  } else {
-    const summary = {
-      final_status: data.final_status,
-      route_level: data.route?.level,
-      validation_verdict: data.validation?.verdict,
-      changed_files: data.changed_files,
-      elapsed: data.elapsed,
-      token_count: data.token_count,
-    };
-    content.innerHTML = `
-      <h2 style="margin-bottom:12px">📄 Trace: ${taskId.slice(-8)}</h2>
-      <div style="font-size:13px">
-        <p><b>最终状态:</b> ${data.final_status||'?'}</p>
-        <p><b>路由级别:</b> ${data.route?.level||'?'}</p>
-        <p><b>验证结论:</b> ${data.validation?.verdict||'?'}</p>
-        <p><b>改动文件:</b> ${(data.changed_files||[]).join(', ')||'无'}</p>
-        <p><b>耗时:</b> ${data.elapsed ? data.elapsed.toFixed(1)+'s' : '?'}</p>
-        <p><b>Token:</b> ${data.token_count||0}</p>
-      </div>
-      <details style="margin-top:8px">
-        <summary>完整 JSON</summary>
-        <pre>${esc(JSON.stringify(data, null, 2))}</pre>
-      </details>
-      <button class="btn" onclick="closeTrace()">关闭</button>
-    `;
-  }
-  modal.classList.add('open');
-}
+  const parents=(data._dag_parents||[]).map(p=>`  ↳ ${(p.id||'').slice(-8)} ${esc((p.description||'').slice(0,30))} [${STATUS_CN[p.status]||p.status}]`);
+  const children=(data._dag_children||[]).map(c=>`  ↳ ${(c.id||'').slice(-8)} ${esc((c.description||'').slice(0,30))} [${STATUS_CN[c.status]||c.status}]`);
+  const created=unix2str(data.created_at); const updated=unix2str(data.updated_at);
 
-function closeTrace() {
-  document.getElementById('trace-modal').classList.remove('open');
-}
-
-// ═══════════════════════════════════════════════════════
-// Conflicts
-// ═══════════════════════════════════════════════════════
-function renderConflicts() {
-  const sec = document.getElementById('conflict-section');
-  const list = document.getElementById('conflict-list');
-  if (!conflicts.length) { sec.style.display = 'none'; return; }
-  sec.style.display = '';
-  list.innerHTML = conflicts.map(c => `
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
-      <div>
-        <span style="font-family:monospace;font-size:11px">${c.id.slice(-8)}</span>
-        <span style="margin-left:8px">${esc((c.description||'').slice(0,60))}</span>
-        ${c.error ? `<div style="font-size:11px;color:var(--orange)">${esc(c.error.slice(0,120))}</div>` : ''}
-      </div>
-      <div style="display:flex;gap:6px;flex-shrink:0">
-        <button class="btn small primary" onclick="resolveConflict('${c.id}','manual')">已解决</button>
-        <button class="btn small danger" onclick="resolveConflict('${c.id}','abort')">放弃</button>
-      </div>
-    </div>
-  `).join('');
-}
-
-async function resolveConflict(taskId, action) {
-  const r = await api('/api/conflicts/' + taskId + '/resolve', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({action}),
-  });
-  if (r.ok) refreshAll();
-  else alert('操作失败: ' + (r.error || '未知错误'));
-}
-
-// ═══════════════════════════════════════════════════════
-// Memory Query
-// ═══════════════════════════════════════════════════════
-async function queryMemory() {
-  const q = document.getElementById('mem-query').value.trim();
-  const res = await api('/api/memory?q=' + encodeURIComponent(q));
-  const stats = res.stats;
-  document.getElementById('mem-stats').innerHTML = stats ?
-    `事件:${stats.events} | 语义边:${stats.edges_semantic} | 时间边:${stats.edges_temporal} | 因果边:${stats.edges_causal_explicit}E+${stats.edges_causal_inferred}I | 实体边:${stats.edges_entity} | 候选:${stats.latent_candidates}` : '';
-
-  if (res.error) {
-    document.getElementById('mem-results').innerHTML = `<div class="error-block">${esc(res.error)}</div>`;
-    return;
-  }
-
-  const trav = res.traversal;
-  let html = '';
-
-  // Stage 3-4: Traversal narrative
-  if (trav && trav.narrative && trav.narrative.length) {
-    html += `<div style="margin-bottom:12px"><b>🎯 ${trav.intent} 遍历</b> (${trav.total_results}结果, 图覆盖: ${JSON.stringify(trav.graph_coverage)})`;
-    if (trav.budget_exceeded) html += ' <span style="color:var(--orange)">⚠超预算</span>';
-    html += '</div>';
-    trav.narrative.forEach(r => {
-      const pathStr = r.path && r.path.length ? r.path.map(p=>`${p[0]}→${p[1]}`).join(' ') : '入口';
-      const truncated = r.truncated ? '...' : '';
-      html += `<div class="mem-card">
-        <span class="sim">${r.score.toFixed(4)}</span>
-        <span style="font-family:monospace;font-size:11px">${(r.task_id||'').slice(-8)}</span>
-        <span style="color:var(--text2);font-size:10px">[${(r.graph_sources||[]).join(',')}]</span>
-        ${esc((r.description||'').slice(0,60))}${truncated}
-        <div class="source">${pathStr}</div>
+  // Mini timeline
+  let tlHtml='';
+  if(tl.timeline){
+    tl.timeline.forEach(node=>{
+      const cls=node.to==='done'?'done':node.to==='failed'||node.to==='rolled_back'?'failed':node.to==='running'?'active':'';
+      tlHtml+=`<div class="tl-node ${cls}">
+        <span class="tl-from">${node.from||'∅'}</span>→<span class="tl-to">${node.to}</span>
+        ${node.meta&&node.meta.route_level?`<span class="tl-meta">level=${node.meta.route_level}</span>`:''}
+        ${node.meta&&node.meta.error?`<span class="tl-meta" style="color:var(--red)">${esc(node.meta.error.slice(0,80))}</span>`:''}
       </div>`;
     });
   }
 
-  // Semantic baseline (direct Jaccard)
-  if (res.semantic_baseline && res.semantic_baseline.length) {
-    html += '<div style="margin-bottom:12px"><b>📊 语义基线:</b>';
-    res.semantic_baseline.forEach(t => {
-      html += `<div class="mem-card"><span class="sim">${t.similarity.toFixed(3)}</span> <span style="font-family:monospace;font-size:11px">${(t.task_id||'').slice(-8)}</span> ${esc((t.description||'').slice(0,60))}</div>`;
-    });
-    html += '</div>';
+  // Action buttons
+  let actions='';
+  const st=data.status;
+  if(st==='pending'||st==='routed'||st==='blocked'){
+    actions+=data.held
+      ?`<button class="btn cyan sm" onclick="event.stopPropagation();releaseTask('${taskId}')">释放</button>`
+      :`<button class="btn purple sm" onclick="event.stopPropagation();holdTask('${taskId}')">扣留</button>`;
+    actions+=`<button class="btn orange sm" onclick="event.stopPropagation();overrideRoute('${taskId}')">覆盖路由</button>`;
   }
-
-  // Entity matches
-  if (res.entity_matches && Object.keys(res.entity_matches).length) {
-    html += '<div style="margin-bottom:12px"><b>📁 实体重叠:</b>';
-    Object.entries(res.entity_matches).forEach(([f,ids]) => {
-      html += `<div class="mem-card">📁 ${esc(f)} ← ${ids.map(i=>(i||'').slice(-8)).join(', ')}</div>`;
-    });
-    html += '</div>';
+  if(st==='running'||st==='dispatched'){
+    actions+=`<button class="btn red sm" onclick="event.stopPropagation();cancelTask('${taskId}')">取消</button>`;
   }
+  if(st==='failed'||st==='rolled_back'){
+    actions+=`<button class="btn cyan sm" onclick="event.stopPropagation();retryTask('${taskId}')">重试</button>`;
+  }
+  if(data._has_trace){
+    actions+=`<button class="btn sm" onclick="event.stopPropagation();viewTrace('${taskId}')">Trace</button>`;
+  }
+  actions+=`<button class="btn red sm" onclick="event.stopPropagation();rollbackTask('${taskId}')">回滚</button>`;
 
-  document.getElementById('mem-results').innerHTML = html || '<span style="color:var(--text2)">无结果</span>';
+  detailRow.querySelector('td').innerHTML=`
+    <div class="detail-grid">
+      <div><dt>ID</dt><dd style="font-family:'SF Mono',monospace;font-size:11px">${data.id||taskId}</dd></div>
+      <div><dt>状态</dt><dd><span class="badge ${st}">${STATUS_CN[st]||st}</span>
+        ${data.held?'<span class="held-tag">扣留</span>':''}
+        ${data.route_locked?'<span style="font-size:9px;color:var(--orange);margin-left:4px">🔒锁定</span>':''}
+      </dd></div>
+      <div><dt>描述</dt><dd>${esc(data.description||'')}</dd></div>
+      <div><dt>路由级别 · 类型</dt><dd>${data.route_level||'--'} · ${data.route_type||'--'}</dd></div>
+      <div><dt>优先级 · 深度</dt><dd>${data.priority||0} · ${data.depth||0}</dd></div>
+      <div><dt>重试</dt><dd>${data.retry_count||0}/${data.max_retries||3}</dd></div>
+      <div><dt>创建</dt><dd>${created}</dd></div>
+      <div><dt>更新</dt><dd>${updated}</dd></div>
+      <div><dt>等待 · 耗时</dt><dd>${fmtDur(data.wait_sec||0)} · ${data.duration_sec!=null?fmtDur(data.duration_sec):'--'}</dd></div>
+      <div><dt>快照</dt><dd style="font-family:'SF Mono',monospace;font-size:10px">${data.snapshot_id||'--'}</dd></div>
+    </div>
+    ${tlHtml?`<div style="margin-top:8px"><dt>流转</dt><div class="timeline" style="margin-top:4px">${tlHtml}</div></div>`:''}
+    ${parents.length?`<div style="margin-top:8px"><dt>依赖</dt><div class="dag-tree">${parents.join('\n')}</div></div>`:''}
+    ${children.length?`<div style="margin-top:4px"><dt>子任务</dt><div class="dag-tree">${children.join('\n')}</div></div>`:''}
+    ${data.error?`<div class="error-block">${esc(data.error)}</div>`:''}
+    <div class="detail-actions">${actions}</div>`;
+  detailRow.classList.add('open');
 }
+
+// ═══════════════════════════════════════════════════════
+// Decision Chain — Tab 3
+// ═══════════════════════════════════════════════════════
+function populateDecisionsPicker(){
+  const sel=document.getElementById('dc-task-picker');
+  const done=tasks.filter(t=>t.status==='done'||t.status==='failed');
+  sel.innerHTML='<option value="">-- 选择已完成任务 --</option>'+
+    done.map(t=>`<option value="${t.id}">${(t.id||'').slice(-8)} ${esc((t.description||'').slice(0,50))}</option>`).join('');
+}
+
+async function loadDecisions(){
+  const taskId=document.getElementById('dc-task-picker').value;
+  if(!taskId)return;
+  const [route,pre,val]=await Promise.all([
+    api(`/api/tasks/${taskId}/trace?section=route`),
+    api(`/api/tasks/${taskId}/trace?section=pre_search`),
+    api(`/api/tasks/${taskId}/trace?section=validation`),
+  ]);
+
+  let html='';
+
+  // Card 1: Route
+  const lvl=route.level||'?';
+  const lvlC=lvl==='E'?'e-dot':lvl==='D'?'d-dot':'ep-dot';
+  html+=`<div class="decision-card">
+    <div class="dc-header route">路由决策 · level=<b>${lvl}</b> · type=${route.task_type||'?'} · gate=${route.gate_required?'ON':'off'}</div>
+    <div class="dc-body">`;
+  if(route.matched_signals&&route.matched_signals.length){
+    route.matched_signals.forEach(s=>{
+      let icon='▸';
+      if(s.includes('complexity@1'))icon='◆';
+      else if(s.includes('complexity@2'))icon='◇';
+      else if(s.includes('complexity@3'))icon='○';
+      else if(s.includes('降级'))icon='↓';
+      else if(s.includes('gate'))icon='⚷';
+      else if(s.includes('MAGMA'))icon='🧠';
+      else if(s.includes('leading'))icon='⇱';
+      html+=`<div class="signal-row"><span class="sig-icon">${icon}</span><span>${esc(s)}</span></div>`;
+    });
+  }else{html+=`<span style="color:var(--text2)">无匹配信号（默认 E）</span>`;}
+  html+=`</div></div>`;
+
+  // Card 2: Pre-Search
+  if(pre&&!pre.error){
+    html+=`<div class="decision-card">
+      <div class="dc-header presearch">I 层预检 · ${pre.skipped?'已跳过':'已完成'}${pre.reason?` · ${esc(pre.reason)}`:''}</div>
+      <div class="dc-body">`;
+    if(pre.top_decisions&&pre.top_decisions.length){
+      html+=`<div style="margin-bottom:6px;font-weight:600;font-size:10px">📚 知识库命中</div>`;
+      pre.top_decisions.forEach(d=>{
+        html+=`<div class="kb-hit">▸ <span style="color:var(--cyan)">score=${(d.score||0).toFixed(1)}</span> · ${esc((d.title||d.id||'').slice(0,60))}</div>`;
+      });
+    }
+    if(pre.memory&&!pre.memory.error){
+      const mem=pre.memory;
+      html+=`<div style="margin-top:6px;font-weight:600;font-size:10px">🧠 MAGMA 记忆 · intent=${mem.intent||'?'}</div>`;
+      if(mem.narrative&&mem.narrative.length){
+        mem.narrative.slice(0,3).forEach(h=>{
+          html+=`<div class="magma-hit">
+            <span style="color:var(--purple)">${(h.score||0).toFixed(4)}</span>
+            <span style="font-family:'SF Mono',monospace;font-size:10px">${(h.task_id||'').slice(-8)}</span>
+            [${(h.graph_sources||[]).join(',')}]
+            ${esc((h.description||'').slice(0,50))}
+          </div>`;
+        });
+      }
+      if(mem.entity_matches&&Object.keys(mem.entity_matches).length){
+        html+=`<div style="margin-top:4px">📁 实体: ${Object.keys(mem.entity_matches).join(', ')}</div>`;
+      }
+      if(mem.graph_coverage&&Object.keys(mem.graph_coverage).length){
+        html+=`<div style="color:var(--text2)">📊 图覆盖: ${Object.entries(mem.graph_coverage).map(([k,v])=>`${k}=${v}`).join(', ')}</div>`;
+      }
+    }
+    html+=`</div></div>`;
+  }
+
+  // Card 3: Validation
+  if(val&&!val.error){
+    const v=val;
+    html+=`<div class="decision-card">
+      <div class="dc-header validation">验证结论 · ${v.verdict||'?'} · action=${v.action||'?'} · turns=${v.turns_used||0}</div>
+      <div class="dc-body">
+        <div>原始判定: <b>${v.validate_verdict||'?'}</b> · ${esc(v.validate_reason||'')}</div>
+        <div>Gate: ${v.gate_passed===null?'未触发':v.gate_passed?'✅通过':'❌失败'}${v.gate_message?` · ${esc(v.gate_message)}`:''}</div>
+        ${v.unverified&&v.unverified.length?`<div style="margin-top:4px">⚠ 未验证: ${v.unverified.map(u=>esc(u)).join(' · ')}</div>`:''}
+        ${v.changed_files&&v.changed_files.length?`<div style="margin-top:4px">📄 文件: ${v.changed_files.join(', ')}</div>`:''}
+        <div style="margin-top:4px;color:var(--text2)">Token: ${v.token_count||0} · 耗时: ${v.elapsed?v.elapsed.toFixed(1)+'s':'?'}</div>
+        ${v.agent_output?`<details style="margin-top:6px"><summary>Agent 原始输出</summary><pre class="agent-out">${esc(v.agent_output)}</pre></details>`:''}
+      </div></div>`;
+  }
+
+  document.getElementById('decision-cards').innerHTML=html||'<span style="color:var(--text2)">选择任务后加载决策链</span>';
+}
+
+// ═══════════════════════════════════════════════════════
+// Intervention — Tab 4
+// ═══════════════════════════════════════════════════════
+function renderIntervention(){
+  // Queue management: PENDING + ROUTED + BLOCKED
+  const queue=tasks.filter(t=>['pending','routed','blocked'].includes(t.status));
+  document.getElementById('queue-list').innerHTML=queue.length?queue.map(t=>`
+    <div class="intervention-row">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" class="q-check" value="${t.id}">
+        <span style="font-family:'SF Mono',monospace;font-size:10px;color:var(--text2)">${(t.id||'').slice(-8)}</span>
+        ${t.held?'<span class="held-tag">扣留</span>':''}
+        ${t.route_locked?'<span style="font-size:9px;color:var(--orange)">🔒</span>':''}
+        <span>${esc((t.description||'').slice(0,50))}</span>
+        <span class="badge ${t.status}">${STATUS_CN[t.status]||t.status}</span>
+      </label>
+      <div style="display:flex;gap:4px">
+        ${t.held
+          ?`<button class="btn cyan sm" onclick="releaseTask('${t.id}')">释放</button>`
+          :`<button class="btn purple sm" onclick="holdTask('${t.id}')">扣留</button>`}
+        <button class="btn orange sm" onclick="overrideRoute('${t.id}')">覆盖</button>
+      </div>
+    </div>`).join(''):'<span style="color:var(--text2);font-size:11px">无排队任务</span>';
+
+  // Active: RUNNING + DISPATCHED
+  const active=tasks.filter(t=>['running','dispatched'].includes(t.status));
+  document.getElementById('active-list').innerHTML=active.length?active.map(t=>`
+    <div class="intervention-row">
+      <span>
+        <span style="font-family:'SF Mono',monospace;font-size:10px;color:var(--text2)">${(t.id||'').slice(-8)}</span>
+        <span class="badge ${t.status} pulse">${STATUS_CN[t.status]||t.status}</span>
+        ${esc((t.description||'').slice(0,50))}
+      </span>
+      <button class="btn red sm" onclick="cancelTask('${t.id}')">取消</button>
+    </div>`).join(''):'<span style="color:var(--text2);font-size:11px">无活跃任务</span>';
+
+  // Failed / retryable
+  const failed=tasks.filter(t=>['failed','rolled_back'].includes(t.status));
+  document.getElementById('failed-list').innerHTML=failed.length?failed.map(t=>`
+    <div class="intervention-row">
+      <span>
+        <span style="font-family:'SF Mono',monospace;font-size:10px;color:var(--text2)">${(t.id||'').slice(-8)}</span>
+        <span class="badge ${t.status}">${STATUS_CN[t.status]||t.status}</span>
+        ${esc((t.description||'').slice(0,50))}
+        ${t.error?`<span style="font-size:10px;color:var(--red)">${esc(t.error.slice(0,60))}</span>`:''}
+      </span>
+      <button class="btn cyan sm" onclick="retryTask('${t.id}')">重试</button>
+    </div>`).join(''):'<span style="color:var(--text2);font-size:11px">无可重试任务</span>';
+}
+
+// ═══════════════════════════════════════════════════════
+// Batch ops
+// ═══════════════════════════════════════════════════════
+function getChecked(){return [...document.querySelectorAll('.q-check:checked')].map(c=>c.value);}
+async function batchHold(){for(const id of getChecked())await api(`/api/tasks/${id}/hold`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{"reason":"批量扣留"}'});refreshAll();}
+async function batchRelease(){for(const id of getChecked())await api(`/api/tasks/${id}/release`,{method:'POST'});refreshAll();}
+async function batchOverride(){
+  const lvl=document.getElementById('batch-level').value;if(!lvl)return;
+  for(const id of getChecked())await api(`/api/tasks/${id}/override-route`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({level:lvl})});
+  refreshAll();
+}
+
+// ═══════════════════════════════════════════════════════
+// Single actions
+// ═══════════════════════════════════════════════════════
+async function holdTask(id,reason=''){await api(`/api/tasks/${id}/hold`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason})});refreshAll();}
+async function releaseTask(id){await api(`/api/tasks/${id}/release`,{method:'POST'});refreshAll();}
+async function overrideRoute(id){
+  const lvl=prompt('覆盖路由级别 (E / D / E+):','D');if(!lvl)return;
+  await api(`/api/tasks/${id}/override-route`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({level:lvl})});
+  refreshAll();
+}
+async function cancelTask(id){if(!confirm(`取消任务 ${id.slice(-8)}?`))return;await api(`/api/tasks/${id}/cancel`,{method:'POST'});refreshAll();}
+async function retryTask(id){await api(`/api/tasks/${id}/retry`,{method:'POST'});refreshAll();}
+
+// ═══════════════════════════════════════════════════════
+// Submit / Trace / Rollback / Resolve (existing)
+// ═══════════════════════════════════════════════════════
+async function submitTask(){
+  const desc=document.getElementById('new-task-desc').value.trim();if(!desc)return;
+  const r=await api('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({description:desc})});
+  if(r.ok){document.getElementById('new-task-desc').value='';refreshAll();}
+  else alert('创建失败: '+(r.error||'?'));
+}
+
+async function viewTrace(taskId){
+  const data=await api('/api/tasks/'+taskId+'/trace');
+  const modal=document.getElementById('trace-modal'),content=document.getElementById('trace-content');
+  if(data.error){content.innerHTML=`<h3>Trace 不可用</h3><p>${esc(data.error)}</p><button class="btn" onclick="closeTrace()">关闭</button>`;}
+  else{
+    content.innerHTML=`
+      <h3 style="margin-bottom:8px">Trace · ${(taskId||'').slice(-8)}</h3>
+      <div style="font-size:12px;margin-bottom:12px">
+        <p><b>最终状态:</b> ${data.final_status||'?'}</p>
+        <p><b>路由:</b> ${data.route?.level||'?'} · ${(data.route?.matched_signals||[]).join(', ')}</p>
+        <p><b>验证:</b> ${data.validation?.verdict||'?'}</p>
+        <p><b>文件:</b> ${(data.changed_files||[]).join(', ')||'无'}</p>
+        <p><b>耗时:</b> ${data.elapsed?data.elapsed.toFixed(1)+'s':'?'} · <b>Token:</b> ${data.token_count||0}</p>
+      </div>
+      <details><summary>完整 JSON</summary><pre>${esc(JSON.stringify(data,null,2))}</pre></details>
+      <button class="btn" onclick="closeTrace()" style="margin-top:8px">关闭</button>`;
+  }
+  modal.classList.add('open');
+}
+function closeTrace(){document.getElementById('trace-modal').classList.remove('open');}
+
+async function rollbackTask(taskId){
+  if(!confirm(`回滚 ${taskId.slice(-8)}?`))return;
+  const r=await api('/api/tasks/'+taskId+'/rollback',{method:'POST'});
+  if(r.ok)refreshAll();else alert('回滚失败: '+(r.error||'?'));
+}
+
+function renderConflicts(){
+  const sec=document.getElementById('conflict-section'),body=document.getElementById('conflict-body');
+  if(!conflicts.length){sec.style.display='none';return;}sec.style.display='';
+  body.innerHTML=conflicts.map(c=>`
+    <div class="intervention-row">
+      <span>
+        <span style="font-family:'SF Mono',monospace;font-size:10px;color:var(--text2)">${(c.id||'').slice(-8)}</span>
+        ${esc((c.description||'').slice(0,50))}
+        ${c.error?`<span style="font-size:10px;color:var(--orange)">${esc(c.error.slice(0,80))}</span>`:''}
+      </span>
+      <div style="display:flex;gap:4px">
+        <button class="btn cyan sm" onclick="resolveConflict('${c.id}','manual')">已解决</button>
+        <button class="btn red sm" onclick="resolveConflict('${c.id}','abort')">放弃</button>
+      </div>
+    </div>`).join('');
+}
+async function resolveConflict(id,action){
+  const r=await api('/api/conflicts/'+id+'/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});
+  if(r.ok)refreshAll();else alert('操作失败: '+(r.error||'?'));
+}
+
+// ═══════════════════════════════════════════════════════
+// Loop Control
+// ═══════════════════════════════════════════════════════
+async function startLoop(){
+  const r=await api('/api/loop/start',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"concurrent":1}'});
+  if(r.ok){updateLoopUI(true);refreshAll();}
+}
+async function stopLoop(){
+  const r=await api('/api/loop/stop',{method:'POST'});
+  if(r.ok){updateLoopUI(false);refreshAll();}
+}
+function updateLoopUI(running){
+  document.getElementById('loop-dot').className='loop-indicator '+(running?'on':'off');
+  document.getElementById('loop-label').className='loop-status '+(running?'on':'off');
+  document.getElementById('loop-label').textContent=running?'调度循环 · 运行中':'调度循环 · 已停止';
+  document.getElementById('btn-loop-start').style.display=running?'none':'';
+  document.getElementById('btn-loop-stop').style.display=running?'':'none';
+}
+async function pollLoopEvents(){
+  try{
+    const r=await api('/api/loop/status');
+    if(r.running) updateLoopUI(true);
+    document.getElementById('loop-info').textContent=r.running?`concurrent=${r.concurrent}`:'';
+    if(r.events&&r.events.length){
+      document.getElementById('event-section').style.display='';
+      document.getElementById('event-feed').innerHTML=r.events.map(e=>{
+        const cls=e.kind==='task'?'ev-task':e.kind==='error'?'ev-error':e.kind==='system'?'ev-system':'ev-idle';
+        return `<div class="event-row"><span class="ev-ts">${new Date(e.ts*1000).toLocaleTimeString('zh-CN')}</span><span class="${cls}">${esc(e.msg)}</span></div>`;
+      }).join('');
+    }
+  }catch(e){}
+}
+// Check loop status on init
+pollLoopEvents();
+setInterval(pollLoopEvents,2000);
 
 // ═══════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════
-function esc(s) {
-  if (!s) return '';
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
-
-function fmtDur(sec) {
-  if (sec < 60) return Math.round(sec) + 's';
-  if (sec < 3600) return (sec/60).toFixed(1) + 'm';
-  return (sec/3600).toFixed(2) + 'h';
-}
-
-function updateClock() {
-  document.getElementById('clock').textContent =
-    new Date().toLocaleString('zh-CN') + ' | v3 MAGMA';
-}
+function esc(s){if(!s)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+function fmtDur(s){if(s<60)return Math.round(s)+'s';if(s<3600)return(s/60).toFixed(1)+'m';return(s/3600).toFixed(1)+'h';}
+function unix2str(ts){if(!ts)return'--';return new Date(ts*1000).toLocaleString('zh-CN');}
 
 // ═══════════════════════════════════════════════════════
 // Init
 // ═══════════════════════════════════════════════════════
 refreshAll();
-queryMemory();
-setInterval(refreshAll, 5000);
+setInterval(refreshAll,2000);
 </script>
 </body>
 </html>

@@ -58,6 +58,8 @@ class Task:
     children: list[str] = field(default_factory=list)  # 子任务 id 列表 (DAG 分解)
     depth: int = 0  # 分解深度, 防无限递归
     route_locked: bool = False  # planner 已指定层级 → 跳过 re-route (建议 #6)
+    held: bool = False           # 人工扣留, 不进调度队列
+    held_reason: str = ""        # 扣留原因
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -73,6 +75,8 @@ class Task:
         d.setdefault("children", [])
         d.setdefault("depth", 0)
         d.setdefault("route_locked", False)
+        d.setdefault("held", False)
+        d.setdefault("held_reason", "")
         return cls(**d)
 
     def compute_starvation(self) -> float:
@@ -258,6 +262,8 @@ def ready_tasks(exclude: set[str] = None) -> list[Task]:
         if task.status not in _SCHEDULABLE:
             continue
         if task.id in exclude:
+            continue
+        if task.held:  # 人工扣留 → 跳过调度
             continue
         dead_dep = _any_dead_dep(task)
         if dead_dep:

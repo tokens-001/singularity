@@ -1,0 +1,88 @@
+{
+  "t1": {
+    "task_id": "t1",
+    "content": "修复DAG调度器死锁问题",
+    "timestamp": 1000.0,
+    "tokens": [
+      "dag",
+      "修复",
+      "器死",
+      "度器",
+      "死锁",
+      "调度",
+      "锁问",
+      "问题"
+    ],
+    "attrs": {
+      "files": [
+        "scheduler/orchestrator.py"
+      ],
+      "depends_on": [],
+      "status": "done",
+      "route_level": "E"
+    }
+  },
+  "t2": {
+    "task_id": "t2",
+    "content": "为merge queue添加并发控制",
+    "timestamp": 2000.0,
+    "tokens": [
+      "merge",
+      "queue",
+      "为",
+      "加并",
+      "发控",
+      "并发",
+      "控制",
+      "添加"
+    ],
+    "attrs": {
+      "files": [
+        "scheduler/merge.py"
+      ],
+      "depends_on": [
+        "t1"
+      ]
+    }
+  },
+  "t3": {
+    "task_id": "t3",
+    "content": "重构知识引擎分词器",
+    "timestamp": 3000.0,
+    "tokens": [
+      "分词",
+      "引擎",
+      "擎分",
+      "构知",
+      "知识",
+      "识引",
+      "词器",
+      "重构"
+    ],
+    "attrs": {
+      "files": [
+        "qidian-knowledge/scripts/tokenizer.py"
+      ],
+      "depends_on": []
+    }
+  },
+  "t4": {
+    "task_id": "t4",
+    "content": "修复orchestrator并发问题",
+    "timestamp": 4000.0,
+    "tokens": [
+      "orchestrator",
+      "修复",
+      "发问",
+      "并发",
+      "问题"
+    ],
+    "attrs": {
+      "files": [
+        "scheduler/orchestrator.py",
+        "scheduler/pre_search.py"
+      ],
+      "depends_on": []
+    }
+  }
+}

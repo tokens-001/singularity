@@ -1,0 +1,52 @@
+{
+  "semantic": [
+    [
+      "t1",
+      "t4",
+      0.1818
+    ]
+  ],
+  "temporal": [
+    [
+      "t1",
+      "t2"
+    ],
+    [
+      "t2",
+      "t3"
+    ],
+    [
+      "t3",
+      "t4"
+    ]
+  ],
+  "causal": [
+    [
+      "t1",
+      "t2",
+      "explicit"
+    ]
+  ],
+  "entity": [
+    [
+      "t1",
+      "scheduler/orchestrator.py"
+    ],
+    [
+      "t2",
+      "scheduler/merge.py"
+    ],
+    [
+      "t3",
+      "qidian-knowledge/scripts/tokenizer.py"
+    ],
+    [
+      "t4",
+      "scheduler/orchestrator.py"
+    ],
+    [
+      "t4",
+      "scheduler/pre_search.py"
+    ]
+  ]
+}

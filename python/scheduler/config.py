@@ -23,6 +23,8 @@ QIDIAN_DIR = PROJECT_ROOT / ".qidian"
 SNAPSHOT_DIR = QIDIAN_DIR / "snapshots"
 PATCH_DIR = QIDIAN_DIR / "patches"  # E+ 智谱产出暂存, apply 前不落盘 (审计 6.5)
 TRACE_DIR = QIDIAN_DIR / "traces"
+HOLD_DIR = QIDIAN_DIR / "holds"      # 人工扣留标记
+CANCEL_DIR = QIDIAN_DIR / "cancels"  # 取消标记
 
 AGENTS_TOML = SCHEDULER_DIR / "agents.toml"  # stdlib tomllib, 不依赖 pyyaml
 
@@ -66,7 +68,7 @@ def ensure_dirs() -> None:
     """启动前建好产物目录; 剩余空间不足 fail fast (审计 4.4)。"""
     import shutil
 
-    for d in (QIDIAN_DIR, SNAPSHOT_DIR, PATCH_DIR, TRACE_DIR):
+    for d in (QIDIAN_DIR, SNAPSHOT_DIR, PATCH_DIR, TRACE_DIR, HOLD_DIR, CANCEL_DIR):
         d.mkdir(parents=True, exist_ok=True)
     free = shutil.disk_usage(QIDIAN_DIR).free / (1024 * 1024)
     if free < MIN_DISK_MB:

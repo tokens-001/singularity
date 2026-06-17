@@ -139,6 +139,20 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
         for turn in range(1, level_max + 1):
             witness.heartbeat(task.id, level)
 
+            # 检查人工取消标记
+            cancel_path = config.CANCEL_DIR / f"{task.id}.json"
+            if cancel_path.exists():
+                cancel_path.unlink()
+                wt and _cleanup_wt(wt)
+                return BatchOutput(
+                    ok=False, task_id=task.id,
+                    term_reason="cancelled_by_user",
+                    validation=val_mod.ValidationReport(
+                        verdict="阻断", action="abort",
+                        unverified=["用户手动取消"],
+                    ),
+                )
+
             effective_task = task.description
             if is_planner:
                 effective_task = _PLANNER_PREAMBLE + task.description

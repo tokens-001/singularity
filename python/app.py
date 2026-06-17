@@ -1,10 +1,13 @@
 # 奇点 Agent 调度平台 — Web 控制台
 # Flask 后端：查看调度状态、提交任务、处理合并冲突
+# v2: 调度循环后台线程，面板即控制中心
 
 import json
 import os
 import sys
 import time
+import threading
+from collections import deque
 from pathlib import Path
 
 from flask import Flask, render_template, request, jsonify
@@ -19,10 +22,97 @@ from scheduler import neijinglu
 from scheduler import dispatcher as disp_mod
 from scheduler import snapshot as snap_mod
 from scheduler import merge as merge_mod
+from scheduler import orchestrator
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24).hex()
+
+# ═══════════════════════════════════════════════════════════
+# 调度循环后台线程
+# ═══════════════════════════════════════════════════════════
+
+_loop_thread: threading.Thread | None = None
+_loop_stop: threading.Event = threading.Event()
+_loop_concurrent: int = 1
+_loop_events: deque = deque(maxlen=50)  # 最近 50 个事件
+_loop_running: bool = False
+_loop_lock = threading.Lock()
+
+
+def _loop_worker():
+    """后台调度循环：持续取队 → 执行，面板可随时停止。"""
+    global _loop_running
+    import signal
+
+    sched_config.ensure_dirs()
+    agents = disp_mod.load_agents()
+
+    recovered = tracker.recover()
+    if recovered:
+        _push_event("system", f"恢复 {recovered} 个中断任务")
+
+    _push_event("system", "loop started")
+    idle_ticks = 0
+
+    while not _loop_stop.is_set():
+        try:
+            results = orchestrator.run_queue(agents, max_concurrent=_loop_concurrent)
+            count = len(results) if results else 0
+
+            if count == 0:
+                idle_ticks += 1
+                if idle_ticks == 1:
+                    _push_event("idle", "队列空，等待新任务...")
+                time.sleep(3)
+            else:
+                idle_ticks = 0
+                for tid, reason, validation in results:
+                    t = tracker._read(tid)
+                    level = t.route_level if t else "?"
+                    verdict = getattr(validation, "action", "?")
+                    _push_event("task", f"[{tid[:8]}] level={level} {verdict}: {reason}")
+
+                # MAGMA 慢通道整合
+                try:
+                    added = orchestrator.consolidate_memory()
+                    if added:
+                        _push_event("memory", f"慢通道: +{added} 条隐含因果边")
+                except Exception:
+                    pass
+        except Exception as e:
+            _push_event("error", f"loop error: {e}")
+            time.sleep(5)
+
+    _push_event("system", "loop stopped")
+    _loop_running = False
+
+
+def _push_event(kind: str, msg: str):
+    ts = time.time()
+    _loop_events.appendleft({"kind": kind, "msg": msg, "ts": ts})
+
+
+def start_loop(concurrent: int = 1):
+    global _loop_thread, _loop_stop, _loop_concurrent, _loop_running
+    with _loop_lock:
+        if _loop_running:
+            return False
+        _loop_stop.clear()
+        _loop_concurrent = concurrent
+        _loop_running = True
+        _loop_thread = threading.Thread(target=_loop_worker, daemon=True)
+        _loop_thread.start()
+        return True
+
+
+def stop_loop():
+    global _loop_stop, _loop_running
+    with _loop_lock:
+        if not _loop_running:
+            return False
+        _loop_stop.set()
+        return True
 
 
 @app.after_request
@@ -78,7 +168,35 @@ def index():
 
 
 # ═══════════════════════════════════════════════════════════
-# GET /api/status — 聚合状态
+# Loop Control API — 面板即控制中心
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/loop/start", methods=["POST"])
+def api_loop_start():
+    data = request.get_json(silent=True) or {}
+    concurrent = int(data.get("concurrent", 1))
+    ok = start_loop(concurrent)
+    return jsonify({"ok": ok, "running": _loop_running, "concurrent": _loop_concurrent})
+
+
+@app.route("/api/loop/stop", methods=["POST"])
+def api_loop_stop():
+    ok = stop_loop()
+    return jsonify({"ok": ok, "running": _loop_running})
+
+
+@app.route("/api/loop/status")
+def api_loop_status():
+    events = list(_loop_events)[:20]
+    return jsonify({
+        "running": _loop_running,
+        "concurrent": _loop_concurrent,
+        "events": [{"kind": e["kind"], "msg": e["msg"], "ts": e["ts"]} for e in events],
+    })
+
+
+# ═══════════════════════════════════════════════════════════
+# GET /api/status — 聚合状态 (含 loop 信息)
 # ═══════════════════════════════════════════════════════════
 
 @app.route("/api/status")
@@ -107,6 +225,8 @@ def api_status():
         "token_totals": token_totals,
         "stalled": stalled,
         "agents": agents,
+        "loop_running": _loop_running,
+        "loop_concurrent": _loop_concurrent,
     })
 
 
@@ -203,24 +323,254 @@ def api_task_detail(task_id):
 
 
 # ═══════════════════════════════════════════════════════════
-# GET /api/tasks/<id>/trace — 交付报告
+# GET /api/tasks/<id>/trace — 交付报告 (支持 ?section= / ?format=)
 # ═══════════════════════════════════════════════════════════
 
 @app.route("/api/tasks/<task_id>/trace")
 def api_task_trace(task_id):
+    """支持 ?section=route|pre_search|validation，按需取决策证据。"""
     trace_path = sched_config.TRACE_DIR / f"{task_id}.json"
     if not trace_path.exists():
-        return jsonify({"error": "Trace 文件不存在（任务未完成或未生成）"}), 404
+        return jsonify({"error": "Trace 文件不存在"}), 404
     try:
         data = json.loads(trace_path.read_text(encoding="utf-8"))
+        section = request.args.get("section", "")
         fmt = request.args.get("format", "")
+
         if fmt == "md":
             from scheduler.neijinglu import DeliveryReport, format_report
             report = DeliveryReport.from_dict(data)
             return format_report(report), 200, {"Content-Type": "text/plain; charset=utf-8"}
+
+        if section == "route":
+            route = data.get("route", {})
+            return jsonify({
+                "level": route.get("level", "?"),
+                "gate_required": route.get("gate_required", False),
+                "task_type": route.get("task_type", "default"),
+                "matched_signals": route.get("matched_signals", []),
+            })
+        elif section == "pre_search":
+            ps = data.get("pre_search", {})
+            return jsonify({
+                "skipped": ps.get("skipped", True),
+                "reason": ps.get("reason", ""),
+                "top_decisions": ps.get("top_decisions", []),
+                "memory": ps.get("memory", {}),
+            })
+        elif section == "validation":
+            val = data.get("validation", {})
+            return jsonify({
+                "verdict": val.get("verdict", "?"),
+                "action": val.get("action", "?"),
+                "validate_verdict": val.get("validate_verdict", ""),
+                "validate_reason": val.get("validate_reason", ""),
+                "gate_passed": val.get("gate_passed"),
+                "gate_message": val.get("gate_message", ""),
+                "turns_used": val.get("turns_used", 0),
+                "unverified": val.get("unverified", []),
+                "changed_files": data.get("changed_files", []),
+                "agent_output": data.get("agent_output", ""),
+                "token_count": data.get("token_count", 0),
+                "elapsed": data.get("elapsed", 0),
+            })
         return jsonify(data)
     except (json.JSONDecodeError, OSError):
         return jsonify({"error": "Trace 文件读取失败"}), 500
+
+
+# ═══════════════════════════════════════════════════════════
+# GET /api/tasks/<id>/timeline — 任务流转时间线
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/tasks/<task_id>/timeline")
+def api_task_timeline(task_id):
+    """从 task 文件 + trace + heartbeat 重建状态流转时间线。"""
+    task_path = tracker._tasks_dir() / f"{task_id}.json"
+    if not task_path.exists():
+        return jsonify({"error": "任务不存在"}), 404
+
+    task_data = _read_task_file(task_path)
+    if not task_data:
+        return jsonify({"error": "读取失败"}), 500
+
+    timeline = []
+    status = task_data.get("status", "pending")
+    created_at = task_data.get("created_at", 0)
+    updated_at = task_data.get("updated_at", created_at)
+
+    # Step 1: 创建
+    timeline.append({
+        "from": None, "to": "pending",
+        "timestamp": created_at,
+        "meta": {},
+    })
+
+    # Step 2: 如果已被路由，添加 routed 节点
+    route_level = task_data.get("route_level", "")
+    if status not in ("pending",) and route_level:
+        timeline.append({
+            "from": "pending", "to": "routed",
+            "timestamp": task_data.get("routed_at", updated_at),
+            "meta": {
+                "route_level": route_level,
+                "route_gate": task_data.get("route_gate", False),
+                "route_type": task_data.get("route_type", "default"),
+            },
+        })
+
+    # Step 3: dispatched (v3)
+    if status in ("dispatched", "running", "validating", "done", "failed", "rolled_back", "decomposed", "conflict_held"):
+        timeline.append({
+            "from": "routed", "to": "dispatched",
+            "timestamp": updated_at,
+            "meta": {},
+        })
+
+    # Step 4: running
+    if task_data.get("snapshot_id"):
+        timeline.append({
+            "from": "dispatched", "to": "running",
+            "timestamp": updated_at,
+            "meta": {"snapshot_id": task_data.get("snapshot_id", "")},
+        })
+
+    # Step 5: 终态
+    if status in ("done", "failed", "rolled_back", "decomposed", "conflict_held"):
+        prev = "validating" if status in ("done", "failed") else "running"
+        meta = {}
+        if status == "failed":
+            meta["error"] = (task_data.get("error", "") or "")[:200]
+        if status == "rolled_back":
+            meta["rolled_back"] = True
+        timeline.append({
+            "from": prev, "to": status,
+            "timestamp": updated_at,
+            "meta": meta,
+        })
+
+    # Step 6: 补充 trace 数据（如果有）
+    trace_path = sched_config.TRACE_DIR / f"{task_id}.json"
+    if trace_path.exists():
+        try:
+            trace = json.loads(trace_path.read_text(encoding="utf-8"))
+            timeline.append({
+                "from": None, "to": "_trace",
+                "timestamp": updated_at,
+                "meta": {
+                    "route": trace.get("route", {}).get("matched_signals", []),
+                    "elapsed": trace.get("elapsed"),
+                    "token_count": trace.get("token_count"),
+                    "changed_files": trace.get("changed_files", []),
+                    "validation_verdict": trace.get("validation", {}).get("verdict"),
+                    "pre_search_escalated": trace.get("pre_search", {}).get("escalated"),
+                },
+            })
+        except Exception:
+            pass
+
+    return jsonify({
+        "task_id": task_id,
+        "current_status": status,
+        "timeline": timeline,
+    })
+
+
+# ═══════════════════════════════════════════════════════════
+# POST /api/tasks/<id>/hold — 暂扣任务
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/tasks/<task_id>/hold", methods=["POST"])
+def api_hold_task(task_id):
+    task_path = tracker._tasks_dir() / f"{task_id}.json"
+    if not task_path.exists():
+        return jsonify({"error": "任务不存在"}), 404
+    data = request.get_json(silent=True) or {}
+    reason = data.get("reason", "")
+    task = tracker._read(task_id)
+    if task is None:
+        return jsonify({"error": "任务读取失败"}), 500
+    if task.status not in (TaskStatus.PENDING, TaskStatus.ROUTED):
+        return jsonify({"error": f"当前状态 {task.status.value} 不支持扣留"}), 400
+    tracker.transition(task_id, task.status, held=True, held_reason=reason)
+    return jsonify({"ok": True, "held": True, "reason": reason})
+
+
+# ═══════════════════════════════════════════════════════════
+# POST /api/tasks/<id>/release — 释放扣留任务
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/tasks/<task_id>/release", methods=["POST"])
+def api_release_task(task_id):
+    task = tracker._read(task_id)
+    if task is None:
+        return jsonify({"error": "任务不存在"}), 404
+    if not task.held:
+        return jsonify({"error": "任务未被扣留"}), 400
+    tracker.transition(task_id, task.status, held=False, held_reason="")
+    return jsonify({"ok": True, "held": False})
+
+
+# ═══════════════════════════════════════════════════════════
+# POST /api/tasks/<id>/override-route — 覆盖路由级别
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/tasks/<task_id>/override-route", methods=["POST"])
+def api_override_route(task_id):
+    data = request.get_json(silent=True) or {}
+    level = data.get("level", "")
+    locked = data.get("locked", True)
+    if level not in ("E", "D", "E+"):
+        return jsonify({"error": "level 必须是 E / D / E+"}), 400
+    task = tracker._read(task_id)
+    if task is None:
+        return jsonify({"error": "任务不存在"}), 404
+    if task.status not in (TaskStatus.PENDING, TaskStatus.ROUTED):
+        return jsonify({"error": f"当前状态 {task.status.value} 不支持覆盖路由"}), 400
+    tracker.transition(task_id, task.status, route_level=level, route_locked=locked)
+    return jsonify({"ok": True, "route_level": level, "locked": locked})
+
+
+# ═══════════════════════════════════════════════════════════
+# POST /api/tasks/<id>/cancel — 取消任务
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/tasks/<task_id>/cancel", methods=["POST"])
+def api_cancel_task(task_id):
+    task = tracker._read(task_id)
+    if task is None:
+        return jsonify({"error": "任务不存在"}), 404
+    if task.status in (TaskStatus.DONE, TaskStatus.FAILED,
+                       TaskStatus.ROLLED_BACK, TaskStatus.DECOMPOSED):
+        return jsonify({"error": f"终态任务 {task.status.value} 不可取消"}), 400
+
+    sched_config.ensure_dirs()
+    if task.status in (TaskStatus.RUNNING, TaskStatus.DISPATCHED):
+        # 写取消标记文件，orchestrator turn loop 会检测
+        cancel_path = sched_config.CANCEL_DIR / f"{task_id}.json"
+        cancel_path.write_text(json.dumps({
+            "task_id": task_id, "cancelled_at": time.time(),
+        }), encoding="utf-8")
+        return jsonify({"ok": True, "message": "已发送取消信号，将在当前 turn 结束后生效"})
+    else:
+        # PENDING/ROUTED/BLOCKED → 直接标记失败
+        tracker.transition(task_id, TaskStatus.FAILED, error="用户手动取消")
+        return jsonify({"ok": True, "message": "已取消"})
+
+
+# ═══════════════════════════════════════════════════════════
+# POST /api/tasks/<id>/retry — 重试失败任务
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/tasks/<task_id>/retry", methods=["POST"])
+def api_retry_task(task_id):
+    task = tracker._read(task_id)
+    if task is None:
+        return jsonify({"error": "任务不存在"}), 404
+    if task.status not in (TaskStatus.FAILED, TaskStatus.ROLLED_BACK):
+        return jsonify({"error": f"当前状态 {task.status.value} 不支持重试"}), 400
+    tracker.transition(task_id, TaskStatus.PENDING, error="", retry_count=0)
+    return jsonify({"ok": True, "new_status": "pending"})
 
 
 # ═══════════════════════════════════════════════════════════
