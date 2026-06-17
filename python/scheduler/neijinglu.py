@@ -38,6 +38,8 @@ class DeliveryReport:
     final_status: str = "unknown"   # delivered | delivered_unverified | blocked | rolled_back
     pre_search_skipped: bool = False
     pre_search_reason: str = ""
+    pre_search_top_decisions: list = None     # [{id, title, score}] 知识库命中
+    pre_search_memory: dict = None            # MAGMA 记忆命中 (MemoryHits.to_dict)
 
     @classmethod
     def from_dict(cls, d: dict) -> "DeliveryReport":
@@ -88,6 +90,8 @@ class DeliveryReport:
             final_status=d.get("final_status", "unknown"),
             pre_search_skipped=d.get("pre_search", {}).get("skipped", False),
             pre_search_reason=d.get("pre_search", {}).get("reason", ""),
+            pre_search_top_decisions=d.get("pre_search", {}).get("top_decisions", []),
+            pre_search_memory=d.get("pre_search", {}).get("memory"),
         )
 
     def to_dict(self) -> dict:
@@ -103,6 +107,8 @@ class DeliveryReport:
             "pre_search": {
                 "skipped": self.pre_search_skipped,
                 "reason": self.pre_search_reason,
+                "top_decisions": self.pre_search_top_decisions or [],
+                "memory": self.pre_search_memory or {},
             },
             "changed_files": self.executor_result.changed_files,
             "patch_path": self.executor_result.patch_path,
@@ -134,6 +140,8 @@ def build_report(
     pre_search_skipped: bool = False,
     pre_search_reason: str = "",
     rolled_back: bool = False,
+    pre_search_top_decisions: list = None,
+    pre_search_memory: dict = None,
 ) -> DeliveryReport:
     """组装交付报告。"""
     report = DeliveryReport(
@@ -144,6 +152,8 @@ def build_report(
         snapshot=snapshot,
         pre_search_skipped=pre_search_skipped,
         pre_search_reason=pre_search_reason,
+        pre_search_top_decisions=pre_search_top_decisions or [],
+        pre_search_memory=pre_search_memory or {},
     )
 
     # 最终状态判定 (审计 1.3: 通过≠已验证)

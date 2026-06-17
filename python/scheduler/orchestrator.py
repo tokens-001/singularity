@@ -87,6 +87,8 @@ class BatchOutput:
     planner_decomposed: bool = False  # planner 分解了子任务 (parent 不该 DONE)
     pre_search_skipped: bool = False
     pre_search_reason: str = ""
+    pre_search_top_decisions: list = field(default_factory=list)
+    pre_search_memory: dict = field(default_factory=dict)
 
 
 def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
@@ -383,6 +385,13 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
         batch = _run_with_retry(task, ctx, agents)
         batch.pre_search_skipped = pre.skipped
         batch.pre_search_reason = pre.reason
+        batch.pre_search_top_decisions = pre.top_decisions
+        batch.pre_search_memory = {
+            "intent": pre.memory.intent,
+            "narrative": pre.memory.narrative,
+            "entity_matches": pre.memory.entity_matches,
+            "graph_coverage": pre.memory.graph_coverage,
+        }
 
         # 主线程写终态 (修复 #3: 无 merge_request → 直接 DONE)
         validation = batch.validation
@@ -407,7 +416,9 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
             reason = f"failed: {term_reason}"
 
         _save_trace(task, route, snap, disp_result, validation, validation.action == "rollback",
-                    pre_search_skipped=pre.skipped, pre_search_reason=pre.reason)
+                    pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
+                    pre_search_top_decisions=batch.pre_search_top_decisions,
+                    pre_search_memory=batch.pre_search_memory)
         results.append((task.id, reason, validation))
 
     return results
@@ -477,11 +488,20 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                     batch = fut.result()
                     batch.pre_search_skipped = pre.skipped
                     batch.pre_search_reason = pre.reason
+                    batch.pre_search_top_decisions = pre.top_decisions
+                    batch.pre_search_memory = {
+                        "intent": pre.memory.intent,
+                        "narrative": pre.memory.narrative,
+                        "entity_matches": pre.memory.entity_matches,
+                        "graph_coverage": pre.memory.graph_coverage,
+                    }
 
                     if batch.planner_decomposed:
                         _materialize_in_main(batch, t)
                         _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
-            pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason)
+                                    pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
+                                    pre_search_top_decisions=batch.pre_search_top_decisions,
+                                    pre_search_memory=batch.pre_search_memory)
                         results.append((t.id, f"decomposed: {batch.term_reason}", batch.validation))
                         continue
 
@@ -496,20 +516,26 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                             tracker.transition(t.id, TaskStatus.DONE)
                             _maybe_complete_parents(t.id)
                             _save_trace(t, route, snap, batch.dispatch_result, validation, False,
-            pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason)
+                                        pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
+                                        pre_search_top_decisions=batch.pre_search_top_decisions,
+                                        pre_search_memory=batch.pre_search_memory)
                             results.append((t.id, f"pass: {batch.term_reason}", validation))
                     elif validation.action == "rollback":
                         snap_mod.rollback(batch_snap)
                         tracker.transition(t.id, TaskStatus.ROLLED_BACK, error=f"{validation.verdict}: {batch.term_reason}")
                         _release_ref(t.id)
                         _save_trace(t, route, snap, batch.dispatch_result, validation, True,
-            pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason)
+                                    pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
+                                    pre_search_top_decisions=batch.pre_search_top_decisions,
+                                    pre_search_memory=batch.pre_search_memory)
                         results.append((t.id, f"rolled_back: {batch.term_reason}", validation))
                     else:
                         tracker.transition(t.id, TaskStatus.FAILED, error=f"{validation.verdict}: {batch.term_reason}")
                         _release_ref(t.id)
                         _save_trace(t, route, snap, batch.dispatch_result, validation, False,
-            pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason)
+                                    pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
+                                    pre_search_top_decisions=batch.pre_search_top_decisions,
+                                    pre_search_memory=batch.pre_search_memory)
                         results.append((t.id, f"failed: {batch.term_reason}", validation))
 
             # ⑥ drain (主线程), 合成功的 task 标 DONE (修复 #9: drain 后才定终态)
@@ -523,7 +549,9 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                             _maybe_complete_parents(t.id)
                             _release_ref(t.id)
                             _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
-            pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason)
+                                        pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
+                                        pre_search_top_decisions=batch.pre_search_top_decisions,
+                                        pre_search_memory=batch.pre_search_memory)
                             results.append((t.id, f"merged: {mr.new_head[:8]}", batch.validation))
                         elif mr.status == "conflict":
                             # CONFLICT_HELD 已在 mq._park 标过, 保留 ref 等人; 非终态不存 trace
@@ -532,7 +560,9 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                             tracker.transition(t.id, TaskStatus.FAILED, error=f"merge {mr.status}")
                             _release_ref(t.id)
                             _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
-            pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason)
+                                        pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
+                                        pre_search_top_decisions=batch.pre_search_top_decisions,
+                                        pre_search_memory=batch.pre_search_memory)
                             results.append((t.id, f"merge_failed", batch.validation))
 
     return results
@@ -680,7 +710,8 @@ def _save_planner_patch(task_id: str, content: str) -> None:
 
 
 def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
-                pre_search_skipped: bool = False, pre_search_reason: str = "") -> None:
+                pre_search_skipped: bool = False, pre_search_reason: str = "",
+                pre_search_top_decisions: list = None, pre_search_memory: dict = None) -> None:
     try:
         report = nj_mod.build_report(
             task=task.description, route=route,
@@ -688,6 +719,8 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
             validation=validation, snapshot=snap, rolled_back=rolled_back,
             pre_search_skipped=pre_search_skipped,
             pre_search_reason=pre_search_reason,
+            pre_search_top_decisions=pre_search_top_decisions,
+            pre_search_memory=pre_search_memory,
         )
         nj_mod.save_trace(report, task.id)
     except Exception:  # noqa: BLE001
