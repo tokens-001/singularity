@@ -117,6 +117,12 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
 
     snap = _SnapProxy(ctx.snapshot_ref)
 
+    # ── 执行前钩子 ──
+    pre_warnings = val_mod.pre_execution_hook(task.description, snap)
+    if pre_warnings:
+        for w in pre_warnings:
+            witness.heartbeat(task.id, f"pre_hook: {w[:80]}")
+
     while True:
         agent_cfg = disp_mod.pick_agent(agents, level)
         level_max = agent_cfg.get("max_turns", config.DEFAULT_MAX_TURNS)
@@ -633,6 +639,17 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
     while retry <= task.max_retries:
         batch = run(task, ctx, agents)
 
+        # ── 执行后钩子 ──
+        try:
+            exec_result = batch.dispatch_result.executor_result if batch.dispatch_result else None
+            if exec_result:
+                snap = snap_mod.Snapshot(id=task.id, method="git", ref=ctx.snapshot_ref, created_at=0.0)
+                post_warnings = val_mod.post_execution_hook(exec_result, snap)
+                if post_warnings:
+                    batch.term_reason += f"; post_hook: {', '.join(post_warnings)}"
+        except Exception:
+            pass
+
         if batch.validation.action == "pass" or batch.planner_decomposed:
             return batch
         if "merge_conflict" in batch.term_reason:
@@ -676,7 +693,7 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
     except Exception:  # noqa: BLE001
         pass
 
-    # ── MAGMA 多图记忆索引 ──
+    # ── MAGMA 多图记忆索引 + 状态更新 ──
     try:
         changed_files = disp_result.executor_result.changed_files if disp_result else []
         mem_mod.index_task(
@@ -685,6 +702,13 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
             changed_files=changed_files,
             depends_on=task.depends_on,
             created_at=task.created_at,
+        )
+        # 补充事件属性: 终态 + route info
+        final_status = "rolled_back" if rolled_back else task.status.value
+        mem_mod.update_attrs(task.id,
+            status=final_status,
+            route_level=route.level if route else "",
+            route_type=route.task_type if route else "",
         )
     except Exception:
         pass

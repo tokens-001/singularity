@@ -337,6 +337,20 @@ def _cmd_memory(argv: list) -> int:
                   f"共享:{c['shared_files']} sim={c['semantic_sim']} gap={c['time_gap_hours']}h")
         return 0
 
+    if sub == "chain" and len(argv) >= 2:
+        task_id = argv[1]
+        direction = "up"
+        if "--down" in argv:
+            direction = "down"
+        elif "--both" in argv:
+            direction = "both"
+        chain = mem_mod.find_causal_chain(task_id, direction=direction)
+        print(f"因果链 ({direction}): {len(chain)} 个关联任务")
+        for c in chain:
+            indent = "  " * c["depth"]
+            print(f"{indent}{c['task_id'][-8:]} [{c['depth']}] {c['description'][:60]}")
+        return 0
+
     if sub == "traverse" and len(argv) >= 2:
         rest, _ = _parse_concurrent(argv[1:])
         query_text = " ".join(rest) if rest else ""

@@ -209,20 +209,6 @@ def _save_edges(edges: dict) -> None:
     _write_json(_EDGES_PATH, edges)
 
 
-def _build_semantic_edges(events: dict[str, EventNode], threshold: float = 0.15) -> list:
-    """为所有事件对计算 Jaccard 相似度，超阈值则建语义边。"""
-    items = list(events.items())
-    edges: list = []
-    for i in range(len(items)):
-        for j in range(i + 1, len(items)):
-            tid_a, node_a = items[i]
-            tid_b, node_b = items[j]
-            sim = _jaccard(node_a.tokens, node_b.tokens)
-            if sim >= threshold:
-                edges.append((tid_a, tid_b, round(sim, 4)))
-    return edges
-
-
 def index_task(
     task_id: str,
     description: str,

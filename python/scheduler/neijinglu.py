@@ -39,6 +39,57 @@ class DeliveryReport:
     pre_search_skipped: bool = False
     pre_search_reason: str = ""
 
+    @classmethod
+    def from_dict(cls, d: dict) -> "DeliveryReport":
+        """从 JSON dict 重建 (简化版, 仅字段映射)。"""
+        route_data = d.get("route", {})
+        route = RouteResult(
+            level=route_data.get("level", "E"),
+            gate_required=route_data.get("gate_required", False),
+            task_type=route_data.get("task_type", "default"),
+            matched_signals=route_data.get("matched_signals", []),
+        )
+        from .validator import ValidationReport
+        val_data = d.get("validation", {})
+        validation = ValidationReport(
+            verdict=val_data.get("verdict", ""),
+            action=val_data.get("action", ""),
+            validate_verdict=val_data.get("validate_verdict", ""),
+            validate_reason=val_data.get("validate_reason", ""),
+            gate_passed=val_data.get("gate_passed"),
+            gate_message=val_data.get("gate_message", ""),
+            turns_used=val_data.get("turns_used", 0),
+            unverified=val_data.get("unverified", []),
+        )
+        from .snapshot import Snapshot
+        snapshot = Snapshot(
+            id=d.get("rollback_reference", ""),
+            method=d.get("snapshot_method", ""),
+            ref=d.get("snapshot_ref", ""),
+            created_at=0.0,
+        )
+        from .dispatcher import ExecutorResult
+        exec_result = ExecutorResult(
+            success=True,  # 能从 trace 重建说明 executor 当时成功了
+            raw_output=d.get("agent_output", ""),
+            changed_files=d.get("changed_files", []),
+            patch_path=d.get("patch_path", ""),
+            token_count=d.get("token_count", 0),
+            elapsed=d.get("elapsed", 0.0),
+            error=d.get("error", ""),
+            error_kind=d.get("error_kind", ""),
+        )
+        return cls(
+            task=d.get("task", ""),
+            route=route,
+            executor_result=exec_result,
+            validation=validation,
+            snapshot=snapshot,
+            final_status=d.get("final_status", "unknown"),
+            pre_search_skipped=d.get("pre_search", {}).get("skipped", False),
+            pre_search_reason=d.get("pre_search", {}).get("reason", ""),
+        )
+
     def to_dict(self) -> dict:
         return {
             "task": self.task,

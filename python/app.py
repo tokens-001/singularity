@@ -212,7 +212,13 @@ def api_task_trace(task_id):
     if not trace_path.exists():
         return jsonify({"error": "Trace 文件不存在（任务未完成或未生成）"}), 404
     try:
-        return jsonify(json.loads(trace_path.read_text(encoding="utf-8")))
+        data = json.loads(trace_path.read_text(encoding="utf-8"))
+        fmt = request.args.get("format", "")
+        if fmt == "md":
+            from scheduler.neijinglu import DeliveryReport, format_report
+            report = DeliveryReport.from_dict(data)
+            return format_report(report), 200, {"Content-Type": "text/plain; charset=utf-8"}
+        return jsonify(data)
     except (json.JSONDecodeError, OSError):
         return jsonify({"error": "Trace 文件读取失败"}), 500
 
@@ -258,6 +264,18 @@ def api_memory_query():
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": f"记忆查询失败: {e}"}), 500
+
+
+@app.route("/api/memory/chain/<task_id>")
+def api_memory_chain(task_id):
+    """因果链查询: 溯源(up) / 追果(down) / 双向(both)。"""
+    direction = request.args.get("direction", "up")
+    try:
+        from scheduler import memory as mem_mod
+        chain = mem_mod.find_causal_chain(task_id, direction=direction)
+        return jsonify({"task_id": task_id, "direction": direction, "chain": chain})
+    except Exception as e:
+        return jsonify({"error": f"因果链查询失败: {e}"}), 500
 
 
 @app.route("/api/memory/rebuild", methods=["POST"])
