@@ -1,0 +1,20 @@
+{
+  "id": "1781730935812",
+  "description": "状态转换",
+  "status": "routed",
+  "priority": 0,
+  "depends_on": [],
+  "route_level": "D",
+  "route_gate": false,
+  "route_type": "default",
+  "snapshot_id": "",
+  "error": "",
+  "retry_count": 0,
+  "max_retries": 3,
+  "created_at": 1781730935.811893,
+  "updated_at": 1781730935.8121989,
+  "starvation_score": 0.0,
+  "children": [],
+  "depth": 0,
+  "route_locked": false
+}
