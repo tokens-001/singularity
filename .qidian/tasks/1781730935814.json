@@ -1,0 +1,20 @@
+{
+  "id": "1781730935814",
+  "description": "CAS失败测试",
+  "status": "pending",
+  "priority": 0,
+  "depends_on": [],
+  "route_level": "E",
+  "route_gate": false,
+  "route_type": "default",
+  "snapshot_id": "",
+  "error": "",
+  "retry_count": 0,
+  "max_retries": 3,
+  "created_at": 1781730935.813212,
+  "updated_at": 1781730935.813212,
+  "starvation_score": 0.0,
+  "children": [],
+  "depth": 0,
+  "route_locked": false
+}
