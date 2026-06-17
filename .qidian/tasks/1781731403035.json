@@ -1,0 +1,20 @@
+{
+  "id": "1781731403035",
+  "description": "创建hello.py文件",
+  "status": "failed",
+  "priority": 0,
+  "depends_on": [],
+  "route_level": "E",
+  "route_gate": false,
+  "route_type": "default",
+  "snapshot_id": "1781731417_1781731403035",
+  "error": "阻断: merge_conflict (level=E, turn=1)",
+  "retry_count": 0,
+  "max_retries": 3,
+  "created_at": 1781731403.0341928,
+  "updated_at": 1781731427.222944,
+  "starvation_score": 0.0,
+  "children": [],
+  "depth": 0,
+  "route_locked": false
+}
