@@ -27,6 +27,7 @@ from . import tracker
 from . import validator as val_mod
 from . import neijinglu as nj_mod
 from . import witness
+from . import memory as mem_mod
 from .executors.worktree import (
     Worktree, create as wt_create, cleanup as wt_cleanup,
     merge_back as wt_merge_back, commit_wt, changed_files_between,
@@ -507,6 +508,69 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
     return results
 
 
+# ═══════════════════════════════════════════════════════════
+# MAGMA 慢通道: 后台内存整合 (Slow Path — Structural Consolidation)
+# ═══════════════════════════════════════════════════════════
+
+def consolidate_memory() -> int:
+    """慢通道启发式整合: 从候选对中发现隐含因果边。
+
+    当前使用启发式规则 (不调 LLM):
+      - 共享文件 + sim > 0.4 + 时间差 < 4h → 高置信因果边
+      - 共享文件 + sim > 0.25 → 中置信因果边
+
+    LLM 推理版本留作未来升级 (见 memory.find_candidate_latent_edges 的注释)。
+
+    返回添加的隐含边数。
+    """
+    try:
+        candidates = mem_mod.find_candidate_latent_edges()
+        added = 0
+
+        for c in candidates:
+            sim = c["semantic_sim"]
+            gap = c["time_gap_hours"]
+            shared = c["shared_files"]
+
+            # 高置信: 同一批文件 + 高语义相似 + 时间接近
+            if sim >= 0.4 and gap < 4.0 and len(shared) >= 1:
+                a, b = c["task_a"], c["task_b"]
+                # 时间早的 → 时间晚的
+                events = mem_mod._load_events()
+                node_a = events.get(a)
+                node_b = events.get(b)
+                if node_a and node_b:
+                    if node_a.timestamp <= node_b.timestamp:
+                        src, dst = a, b
+                    else:
+                        src, dst = b, a
+                    mem_mod.add_inferred_causal_edge(
+                        src, dst,
+                        reason=f"shared:{','.join(shared)} sim={sim:.2f} gap={gap:.1f}h"
+                    )
+                    added += 1
+            # 中置信: 共享文件 + 一定语义相似
+            elif sim >= 0.25 and len(shared) >= 1:
+                a, b = c["task_a"], c["task_b"]
+                events = mem_mod._load_events()
+                node_a = events.get(a)
+                node_b = events.get(b)
+                if node_a and node_b:
+                    if node_a.timestamp <= node_b.timestamp:
+                        src, dst = a, b
+                    else:
+                        src, dst = b, a
+                    mem_mod.add_inferred_causal_edge(
+                        src, dst,
+                        reason=f"medium:shared:{','.join(shared)} sim={sim:.2f}"
+                    )
+                    added += 1
+
+        return added
+    except Exception:
+        return 0
+
+
 def _materialize_in_main(batch: BatchOutput, parent_task) -> None:
     """planner 分解后, 主线程 materialize (worker 不写 tracker)。
 
@@ -583,6 +647,19 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool) -
         )
         nj_mod.save_trace(report, task.id)
     except Exception:  # noqa: BLE001
+        pass
+
+    # ── MAGMA 多图记忆索引 ──
+    try:
+        changed_files = disp_result.executor_result.changed_files if disp_result else []
+        mem_mod.index_task(
+            task_id=task.id,
+            description=task.description,
+            changed_files=changed_files,
+            depends_on=task.depends_on,
+            created_at=task.created_at,
+        )
+    except Exception:
         pass
 
 

@@ -3,994 +3,678 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>判例助手</title>
+<title>奇点 Agent 调度平台</title>
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0d1117;
+  --bg2: #161b22;
+  --bg3: #21262d;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --text2: #8b949e;
+  --blue: #58a6ff;
+  --green: #3fb950;
+  --red: #f85149;
+  --orange: #d2991d;
+  --purple: #a371f7;
+  --cyan: #39d2c0;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
+  background: var(--bg); color: var(--text);
+  line-height: 1.5; padding: 16px;
+}
+h1 { font-size: 20px; margin-bottom: 4px; }
+h2 { font-size: 14px; color: var(--text2); margin-bottom: 16px; font-weight: normal; }
+.header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
+.refresh { font-size: 12px; color: var(--text2); }
+.refresh.live { color: var(--green); }
 
-  :root {
-    --bg: #f3f4f6;
-    --surface: #ffffff;
-    --surface2: #e5e7eb;
-    --border: #d1d5db;
-    --border-focus: #1e3a5f;
-    --text: #1f2937;
-    --text-dim: #6b7280;
-    --text-bright: #111827;
-    --navy: #1e3a5f;
-    --navy-light: #2563eb;
-    --red: #dc2626;
-    --green: #059669;
-    --amber: #b45309;
-    --gold: #b45309;
-  }
+/* ── Status Cards ── */
+.cards { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+.card {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px 16px; min-width: 100px; flex: 1;
+}
+.card .count { font-size: 28px; font-weight: bold; }
+.card .label { font-size: 11px; color: var(--text2); margin-top: 2px; }
+.card.pending .count { color: var(--blue); }
+.card.running .count { color: var(--cyan); animation: pulse 1.5s infinite; }
+.card.done .count { color: var(--green); }
+.card.failed .count { color: var(--red); }
+.card.conflict .count { color: var(--orange); }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    line-height: 1.7;
-    min-height: 100vh;
-  }
+/* ── Sections ── */
+.section {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 8px; margin-bottom: 16px; overflow: hidden;
+}
+.section-title {
+  font-size: 13px; font-weight: bold; padding: 10px 16px;
+  background: var(--bg3); border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.section-body { padding: 12px 16px; }
 
-  /* ---- 头部 ---- */
-  .header {
-    background: var(--navy);
-    padding: 16px 32px;
-    display: flex; align-items: center; justify-content: space-between;
-  }
-  .header-brand { display: flex; align-items: center; gap: 12px; }
-  .header-logo {
-    width: 36px; height: 36px;
-    background: rgba(255,255,255,.15);
-    border-radius: 8px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 18px; color: #fff;
-  }
-  .header-text h1 { font-size: 18px; font-weight: 700; color: #fff; font-family: "Noto Serif SC", "Songti SC", "STSong", serif; }
+/* ── Agent Load ── */
+.agent-loads { display: flex; gap: 16px; }
+.agent-load {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px;
+}
+.agent-load .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+}
+.agent-load .dot.e { background: var(--cyan); }
+.agent-load .dot.d { background: var(--purple); }
+.agent-load .dot.ep { background: var(--orange); }
 
-  .mode-switch { display: flex; gap: 4px; }
-  .mode-btn {
-    padding: 5px 12px; font-size: 12px; font-weight: 600;
-    background: transparent; color: rgba(255,255,255,.55);
-    border: 1px solid rgba(255,255,255,.15); border-radius: 8px;
-    cursor: pointer; transition: all .2s;
-  }
-  .mode-btn.active { background: rgba(255,255,255,.15); color: #fff; border-color: rgba(255,255,255,.3); }
-  .mode-btn:hover:not(.active) { color: #fff; border-color: rgba(255,255,255,.25); }
+/* ── Table ── */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; padding: 8px 12px; background: var(--bg3); color: var(--text2); font-weight: normal; font-size: 11px; text-transform: uppercase; }
+td { padding: 6px 12px; border-top: 1px solid var(--border); }
+tr:hover { background: rgba(88,166,255,.05); cursor: pointer; }
+tr.expanded { background: rgba(88,166,255,.08); }
+.badge {
+  display: inline-block; padding: 1px 8px; border-radius: 10px;
+  font-size: 11px; font-weight: bold;
+}
+.badge.pending { background: rgba(88,166,255,.15); color: var(--blue); }
+.badge.routed { background: rgba(88,166,255,.2); color: var(--blue); }
+.badge.dispatched { background: rgba(163,113,247,.2); color: var(--purple); }
+.badge.running { background: rgba(57,210,192,.2); color: var(--cyan); }
+.badge.validating { background: rgba(163,113,247,.2); color: var(--purple); }
+.badge.done { background: rgba(63,185,80,.15); color: var(--green); }
+.badge.failed { background: rgba(248,81,73,.15); color: var(--red); }
+.badge.rolled_back { background: rgba(248,81,73,.1); color: var(--red); }
+.badge.decomposed { background: rgba(210,153,29,.15); color: var(--orange); }
+.badge.blocked { background: rgba(139,148,158,.15); color: var(--text2); }
+.badge.conflict_held { background: rgba(210,153,29,.2); color: var(--orange); }
 
-  .features {
-    margin-bottom: 14px; font-size: 13px;
-  }
-  .features-title { font-weight: 700; color: var(--navy); }
-  .features-desc { color: var(--text-dim); margin-left: 8px; }
+.level-tag {
+  display: inline-block; padding: 1px 6px; border-radius: 4px;
+  font-size: 10px; font-weight: bold; margin-left: 4px;
+}
+.level-tag.e { background: rgba(57,210,192,.2); color: var(--cyan); }
+.level-tag.d { background: rgba(163,113,247,.2); color: var(--purple); }
+.level-tag.ep { background: rgba(210,153,29,.2); color: var(--orange); }
 
-  .submode-switch { display: flex; gap: 6px; margin-bottom: 12px; }
-  .submode-btn {
-    padding: 4px 12px; font-size: 12px; font-weight: 600;
-    background: var(--surface); color: var(--text-dim);
-    border: 1px solid var(--border); border-radius: 8px;
-    cursor: pointer; transition: all .15s;
-  }
-  .submode-btn.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+/* ── Detail Panel ── */
+.detail { display: none; }
+.detail.open { display: table-row; }
+.detail td { padding: 16px 20px; background: rgba(0,0,0,.2); }
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; font-size: 13px; }
+.detail-grid dt { color: var(--text2); font-size: 11px; }
+.detail-grid dd { margin-bottom: 8px; word-break: break-all; }
+.detail-actions { margin-top: 12px; display: flex; gap: 8px; }
+.dag-tree { font-family: monospace; font-size: 12px; white-space: pre; color: var(--text2); }
+.error-block { background: rgba(248,81,73,.1); border: 1px solid rgba(248,81,73,.3); border-radius: 4px; padding: 8px 12px; margin-top: 8px; font-size: 12px; max-height: 120px; overflow-y: auto; }
 
+/* ── Buttons ── */
+.btn {
+  padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg3); color: var(--text); cursor: pointer; font-size: 12px;
+  font-family: inherit;
+}
+.btn:hover { background: var(--border); }
+.btn.primary { background: var(--blue); color: #000; border-color: var(--blue); }
+.btn.primary:hover { opacity: .8; }
+.btn.danger { background: var(--red); color: #fff; border-color: var(--red); }
+.btn.small { padding: 3px 8px; font-size: 11px; }
 
-  .main { max-width: 900px; margin: 0 auto; padding: 28px 20px; }
+/* ── Forms ── */
+.form-row { display: flex; gap: 8px; }
+textarea, input, select {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px 12px; color: var(--text);
+  font-family: inherit; font-size: 13px; width: 100%;
+}
+textarea:focus, input:focus, select:focus { outline: none; border-color: var(--blue); }
+textarea { resize: vertical; min-height: 60px; }
+select { width: auto; }
 
-  /* ---- 输入区 ---- */
-  .input-section {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 24px;
-    margin-bottom: 24px;
-    box-shadow: 0 1px 2px rgba(0,0,0,.04);
-  }
-  .input-row { display: flex; gap: 10px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
-  .input-row label { font-size: 13px; color: var(--text); white-space: nowrap; min-width: 60px; font-weight: 600; }
-  .input-row input[type="text"] {
-    flex: 0 0 70%; min-width: 140px; max-width: 500px;
-    background: var(--surface);
-    border: 1.5px solid var(--border);
-    border-radius: 12px;
-    padding: 8px 14px;
-    color: var(--text);
-    font-size: 14px;
-    transition: border-color .2s, box-shadow .2s;
-  }
-  .input-row input[type="text"]:focus { outline: none; border-color: var(--navy); box-shadow: 0 0 0 3px rgba(30,58,95,.08); }
-  .input-row input[type="text"]::placeholder { font-size: 13px; }
+/* ── Filter Bar ── */
+.filter-bar { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.filter-bar select { width: auto; }
 
-  textarea {
-    width: 100%; height: 200px;
-    background: var(--surface);
-    border: 1.5px solid var(--border);
-    border-radius: 12px;
-    padding: 18px;
-    color: var(--text);
-    font-size: 14px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-    line-height: 1.8;
-    resize: vertical;
-    margin-bottom: 14px;
-    transition: border-color .2s, box-shadow .2s;
-  }
-  textarea:focus { outline: none; border-color: var(--navy); box-shadow: 0 0 0 3px rgba(30,58,95,.08); }
-  textarea::placeholder { color: #9ca3af; font-size: 13px; }
+/* ── Memory Panel ── */
+.mem-card { font-size: 12px; margin-bottom: 8px; }
+.mem-card .source { color: var(--text2); font-size: 10px; }
+.mem-card .sim { color: var(--blue); }
 
-  .btn-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .btn {
-    padding: 8px 18px; border: 1.5px solid transparent; border-radius: 10px;
-    font-size: 13px; font-weight: 600; cursor: pointer;
-    transition: all .15s;
-  }
-  .btn-primary { background: var(--navy); color: #fff; border-color: var(--navy); }
-  .btn-primary:hover { background: #152d4a; }
-  .btn-secondary { background: var(--surface); color: var(--text); border-color: var(--border); }
-  .btn-secondary:hover { border-color: var(--navy); color: var(--navy); }
-  .file-upload { position: relative; }
-  .file-upload input[type="file"] { position: absolute; opacity: 0; width: 0; height: 0; }
+/* ── Trace View ── */
+.trace-modal {
+  display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,.7); z-index: 100; overflow-y: auto;
+}
+.trace-modal.open { display: flex; justify-content: center; align-items: flex-start; padding: 40px 20px; }
+.trace-content {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; max-width: 800px; width: 100%;
+}
+.trace-content pre { white-space: pre-wrap; font-size: 12px; max-height: 500px; overflow-y: auto; }
 
-  /* ---- 加载 / 错误 ---- */
-  .loading { display: none; text-align: center; padding: 40px; color: var(--text-dim); font-size: 13px; }
-  .loading.active { display: block; }
-  .spinner {
-    width: 36px; height: 36px;
-    border: 3px solid var(--border);
-    border-top-color: var(--navy);
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-    margin: 0 auto 14px;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  @keyframes fadeInUp {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  .error {
-    display: none;
-    background: #fef0f0; border: 1px solid #f5c6c6; color: var(--red);
-    padding: 12px 16px; border-radius: 8px;
-    margin-bottom: 18px; font-size: 13px;
-  }
-  .error.active { display: block; animation: fadeInUp .3s ease; }
-
-  /* ---- 结果区 ---- */
-  .results { display: none; }
-  .results.active { display: block; }
-  .results.active > * { animation: fadeInUp .4s ease backwards; }
-  .results.active > *:nth-child(2) { animation-delay: .05s; }
-  .results.active > *:nth-child(3) { animation-delay: .1s; }
-  .results.active > *:nth-child(4) { animation-delay: .15s; }
-  .results.active > *:nth-child(5) { animation-delay: .2s; }
-
-  /* ---- 卡片 ---- */
-  .card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
-  .card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 20px;
-    transition: border-color .2s;
-  }
-  .card:hover { border-color: var(--navy); }
-  .card h3 { font-size: 12px; font-weight: 700; color: var(--navy); margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
-  .card .content { font-size: 13px; color: var(--text); white-space: pre-wrap; line-height: 1.85; }
-
-  .card-summary {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 20px;
-    margin-bottom: 14px;
-    border-left: 3px solid var(--navy);
-  }
-  .card-summary h3 { font-size: 13px; font-weight: 700; color: var(--navy); margin-bottom: 10px; font-family: "Noto Serif SC", "Songti SC", serif; }
-  .card-summary .content { font-size: 14px; color: var(--text); line-height: 1.9; }
-
-  
-  .result-hero {
-    background: #eef2f7; border: 1px solid #d6dde8; border-radius: 12px;
-    padding: 18px 22px; margin-bottom: 16px;
-  }
-  .quick-summary { margin-top: 12px; }
-  .detail-section {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 12px; padding: 16px 20px; margin-bottom: 16px;
-  }
-  .detail-section h3 { font-size: 13px; font-weight: 700; color: var(--navy); }
-
-  /* ---- 溯源 ---- */
-  .trace-section {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px; padding: 20px; margin-bottom: 14px;
-  }
-  .trace-section h3 { font-size: 13px; font-weight: 700; color: var(--navy); margin-bottom: 12px; }
-  .trace-item {
-    background: var(--surface2);
-    border-left: 3px solid var(--navy);
-    padding: 10px 14px; margin-bottom: 6px;
-    border-radius: 0 8px 8px 0;
-    font-size: 12px; color: var(--text);
-  }
-  .trace-item .label { font-size: 10px; color: var(--navy); font-weight: 700; margin-bottom: 2px; }
-  .trace-item.invalid { border-left-color: var(--red); }
-  .trace-item.invalid .label { color: var(--red); }
-
-  /* ---- 法条对照 ---- */
-  .law-section {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px; padding: 20px; margin-bottom: 14px;
-  }
-  .law-section h3 { font-size: 13px; font-weight: 700; color: var(--navy); margin-bottom: 12px; }
-  .law-item {
-    background: var(--surface2);
-    padding: 10px 14px; margin-bottom: 6px;
-    border-radius: 8px; font-size: 12px; color: var(--text);
-    border: 1px solid var(--border);
-  }
-  .law-item .law-name { font-size: 11px; color: var(--navy); font-weight: 700; margin-bottom: 4px; }
-
-  /* ---- 验证 ---- */
-  .validation {
-    padding: 10px 16px; border-radius: 8px;
-    font-size: 12px; margin-bottom: 14px; font-weight: 500;
-  }
-  .validation.pass { background: #eef6f0; border: 1px solid #b8d4c0; color: var(--green); }
-  .validation.warn { background: #fdf8ed; border: 1px solid #e8d5a0; color: var(--amber); }
-  .validation .warn-item { margin-top: 3px; }
-  .validation .warn-item::before { content: "⚠️ "; }
-
-  /* ---- 风险提示 ---- */
-  .risk-section { margin-bottom: 14px; }
-  .risk-item {
-    padding: 12px 16px; border-radius: 8px; margin-bottom: 6px;
-    font-size: 13px; font-weight: 500;
-    display: flex; align-items: flex-start; gap: 8px;
-    animation: fadeInUp .35s ease backwards;
-  }
-  .risk-item.warning { background: #fdf8ed; border: 1px solid #e8d5a0; color: var(--amber); }
-  .risk-item.danger { background: #fef0f0; border: 1px solid #f5c6c6; color: var(--red); }
-
-  /* ---- 可信度 ---- */
-  .trust-dashboard {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px; padding: 18px 22px; margin-bottom: 18px;
-    display: flex; gap: 22px; align-items: center; flex-wrap: wrap;
-  }
-  .trust-score-ring {
-    width: 72px; height: 72px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 16px; font-weight: 800; flex-shrink: 0;
-    font-family: "Noto Serif SC", "Songti SC", serif;
-  }
-  .trust-score-ring.high { background: #eef6f0; border: 2px solid var(--green); color: var(--green); }
-  .trust-score-ring.mid { background: #fdf8ed; border: 2px solid var(--amber); color: var(--amber); }
-  .trust-score-ring.low { background: #fef0f0; border: 2px solid var(--red); color: var(--red); }
-  .trust-detail { flex: 1; min-width: 180px; }
-  .trust-detail .trust-label { font-size: 11px; color: var(--text-dim); font-weight: 600; }
-  .trust-breakdown { font-size: 11px; color: var(--text-dim); margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
-  .trust-breakdown .tbitem { display: flex; align-items: center; gap: 3px; }
-  .trust-breakdown .tbitem.up { color: var(--green); }
-  .trust-breakdown .tbitem.down { color: var(--red); }
-
-  /* ---- 历史 ---- */
-  .history-section {
-    background: #f4f7fb; border: 1px solid #d6dde8; border-radius: 8px;
-    padding: 10px 16px; margin-bottom: 20px;
-  }
-  .history-toggle {
-    display: flex; align-items: center; gap: 4px;
-    cursor: pointer; font-size: 13px; color: var(--navy); font-weight: 600; user-select: none;
-  }
-  .history-toggle:hover { opacity: 0.8; }
-  .history-list { display: none; margin-top: 10px; }
-  .history-list.active { display: block; }
-  .history-item {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 8px; padding: 12px 16px; margin-bottom: 6px;
-    cursor: pointer; transition: border-color .2s;
-    display: flex; justify-content: space-between; align-items: center;
-  }
-  .history-item:hover { border-color: var(--navy); }
-  .history-item .h-name { font-size: 13px; color: var(--text); font-weight: 600; }
-  .history-item .h-meta { font-size: 11px; color: var(--text-dim); flex-shrink: 0; } }
-  .history-search { margin-bottom: 10px; }
-  .history-search input {
-    width: 100%; padding: 8px 12px; font-size: 13px;
-    border: 1px solid var(--border); border-radius: 8px;
-    background: var(--surface); color: var(--text);
-  }
-
-  /* ---- 折叠 ---- */
-  .collapse-toggle { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 4px; }
-  .collapse-toggle:hover { opacity: 0.8; }
-  .collapse-toggle .arrow { transition: transform .2s; font-size: 10px; }
-  .collapse-toggle.open .arrow { transform: rotate(90deg); }
-  .collapse-body { display: none; margin-top: 12px; }
-  .collapse-body.open { display: block; }
-
-  @media (max-width: 700px) {
-    .card-grid { grid-template-columns: 1fr; }
-    .header { padding: 12px 16px; }
-    .main { padding: 16px 10px; }
-    .input-section { padding: 16px; }
-    .trust-dashboard { flex-direction: column; align-items: flex-start; }
-  }
+/* ── Responsive ── */
+@media (max-width: 768px) {
+  .cards { flex-direction: column; }
+  .detail-grid { grid-template-columns: 1fr; }
+  .agent-loads { flex-direction: column; }
+}
 </style>
 </head>
 <body>
 
-<!-- 头部 -->
 <div class="header">
-  <div class="header-brand">
-    <div class="header-logo">⚖️</div>
-    <div class="header-text">
-      <h1>判例助手<span style="font-size:11px;color:var(--amber);font-weight:400;">（测试版）</span></h1>
-    </div>
+  <div>
+    <h1>⚡ 奇点 Agent 调度平台</h1>
+    <h2 id="clock">加载中...</h2>
   </div>
-  <div class="mode-switch">
-    <button class="mode-btn active" id="mode-judgment" onclick="切换模式('judgment')">判决书分析</button>
-    <button class="mode-btn" id="mode-case" onclick="切换模式('case')">案情分析</button>
+  <div class="refresh live" id="refresh-indicator">● 实时</div>
+</div>
+
+<!-- Status Cards -->
+<div class="cards" id="status-cards"></div>
+
+<!-- Agent Load + Timing -->
+<div class="section">
+  <div class="section-title">Agent 负载</div>
+  <div class="section-body">
+    <div class="agent-loads" id="agent-loads"></div>
+    <div style="margin-top:8px;font-size:12px;color:var(--text2)" id="timing-stats"></div>
   </div>
 </div>
 
-<div class="main">
+<!-- Token Stats -->
+<div class="section" id="token-section" style="display:none">
+  <div class="section-title">Token 消耗</div>
+  <div class="section-body" id="token-stats"></div>
+</div>
 
-  <!-- 输入区 -->
-  <div class="input-section">
-    <div class="features" id="features-judgment">
-      <span class="features-title">法院推理拆解</span>
-      <span class="features-desc">还原裁判逻辑</span>
-    </div>
-    <div class="submode-switch" id="submode-switch">
-      <button class="submode-btn active" id="submode-read" onclick="切换子模式('read')">📖 判例解读</button>
-      <button class="submode-btn" id="submode-audit" onclick="切换子模式('audit')">⚔️ 裁判审计</button>
-    </div>
-    <div class="features" id="features-case" style="display:none">
-      <span class="features-title">律师对抗分析</span>
-      <span class="features-desc">评估风险与诉讼路径</span>
-    </div>
-    <div style="font-size:12px;color:var(--text-dim);margin-bottom:14px;" id="formatHint">支持判决书、裁定书、仲裁裁决 · 建议500字以上</div>
-    <div class="input-row">
-      <label id="caseNameLabel">判例名称</label>
-      <input type="text" id="caseName" placeholder="可留空，AI自动提取，例：张某诉李某合同纠纷案">
-    </div>
-
-    <textarea id="caseText" placeholder="粘贴判决书全文，或点击下方上传文件……"></textarea>
-
-    <div class="btn-row">
-      <button class="btn btn-primary" onclick="开始分析()">开始分析</button>
-      <span class="file-upload">
-        <button class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">上传文件</button>
-        <input type="file" id="fileInput" accept=".txt" onchange="读文件(this)">
-      </span>
-      <button class="btn btn-secondary" onclick="清空()">清空</button>
-      <span id="remaining" style="margin-left:auto; font-size:12px; color:var(--text-dim);"></span>
+<!-- Task Table -->
+<div class="section">
+  <div class="section-title">
+    <span>任务列表 <span style="color:var(--text2);font-weight:normal" id="task-count"></span></span>
+    <div style="display:flex;gap:8px">
+      <button class="btn small" onclick="refreshAll()">↻ 刷新</button>
     </div>
   </div>
-
-  <!-- 加载中 -->
-  <div class="loading" id="loading">
-    <div class="spinner"></div>
-    AI正在分析判例……六维并行处理中，约需30-50秒
+  <div class="section-body">
+    <div class="filter-bar">
+      <select id="filter-status" onchange="renderTasks()">
+        <option value="">全部状态</option>
+      </select>
+      <select id="filter-level" onchange="renderTasks()">
+        <option value="">全部级别</option>
+        <option value="E">E (DeepSeek)</option>
+        <option value="D">D (Opus)</option>
+        <option value="E+">E+ (GLM)</option>
+      </select>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>描述</th>
+          <th>状态</th>
+          <th>级别</th>
+          <th>等待</th>
+        </tr>
+      </thead>
+      <tbody id="task-table"></tbody>
+    </table>
   </div>
+</div>
 
-  <!-- 错误 -->
-  <div class="error" id="error"></div>
-
-  <!-- 结果区 -->
-  <div class="results" id="results">
-
-    <div class="risk-section" id="risk-section" style="display:none;"><div id="risk-items"></div></div>
-
-    <div class="result-hero" id="result-hero" style="display:none;">
-      <div class="trust-dashboard" id="trust-dashboard">
-        <div class="trust-score-ring" id="trust-ring">--</div>
-          <div class="trust-detail">
-          <div class="trust-label">分析可信度</div>
-          <div class="trust-breakdown" id="trust-breakdown"></div>
-        </div>
-      </div>
-      <div class="quick-summary" id="quick-summary"></div>
-    </div>
-
-    <div class="law-section" id="law-section" style="display:none;">
-      <h3 class="collapse-toggle" onclick="this.classList.toggle('open');document.getElementById('law-body').classList.toggle('open')"><span class="arrow">▶</span> 📖 法条库对照</h3>
-      <div class="collapse-body" id="law-body"><div id="law-items"></div></div>
-    </div>
-
-    <div class="trace-section" id="trace-section" style="display:none;">
-      <h3 class="collapse-toggle" onclick="this.classList.toggle('open');document.getElementById('trace-body').classList.toggle('open')"><span class="arrow">▶</span> 🔍 溯源对比</h3>
-      <div class="collapse-body" id="trace-body"><div id="trace-items"></div></div>
-    </div>
-
-    <div class="detail-section">
-      <h3 class="collapse-toggle" onclick="this.classList.toggle('open');document.getElementById('detail-body').classList.toggle('open')"><span class="arrow">▶</span> 完整分析</h3>
-      <div class="collapse-body" id="detail-body">
-        <div class="card-grid" id="cardGrid"></div>
-      </div>
-    </div>
-
-    <!-- 法条统计 -->
-    <div class="validation pass" id="r-lawstats" style="font-size:13px; color:#8ccb8c;"></div>
-
-    <!-- 验证 -->
-    <div class="validation pass" id="validation"></div>
-
-    <!-- 下载按钮 -->
-    <div style="text-align:center; margin-top:8px;">
-      <button class="btn btn-primary" onclick="下载报告()" id="btnDownload" style="display:none;">📥 下载分析报告</button>
-    </div>
-
-    </div>
-
-    <!-- 法条库对照 -->
-    <div class="law-section" id="law-section" style="display:none;">
-      <h3 class="collapse-toggle" onclick="this.classList.toggle('open');document.getElementById('law-body').classList.toggle('open')"><span class="arrow">▶</span> 📖 法条库对照</h3>
-      <div class="collapse-body" id="law-body"><div id="law-items"></div></div>
-    </div>
-
-    <!-- 验证 -->
-    <div class="validation pass" id="validation"></div>
-
-    <!-- 下载按钮 -->
-    <div style="text-align:center; margin-top:8px;">
-      <button class="btn btn-primary" onclick="下载报告()" id="btnDownload" style="display:none;">📥 下载分析报告</button>
-    </div>
-
-    <!-- 反馈区 -->
-    <div id="feedback-section" style="display:none; background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:20px; margin-top:18px;">
-      <div id="feedback-form">
-      <div style="font-size:13px; font-weight:700; color:var(--navy); margin-bottom:16px; font-family:'Noto Serif SC','Songti SC',serif;">📋 帮助我们改进（全选择题，30秒搞定）</div>
-
-      <!-- 第一步：有帮助程度 -->
-      <div style="margin-bottom:16px;">
-        <div style="font-size:13px; color:var(--text-dim); margin-bottom:8px;">1. 这个分析结果对你有帮助吗？<span style="color:var(--red);">*</span></div>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;" id="q-helpfulness">
-          <label class="fb-radio"><input type="radio" name="helpfulness" value="very"> 非常有帮助</label>
-          <label class="fb-radio"><input type="radio" name="helpfulness" value="somewhat"> 有一点帮助</label>
-          <label class="fb-radio"><input type="radio" name="helpfulness" value="little"> 没什么帮助</label>
-          <label class="fb-radio"><input type="radio" name="helpfulness" value="none"> 完全没帮助</label>
-        </div>
-      </div>
-
-      <!-- 第二步：最有价值模块 -->
-      <div style="margin-bottom:16px;">
-        <div style="font-size:13px; color:var(--text-dim); margin-bottom:8px;">2. 哪个模块最有价值？（可多选）<span style="color:var(--red);">*</span></div>
-        <div style="display:flex; gap:6px; flex-wrap:wrap;" id="q-valuable"></div>
-      </div>
-
-      <!-- 第三步：最没用模块 -->
-      <div style="margin-bottom:16px;">
-        <div style="font-size:13px; color:var(--text-dim); margin-bottom:8px;">3. 哪个模块最没用？（可多选）<span style="color:var(--red);">*</span></div>
-        <div style="display:flex; gap:6px; flex-wrap:wrap;" id="q-useless"></div>
-      </div>
-
-      <!-- 第四步：如果只能保留3个模块 -->
-      <div style="margin-bottom:16px;">
-        <div style="font-size:13px; color:var(--text-dim); margin-bottom:8px;">4. 如果只能保留3个模块，你会留下哪些？（选1-3个）<span style="color:var(--red);">*</span></div>
-        <div style="display:flex; gap:6px; flex-wrap:wrap;" id="q-keep"></div>
-      </div>
-
-      <!-- 第五步：问题类型 -->
-      <div style="margin-bottom:16px;">
-        <div style="font-size:13px; color:var(--text-dim); margin-bottom:8px;">5. 遇到了什么问题？（可选）</div>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;" id="q-issues">
-          <label class="fb-radio"><input type="radio" name="issue_type" value="ai_error"> AI分析错误</label>
-          <label class="fb-radio"><input type="radio" name="issue_type" value="law_error"> 法条引用错误</label>
-          <label class="fb-radio"><input type="radio" name="issue_type" value="bug"> 页面Bug</label>
-          <label class="fb-radio"><input type="radio" name="issue_type" value="slow"> 响应太慢</label>
-          <label class="fb-radio"><input type="radio" name="issue_type" value="unclear"> 看不懂结果</label>
-          <label class="fb-radio"><input type="radio" name="issue_type" value="other"> 其它</label>
-        </div>
-      </div>
-
-      <!-- 第六步：补充意见 -->
-      <div style="margin-bottom:16px;">
-        <div style="font-size:13px; color:var(--text-dim); margin-bottom:8px;">6. 补充意见（选填）</div>
-        <textarea id="feedbackComment" placeholder="任何想说的……" style="width:100%; height:64px; background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:10px 14px; color:var(--text-bright); font-size:13px; font-family:inherit; resize:vertical;"></textarea>
-      </div>
-
-      <button class="btn btn-primary" onclick="提交反馈()" style="font-size:13px; padding:10px 28px;">提交反馈</button>
-      <span id="feedback-err" style="display:none; color:var(--red); font-size:13px; margin-left:12px;"></span>
-      </div><!-- #feedback-form -->
-      <div id="feedback-done" style="display:none; color:var(--green); font-size:14px; text-align:center; padding:12px;">✅ 感谢反馈！你的选择会直接影响产品方向。</div>
-      <span id="feedback-err" style="display:none; color:var(--red); font-size:13px; margin-left:12px;"></span>
-    </div>
-
-    <style>
-      .fb-radio {
-        display:inline-flex; align-items:center; gap:4px;
-        padding:6px 14px; border:1px solid var(--border); border-radius:4px;
-        font-size:12px; color:var(--text-dim); cursor:pointer;
-        transition: all .2s; background:var(--surface2);
-      }
-      .fb-radio:hover { border-color:var(--text-dim); color:var(--text); }
-      .fb-radio:has(input:checked) { border-color:var(--navy); color:var(--navy); background:#eef2f7; }
-      .fb-radio input { display:none; }
-      .fb-chip {
-        display:inline-flex; align-items:center; gap:4px;
-        padding:5px 12px; border:1px solid var(--border); border-radius:4px;
-        font-size:12px; color:var(--text-dim); cursor:pointer;
-        transition: all .2s; background:var(--surface2);
-      }
-      .fb-chip:hover { border-color:var(--text-dim); color:var(--text); }
-      .fb-chip:has(input:checked) { border-color:var(--green); color:var(--green); background:#eef6f0; }
-      .fb-chip input { display:none; }
-    </style>
-
-  </div>
-
-  <!-- 历史记录 -->
-  <div class="history-section">
-    <div class="history-toggle" onclick="切换历史()">
-      <span id="historyArrow">▶</span> 历史分析记录 <span id="historyCount" style="font-weight:400;color:var(--text-dim);"></span>
-    </div>
-    <div class="history-list" id="historyList">
-      <input type="text" id="searchInput" placeholder="搜索历史记录…"
-        style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:13px;"
-        oninput="过滤历史()">
-      <div id="historyItems" style="margin-top:10px;"></div>
+<!-- New Task -->
+<div class="section">
+  <div class="section-title">新建任务</div>
+  <div class="section-body">
+    <div class="form-row">
+      <textarea id="new-task-desc" placeholder="输入任务描述..."></textarea>
+      <button class="btn primary" onclick="submitTask()" style="flex-shrink:0">提交</button>
     </div>
   </div>
+</div>
 
+<!-- Conflicts -->
+<div class="section" id="conflict-section" style="display:none">
+  <div class="section-title" style="color:var(--orange)">⚠ 合并冲突</div>
+  <div class="section-body" id="conflict-list"></div>
+</div>
+
+<!-- Memory Query -->
+<div class="section">
+  <div class="section-title">🧠 MAGMA 多图记忆</div>
+  <div class="section-body">
+    <div class="form-row" style="margin-bottom:8px">
+      <input id="mem-query" placeholder="查询记忆（描述或文件名）..." onkeydown="if(event.key==='Enter')queryMemory()">
+      <button class="btn" onclick="queryMemory()">搜索</button>
+    </div>
+    <div id="mem-stats" style="font-size:11px;color:var(--text2);margin-bottom:8px"></div>
+    <div id="mem-results"></div>
+  </div>
+</div>
+
+<!-- Trace Modal -->
+<div class="trace-modal" id="trace-modal" onclick="if(event.target===this)closeTrace()">
+  <div class="trace-content" id="trace-content"></div>
 </div>
 
 <script>
-// ============================================================
-// 前端交互逻辑
-// ============================================================
+// ═══════════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════════
+let tasks = [];
+let statusData = {};
+let conflicts = [];
+let expandedTask = null;
 
-// ---- 模式切换 ----
-var 当前模式 = 'judgment';
-var 子模式 = 'read';
+const STATUS_MAP = {
+  pending:'待处理',routed:'已路由',dispatched:'已分发',
+  running:'运行中',validating:'验证中',done:'完成',
+  failed:'失败',rolled_back:'已回滚',decomposed:'已分解',
+  blocked:'阻塞',conflict_held:'冲突'
+};
 
-function 切换模式(mode) {
-  if (当前模式 !== mode) {
-    document.getElementById("caseName").value = "";
-    document.getElementById("caseText").value = "";
-    document.getElementById("results").classList.remove("active");
-  }
-  当前模式 = mode;
-  document.getElementById('mode-judgment').classList.toggle('active', mode === 'judgment');
-  document.getElementById('mode-case').classList.toggle('active', mode === 'case');
-  document.getElementById('features-judgment').style.display = mode === 'case' ? 'none' : '';
-  document.getElementById('features-case').style.display = mode === 'case' ? '' : 'none';
-  document.getElementById('submode-switch').style.display = mode === 'case' ? 'none' : 'flex';
-  if (mode === 'case') {
-    document.getElementById('caseNameLabel').textContent = '纠纷名称';
-    document.getElementById('caseName').placeholder = '可留空，AI自动提取，例：合伙纠纷';
-    document.getElementById('caseText').placeholder = '请尽量完整描述纠纷经过、双方主张和现阶段情况……';
-    document.getElementById('formatHint').textContent = '描述你的纠纷情况 · 建议详细陈述事实经过';
-  } else {
-    document.getElementById('caseNameLabel').textContent = '判例名称';
-    document.getElementById('caseName').placeholder = '可留空，AI自动提取，例：张某诉李某合同纠纷案';
-    document.getElementById('caseText').placeholder = '粘贴判决书全文，或上传文件……';
-    document.getElementById('formatHint').textContent = '支持判决书、裁定书、仲裁裁决 · 建议500字以上';
-  }
-}
-
-function 切换子模式(mode) {
-  子模式 = mode;
-  document.getElementById('submode-read').classList.toggle('active', mode === 'read');
-  document.getElementById('submode-audit').classList.toggle('active', mode === 'audit');
-  // 刷新结果卡片
-  if (window._lastResult) 渲染结果(window._lastResult);
-}
-
-// ---- 页面加载：查剩余次数 ----
-async function 刷新剩余次数() {
+// ═══════════════════════════════════════════════════════
+// API calls
+// ═══════════════════════════════════════════════════════
+async function api(path, opts) {
   try {
-    const resp = await fetch("/remaining");
-    const data = await resp.json();
-    if (data.上限 >= 9999) {
-      document.getElementById("remaining").textContent = '测试版 · 不限次';
-    } else {
-      document.getElementById("remaining").textContent = `今日剩余 ${data.剩余}/${data.上限} 次`;
-    }
-    if (data.剩余 === 0) {
-      document.getElementById("remaining").style.color = "#e05d5d";
-    }
-  } catch(e) {
-    document.getElementById("remaining").textContent = "";
+    const r = await fetch(path, opts);
+    return await r.json();
+  } catch(e) { return {error: e.message}; }
+}
+
+// ═══════════════════════════════════════════════════════
+// Refresh
+// ═══════════════════════════════════════════════════════
+async function refreshAll() {
+  const ind = document.getElementById('refresh-indicator');
+  ind.className = 'refresh live';
+  ind.textContent = '● 刷新中...';
+
+  const [s, t, c] = await Promise.all([
+    api('/api/status'),
+    api('/api/tasks'),
+    api('/api/conflicts'),
+  ]);
+
+  statusData = s;
+  tasks = t.tasks || [];
+  conflicts = c.conflicts || [];
+
+  renderStatusCards();
+  renderAgentLoads();
+  renderTiming();
+  renderTokens();
+  renderTasks();
+  renderConflicts();
+  updateClock();
+
+  ind.textContent = '● 实时';
+}
+
+// ═══════════════════════════════════════════════════════
+// Status Cards
+// ═══════════════════════════════════════════════════════
+function renderStatusCards() {
+  const counts = statusData.counts || {};
+  const cards = [
+    {key:'pending',label:'待处理',cls:'pending'},
+    {key:'running',label:'运行中',cls:'running',use:statusData.running_total||0},
+    {key:'done',label:'已完成',cls:'done'},
+    {key:'failed',label:'失败',cls:'failed'},
+    {key:'conflict_held',label:'冲突',cls:'conflict'},
+  ];
+
+  document.getElementById('status-cards').innerHTML = cards.map(c => {
+    const n = c.use !== undefined ? c.use : (counts[c.key]||0);
+    return `<div class="card ${c.cls}"><div class="count">${n}</div><div class="label">${c.label}</div></div>`;
+  }).join('');
+
+  // Populate filter dropdown
+  const sel = document.getElementById('filter-status');
+  if (sel.options.length <= 1) {
+    const allStatuses = [...new Set(tasks.map(t=>t.status))].sort();
+    allStatuses.forEach(s => {
+      if (!sel.querySelector(`[value="${s}"]`)) {
+        const o = document.createElement('option');
+        o.value = s; o.textContent = STATUS_MAP[s] || s;
+        sel.appendChild(o);
+      }
+    });
   }
 }
-刷新剩余次数();
 
-// ---- 文件读取 ----
-function 读文件(input) {
-  const file = input.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    document.getElementById("caseText").value = e.target.result;
-    // 用文件名当判例名（去扩展名）
-    if (!document.getElementById("caseName").value) {
-      document.getElementById("caseName").value = file.name.replace(/\.\w+$/, "");
-    }
-  };
-  reader.readAsText(file);
+// ═══════════════════════════════════════════════════════
+// Agent Loads
+// ═══════════════════════════════════════════════════════
+function renderAgentLoads() {
+  const agents = statusData.agents || {};
+  const loads = statusData.heartbeat_levels || {};
+  document.getElementById('agent-loads').innerHTML = ['E','D','E+'].map(l => {
+    const n = loads[l] || 0;
+    const model = agents[l] && agents[l][0] ? agents[l][0].model : '';
+    const cls = l==='E'?'e':l==='D'?'d':'ep';
+    return `<div class="agent-load"><span class="dot ${cls}"></span> ${l} (${model}): <b>${n}</b> 个任务</div>`;
+  }).join('');
 }
 
-// ---- 清空 ----
-function 清空() {
-  document.getElementById("caseName").value = "";
-  document.getElementById("caseText").value = "";
-  document.getElementById("results").classList.remove("active");
-  document.getElementById("error").classList.remove("active");
+function renderTiming() {
+  document.getElementById('timing-stats').textContent =
+    `平均等待: ${statusData.avg_wait||'--'} | 平均完成: ${statusData.avg_done||'--'}` +
+    (statusData.stalled && statusData.stalled.length ? ` | ⚠ 卡住: ${statusData.stalled.join(', ')}` : '');
 }
 
-// ---- 开始分析 ----
-async function 开始分析() {
-  const name = document.getElementById("caseName").value.trim();
-  const text = document.getElementById("caseText").value.trim();
-
-  if (!text) {
-    显示错误("请先输入或上传判例文字");
+function renderTokens() {
+  const tt = statusData.token_totals;
+  if (!tt || !Object.keys(tt).length) {
+    document.getElementById('token-section').style.display = 'none';
     return;
   }
+  document.getElementById('token-section').style.display = '';
+  const total = Object.values(tt).reduce((a,b)=>a+b,0);
+  document.getElementById('token-stats').innerHTML =
+    `<b>总计:</b> ${fmtTokens(total)} &nbsp; ` +
+    Object.entries(tt).map(([l,t]) => `${l}: ${fmtTokens(t)}`).join(' | ');
+}
 
-  // 显示加载
-  document.getElementById("loading").classList.add("active");
-  document.getElementById("results").classList.remove("active");
-  document.getElementById("error").classList.remove("active");
-  document.querySelector(".loading").innerHTML = '<div class="spinner"></div>AI正在分析中……预计20-40秒';
+function fmtTokens(n) {
+  if (n >= 1e6) return (n/1e6).toFixed(1)+'M';
+  if (n >= 1e3) return Math.round(n/1e3)+'K';
+  return String(n);
+}
 
-  try {
-    const response = await fetch("/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name || '', text: text, mode: 当前模式, submode: 子模式 })
-    });
+// ═══════════════════════════════════════════════════════
+// Task Table
+// ═══════════════════════════════════════════════════════
+function renderTasks() {
+  const fs = document.getElementById('filter-status').value;
+  const fl = document.getElementById('filter-level').value;
 
-    const data = await response.json();
+  let filtered = tasks;
+  if (fs) filtered = filtered.filter(t => t.status === fs);
+  if (fl) filtered = filtered.filter(t => t.route_level === fl);
 
-    if (!response.ok) {
-      显示错误(data.error || "分析失败");
+  document.getElementById('task-count').textContent = `(${filtered.length} 条)`;
+
+  const tbody = document.getElementById('task-table');
+  tbody.innerHTML = filtered.map(t => {
+    const idShort = t.id ? t.id.slice(-8) : '?';
+    const desc = (t.description||'').slice(0,80);
+    const status = STATUS_MAP[t.status] || t.status || '?';
+    const wait = t.wait_sec != null ? fmtDur(t.wait_sec) : '--';
+    const lvl = t.route_level || '';
+    const lvlCls = lvl==='E'?'e':lvl==='D'?'d':lvl==='E+'?'ep':'';
+
+    return `
+      <tr onclick="toggleDetail('${t.id}')" id="row-${t.id}">
+        <td style="font-family:monospace;font-size:11px">${idShort}</td>
+        <td>${esc(desc)}</td>
+        <td><span class="badge ${t.status}">${status}</span></td>
+        <td>${lvl?`<span class="level-tag ${lvlCls}">${lvl}</span>`:'--'}</td>
+        <td style="font-size:11px;color:var(--text2)">${wait}</td>
+      </tr>
+      <tr class="detail" id="detail-${t.id}"><td colspan="5"></td></tr>
+    `;
+  }).join('') || '<tr><td colspan="5" style="color:var(--text2);text-align:center;padding:20px">暂无任务</td></tr>';
+}
+
+async function toggleDetail(taskId) {
+  const detailRow = document.getElementById('detail-' + taskId);
+  const row = document.getElementById('row-' + taskId);
+
+  if (detailRow.classList.contains('open')) {
+    detailRow.classList.remove('open');
+    row.classList.remove('expanded');
+    expandedTask = null;
+  } else {
+    // Close previous
+    if (expandedTask) {
+      const prev = document.getElementById('detail-' + expandedTask);
+      if (prev) prev.classList.remove('open');
+      const prevRow = document.getElementById('row-' + expandedTask);
+      if (prevRow) prevRow.classList.remove('expanded');
+    }
+    expandedTask = taskId;
+    row.classList.add('expanded');
+
+    // Fetch detail
+    const data = await api('/api/tasks/' + taskId);
+    if (data.error) {
+      detailRow.querySelector('td').innerHTML = `<div class="error-block">${esc(data.error)}</div>`;
+      detailRow.classList.add('open');
       return;
     }
 
-    渲染结果(data);
-  } catch (err) {
-    显示错误("网络请求失败: " + err.message);
+    const parents = (data._dag_parents||[]).map(p =>
+      `${p.id.slice(-8)} ${esc((p.description||'').slice(0,30))} [${STATUS_MAP[p.status]||p.status}]`
+    );
+    const children = (data._dag_children||[]).map(c =>
+      `${c.id.slice(-8)} ${esc((c.description||'').slice(0,30))} [${STATUS_MAP[c.status]||c.status}]`
+    );
+
+    const created = data.created_at ? new Date(data.created_at*1000).toLocaleString('zh-CN') : '--';
+    const updated = data.updated_at ? new Date(data.updated_at*1000).toLocaleString('zh-CN') : '--';
+
+    detailRow.querySelector('td').innerHTML = `
+      <div class="detail-grid">
+        <div><dt>任务 ID</dt><dd style="font-family:monospace">${data.id||taskId}</dd></div>
+        <div><dt>状态</dt><dd><span class="badge ${data.status}">${STATUS_MAP[data.status]||data.status}</span></dd></div>
+        <div><dt>描述</dt><dd>${esc(data.description||'')}</dd></div>
+        <div><dt>路由级别</dt><dd>${data.route_level||'--'} ${data.route_locked?'🔒':''}</dd></div>
+        <div><dt>任务类型</dt><dd>${data.route_type||'--'}</dd></div>
+        <div><dt>优先级</dt><dd>${data.priority||0}</dd></div>
+        <div><dt>重试</dt><dd>${data.retry_count||0}/${data.max_retries||3}</dd></div>
+        <div><dt>创建时间</dt><dd>${created}</dd></div>
+        <div><dt>更新时间</dt><dd>${updated}</dd></div>
+        <div><dt>等待时间</dt><dd>${fmtDur(data.wait_sec||0)}</dd></div>
+        <div><dt>执行时长</dt><dd>${data.duration_sec != null ? fmtDur(data.duration_sec) : '--'}</dd></div>
+        <div><dt>快照</dt><dd style="font-family:monospace;font-size:11px">${data.snapshot_id||'--'}</dd></div>
+      </div>
+      ${parents.length ? `<div style="margin-top:8px"><dt>依赖 (depends_on)</dt><dd class="dag-tree">${parents.join('\n')}</dd></div>` : ''}
+      ${children.length ? `<div style="margin-top:4px"><dt>子任务 (children)</dt><dd class="dag-tree">${children.join('\n')}</dd></div>` : ''}
+      ${data.error ? `<div class="error-block">⚠ ${esc(data.error)}</div>` : ''}
+      <div class="detail-actions">
+        ${data._has_trace ? `<button class="btn small" onclick="event.stopPropagation();viewTrace('${taskId}')">📄 查看 Trace</button>` : ''}
+        <button class="btn small danger" onclick="event.stopPropagation();rollbackTask('${taskId}')">↩ 回滚</button>
+      </div>
+    `;
+    detailRow.classList.add('open');
   }
 }
 
-// ---- 显示错误 ----
-function 显示错误(msg) {
-  document.getElementById("loading").classList.remove("active");
-  const el = document.getElementById("error");
-  el.textContent = msg;
-  el.classList.add("active");
-  刷新剩余次数();
+// ═══════════════════════════════════════════════════════
+// Submit Task
+// ═══════════════════════════════════════════════════════
+async function submitTask() {
+  const desc = document.getElementById('new-task-desc').value.trim();
+  if (!desc) return;
+  const r = await api('/api/tasks', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({description: desc}),
+  });
+  if (r.ok) {
+    document.getElementById('new-task-desc').value = '';
+    refreshAll();
+  } else {
+    alert('创建失败: ' + (r.error || '未知错误'));
+  }
 }
 
-// ---- 渲染结果 ----
-function 渲染结果(data) {
-  document.getElementById("loading").classList.remove("active");
+// ═══════════════════════════════════════════════════════
+// Rollback
+// ═══════════════════════════════════════════════════════
+async function rollbackTask(taskId) {
+  if (!confirm(`确定回滚任务 ${taskId.slice(-8)}？`)) return;
+  const r = await api('/api/tasks/' + taskId + '/rollback', {method:'POST'});
+  if (r.ok) refreshAll();
+  else alert('回滚失败: ' + (r.error || '未知错误'));
+}
 
-  // 更新剩余次数
-  if (data.剩余次数 !== undefined) {
-    if (data.今日上限 >= 9999) {
-      document.getElementById("remaining").textContent = '测试版 · 不限次';
-    } else {
-      document.getElementById("remaining").textContent = `今日剩余 ${data.剩余次数}/${data.今日上限} 次`;
-      if (data.剩余次数 === 0) document.getElementById("remaining").style.color = "#dc2626";
-    }
-  }
-
-  const a = data.分析;
-
-  // ⚠️ 风险提示（最优先）
-  const riskSection = document.getElementById("risk-section");
-  const riskItems = document.getElementById("risk-items");
-  if (data.风险列表 && data.风险列表.length > 0) {
-    riskSection.style.display = "block";
-    riskItems.innerHTML = data.风险列表.map(r => {
-      const icon = r.等级 === "danger" ? "🔴" : "🟡";
-      return `<div class="risk-item ${r.等级}">${icon} ${r.内容}</div>`;
-    }).join("");
+// ═══════════════════════════════════════════════════════
+// Trace View
+// ═══════════════════════════════════════════════════════
+async function viewTrace(taskId) {
+  const data = await api('/api/tasks/' + taskId + '/trace');
+  const modal = document.getElementById('trace-modal');
+  const content = document.getElementById('trace-content');
+  if (data.error) {
+    content.innerHTML = `<h2>Trace 不可用</h2><p>${esc(data.error)}</p><button class="btn" onclick="closeTrace()">关闭</button>`;
   } else {
-    riskSection.style.display = "none";
+    const summary = {
+      final_status: data.final_status,
+      route_level: data.route?.level,
+      validation_verdict: data.validation?.verdict,
+      changed_files: data.changed_files,
+      elapsed: data.elapsed,
+      token_count: data.token_count,
+    };
+    content.innerHTML = `
+      <h2 style="margin-bottom:12px">📄 Trace: ${taskId.slice(-8)}</h2>
+      <div style="font-size:13px">
+        <p><b>最终状态:</b> ${data.final_status||'?'}</p>
+        <p><b>路由级别:</b> ${data.route?.level||'?'}</p>
+        <p><b>验证结论:</b> ${data.validation?.verdict||'?'}</p>
+        <p><b>改动文件:</b> ${(data.changed_files||[]).join(', ')||'无'}</p>
+        <p><b>耗时:</b> ${data.elapsed ? data.elapsed.toFixed(1)+'s' : '?'}</p>
+        <p><b>Token:</b> ${data.token_count||0}</p>
+      </div>
+      <details style="margin-top:8px">
+        <summary>完整 JSON</summary>
+        <pre>${esc(JSON.stringify(data, null, 2))}</pre>
+      </details>
+      <button class="btn" onclick="closeTrace()">关闭</button>
+    `;
+  }
+  modal.classList.add('open');
+}
+
+function closeTrace() {
+  document.getElementById('trace-modal').classList.remove('open');
+}
+
+// ═══════════════════════════════════════════════════════
+// Conflicts
+// ═══════════════════════════════════════════════════════
+function renderConflicts() {
+  const sec = document.getElementById('conflict-section');
+  const list = document.getElementById('conflict-list');
+  if (!conflicts.length) { sec.style.display = 'none'; return; }
+  sec.style.display = '';
+  list.innerHTML = conflicts.map(c => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
+      <div>
+        <span style="font-family:monospace;font-size:11px">${c.id.slice(-8)}</span>
+        <span style="margin-left:8px">${esc((c.description||'').slice(0,60))}</span>
+        ${c.error ? `<div style="font-size:11px;color:var(--orange)">${esc(c.error.slice(0,120))}</div>` : ''}
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <button class="btn small primary" onclick="resolveConflict('${c.id}','manual')">已解决</button>
+        <button class="btn small danger" onclick="resolveConflict('${c.id}','abort')">放弃</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function resolveConflict(taskId, action) {
+  const r = await api('/api/conflicts/' + taskId + '/resolve', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action}),
+  });
+  if (r.ok) refreshAll();
+  else alert('操作失败: ' + (r.error || '未知错误'));
+}
+
+// ═══════════════════════════════════════════════════════
+// Memory Query
+// ═══════════════════════════════════════════════════════
+async function queryMemory() {
+  const q = document.getElementById('mem-query').value.trim();
+  const res = await api('/api/memory?q=' + encodeURIComponent(q));
+  const stats = res.stats;
+  document.getElementById('mem-stats').innerHTML = stats ?
+    `事件:${stats.events} | 语义边:${stats.edges_semantic} | 时间边:${stats.edges_temporal} | 因果边:${stats.edges_causal_explicit}E+${stats.edges_causal_inferred}I | 实体边:${stats.edges_entity} | 候选:${stats.latent_candidates}` : '';
+
+  if (res.error) {
+    document.getElementById('mem-results').innerHTML = `<div class="error-block">${esc(res.error)}</div>`;
+    return;
   }
 
-  // 结构化摘要
-  // 可信度仪表盘（仅显示等级+明细，不显示伪精确数字分）
-  if (data.可信度) {
-    const t = data.可信度;
-    document.getElementById("trust-dashboard").style.display = "flex";
-    const ring = document.getElementById("trust-ring");
-    const levelText = t.等级 === "高" ? "可信" : t.等级 === "中" ? "需审阅" : "不可信";
-    ring.textContent = levelText;
-    ring.className = "trust-score-ring " + (t.等级 === "高" ? "high" : t.等级 === "中" ? "mid" : "low");
-    ring.style.fontSize = "16px";
-    const breakdownItems = (t.明细 || []).map(d =>
-      `<span class="tbitem ${d.方向 === '正面' ? 'up' : d.方向 === '负面' ? 'down' : ''}">${d.方向 === '正面' ? '▲' : d.方向 === '负面' ? '▼' : '—'} ${d.来源}</span>`
-    ).join("");
-    document.getElementById("trust-breakdown").innerHTML = breakdownItems
-      ? `<span style="font-size:11px;color:var(--text-dim);margin-right:6px;">评分明细：</span>${breakdownItems}`
-      : "";
-  } else {
-    document.getElementById("trust-dashboard").style.display = "none";
-  }
+  const trav = res.traversal;
+  let html = '';
 
-  // 动态卡片：根据返回字段渲染
-  const cardTemplates = {
-    "结构化摘要": "📐", "核心争议": "🎯", "推理链路": "🧠",
-    "法条适用精析": "⚖️", "对立解释路径": "🔀",
-    "论证完整性检查": "🔗", "程序问题识别": "🏛️", "未回答问题": "❓",
-    "法律关系": "⚖️", "事实与证据": "📋",
-    "对抗路径": "⚔️", "风险推演": "⚠️", "行动建议": "💡",
-  };
-  const grid = document.getElementById("cardGrid");
-  grid.innerHTML = "";
-  const readKeys = ["结构化摘要", "核心争议", "推理链路", "法条适用精析", "程序问题识别"];
-  const auditKeys = ["未回答问题", "对立解释路径", "论证完整性检查", "程序问题识别"];
-  const visibleKeys = (当前模式 === 'judgment') ? (子模式 === 'read' ? readKeys : auditKeys) : Object.keys(a);
-  for (const [key, val] of Object.entries(a)) {
-    if (key === "总结" || !val) continue;
-    if (当前模式 === 'judgment' && !visibleKeys.includes(key)) continue;
-    const emoji = cardTemplates[key] || "📌";
-    const card = document.createElement("div");
-    card.className = "card";
-    const h3 = document.createElement("h3");
-    h3.textContent = emoji + " " + key;
-    const content = document.createElement("div");
-    content.className = "content";
-    content.textContent = val;
-    card.appendChild(h3);
-    card.appendChild(content);
-    grid.appendChild(card);
-  }
-
-
-
-
-  // 法条统计
-  const lawEl = document.getElementById("r-lawstats");
-  const 法条信息 = (data.验证 && data.验证.法条统计) ? data.验证.法条统计 : "历史存档";
-  lawEl.textContent = "📋 " + 法条信息 + "  |  判例字数：" + (data.字数 || "?");
-
-  // 溯源（历史数据可能为null）
-  const trace = data.溯源;
-  const traceSection = document.getElementById("trace-section");
-  const traceItems = document.getElementById("trace-items");
-  if (trace && trace.items && trace.items.length > 0) {
-    traceSection.style.display = "block";
-    traceItems.innerHTML = trace.items.map(item => {
-      const cls = item.有效 ? "" : " invalid";
-      return `<div class="trace-item${cls}">
-        <div class="label">原文第${item.段号}段</div>
-        ${item.内容}
+  // Stage 3-4: Traversal narrative
+  if (trav && trav.narrative && trav.narrative.length) {
+    html += `<div style="margin-bottom:12px"><b>🎯 ${trav.intent} 遍历</b> (${trav.total_results}结果, 图覆盖: ${JSON.stringify(trav.graph_coverage)})`;
+    if (trav.budget_exceeded) html += ' <span style="color:var(--orange)">⚠超预算</span>';
+    html += '</div>';
+    trav.narrative.forEach(r => {
+      const pathStr = r.path && r.path.length ? r.path.map(p=>`${p[0]}→${p[1]}`).join(' ') : '入口';
+      const truncated = r.truncated ? '...' : '';
+      html += `<div class="mem-card">
+        <span class="sim">${r.score.toFixed(4)}</span>
+        <span style="font-family:monospace;font-size:11px">${(r.task_id||'').slice(-8)}</span>
+        <span style="color:var(--text2);font-size:10px">[${(r.graph_sources||[]).join(',')}]</span>
+        ${esc((r.description||'').slice(0,60))}${truncated}
+        <div class="source">${pathStr}</div>
       </div>`;
-    }).join("");
-  } else if (trace && trace.warning) {
-    traceSection.style.display = "block";
-    traceItems.innerHTML = `<div class="trace-item invalid"><div class="label">⚠️</div>${trace.warning}</div>`;
-  } else {
-    traceSection.style.display = "none";
-  }
-
-  // 法条库对照（历史数据可能为null）
-  const lawSection = document.getElementById("law-section");
-  const lawItems = document.getElementById("law-items");
-  if (data.法条对照 && data.法条对照.length > 0) {
-    lawSection.style.display = "block";
-    lawItems.innerHTML = data.法条对照.map(item => {
-      // 状态标签颜色
-      let 状态色 = "#9ca3af", 状态文字 = item.状态 || "未知";
-      if (item.状态 === "现行有效") { 状态色 = "#4ade80"; 状态文字 = "✅ 现行有效"; }
-      else if (item.状态 === "已修订") { 状态色 = "#facc15"; 状态文字 = "⚠️ 已修订"; }
-      else if (item.状态 === "已废止") { 状态色 = "#f87171"; 状态文字 = "❌ 已废止"; }
-      let 附注 = "";
-      if (item.施行日期) 附注 += ` · 施行: ${item.施行日期}`;
-      if (item.取代) 附注 += ` · ${item.取代}`;
-      return `<div class="law-item">
-        <div class="law-name">
-          ${item.法名} · ${item.引用}
-          <span style="color:${状态色};font-size:11px;margin-left:6px;">${状态文字}</span>
-        </div>
-        ${item.条文}
-        ${附注 ? `<div style="font-size:11px;color:#6b7280;margin-top:4px;">${附注}</div>` : ""}
-      </div>`;
-    }).join("");
-  } else {
-    lawSection.style.display = "none";
-  }
-
-  // 验证
-  const v = document.getElementById("validation");
-  if (!data.验证 || data.验证.通过) {
-    v.className = "validation pass";
-    v.textContent = "✅ 验证通过";
-  } else {
-    v.className = "validation warn";
-    v.innerHTML = data.验证.问题.map(p => `<div class="warn-item">${p}</div>`).join("");
-  }
-
-
-  document.getElementById("results").classList.add("active");
-  document.getElementById("results").scrollIntoView({ behavior: "smooth" });
-
-  // 显示下载按钮和反馈区（重置表单状态）
-  document.getElementById("btnDownload").style.display = "inline-block";
-  document.getElementById("feedback-section").style.display = "block";
-  document.getElementById("feedback-form").style.display = "block";
-  document.getElementById("feedback-done").style.display = "none";
-  document.getElementById("feedback-err").style.display = "none";
-  // 动态生成反馈选项（基于实际分析字段 + 公共模块）
-  const analysisKeys = Object.keys(a).filter(k => k !== "总结" && a[k]);
-  const commonModules = ["可信度评分", "综合总结"];
-  const allOptions = [...analysisKeys, ...commonModules];
-  const chipHTML = allOptions.map(k => `<label class="fb-chip"><input type="checkbox" value="${k}"> ${k}</label>`).join("");
-  document.getElementById("q-valuable").innerHTML = chipHTML;
-  document.getElementById("q-useless").innerHTML = chipHTML;
-  document.getElementById("q-keep").innerHTML = chipHTML;
-  // 清除上次勾选和文字
-  document.querySelectorAll("#feedback-section input[type=radio], #feedback-section input[type=checkbox]").forEach(el => el.checked = false);
-  document.getElementById("feedbackComment").value = "";
-  window._lastResult = data;
-}
-
-// ---- 反馈 ----
-function 收集选中值(容器ID) {
-  const checks = document.querySelectorAll(`#${容器ID} input:checked`);
-  return Array.from(checks).map(c => c.value);
-}
-
-async function 提交反馈() {
-  const helpfulness = document.querySelector('input[name="helpfulness"]:checked');
-  if (!helpfulness) {
-    document.getElementById("feedback-err").style.display = "inline";
-    document.getElementById("feedback-err").textContent = "请选择有帮助程度";
-    return;
-  }
-  const mostValuable = 收集选中值("q-valuable");
-  if (mostValuable.length === 0) {
-    document.getElementById("feedback-err").style.display = "inline";
-    document.getElementById("feedback-err").textContent = "请至少选一个最有价值的模块";
-    return;
-  }
-  const leastValuable = 收集选中值("q-useless");
-  if (leastValuable.length === 0) {
-    document.getElementById("feedback-err").style.display = "inline";
-    document.getElementById("feedback-err").textContent = "请至少选一个最没用的模块（可如实选，这对我们非常重要）";
-    return;
-  }
-  const keepThree = 收集选中值("q-keep");
-  if (keepThree.length === 0 || keepThree.length > 3) {
-    document.getElementById("feedback-err").style.display = "inline";
-    document.getElementById("feedback-err").textContent = "请选择1-3个你不能失去的模块";
-    return;
-  }
-  document.getElementById("feedback-err").style.display = "none";
-
-  const issueType = document.querySelector('input[name="issue_type"]:checked');
-  const comment = document.getElementById("feedbackComment").value.trim();
-
-  try {
-    await fetch("/feedback", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        case_name: window._lastResult?.判例名 || "未知",
-        date: new Date().toISOString().slice(0, 10),
-        helpfulness: helpfulness.value,
-        most_valuable: mostValuable,
-        least_valuable: leastValuable,
-        keep_three: keepThree,
-        issue_types: issueType ? [issueType.value] : [],
-        comment: comment
-      })
     });
-  } catch(e) { /* 静默失败 */ }
-
-  // 隐藏表单，显示感谢（保留DOM，下次分析可重置）
-  document.getElementById("feedback-form").style.display = "none";
-  document.getElementById("feedback-done").style.display = "block";
-}
-
-// ---- 下载报告 ----
-function 下载报告() {
-  if (!window._lastResult) return;
-  const a = window._lastResult.分析;
-  const body = Object.assign({ 判例名: window._lastResult.判例名 }, a, {
-    法条统计: window._lastResult.验证?.法条统计,
-    法条对照: window._lastResult.法条对照,
-    溯源: window._lastResult.溯源
-  });
-  fetch("/download", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  }).then(res => res.blob()).then(blob => {
-    const url = URL.createObjectURL(blob);
-    const el = document.createElement("a");
-    el.href = url;
-    el.download = (window._lastResult.判例名 || "report") + "_分析报告.txt";
-    el.click();
-    URL.revokeObjectURL(url);
-  });
-}
-
-// ---- 历史记录 ----
-var _historyData = [];
-
-async function 切换历史() {
-  const list = document.getElementById("historyList");
-  const arrow = document.getElementById("historyArrow");
-
-  if (list.classList.contains("active")) {
-    list.classList.remove("active");
-    arrow.textContent = "▶";
-    return;
   }
 
-  // 加载历史
-  try {
-    const resp = await fetch("/history");
-    _historyData = await resp.json();
-    渲染历史列表(_historyData);
-    list.classList.add("active");
-    arrow.textContent = "▼";
-  } catch (err) {
-    document.getElementById("historyItems").innerHTML = "<div style='color:#e05d5d;font-size:13px;padding:12px;'>加载失败</div>";
-    list.classList.add("active");
+  // Semantic baseline (direct Jaccard)
+  if (res.semantic_baseline && res.semantic_baseline.length) {
+    html += '<div style="margin-bottom:12px"><b>📊 语义基线:</b>';
+    res.semantic_baseline.forEach(t => {
+      html += `<div class="mem-card"><span class="sim">${t.similarity.toFixed(3)}</span> <span style="font-family:monospace;font-size:11px">${(t.task_id||'').slice(-8)}</span> ${esc((t.description||'').slice(0,60))}</div>`;
+    });
+    html += '</div>';
   }
+
+  // Entity matches
+  if (res.entity_matches && Object.keys(res.entity_matches).length) {
+    html += '<div style="margin-bottom:12px"><b>📁 实体重叠:</b>';
+    Object.entries(res.entity_matches).forEach(([f,ids]) => {
+      html += `<div class="mem-card">📁 ${esc(f)} ← ${ids.map(i=>(i||'').slice(-8)).join(', ')}</div>`;
+    });
+    html += '</div>';
+  }
+
+  document.getElementById('mem-results').innerHTML = html || '<span style="color:var(--text2)">无结果</span>';
 }
 
-function 渲染历史列表(items) {
-  const container = document.getElementById("historyItems");
-  if (items.length === 0) {
-    container.innerHTML = "<div style='color:#6b7280;font-size:13px;padding:12px;'>暂无匹配记录</div>";
-    return;
-  }
-  if (items.length === 0) {
-    container.innerHTML = "<div style='color:var(--text-dim);font-size:13px;padding:12px 0;'>暂无历史记录，分析结果将在此显示</div>";
-    return;
-  }
-  container.innerHTML = items.map(item =>
-    `<div class="history-item" onclick="加载历史详情('${item.文件名}')">
-      <div class="h-name">${item.判例名}</div>
-      <div class="h-meta">${item.日期}</div>
-    </div>`
-  ).join("");
+// ═══════════════════════════════════════════════════════
+// Helpers
+// ═══════════════════════════════════════════════════════
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
 }
 
-// ---- 加载历史详情 ----
-async function 加载历史详情(fname) {
-  document.getElementById("loading").classList.add("active");
-  document.getElementById("results").classList.remove("active");
-  document.getElementById("error").classList.remove("active");
-  try {
-    const resp = await fetch(`/case/${encodeURIComponent(fname)}`);
-    const data = await resp.json();
-    if (!resp.ok) {
-      显示错误(data.error || "加载失败");
-      return;
-    }
-    // 历史数据可能缺少溯源/法条对照，渲染函数已兼容
-    data._来自历史 = true;
-    渲染结果(data);
-  } catch (err) {
-    显示错误("加载历史失败: " + err.message);
-  }
+function fmtDur(sec) {
+  if (sec < 60) return Math.round(sec) + 's';
+  if (sec < 3600) return (sec/60).toFixed(1) + 'm';
+  return (sec/3600).toFixed(2) + 'h';
 }
 
-function 过滤历史() {
-  const kw = document.getElementById("searchInput").value.trim();
-  if (!kw) { 渲染历史列表(_historyData); return; }
-  const filtered = _historyData.filter(item =>
-    (item.判例名 && item.判例名.includes(kw)) ||
-    (item.总结 && item.总结.includes(kw))
-  );
-  渲染历史列表(filtered);
+function updateClock() {
+  document.getElementById('clock').textContent =
+    new Date().toLocaleString('zh-CN') + ' | v3 MAGMA';
 }
+
+// ═══════════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════════
+refreshAll();
+queryMemory();
+setInterval(refreshAll, 5000);
 </script>
-
 </body>
 </html>

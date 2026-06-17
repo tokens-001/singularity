@@ -28,7 +28,7 @@ _LOOP_POLL_SECS = 3  # 队列空时的轮询间隔
 def main(argv: list) -> int:
     if not argv:
         print(
-            "用法: python3 -m scheduler add|run|loop|rollback|apply|status|merge [参数]",
+            "用法: python3 -m scheduler add|run|loop|rollback|apply|status|merge|memory [参数]",
             file=sys.stderr,
         )
         return 2
@@ -54,6 +54,8 @@ def main(argv: list) -> int:
     if cmd == "merge" and len(argv) >= 2:
         # 修复 #10: merge list / merge resolve <id> --manual|--abort
         return _cmd_merge(argv[1:])
+    if cmd == "memory":
+        return _cmd_memory(argv[1:])
 
     # 兼容旧用法: 直接跟任务文本
     rest, concurrent = _parse_concurrent(argv)
@@ -152,6 +154,16 @@ def _cmd_loop(max_concurrent: int = 1) -> int:
 def _drain_queue(agents: dict, max_concurrent: int = 1) -> tuple[int, int]:
     """处理队列中所有就绪任务, 返回 (退出码, 处理数)。"""
     results = orchestrator.run_queue(agents, max_concurrent=max_concurrent)
+
+    # MAGMA 慢通道: 每轮 drain 后运行一次启发式整合
+    if results:
+        try:
+            added = orchestrator.consolidate_memory()
+            if added:
+                print(f"[memory] 慢通道整合: +{added} 条隐含因果边", file=sys.stderr)
+        except Exception:
+            pass
+
     exit_code = 0
     for tid, reason, validation in results:
         t = tracker._read(tid)
@@ -294,6 +306,74 @@ def _is_merged_to_main(task_id: str) -> bool:
         cwd=str(config.PROJECT_ROOT), capture_output=True,
     )
     return r.returncode == 0
+
+
+def _cmd_memory(argv: list) -> int:
+    """scheduler memory stats|rebuild|query|latent|traverse [参数]"""
+    from . import memory as mem_mod
+
+    if not argv:
+        print("用法: scheduler memory stats|rebuild|query|latent|traverse [参数]",
+              file=sys.stderr)
+        return 2
+
+    sub = argv[0]
+    if sub == "stats":
+        s = mem_mod.stats()
+        print(json.dumps(s, ensure_ascii=False, indent=2))
+        return 0
+
+    if sub == "rebuild":
+        config.ensure_dirs()
+        n = mem_mod.rebuild_from_traces()
+        print(f"[memory] 从 traces 重建: {n} 条任务已索引")
+        return 0
+
+    if sub == "latent":
+        candidates = mem_mod.find_candidate_latent_edges()
+        print(f"慢通道候选: {len(candidates)} 对")
+        for c in candidates[:10]:
+            print(f"  {c['task_a'][-8:]} ↔ {c['task_b'][-8:]} "
+                  f"共享:{c['shared_files']} sim={c['semantic_sim']} gap={c['time_gap_hours']}h")
+        return 0
+
+    if sub == "traverse" and len(argv) >= 2:
+        rest, _ = _parse_concurrent(argv[1:])
+        query_text = " ".join(rest) if rest else ""
+        beam = 3
+        hops = 3
+        i = 0
+        while i < len(argv):
+            if argv[i] == "--beam" and i + 1 < len(argv):
+                beam = int(argv[i+1]); i += 2; continue
+            if argv[i] == "--hops" and i + 1 < len(argv):
+                hops = int(argv[i+1]); i += 2; continue
+            i += 1
+        result = mem_mod.traverse(query_text, beam_width=beam, max_hops=hops)
+        narrative = mem_mod.synthesize(result, query_text)
+        print(json.dumps(narrative, ensure_ascii=False, indent=2))
+        return 0
+
+    if sub == "query" and len(argv) >= 2:
+        rest, _ = _parse_concurrent(argv[1:])
+        query_text = " ".join(rest) if rest else ""
+        # 提取 --files
+        files = None
+        i = 0
+        while i < len(argv):
+            if argv[i] == "--files" and i + 1 < len(argv):
+                files = [f.strip() for f in argv[i + 1].split(",")]
+                i += 2
+                continue
+            i += 1
+
+        result = mem_mod.query(query_text, files=files)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    print("用法: scheduler memory stats|rebuild|query|latent|traverse [参数]",
+          file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

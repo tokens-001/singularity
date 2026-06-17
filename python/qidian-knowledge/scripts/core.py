@@ -288,15 +288,55 @@ class KnowledgeSearchEngine:
         self._loaded = True
         return self
 
-    def detect_domain(self, query: str) -> str:
-        """关键词命中 → 自动判域，默认返回 'case'"""
+    # ── MAGMA 意图分类: 查图选路 ──────────────────────
+    _INTENT_PATTERNS = {
+        "causal": [
+            "为什么", "原因", "理由", "动机", "目的", "为啥",
+            "因为", "所以", "导致", "引起", "触发", "根源",
+        ],
+        "temporal": [
+            "什么时候", "何时", "先后", "顺序", "流程", "步骤",
+            "之前", "之后", "最早", "最近", "历史", "演变",
+        ],
+        "entity": [
+            "谁", "哪个", "哪些", "什么人", "什么文件",
+            "在哪里", "文件", "模块", "函数", "类", "路径",
+        ],
+    }
+
+    _INTENT_DOMAIN_BOOST = {
+        "causal": {"decision": 3, "insight": 2, "principle": 1},
+        "temporal": {"case": 2, "experiment": 2, "question": 1},
+        "entity": {"case": 3, "reference": 2, "experiment": 1},
+    }
+
+    def detect_intent(self, query: str) -> str:
+        """MAGMA 意图分类: causal | temporal | entity | semantic (默认)。
+
+        用于决定优先查哪个"图"——域路由的偏置。
+        """
         query_lower = query.lower()
+        scores = {}
+        for intent, keywords in self._INTENT_PATTERNS.items():
+            scores[intent] = sum(1 for kw in keywords if kw in query_lower)
+
+        best = max(scores, key=scores.get)
+        return best if scores[best] > 0 else "semantic"
+
+    def detect_domain(self, query: str) -> str:
+        """关键词命中 + MAGMA 意图偏置 → 自动判域，默认返回 'case'"""
+        query_lower = query.lower()
+        intent = self.detect_intent(query)
+        intent_boost = self._INTENT_DOMAIN_BOOST.get(intent, {})
+
         scores = {}
         for domain, keywords in INTENT_KEYWORDS.items():
             score = sum(1 for kw in keywords if kw in query_lower)
             # 前缀匹配: D008, P001 等
             if re.search(rf"\b{domain[:1]}\d{{3}}\b", query_lower):
                 score += 5
+            # MAGMA 意图偏置: 按查询意图加权
+            score += intent_boost.get(domain, 0)
             scores[domain] = score
 
         best = max(scores, key=scores.get)
@@ -353,6 +393,7 @@ class KnowledgeSearchEngine:
             "domain_label": DOMAIN_CONFIG.get(domain, {}).get("label", domain),
             "query": query,
             "query_tokens": query_tokens,
+            "intent": self.detect_intent(query),
             "count": len(results),
             "results": results,
             "mode": mode,
