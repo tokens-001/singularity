@@ -1379,32 +1379,47 @@ async function renderLayerSwitch(){
   if (agents.error || models.error) { body.innerHTML = '<span style="color:var(--red)">加载失败</span>'; return; }
 
   const tiers = [
-    {id:'E', color:'var(--cyan)', label:'E 层 · 日常执行', desc:'简单任务、bugfix、查询'},
-    {id:'E+', color:'var(--orange)', label:'E+ 层 · 复杂构建', desc:'多文件重构、新模块、跨模块'},
-    {id:'D', color:'var(--purple)', label:'D 层 · 架构设计', desc:'方案设计、安全审查、架构决策'},
+    {id:'E', color:'var(--cyan)', label:'E 层', desc:'日常执行 · bugfix · 查询'},
+    {id:'E+', color:'var(--orange)', label:'E+ 层', desc:'复杂构建 · 多文件 · 新模块'},
+    {id:'D', color:'var(--purple)', label:'D 层', desc:'架构设计 · 审查 · 方案'},
   ];
 
   body.innerHTML = tiers.map(t => {
     const tierAgents = agents[t.id] || [];
-    const activeModels = tierAgents.map(a => a.model);
+    const activeModels = new Set(tierAgents.map(a => a.model));
     const available = Object.values(models).filter(m => (m.tiers||[]).includes(t.id));
 
-    const checks = available.map(m => {
-      const checked = activeModels.includes(m.id) ? 'checked' : '';
-      const dot = m.api_available
-        ? '<span style="color:var(--green);font-size:7px">●</span>'
-        : '<span style="color:var(--text3);font-size:7px">○</span>';
-      return `<label style="display:inline-flex;align-items:center;gap:3px;margin-right:8px;cursor:pointer;font-size:9px;font-family:var(--mono)">
-        <input type="checkbox" value="${esc(m.id)}" ${checked} onchange="toggleLayerAgent('${t.id}','${esc(m.id)}',this.checked)"
-          ${m.api_available?'':'disabled'}>
-        ${dot} ${esc(m.display||m.id)}
-        <span style="color:var(--text3);font-size:8px">${m.cost}</span>
-      </label>`;
+    const cards = available.map(m => {
+      const active = activeModels.has(m.id);
+      const online = m.api_available;
+      const bg = active ? 'var(--bg3)' : 'transparent';
+      const border = active ? t.color : 'var(--bg3)';
+      const statusDot = online
+        ? `<span style="color:var(--green);font-size:7px">●</span>`
+        : `<span style="color:var(--red);font-size:7px">●</span>`;
+      const costLabel = {budget:'$',standard:'$$',premium:'$$$'}[m.cost]||'$$';
+
+      return `<div onclick="toggleLayerAgent('${t.id}','${esc(m.id)}',${!active})"
+        style="cursor:pointer;padding:8px 10px;border:1px solid ${border};background:${bg};display:flex;align-items:center;gap:8px;min-width:180px;transition:all .15s">
+        <span style="display:flex;align-items:center;gap:4px;min-width:50px">
+          <span style="width:10px;text-align:center">${statusDot}</span>
+          <span style="font-size:8px;font-family:var(--mono);text-transform:uppercase;color:${active?t.color:'var(--text3)'}">${active?'ON':'OFF'}</span>
+        </span>
+        <div style="min-width:0;flex:1">
+          <div style="font-size:10px;font-weight:500;color:var(--text)">${esc(m.display||m.id)}</div>
+          <div style="font-size:8px;color:var(--text3);font-family:var(--mono)">${esc(m.provider)} · ${m.speed} · ${costLabel}</div>
+        </div>
+      </div>`;
     }).join('');
 
-    return `<div style="padding:8px 0;border-bottom:1px solid var(--bg3)">
-      <div style="font-size:10px;font-weight:600;color:${t.color};font-family:var(--mono);margin-bottom:4px">${t.label}</div>
-      <div style="display:flex;flex-wrap:wrap;gap:2px">${checks||'<span style="color:var(--text3);font-size:9px">该层无可用模型</span>'}</div>
+    return `<div style="margin-bottom:10px">
+      <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:6px">
+        <span style="font-size:10px;font-weight:600;color:${t.color};font-family:var(--mono)">${t.label}</span>
+        <span style="font-size:8px;color:var(--text3)">${t.desc}</span>
+        <span style="flex:1"></span>
+        <span style="font-size:8px;color:var(--text3);font-family:var(--mono)">${tierAgents.length} active</span>
+      </div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap">${cards||'<span style="color:var(--text3);font-size:9px">无可用模型</span>'}</div>
     </div>`;
   }).join('');
 }
