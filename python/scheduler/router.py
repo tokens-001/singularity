@@ -55,6 +55,9 @@ _LEADING_QUERY_RE = re.compile(
     r"|(^(这|那)(个|么)?(能不能|行不行|可以吗|是否))"
 )
 
+# D-lite: 简单架构任务不走 D 层, 降级到 E (省 Opus $15/M→$0.5/M)
+_SIMPLE_D_RE = re.compile(r"加个|加一个|增加|添加|删掉|去掉|修改配置|改个|调一下|小改|微调|单文件")
+
 # 消歧: 否定词+动作词 → 去除动作词, 防误判 (如 "不写代码"→不是写代码意图)
 _NEGATION_FILTER = re.compile(r"(?:不|别|不要|不必|不用)(?:新建|创建|搭建|建立|写代码|编写|重写|实现|重构|审查|修改)")
 
@@ -91,6 +94,16 @@ def route(task: str) -> RouteResult:
         very_short = len(task) <= 15
         if single_file or very_short:
             result.level = "E"
+            result.matched_signals.append("降级 E+: 单文件/简单任务 → E")
+
+    # Step 1c: D-lite —— 简单架构任务降级到 E (省钱, Opus $15/M → DeepSeek $0.5/M)
+    if result.level == "D":
+        simple_d = _SIMPLE_D_RE.search(task)
+        very_short = len(task) <= 20
+        if simple_d or very_short:
+            result.level = "E"
+            result.cost_tier = "standard"
+            result.matched_signals.append("D-lite: 简单架构/短任务 → E (省$14.5/M)")
             result.matched_signals.append("降级 E+: 单文件/简单任务 → E")
 
     # 任务类型独立扫描 (v1 仅记录)

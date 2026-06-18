@@ -79,12 +79,13 @@ _ARCHITECT_PREAMBLE = """你是系统架构师。基于需求和调研报告，�
 - 每个任务必须只改不相交的文件 (并行 merge 的前提)
 - 你只出方案和清单，不写代码。"""
 
-_REVIEWER_PREAMBLE = """你是系统审查员。基于项目架构方案和任务清单，做全项目审查。
+_REVIEWER_PREAMBLE = """你是系统审查员。只审查本次改动的文件和任务，不扫全项目。
 
 架构方案: {architecture}
-已创建的任务 ID: {task_ids}
+本次改动的任务: {task_ids}
+改动范围: {changed_files}
 
-请逐文件、逐模块审查，输出严格 JSON:
+只审查上述 changed_files 中的文件，不要扫描未改动的模块。输出严格 JSON:
 {{
   "issues": [
     {{
@@ -110,7 +111,9 @@ _REVIEWER_PREAMBLE = """你是系统审查员。基于项目架构方案和任�
 
 
 def _needs_research(project: ProjectState) -> bool:
-    """判断是否需要调研阶段。"""
+    """判断是否需要调研阶段。bug_fix 和简单任务自动跳过。"""
+    if project.template == "bug_fix":
+        return False
     desc = project.description.lower()
     triggers = ["调研", "参考", "借鉴", "调研", "架构", "设计", "方案", "重构"]
     return any(t in desc for t in triggers)
@@ -245,11 +248,24 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
 
 
 def _run_review(project: ProjectState, agents: dict) -> str:
-    """调 Reviewer(D层) 全项目审查。"""
+    """调 Reviewer(D层) 增量审查 — 只扫本次改动文件。"""
     if _should_skip(project, "skip_gate3"):
         project.phase = Phase.FIXING
         save(project)
         return "审查已跳过 (Owner 设定 skip_gate3)"
+
+    # 收集本次改动的文件 (从 task traces)
+    changed_files = set()
+    for tid in project.task_ids:
+        trace_path = config.TRACE_DIR / f"{tid}.json"
+        if trace_path.exists():
+            try:
+                trace = json.loads(trace_path.read_text(encoding="utf-8"))
+                for f in trace.get("changed_files", []):
+                    changed_files.add(f)
+            except Exception:
+                pass
+    changed_str = ", ".join(sorted(changed_files)) if changed_files else "全项目"
 
     architecture_json = json.dumps(project.architecture, ensure_ascii=False, indent=2) \
         if project.architecture else "无架构方案"
@@ -258,10 +274,11 @@ def _run_review(project: ProjectState, agents: dict) -> str:
     prompt = _REVIEWER_PREAMBLE.format(
         architecture=architecture_json,
         task_ids=task_ids_str,
+        changed_files=changed_str,
     )
 
     task = tracker.create(
-        f"[审查] {project.name}: 全项目代码审查",
+        f"[审查] {project.name}: 增量审查 ({len(changed_files)} 文件)",
         depth=1,
     )
     tracker.transition(task.id, TaskStatus.PENDING,
