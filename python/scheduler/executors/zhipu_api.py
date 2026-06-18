@@ -16,6 +16,7 @@ v1 边界:
 from __future__ import annotations
 import json
 import os
+import re
 import ssl
 import time
 import urllib.request
@@ -125,7 +126,12 @@ class ZhipuApiExecutor(BaseExecutor):
         return content, token_count
 
     def _save_as_patch(self, content: str, elapsed: float, token_count: int = 0) -> ExecutorResult:
-        """产出写进 patch 文件, 不落盘到项目 (审计 6.5)。"""
+        """产出写进 patch 文件。解析 @files 头提取改动文件列表。"""
+        changed_files = []
+        meta_match = re.match(r'\s*<!--\s*@files:\s*(.+?)\s*-->', content)
+        if meta_match:
+            changed_files = [f.strip() for f in meta_match.group(1).split(",") if f.strip()]
+
         patch_path = config.PATCH_DIR / f"{self.task_id}.md"
         patch_path.parent.mkdir(parents=True, exist_ok=True)
         patch_path.write_text(content, encoding="utf-8")
@@ -133,10 +139,47 @@ class ZhipuApiExecutor(BaseExecutor):
             success=True,
             raw_output=content,
             patch_path=str(patch_path),
-            changed_files=[],   # 未 apply
+            changed_files=changed_files,
             elapsed=elapsed,
             token_count=token_count,
         )
+
+    @staticmethod
+    def apply_patch(task_id: str) -> dict:
+        """读取 patch 文件，解析 @files 头，提取代码块写入目标文件。
+
+        返回 {"applied": [...], "failed": [...]}。
+        """
+        patch_path = config.PATCH_DIR / f"{task_id}.md"
+        if not patch_path.exists():
+            return {"applied": [], "failed": [], "error": f"patch 不存在: {patch_path}"}
+
+        content = patch_path.read_text(encoding="utf-8")
+        meta_match = re.match(r'\s*<!--\s*@files:\s*(.+?)\s*-->', content)
+        if not meta_match:
+            return {"applied": [], "failed": [], "error": "patch 无 @files 声明"}
+
+        declared_files = [f.strip() for f in meta_match.group(1).split(",") if f.strip()]
+        if not declared_files:
+            return {"applied": [], "failed": []}
+
+        code_blocks = re.findall(r'```(?:\w*)\s*\n(.*?)```', content, re.DOTALL)
+        applied, failed = [], []
+        for i, target_file in enumerate(declared_files):
+            if i < len(code_blocks):
+                block = code_blocks[i]
+            else:
+                failed.append({"file": target_file, "error": "无对应代码块"})
+                continue
+            dest = config.PROJECT_ROOT / target_file
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(block, encoding="utf-8")
+                applied.append(target_file)
+            except OSError as e:
+                failed.append({"file": target_file, "error": str(e)})
+
+        return {"applied": applied, "failed": failed}
 
 
 # ── 渲染辅助 ──────────────────────────────────────────────────────────
