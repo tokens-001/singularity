@@ -754,6 +754,23 @@ def api_project_start(project_id):
 
 
 # ═══════════════════════════════════════════════════════════
+# Patch Apply + Supervisor API
+# ═══════════════════════════════════════════════════════════
+
+from scheduler.supervisor import supervise
+
+@app.route("/api/tasks/<task_id>/apply", methods=["POST"])
+def api_apply_patch(task_id):
+    from scheduler.executors.zhipu_api import ZhipuApiExecutor
+    try:
+        result = ZhipuApiExecutor.apply_patch(task_id)
+        if result.get("error"):
+            return jsonify({"ok": False, "error": result["error"]})
+        return jsonify({"ok": True, "applied": result["applied"], "failed": result["failed"]})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+# ═══════════════════════════════════════════════════════════
 # P3 保障层: Cost / Lineage / Project Snapshot
 # ═══════════════════════════════════════════════════════════
 
