@@ -233,10 +233,13 @@ def _run_research(project: ProjectState, agents: dict) -> str:
 
 
 def _run_planning(project: ProjectState, agents: dict) -> str:
-    """调 Architect(D层) 出方案+任务清单。"""
+    """调 Architect(D层) 同步出方案+任务清单 → 解析 JSON → 写入 project。"""
     if _should_skip(project, "gate2"):
+        project.phase = Phase.GATE2
+        save(project)
         return "规划已跳过 (Owner 设定)"
 
+    # 1. 构建 prompt (含调研报告)
     research_json = json.dumps(project.research_report, ensure_ascii=False, indent=2) \
         if project.research_report else "无调研报告"
 
@@ -247,16 +250,49 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
         research=research_json,
     )
 
-    task = tracker.create(
-        f"[架构] {project.name}: 出方案+任务清单",
-        depth=1,
-    )
-    tracker.transition(task.id, TaskStatus.PENDING,
-                       route_level="D", route_locked=True)
-    project.task_ids.append(task.id)
+    # 2. 同步 dispatch 到 D 层
+    task_id = f"architect_{project.id}"
+    disp_result = None
+    raw = ""
+    try:
+        disp_result = disp_mod.dispatch(
+            prompt, "D", task_id, agents,
+            project_lineup=project.agent_lineup,
+        )
+        raw = disp_result.executor_result.raw_output if disp_result else ""
+    except Exception as e:
+        raw = ""
+
+    # 3. 解析 JSON 产出
+    import re as _re
+    arch = None
+    if raw:
+        try:
+            m = _re.search(r"```json\s*\n(.*?)\n```", raw, _re.DOTALL)
+            if m:
+                arch = json.loads(m.group(1))
+            else:
+                m2 = _re.search(r"\{[\s\S]*\}", raw)
+                if m2:
+                    arch = json.loads(m2.group())
+        except (json.JSONDecodeError, Exception):
+            pass
+    if arch is None:
+        arch = {"raw_output": raw[:5000], "parse_error": True}
+
+    project.architecture = arch
+    project.add_lineage({"action": "planning_complete",
+                         "agent": disp_result.agent_cfg.get("model","?") if disp_result else "?",
+                         "task_count": len(arch.get("tasks", []))})
+
+    # 4. 推进到 GATE2
     project.phase = Phase.GATE2
     save(project)
-    return f"架构任务 {task.id[:8]} 已入队(D层)，等待 Owner Gate2 确认"
+    return (
+        f"架构完成: {len(arch.get('tasks', []))} 个任务, "
+        f"{len(arch.get('constraints', []))} 条约束, "
+        f"设计: {arch.get('architecture','N/A')[:80]}"
+    )
 
 
 def _run_execution(project: ProjectState, agents: dict) -> str:
