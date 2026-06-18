@@ -305,6 +305,7 @@ pre.agent-out { background: var(--bg); border: 1px solid var(--border); border-r
   <div class="tab" data-tab="flow">任务流</div>
   <div class="tab" data-tab="decisions">决策链</div>
   <div class="tab" data-tab="intervene">干预面板</div>
+  <div class="tab" data-tab="infra">基础设施</div>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════
@@ -539,6 +540,62 @@ pre.agent-out { background: var(--bg); border: 1px solid var(--border); border-r
 </div>
 
 <!-- ═══════════════════════════════════════════════════════
+     Tab 6: 基础设施 — API库 / 模型库 / Agent编组
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tab-infra">
+
+  <div style="display:flex;gap:14px;flex-wrap:wrap">
+    <!-- API 库 -->
+    <div class="section" style="flex:1;min-width:320px">
+      <div class="section-title">🔑 API 库 <button class="btn cyan sm" style="float:right" onclick="renderAPIStore()">⟳ 刷新</button></div>
+      <div class="section-body" id="api-store-body" style="font-size:11px;max-height:360px;overflow-y:auto"></div>
+      <div style="padding:8px;border-top:1px solid var(--border)">
+        <input id="api-new-id" placeholder="id (如 openai)" style="width:80px;font-size:10px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px">
+        <input id="api-new-provider" placeholder="提供商" style="width:80px;font-size:10px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px">
+        <input id="api-new-url" placeholder="base_url" style="width:140px;font-size:10px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px">
+        <input id="api-new-env" placeholder="环境变量名" style="width:100px;font-size:10px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px">
+        <button class="btn cyan sm" onclick="addAPI()">+ 添加</button>
+      </div>
+    </div>
+
+    <!-- 模型库 -->
+    <div class="section" style="flex:1;min-width:320px">
+      <div class="section-title">🧠 模型库 <button class="btn cyan sm" style="float:right" onclick="renderModels()">⟳ 刷新</button></div>
+      <div class="section-body" id="models-body" style="font-size:11px;max-height:360px;overflow-y:auto"></div>
+    </div>
+  </div>
+
+  <!-- Agent 编组 -->
+  <div class="section" style="margin-top:14px">
+    <div class="section-title">⚙️ 项目 Agent 编组 <span style="font-weight:normal;font-size:10px;color:var(--text2)">— 选择项目后配置每层使用的模型</span></div>
+    <div style="padding:10px;display:flex;gap:10px;align-items:center">
+      <select id="lineup-project-select" onchange="loadLineup()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px;font-size:11px;min-width:180px">
+        <option value="">— 选择项目 —</option>
+      </select>
+      <span id="lineup-status" style="font-size:10px;color:var(--text2)"></span>
+    </div>
+    <div id="lineup-editor" style="padding:0 10px 10px;display:none">
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <div style="flex:1;min-width:180px">
+          <div style="font-size:10px;color:var(--cyan);margin-bottom:4px">E 层 (日常执行)</div>
+          <div id="lineup-e" style="font-size:10px"></div>
+        </div>
+        <div style="flex:1;min-width:180px">
+          <div style="font-size:10px;color:var(--orange);margin-bottom:4px">E+ 层 (复杂构建)</div>
+          <div id="lineup-ep" style="font-size:10px"></div>
+        </div>
+        <div style="flex:1;min-width:180px">
+          <div style="font-size:10px;color:var(--purple);margin-bottom:4px">D 层 (架构设计)</div>
+          <div id="lineup-d" style="font-size:10px"></div>
+        </div>
+      </div>
+      <button class="btn cyan sm" style="margin-top:8px" onclick="saveLineup()">保存编组</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
      Trace Modal
      ═══════════════════════════════════════════════════════ -->
 <div class="modal-overlay" id="trace-modal" onclick="if(event.target===this)closeTrace()">
@@ -571,6 +628,7 @@ document.getElementById('tab-bar').addEventListener('click',e=>{
   if(activeTab==='decisions') populateDecisionsPicker();
   if(activeTab==='intervene') renderIntervention();
   if(activeTab==='flow') renderFlowDiagram();
+  if(activeTab==='infra'){ renderAPIStore(); renderModels(); populateLineupProjects(); }
 });
 
 // ═══════════════════════════════════════════════════════
@@ -1187,6 +1245,161 @@ function renderReports(reports){
 function esc(s){if(!s)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 function fmtDur(s){if(s<60)return Math.round(s)+'s';if(s<3600)return(s/60).toFixed(1)+'m';return(s/3600).toFixed(1)+'h';}
 function unix2str(ts){if(!ts)return'--';return new Date(ts*1000).toLocaleString('zh-CN');}
+
+// ═══════════════════════════════════════════════════════
+// 基础设施 Tab — API库 / 模型库 / Agent编组
+// ═══════════════════════════════════════════════════════
+
+async function renderAPIStore(){
+  const body = document.getElementById('api-store-body');
+  try {
+    const d = await api('/api/api-store');
+    if (d.error) { body.innerHTML = `<span style="color:var(--red)">${esc(d.error)}</span>`; return; }
+    const entries = Object.values(d);
+    if (!entries.length) { body.innerHTML = '<span style="color:var(--text2)">暂无 API 条目</span>'; return; }
+    body.innerHTML = entries.map(e => {
+      const statusColor = {'active':'var(--green)','quota_exhausted':'var(--orange)','rate_limited':'var(--orange)','disabled':'var(--red)'}[e.status]||'var(--text2)';
+      const dot = e.available ? '🟢' : '🔴';
+      return `<div style="padding:6px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
+        <span>${dot}</span>
+        <span style="font-weight:600;min-width:70px">${esc(e.provider)}</span>
+        <span style="color:var(--text2);font-size:9px;flex:1">${esc(e.base_url)}</span>
+        <span style="color:${statusColor};font-size:9px;min-width:60px;text-align:right">${e.status}</span>
+        <select onchange="setAPIStatus('${esc(e.id)}',this.value)" style="background:var(--bg);border:1px solid var(--border);color:var(--text);font-size:9px;padding:2px">
+          <option value="">状态...</option>
+          <option value="active">active</option>
+          <option value="quota_exhausted">欠费</option>
+          <option value="rate_limited">限流</option>
+          <option value="disabled">禁用</option>
+        </select>
+        <button class="btn red sm" style="font-size:9px;padding:2px 6px" onclick="removeAPI('${esc(e.id)}')">✕</button>
+      </div>`;
+    }).join('');
+  } catch(e) { body.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`; }
+}
+
+async function addAPI(){
+  const id = document.getElementById('api-new-id').value.trim();
+  const provider = document.getElementById('api-new-provider').value.trim();
+  const url = document.getElementById('api-new-url').value.trim();
+  const env = document.getElementById('api-new-env').value.trim();
+  if (!id) return alert('需要 id');
+  const r = await api('/api/api-store', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,provider,base_url:url,api_key_env:env})});
+  if (r.error) alert(r.error); else {
+    document.getElementById('api-new-id').value='';
+    document.getElementById('api-new-provider').value='';
+    document.getElementById('api-new-url').value='';
+    document.getElementById('api-new-env').value='';
+    renderAPIStore();
+  }
+}
+
+async function setAPIStatus(id, status){
+  if (!status) return;
+  const r = await api(`/api/api-store/${id}/status`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});
+  if (!r.error) renderAPIStore();
+}
+
+async function removeAPI(id){
+  if (!confirm(`删除 API "${id}"？`)) return;
+  const r = await api(`/api/api-store/${id}`, {method:'DELETE'});
+  if (!r.error) renderAPIStore();
+}
+
+async function renderModels(){
+  const body = document.getElementById('models-body');
+  try {
+    const d = await api('/api/models');
+    if (d.error) { body.innerHTML = `<span style="color:var(--red)">${esc(d.error)}</span>`; return; }
+    const models = Object.values(d);
+    if (!models.length) { body.innerHTML = '<span style="color:var(--text2)">暂无模型</span>'; return; }
+    const costLabels = {budget:'💰',standard:'💵',premium:'💎'};
+    const tierColors = {E:'var(--cyan)',E_plus:'var(--orange)',D:'var(--purple)'};
+    body.innerHTML = models.map(m => {
+      const tiers = m.tiers.map(t => `<span style="color:${tierColors[t]||'var(--text2)'};font-size:9px">${t}</span>`).join(' ');
+      const dot = m.api_available ? '🟢' : '🔴';
+      return `<div style="padding:6px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span>${dot}</span>
+          <span style="font-weight:600">${esc(m.display)}</span>
+          <span style="color:var(--text2);font-size:9px">${esc(m.id)}</span>
+          <span style="font-size:9px">${costLabels[m.cost]||''}</span>
+          <span style="font-size:9px;color:var(--text2)">${m.speed}</span>
+          ${m.reasoning?'<span style="font-size:8px;color:var(--blue)">推理</span>':''}
+          <span style="flex:1"></span>
+          <span style="font-size:9px;color:var(--text2)">${tiers}</span>
+        </div>
+        <div style="font-size:9px;color:var(--text2);margin-top:2px">${esc(m.notes)}</div>
+      </div>`;
+    }).join('');
+  } catch(e) { body.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`; }
+}
+
+async function loadLineup(){
+  const sel = document.getElementById('lineup-project-select');
+  const pid = sel.value;
+  const editor = document.getElementById('lineup-editor');
+  const status = document.getElementById('lineup-status');
+  if (!pid) { editor.style.display='none'; status.textContent=''; return; }
+
+  // 加载项目 lineup
+  const r = await api(`/api/projects/${pid}/lineup`);
+  const lineup = (r.lineup) || {};
+  // 加载可用模型列表
+  const [eMods, epMods, dMods] = await Promise.all([
+    api('/api/models/tier/E'), api('/api/models/tier/E+'), api('/api/models/tier/D')
+  ]);
+
+  function renderCheckboxes(tier, models, containerId){
+    const c = document.getElementById(containerId);
+    const selected = lineup[tier] || [];
+    c.innerHTML = models.map(m => {
+      const checked = selected.includes(m.id) ? 'checked' : '';
+      return `<label style="display:block;margin:2px 0;cursor:pointer">
+        <input type="checkbox" value="${esc(m.id)}" ${checked} onchange="lineupChanged()"
+          ${m.api_available?'':'disabled'}>
+        <span style="color:${m.api_available?'var(--text)':'var(--text2)'}">
+          ${m.api_available?'':'🔴 '}${esc(m.display)} <span style="font-size:9px;color:var(--text2)">${m.cost} ${m.speed}</span>
+        </span>
+      </label>`;
+    }).join('');
+  }
+
+  renderCheckboxes('E', eMods, 'lineup-e');
+  renderCheckboxes('E+', epMods, 'lineup-ep');
+  renderCheckboxes('D', dMods, 'lineup-d');
+  editor.style.display = 'block';
+  status.textContent = lineup && Object.keys(lineup).length ? '已有自定义编组' : '使用全局默认';
+}
+
+function lineupChanged(){
+  document.getElementById('lineup-status').textContent = '已修改，待保存';
+  document.getElementById('lineup-status').style.color = 'var(--orange)';
+}
+
+async function saveLineup(){
+  const pid = document.getElementById('lineup-project-select').value;
+  if (!pid) return;
+  function getChecked(containerId){
+    const c = document.getElementById(containerId);
+    return [...c.querySelectorAll('input:checked')].map(cb => cb.value);
+  }
+  const lineup = {E: getChecked('lineup-e'), 'E+': getChecked('lineup-ep'), D: getChecked('lineup-d')};
+  const r = await api(`/api/projects/${pid}/lineup`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({lineup})});
+  if (r.error) { alert(r.error); return; }
+  document.getElementById('lineup-status').textContent = '已保存 ✓';
+  document.getElementById('lineup-status').style.color = 'var(--green)';
+}
+
+async function populateLineupProjects(){
+  const sel = document.getElementById('lineup-project-select');
+  try {
+    const r = await api('/api/projects');
+    const projects = r.projects || [];
+    sel.innerHTML = '<option value="">— 选择项目 —</option>' +
+      projects.map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${p.phase})</option>`).join('');
+  } catch(e) {}
+}
 
 // ═══════════════════════════════════════════════════════
 // Init

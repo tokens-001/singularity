@@ -25,6 +25,8 @@ from scheduler import merge as merge_mod
 from scheduler import orchestrator
 from scheduler import project as proj_mod
 from scheduler.project import Phase
+from scheduler import api_store
+from scheduler import model_registry
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
@@ -896,6 +898,129 @@ def api_agents():
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": f"读取 agents.toml 失败: {e}"}), 500
+
+
+# ═══════════════════════════════════════════════════════════
+# API 库 & 模型库 & Agent 编组
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/api-store")
+def api_store_list():
+    """列出所有 API 条目。"""
+    try:
+        entries = api_store.list_all()
+        return jsonify({k: {
+            "id": v.id, "provider": v.provider, "base_url": v.base_url,
+            "api_key_env": v.api_key_env, "status": v.status,
+            "notes": v.notes, "available": api_store.is_available(v.id),
+            "updated_at": v.updated_at,
+        } for k, v in entries.items()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/api-store", methods=["POST"])
+def api_store_add():
+    """添加或更新 API 条目。"""
+    data = request.get_json(silent=True)
+    if not data or not data.get("id"):
+        return jsonify({"error": "缺少 id"}), 400
+    try:
+        entry = api_store.add(
+            api_id=data["id"],
+            provider=data.get("provider", data["id"]),
+            base_url=data.get("base_url", ""),
+            api_key_env=data.get("api_key_env", ""),
+            notes=data.get("notes", ""),
+        )
+        return jsonify({"ok": True, "entry": entry.to_dict()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/api-store/<api_id>", methods=["DELETE"])
+def api_store_remove(api_id):
+    """删除 API 条目。"""
+    try:
+        ok = api_store.remove(api_id)
+        return jsonify({"ok": ok})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/api-store/<api_id>/status", methods=["PUT"])
+def api_store_status(api_id):
+    """更新 API 状态。"""
+    data = request.get_json(silent=True)
+    if not data or "status" not in data:
+        return jsonify({"error": "缺少 status"}), 400
+    try:
+        entry = api_store.set_status(api_id, data["status"],
+                                      data.get("notes", ""))
+        if not entry:
+            return jsonify({"error": f"API {api_id} 不存在"}), 404
+        return jsonify({"ok": True, "entry": entry.to_dict()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/models")
+def api_models():
+    """列出所有模型及其能力。"""
+    try:
+        models = model_registry.load_models()
+        return jsonify({mid: {
+            "id": m.id, "provider": m.provider, "display": m.display,
+            "tiers": m.tiers, "speed": m.speed, "cost": m.cost,
+            "reasoning": m.reasoning, "max_turns": m.max_turns,
+            "strengths": m.strengths, "notes": m.notes,
+            "api_available": api_store.is_available(m.provider),
+        } for mid, m in models.items()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/models/tier/<tier>")
+def api_models_for_tier(tier):
+    """获取某一层可用的模型列表 (含 API 状态)。"""
+    try:
+        models = model_registry.for_tier(tier, available_only=False)
+        return jsonify([{
+            "id": m.id, "provider": m.provider, "display": m.display,
+            "cost": m.cost, "speed": m.speed,
+            "api_available": api_store.is_available(m.provider),
+        } for m in models])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/projects/<project_id>/lineup")
+def api_project_lineup(project_id):
+    """获取项目的 Agent 编组。"""
+    try:
+        p = proj_mod.load(project_id)
+        if not p:
+            return jsonify({"error": "项目不存在"}), 404
+        return jsonify({"lineup": p.agent_lineup})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/projects/<project_id>/lineup", methods=["PUT"])
+def api_project_lineup_update(project_id):
+    """更新项目的 Agent 编组。"""
+    data = request.get_json(silent=True)
+    if not data or "lineup" not in data:
+        return jsonify({"error": "缺少 lineup"}), 400
+    try:
+        p = proj_mod.load(project_id)
+        if not p:
+            return jsonify({"error": "项目不存在"}), 404
+        p.agent_lineup = data["lineup"]
+        proj_mod.save(p)
+        return jsonify({"ok": True, "lineup": p.agent_lineup})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ═══════════════════════════════════════════════════════════
