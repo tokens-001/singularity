@@ -210,9 +210,9 @@ ROLES: dict[str, Role] = {
     ),
 
     "supervisor": Role(
-        key="supervisor", name="监督者", level="D",
-        description="独立校验每任务输出，不归 Architect 管，直接汇报 Owner",
-        capabilities=["对照需求检查完整性", "对照约束检查越界", "检测偷懒", "检测代码质量"],
+        key="supervisor", name="监督者", level="",  # 非 LLM: 纯机械规则 + py_compile
+        description="机械质检门: diff/正则/py_compile，不调模型不花钱。直接汇报 Owner",
+        capabilities=["对照需求检查完整性(diff)", "对照约束检查越界(diff)", "检测偷懒(正则)", "产物验证(py_compile)"],
         persona="judge",
         system_prompt="""你是独立监督者。不归架构师管。只认Owner批准的需求+约束。
 
