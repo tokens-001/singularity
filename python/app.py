@@ -994,6 +994,39 @@ def api_models_for_tier(tier):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/models", methods=["POST"])
+def api_models_add():
+    """添加自定义模型。"""
+    data = request.get_json(silent=True)
+    if not data or not data.get("id"):
+        return jsonify({"error": "缺少 id"}), 400
+    try:
+        m = model_registry.add_model(
+            model_id=data["id"],
+            provider=data.get("provider", ""),
+            display=data.get("display", ""),
+            tiers=data.get("tiers", ["E"]),
+            speed=data.get("speed", "medium"),
+            cost=data.get("cost", "standard"),
+            reasoning=data.get("reasoning", False),
+            max_turns=data.get("max_turns", 5),
+            notes=data.get("notes", ""),
+        )
+        return jsonify({"ok": True, "model": m.to_dict()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/models/<model_id>", methods=["DELETE"])
+def api_models_remove(model_id):
+    """删除自定义模型。"""
+    try:
+        ok = model_registry.remove_model(model_id)
+        return jsonify({"ok": ok})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/projects/<project_id>/lineup")
 def api_project_lineup(project_id):
     """获取项目的 Agent 编组。"""

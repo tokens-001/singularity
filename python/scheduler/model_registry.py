@@ -5,6 +5,7 @@
 """
 
 from __future__ import annotations
+import json
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,56 +27,117 @@ class ModelEntry:
     strengths: list[str] = field(default_factory=list)
     notes: str = ""
 
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "provider": self.provider, "display": self.display,
+            "tiers": self.tiers, "speed": self.speed, "cost": self.cost,
+            "reasoning": self.reasoning, "max_turns": self.max_turns,
+            "strengths": self.strengths, "notes": self.notes,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ModelEntry":
+        return cls(
+            id=d.get("id",""), provider=d.get("provider",""), display=d.get("display",""),
+            tiers=d.get("tiers",[]), speed=d.get("speed","medium"), cost=d.get("cost","standard"),
+            reasoning=d.get("reasoning",False), max_turns=d.get("max_turns",5),
+            strengths=d.get("strengths",[]), notes=d.get("notes",""),
+        )
+
 
 def _models_toml_path() -> Path:
     return config.SCHEDULER_DIR / "models.toml"
 
 
-def load_models() -> dict[str, ModelEntry]:
-    """加载所有模型。支持 [[models]] 数组和 [models.xxx] 表两种格式。"""
-    path = _models_toml_path()
+def _custom_path() -> Path:
+    return config.QIDIAN_DIR / "models_custom.json"
+
+
+def _load_custom() -> dict[str, ModelEntry]:
+    """加载用户自定义的模型 (JSON overlay)。"""
+    path = _custom_path()
     if not path.exists():
         return {}
-    with open(path, "rb") as f:
-        raw = tomllib.load(f)
+    try:
+        data = json.loads(path.read_text())
+        return {k: ModelEntry.from_dict(v) for k, v in data.items()}
+    except (json.JSONDecodeError, KeyError):
+        return {}
+
+
+def _save_custom(models: dict[str, ModelEntry]) -> None:
+    config.QIDIAN_DIR.mkdir(parents=True, exist_ok=True)
+    data = {k: v.to_dict() for k, v in models.items()}
+    _custom_path().write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def load_models() -> dict[str, ModelEntry]:
+    """加载所有模型 — TOML 内置 + JSON 自定义覆盖。"""
     models = {}
-    items = raw.get("models", [])
-    # [[models]] 数组格式
-    if isinstance(items, list):
-        for data in items:
-            mid = data.get("id", "")
-            if not mid:
-                continue
-            models[mid] = ModelEntry(
-                id=mid,
-                provider=data.get("provider", ""),
-                display=data.get("display", mid),
-                tiers=data.get("tiers", []),
-                speed=data.get("speed", "medium"),
-                cost=data.get("cost", "standard"),
-                reasoning=data.get("reasoning", False),
-                max_turns=data.get("max_turns", 5),
-                strengths=data.get("strengths", []),
-                notes=data.get("notes", ""),
-            )
-    # [models.xxx] 表格式 (向后兼容)
-    elif isinstance(items, dict):
-        for mid, data in items.items():
-            if not isinstance(data, dict):
-                continue
-            models[mid] = ModelEntry(
-                id=mid,
-                provider=data.get("provider", ""),
-                display=data.get("display", mid),
-                tiers=data.get("tiers", []),
-                speed=data.get("speed", "medium"),
-                cost=data.get("cost", "standard"),
-                reasoning=data.get("reasoning", False),
-                max_turns=data.get("max_turns", 5),
-                strengths=data.get("strengths", []),
-                notes=data.get("notes", ""),
-            )
+    # 1. 内置 TOML
+    path = _models_toml_path()
+    if path.exists():
+        with open(path, "rb") as f:
+            raw = tomllib.load(f)
+        items = raw.get("models", [])
+        if isinstance(items, list):
+            for data in items:
+                mid = data.get("id", "")
+                if mid:
+                    models[mid] = _entry_from_raw(mid, data)
+        elif isinstance(items, dict):
+            for mid, data in items.items():
+                if isinstance(data, dict):
+                    models[mid] = _entry_from_raw(mid, data)
+    # 2. 用户自定义覆盖 / 新增
+    custom = _load_custom()
+    models.update(custom)
     return models
+
+
+def _entry_from_raw(mid: str, data: dict) -> ModelEntry:
+    return ModelEntry(
+        id=mid,
+        provider=data.get("provider", ""),
+        display=data.get("display", mid),
+        tiers=data.get("tiers", []),
+        speed=data.get("speed", "medium"),
+        cost=data.get("cost", "standard"),
+        reasoning=data.get("reasoning", False),
+        max_turns=data.get("max_turns", 5),
+        strengths=data.get("strengths", []),
+        notes=data.get("notes", ""),
+    )
+
+
+# ── CRUD (写入自定义 JSON) ──
+
+def add_model(model_id: str, provider: str, display: str = "",
+              tiers: list[str] = None, speed: str = "medium",
+              cost: str = "standard", reasoning: bool = False,
+              max_turns: int = 5, notes: str = "") -> ModelEntry:
+    """添加或更新自定义模型。"""
+    custom = _load_custom()
+    entry = ModelEntry(
+        id=model_id, provider=provider,
+        display=display or model_id,
+        tiers=tiers or ["E"],
+        speed=speed, cost=cost, reasoning=reasoning,
+        max_turns=max_turns, notes=notes,
+    )
+    custom[model_id] = entry
+    _save_custom(custom)
+    return entry
+
+
+def remove_model(model_id: str) -> bool:
+    """删除自定义模型 (只能删自定义的，不能删内置的)。"""
+    custom = _load_custom()
+    if model_id not in custom:
+        return False
+    del custom[model_id]
+    _save_custom(custom)
+    return True
 
 
 def for_tier(tier: str, available_only: bool = True) -> list[ModelEntry]:

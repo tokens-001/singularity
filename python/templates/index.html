@@ -470,7 +470,29 @@ pre.agent-out {
     </div>
     <div class="section" style="flex:1;min-width:300px">
       <div class="section-title">模型库 <button class="btn cyan sm" style="margin-left:8px" onclick="renderModels()">刷新</button></div>
-      <div class="section-body" id="models-body" style="font-size:10px;max-height:250px;overflow-y:auto"></div>
+      <div class="section-body" id="models-body" style="font-size:10px;max-height:200px;overflow-y:auto"></div>
+      <div style="padding:4px 10px;border-top:1px solid var(--grid);display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+        <input id="model-new-id" placeholder="id" style="width:90px;font-size:9px">
+        <input id="model-new-provider" placeholder="provider" style="width:70px;font-size:9px">
+        <input id="model-new-display" placeholder="显示名" style="width:80px;font-size:9px">
+        <select id="model-new-tier" style="width:55px;font-size:9px;padding:2px">
+          <option value="E">E</option>
+          <option value="E+">E+</option>
+          <option value="D">D</option>
+        </select>
+        <select id="model-new-speed" style="width:55px;font-size:9px;padding:2px">
+          <option value="fast">快</option>
+          <option value="medium" selected>中</option>
+          <option value="slow">慢</option>
+        </select>
+        <select id="model-new-cost" style="width:55px;font-size:9px;padding:2px">
+          <option value="budget">低</option>
+          <option value="standard" selected>标</option>
+          <option value="premium">高</option>
+        </select>
+        <label style="font-size:9px;color:var(--text3);font-family:var(--mono);display:flex;align-items:center;gap:2px"><input type="checkbox" id="model-new-reasoning">推理</label>
+        <button class="btn cyan sm" onclick="addModel()">添加</button>
+      </div>
     </div>
   </div>
 
@@ -1216,6 +1238,27 @@ async function removeAPI(id){
   if (!r.error) renderAPIStore();
 }
 
+async function addModel(){
+  const id=document.getElementById('model-new-id').value.trim();
+  const provider=document.getElementById('model-new-provider').value.trim();
+  const display=document.getElementById('model-new-display').value.trim();
+  const tier=document.getElementById('model-new-tier').value;
+  const speed=document.getElementById('model-new-speed').value;
+  const cost=document.getElementById('model-new-cost').value;
+  const reasoning=document.getElementById('model-new-reasoning').checked;
+  if(!id||!provider) return alert('需要 id 和 provider');
+  const r=await api('/api/models',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,provider,display,tiers:[tier],speed,cost,reasoning,max_turns:5})});
+  if(r.error) alert(r.error); else {
+    ['model-new-id','model-new-provider','model-new-display'].forEach(x=>document.getElementById(x).value='');
+    renderModels();
+  }
+}
+async function removeModel(id){
+  if(!confirm('删除模型 '+id+' ？')) return;
+  const r=await api('/api/models/'+id,{method:'DELETE'});
+  if(r.error) alert(r.error); else renderModels();
+}
+
 async function renderModels(){
   const body = document.getElementById('models-body');
   try {
@@ -1240,7 +1283,7 @@ async function renderModels(){
           <span style="font-size:8px;color:var(--text3)">${m.speed}</span>
           ${m.reasoning?'<span style="font-size:8px;color:var(--purple);font-family:var(--mono)">RSN</span>':''}
           <span style="flex:1"></span>
-          <span style="font-size:8px;font-family:var(--mono)">${tiers}</span>
+          <span style="font-size:8px;font-family:var(--mono)">${tiers}</span> <button class="btn sm" style="color:var(--red);font-size:7px;padding:1px 3px;margin-left:4px" onclick="event.stopPropagation();removeModel('${esc(m.id)}')">DEL</button>
         </div>
         <div style="font-size:8px;color:var(--text3);margin-top:2px;font-family:var(--mono)">${esc(m.notes)}</div>
       </div>`;
