@@ -1076,7 +1076,7 @@ async function overrideRoute(id){
   await api(`/api/tasks/${id}/override-route`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({level:lvl})});
   refreshAll();
 }
-async function cancelTask(id){if(!confirm(`取消任务 ${id.slice(-8)}?`))return;await api(`/api/tasks/${id}/cancel`,{method:'POST'});refreshAll();}
+async function cancelTask(id){if(!confirm(`取消任务 ${id.slice(-8)}?`))return;const r=await api(`/api/tasks/${id}/cancel`,{method:'POST'});if(r.ok){toast(r.message||'已取消','success');}else{toast(r.error||'取消失败','error');}refreshAll();}
 async function retryTask(id){await api(`/api/tasks/${id}/retry`,{method:'POST'});refreshAll();}
 
 // ═══════════════════════════════════════════════════════
