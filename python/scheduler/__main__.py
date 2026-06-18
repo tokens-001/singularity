@@ -421,8 +421,9 @@ def _cmd_project(argv: list) -> int:
     if sub == "show" and len(args) >= 1:
         return _cmd_project_show(args[0])
     if sub == "advance" and len(args) >= 1:
-        approve = "--approve" in args or "--auto" in args
-        return _cmd_project_advance(args[0], approve=approve)
+        approve = "--approve" in args
+        yes = "--yes" in args or "-y" in args
+        return _cmd_project_advance(args[0], approve=approve, yes=yes)
     if sub == "reject" and len(args) >= 1:
         return _cmd_project_reject(args[0])
 
@@ -522,7 +523,7 @@ def _cmd_project_show(project_id: str) -> int:
     return 0
 
 
-def _cmd_project_advance(project_id: str, approve: bool = False) -> int:
+def _cmd_project_advance(project_id: str, approve: bool = False, yes: bool = False) -> int:
     from .project import load as load_proj, save as save_proj
     from .workflow import start_project_workflow, run_phase
     proj = load_proj(project_id)
@@ -544,8 +545,7 @@ def _cmd_project_advance(project_id: str, approve: bool = False) -> int:
 
     # ── 费用估算 & 确认 ──
     cost = _phase_cost_estimate(phase, proj)
-    yes_flag = "--yes" in sys.argv[1:] or "-y" in sys.argv[1:]
-    if cost > 0 and not yes_flag:
+    if cost > 0 and not yes:
         level = _phase_agent_level(phase)
         print(f"[project] {proj.id[:8]}  即将进入 {phase.value} 阶段")
         print(f"  调用: {level} 层 agent")
