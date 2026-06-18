@@ -55,6 +55,9 @@ _LEADING_QUERY_RE = re.compile(
     r"|(^(这|那)(个|么)?(能不能|行不行|可以吗|是否))"
 )
 
+# 真复杂关键词——命中就不降级，必须走 E+
+_GENUINELY_COMPLEX_RE = re.compile(r"重写|多文件|新模块|从零开始|大规模|跨模块")
+
 # D-lite: 简单架构任务不走 D 层, 降级到 E (省 Opus $15/M→$0.5/M)
 _SIMPLE_D_RE = re.compile(r"加个|加一个|增加|添加|删掉|去掉|修改配置|改个|调一下|小改|微调|单文件")
 
@@ -88,13 +91,14 @@ def route(task: str) -> RouteResult:
             result.matched_signals.append(f"complexity@{prio}: {pat.pattern} → {level}")
             break
 
-    # Step 1b: E+ 降级 —— 单文件或简单任务不配 E+ (省钱)
+    # Step 1b: E+ 降级 —— 简单任务不配 E+，但真复杂(重写/多文件等)不降
     if result.level == "E+":
+        genuinely_complex = _GENUINELY_COMPLEX_RE.search(task)
         single_file = bool(re.search(r"\.\w{1,6}\s*(文件|$)", task))
-        very_short = len(task) <= 15
-        if single_file or very_short:
+        very_short = len(task) <= 10
+        if not genuinely_complex and (single_file or very_short):
             result.level = "E"
-            result.matched_signals.append("降级 E+: 单文件/简单任务 → E")
+            result.matched_signals.append("降级 E+: 非复杂关键词 → E")
 
     # Step 1c: D-lite —— 简单架构任务降级到 E (省钱, Opus $15/M → DeepSeek $0.5/M)
     if result.level == "D":
