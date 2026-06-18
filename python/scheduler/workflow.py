@@ -49,35 +49,41 @@ _ARCHITECT_PREAMBLE = """你是系统架构师。基于需求和调研报告，�
 原始约束: {constraints}
 调研报告: {research}
 
-你需要产出架构方案 + 任务分解清单 + 约束。输出严格 JSON:
+你需要产出架构方案 + 任务分解清单 + 约束。输出严格 JSON，必须符合以下 Schema:
 
 {{
-  "architecture": "主设计思路 + 模块划分 + 数据流",
+  "architecture": "主设计思路 + 模块划分 + 数据流 (必填, <500字)",
   "tasks": [
     {{
       "id": "T1",
-      "title": "任务标题",
-      "description": "任务详细描述",
-      "complexity": "low|medium|high",
-      "depends_on": [],
-      "acceptance": "验收标准",
-      "estimated_files": ["涉及文件"]
+      "title": "任务标题 (必填, <50字)",
+      "description": "任务详细描述 (必填, <200字)",
+      "complexity": "low|medium|high (必填)",
+      "depends_on": ["T0"],
+      "acceptance": "验收标准: 完成后怎么验证? (必填, <100字)",
+      "estimated_files": ["涉及文件路径"]
     }}
   ],
   "constraints": [
-    "不改 xx 接口",
-    "保持现有测试通过",
-    "不引入新的第三方依赖"
+    {{
+      "text": "不改 xx 接口",
+      "type": "api_surface|test_green|no_new_deps|compat|perf|other",
+      "check": "如何验证: grep/diff/test命令"
+    }}
   ],
   "risks": ["风险1"],
-  "test_strategy": "测试策略"
+  "test_strategy": "如何测试整个方案 (必填, <200字)"
 }}
 
-注意:
-- low→E, medium→E+, high→D
-- depends_on 填任务 ID 列表
-- 每个任务必须只改不相交的文件 (并行 merge 的前提)
-- 你只出方案和清单，不写代码。"""
+Schema 规则:
+- tasks 至少 1 个, 最多 20 个
+- complexity: low→E层, medium→E+层, high→D层
+- depends_on 填其他任务的 id (T1,T2...), 可为空数组
+- 每个任务必须改不相交的文件 (并行 merge 的前提)
+- constraints 每条必须可机器检查 (type+check 字段)
+- 你只出方案和清单，不写代码。
+
+输出时用 ```json ... ``` 包裹。"""
 
 _REVIEWER_PREAMBLE = """你是系统审查员。只审查本次改动的文件和任务，不扫全项目。
 
@@ -281,18 +287,61 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
         arch = {"raw_output": raw[:5000], "parse_error": True}
 
     project.architecture = arch
+    # 校验架构完整性
+    arch_issues = _validate_architecture(arch)
     project.add_lineage({"action": "planning_complete",
                          "agent": disp_result.agent_cfg.get("model","?") if disp_result else "?",
-                         "task_count": len(arch.get("tasks", []))})
+                         "task_count": len(arch.get("tasks", [])),
+                         "validation_issues": len(arch_issues)})
 
     # 4. 推进到 GATE2
     project.phase = Phase.GATE2
     save(project)
+    warn = f" (校验警告: {'; '.join(arch_issues[:3])})" if arch_issues else ""
     return (
         f"架构完成: {len(arch.get('tasks', []))} 个任务, "
-        f"{len(arch.get('constraints', []))} 条约束, "
+        f"{len(arch.get('constraints', []))} 条约束"
+        f"{warn}, "
         f"设计: {arch.get('architecture','N/A')[:80]}"
     )
+
+
+def _validate_architecture(arch: dict) -> list[str]:
+    """校验架构产出完整性。返回问题列表, 空=通过。"""
+    issues = []
+    # 必填顶层字段
+    for key in ["architecture", "tasks", "constraints", "test_strategy"]:
+        if not arch.get(key):
+            issues.append(f"缺少必填字段: {key}")
+    # tasks 校验
+    tasks = arch.get("tasks", [])
+    if not isinstance(tasks, list) or len(tasks) == 0:
+        issues.append("tasks 为空或格式错误")
+    else:
+        for i, t in enumerate(tasks):
+            tid = t.get("id", f"?")
+            for f in ["id", "title", "description", "complexity", "acceptance"]:
+                if not t.get(f):
+                    issues.append(f"任务 {tid}: 缺少 {f}")
+            if t.get("complexity") not in ("low", "medium", "high"):
+                issues.append(f"任务 {tid}: complexity 无效 ({t.get('complexity')})")
+            if not isinstance(t.get("estimated_files", []), list):
+                issues.append(f"任务 {tid}: estimated_files 应为数组")
+    # constraints 校验
+    constraints = arch.get("constraints", [])
+    if isinstance(constraints, list):
+        for i, c in enumerate(constraints):
+            if isinstance(c, dict):
+                if not c.get("text"):
+                    issues.append(f"约束 {i}: 缺少 text")
+                if c.get("type") not in ("api_surface", "test_green", "no_new_deps", "compat", "perf", "other"):
+                    issues.append(f"约束 {i}: type 无效 ({c.get('type')})")
+            elif isinstance(c, str):
+                issues.append(f"约束 {i}: 应为对象格式 {{text,type,check}}, 不是纯字符串")
+    # risks
+    if "risks" not in arch:
+        issues.append("缺少 risks 字段")
+    return issues
 
 
 def _run_execution(project: ProjectState, agents: dict) -> str:
@@ -419,7 +468,7 @@ def _run_review(project: ProjectState, agents: dict) -> str:
 
 
 def _run_fixing(project: ProjectState, agents: dict) -> str:
-    """为 Reviewer 发现的每条 issue 创建修复任务。"""
+    """为 Reviewer 发现的每条 issue 创建修复任务，然后回到审查循环。"""
     if _should_skip(project, "skip_gate4"):
         project.phase = Phase.DONE
         save(project)
@@ -428,7 +477,14 @@ def _run_fixing(project: ProjectState, agents: dict) -> str:
     if not project.issues:
         project.phase = Phase.DONE
         save(project)
-        return "无 issues，跳过修复，项目完成"
+        return "无 issues，项目完成 ✅"
+
+    # 检查迭代次数，防死循环
+    fix_rounds = sum(1 for e in project.lineage if e.get("action") == "fixing_round")
+    if fix_rounds >= 5:
+        project.phase = Phase.DONE
+        save(project)
+        return f"修复已迭代 {fix_rounds} 轮，达上限，请人工接管"
 
     created = 0
     for issue in project.issues:
@@ -440,13 +496,18 @@ def _run_fixing(project: ProjectState, agents: dict) -> str:
             depth=2,
         )
         tracker.transition(child.id, TaskStatus.PENDING,
-                           route_level=level, route_locked=True)
+                           route_level=level, route_locked=True,
+                           project_id=project.id)
         project.task_ids.append(child.id)
         created += 1
 
-    project.phase = Phase.GATE4
+    # 记录迭代
+    project.add_lineage({"action": "fixing_round", "round": fix_rounds + 1,
+                         "issues_fixed": len(project.issues)})
+    # 回到审查阶段，验证修复效果
+    project.phase = Phase.REVIEWING
     save(project)
-    return f"已创建 {created} 个修复任务，等待 Owner Gate4 验收"
+    return f"已创建 {created} 个修复任务 (第{fix_rounds+1}轮)，回到审查验证"
 
 
 def start_project_workflow(project: ProjectState, agents: dict) -> str:
