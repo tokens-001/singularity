@@ -243,6 +243,7 @@ def create(
         description=description, scope=scope,
         raw_constraints=list(constraints or []),
         token_budget_total=budget,
+        auto_mode=auto_mode,
         phase=Phase.TEMPLATE,
         created_at=now, updated_at=now,
     )
