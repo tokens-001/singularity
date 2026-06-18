@@ -21,6 +21,7 @@ from . import snapshot as snap_mod
 from . import orchestrator
 from . import tracker
 from .tracker import TaskStatus
+from .project import Phase
 
 _LOOP_POLL_SECS = 3  # 队列空时的轮询间隔
 
@@ -56,6 +57,8 @@ def main(argv: list) -> int:
         return _cmd_merge(argv[1:])
     if cmd == "memory":
         return _cmd_memory(argv[1:])
+    if cmd == "project" and len(argv) >= 2:
+        return _cmd_project(argv[1:])
 
     # 兼容旧用法: 直接跟任务文本
     rest, concurrent = _parse_concurrent(argv)
@@ -398,6 +401,173 @@ def _cmd_memory(argv: list) -> int:
     print("用法: scheduler memory stats|rebuild|query|latent|traverse [参数]",
           file=sys.stderr)
     return 2
+
+
+# ═══════════════════════════════════════════════════════════
+# project 子命令
+# ═══════════════════════════════════════════════════════════
+
+def _cmd_project(argv: list) -> int:
+    if not argv:
+        print("用法: scheduler project create|list|show|advance|reject [参数]", file=sys.stderr)
+        return 2
+    sub = argv[0]
+    args = argv[1:]
+
+    if sub == "create" and len(args) >= 1:
+        return _cmd_project_create(args)
+    if sub == "list":
+        return _cmd_project_list()
+    if sub == "show" and len(args) >= 1:
+        return _cmd_project_show(args[0])
+    if sub == "advance" and len(args) >= 1:
+        approve = "--approve" in args or "--auto" in args
+        return _cmd_project_advance(args[0], approve=approve)
+    if sub == "reject" and len(args) >= 1:
+        return _cmd_project_reject(args[0])
+
+    print(f"未知 project 子命令: {sub}", file=sys.stderr)
+    return 2
+
+
+def _cmd_project_create(args: list) -> int:
+    from .project import create, TEMPLATES
+    name = args[0]
+    template = "product_dev"
+    budget = 5.0
+    auto_mode = False
+    i = 1
+    while i < len(args):
+        if args[i] == "--template" and i + 1 < len(args):
+            t = args[i + 1]
+            if t in TEMPLATES:
+                template = t
+            else:
+                print(f"未知模板: {t}, 可用: {list(TEMPLATES.keys())}", file=sys.stderr)
+                return 1
+            i += 2
+        elif args[i] == "--budget" and i + 1 < len(args):
+            try:
+                budget = float(args[i + 1])
+            except ValueError:
+                print(f"无效预算: {args[i+1]}", file=sys.stderr)
+                return 1
+            i += 2
+        elif args[i] in ("--auto",):
+            auto_mode = True
+            i += 1
+        else:
+            print(f"未知参数: {args[i]}", file=sys.stderr)
+            return 1
+
+    proj = create(name=name, template=template, budget=budget, auto_mode=auto_mode)
+    tmpl = TEMPLATES.get(template, {})
+    print(f"[project] 创建: {proj.id[:8]}  {proj.name}")
+    print(f"  template: {template} ({tmpl.get('name','')})")
+    print(f"  phase: {proj.phase.value}")
+    print(f"  auto: {auto_mode}")
+    print(f"  budget: ${budget:.2f}")
+    print(f"  id: {proj.id}")
+    return 0
+
+
+def _cmd_project_list() -> int:
+    from .project import list_all
+    projects = list_all()
+    if not projects:
+        print("无项目")
+        return 0
+    print(f"[project] 项目列表 ({len(projects)}):")
+    print(f"  {'ID':<10} {'NAME':<20} {'PHASE':<14} {'TASKS':<6} {'UPDATED'}")
+    for p in projects:
+        ts = time.strftime("%m-%d %H:%M", time.localtime(p.updated_at)) if p.updated_at else "-"
+        print(f"  {p.id[:8]:<10} {p.name[:20]:<20} {p.phase.value:<14} {len(p.task_ids):<6} {ts}")
+    return 0
+
+
+def _cmd_project_show(project_id: str) -> int:
+    from .project import load as load_proj
+    proj = load_proj(project_id)
+    if proj is None:
+        print(f"项目不存在: {project_id}", file=sys.stderr)
+        return 1
+    print(f"[project] {proj.id[:8]}  {proj.name}")
+    print(f"  phase: {proj.phase.value}")
+    print(f"  template: {proj.template}")
+    print(f"  auto: {proj.auto_mode}")
+    print(f"  budget: ${proj.token_budget_total:.2f} / spent: ${proj.token_spent:.2f}")
+    print(f"  description: {proj.description[:120]}")
+    print(f"  scope: {proj.scope[:120]}")
+    print(f"  constraints: {proj.raw_constraints}")
+    print(f"  tasks: {len(proj.task_ids)} 个关联任务")
+    if proj.research_report:
+        rr = proj.research_report
+        refs = rr.get("references", [])
+        print(f"  调研: {len(refs)} 条引用, 推荐: {rr.get('recommendation','N/A')[:100]}")
+        if refs:
+            for ref in refs[:3]:
+                print(f"    - {ref.get('name','?')}: {ref.get('core_idea','')[:80]}")
+    if proj.architecture:
+        arch = proj.architecture
+        tasks = arch.get("tasks", [])
+        cons = arch.get("constraints", [])
+        print(f"  架构: {len(tasks)} 任务, {len(cons)} 约束")
+        print(f"  设计: {arch.get('architecture','')[:120]}")
+    if proj.issues:
+        print(f"  issues: {len(proj.issues)} 个问题")
+    if proj.agent_lineup:
+        print(f"  lineup: {proj.agent_lineup}")
+    print(f"  created: {time.strftime('%Y-%m-%d %H:%M', time.localtime(proj.created_at))}")
+    print(f"  updated: {time.strftime('%Y-%m-%d %H:%M', time.localtime(proj.updated_at))}")
+    return 0
+
+
+def _cmd_project_advance(project_id: str, approve: bool = False) -> int:
+    from .project import load as load_proj, save as save_proj
+    from .workflow import start_project_workflow, run_phase
+    proj = load_proj(project_id)
+    if proj is None:
+        print(f"项目不存在: {project_id}", file=sys.stderr)
+        return 1
+
+    phase = proj.phase
+    if phase.value.startswith("gate"):
+        if approve:
+            proj.confirm_gate(phase, "approved")
+            save_proj(proj)
+            print(f"[project] {proj.id[:8]}  {phase.value} APPROVED → {proj.phase.value}")
+            return 0
+        else:
+            print(f"[project] {proj.id[:8]}  当前在 {phase.value}，需 --approve 确认或 --reject 打回",
+                  file=sys.stderr)
+            return 1
+
+    agents = disp_mod.load_agents()
+    if phase == Phase.TEMPLATE:
+        # 首次启动: 先跑 start_project_workflow 判断是否需要调研
+        msg = start_project_workflow(proj, agents)
+        print(f"[project] {proj.id[:8]}  {msg}")
+    else:
+        msg = run_phase(proj, agents)
+        print(f"[project] {proj.id[:8]}  {phase.value} → {proj.phase.value}")
+        print(f"  {msg}")
+    return 0
+
+
+def _cmd_project_reject(project_id: str) -> int:
+    from .project import load as load_proj, save as save_proj
+    proj = load_proj(project_id)
+    if proj is None:
+        print(f"项目不存在: {project_id}", file=sys.stderr)
+        return 1
+    phase = proj.phase
+    if not phase.value.startswith("gate"):
+        print(f"[project] {proj.id[:8]}  当前 {phase.value} 不是 gate 阶段，无需打回", file=sys.stderr)
+        return 1
+    proj.confirm_gate(phase, "rejected")
+    save_proj(proj)
+    print(f"[project] {proj.id[:8]}  {phase.value} REJECTED → {proj.phase.value}")
+    return 0
 
 
 if __name__ == "__main__":
