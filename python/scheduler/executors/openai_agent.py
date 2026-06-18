@@ -127,14 +127,17 @@ class OpenAIAgentExecutor(BaseExecutor):
         total_tokens = 0
 
         for turn in range(1, self._max_turns + 1):
+            # 从 request_template 读取参数，只传模型支持的
+            tmpl = self.cfg.get("request_template", {})
             body = {
                 "model": self._model,
                 "messages": messages,
                 "tools": TOOLS,
                 "tool_choice": "auto",
-                "temperature": 0.3,
-                "max_tokens": 4096,
+                "max_tokens": tmpl.get("max_tokens", 4096),
             }
+            if "temperature" in tmpl:
+                body["temperature"] = tmpl["temperature"]
 
             try:
                 resp_data = self._api_call(body)
@@ -286,7 +289,12 @@ class OpenAIAgentExecutor(BaseExecutor):
         except urllib.error.HTTPError as e:
             if e.code == 429:
                 raise _RateLimitError()
-            raise _FormatError(f"HTTP {e.code}")
+            err_body = ""
+            try:
+                err_body = e.read().decode("utf-8", errors="replace")[:500]
+            except Exception:
+                pass
+            raise _FormatError(f"HTTP {e.code}: {err_body}")
         except urllib.error.URLError as e:
             raise _NetworkError(f"网络错误: {e.reason}")
         except ssl.SSLError as e:

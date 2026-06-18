@@ -30,7 +30,6 @@ sandbox = "worktree"
 
 [agents.E.request_template]
 model = "kimi-k2.7-code"
-temperature = 0.3
 max_tokens = 4096
 
 [[agents.E_plus]]

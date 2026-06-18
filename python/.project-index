@@ -1,0 +1,83 @@
+# 奇点调度平台 — 项目索引 (供新会话快速加载)
+# 生成: ls scheduler/*.py | xargs -I{} sh -c 'echo "=== {} ==="; head -5 {}; grep "^class \|^def " {}'
+
+=== scheduler/project.py === (291行, 2类, 17函数)
+  ProjectState     — 项目状态机+黑板, Phase枚举, Gate确认, to_dict/from_dict
+  Phase(Gate)      — TEMPLATE→RESEARCHING→GATE1→PLANNING→GATE2→EXECUTING→GATE3→REVIEWING→FIXING→GATE4→DONE
+  create()         — 新建项目, save/load/list_all/recover_all
+  TEMPLATES        — product_dev/bug_fix/refactor
+
+=== scheduler/workflow.py === (333行, 9函数)
+  工作流引擎: 每个Phase对应一个_run_*函数
+  run_phase()      — 入口, 根据phase分发
+  _run_research()  — 调研(E层)
+  _run_planning()  — 架构(D层)
+  _run_execution() — 分发子任务到E/E+/D
+  _run_review()    — D层增量审查(只扫改动文件)
+  _run_fixing()    — 为issue创建修复任务
+  start_project_workflow() — TEMPLATE→下一个phase
+  auto_mode         — True时跳过所有Owner Gate
+
+=== scheduler/orchestrator.py === (1071行, 3类, 25函数)
+  调度核心: 取队→路由→dispatch→validate→写结果
+  run()            — 单任务执行, fallback链+升级
+  _run_queue_v2()  — 顺序执行(主线程)
+  _run_queue_v3()  — 并行执行(ThreadPool)
+  _run_committee() — D层委员会(多agent并行出方案)
+  _synthesize_plans() — 委员会方案合成
+  _run_with_retry() — worker线程入口
+  KEY: 容灾fallback, E→E+→D升级链, QA+奇点报错在结果写入时触发
+
+=== scheduler/router.py === (134行, 1类, 3函数)
+  二维判定: 复杂度(level)+cost_tier
+  RouteResult      — level/cost_tier/task_type
+  cost_tier        — budget|standard|premium
+  D-lite           — 简单架构任务降级到E
+  E+ only for      — 重写/多文件/新模块/大规模/跨模块
+
+=== scheduler/dispatcher.py === (138行, 1类, 5函数)
+  load_agents()    — 读agents.toml
+  pick_agent()     — 选agent (role优先, default次之)
+  pick_agent_fallback_chain() — 容灾链
+  dispatch()       — 选executor跑一次
+  escalate()       — E→E+→D升级链
+
+=== scheduler/chancellor.py === (162行, 1类, 6函数)
+  奇点报错总管(纯规则)
+  assess()         — 分类: noise|routine|alert|critical
+  save_report()    — 持久化奏报
+  list_reports()   — 按严重程度过滤
+
+=== scheduler/supervisor.py === (225行, 2类, 5函数)
+  QA机械质检(不调LLM)
+  supervise()      — 四维检查: 完整性/约束合规/偷懒检测/产物验证
+  verdict          — pass|fail|escalate (硬证据fail/软证据升级)
+
+=== scheduler/roles.py === (507行, 5类, 20函数)
+  Persona          — 研究员/架构师/工程师/高级工程师/调试专家/QA/代码审查
+  Role             — researcher/architect/implementer/debugger/builder/supervisor/reviewer
+  Agent            — 模型+API绑定
+  AgentRegistry    — 注册表CRUD+分配管理
+
+=== scheduler/agents.toml === (66行)
+  E: deepseek-v4-pro(claude-cli,默认) + kimi-k2.7-code(openai-agent)
+  E+: glm-5.2(openai-agent,默认)
+  D: claude-opus-4-8(claude-cli,默认,planner)
+
+=== executors/ ===
+  claude_cli.py    — Claude Code CLI executor
+  openai_agent.py  — ★通用agent runtime (tool-use loop, 不依赖Claude Code)
+  zhipu_api.py     — 智谱单轮API (旧)
+  worktree.py      — git worktree 沙箱管理
+
+=== 其他 ===
+  tracker.py (344行)   — Task DAG + 状态机
+  merge.py (206行)     — MergeQueue 并行合并
+  snapshot.py (168行)  — git快照
+  validator.py (220行) — 三级护栏
+  memory.py (856行)    — MAGMA记忆
+  neijinglu.py (243行) — 审计日志
+  app.py               — Flask :5050, 全部API端点
+  templates/index.html — 前端面板(总览/项目/任务/决策/干预)
+  codex_proxy.py       — Codex responses↔chat翻译代理
+  tests/ (62测试)
