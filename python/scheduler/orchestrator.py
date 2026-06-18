@@ -272,6 +272,10 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
             term_reason = f"escalation_exhausted (level={level})"
             break
         level = next_level
+        # 升级后重建 fallback 链 (新层级的新 agent 列表)
+        fallback_chain = disp_mod.pick_agent_fallback_chain(agents, level)
+        tried_models = set()
+        feedback = ""
         feedback = ""
 
     return BatchOutput(

@@ -22,8 +22,8 @@ from .executors import (
     ClaudeCliExecutor, ZhipuApiExecutor,
 )
 
-# 升级链 (审计 6.3): D 是顶
-_ESCALATION = {"E": "D", "E+": "D"}
+# 升级链: E 搞不定→E+, E+ 搞不定→D, D 是顶
+_ESCALATION = {"E": "E+", "E+": "D"}
 _EXECUTOR_BY_TYPE = {
     "claude-cli": ClaudeCliExecutor,
     "zhipu-api": ZhipuApiExecutor,
