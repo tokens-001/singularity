@@ -75,7 +75,7 @@ def main(argv: list) -> int:
         return _cmd_merge(argv[1:])
     if cmd == "memory":
         return _cmd_memory(argv[1:])
-    if cmd == "project" and len(argv) >= 2:
+    if cmd == "project":
         return _cmd_project(argv[1:])
 
     # 兼容旧用法: 直接跟任务文本
@@ -427,7 +427,7 @@ def _cmd_memory(argv: list) -> int:
 
 def _cmd_project(argv: list) -> int:
     if not argv:
-        print("用法: scheduler project create|list|show|advance|reject [参数]", file=sys.stderr)
+        print("用法: scheduler project create|list|show|advance|reject|delete [参数]", file=sys.stderr)
         return 2
     sub = argv[0]
     args = argv[1:]

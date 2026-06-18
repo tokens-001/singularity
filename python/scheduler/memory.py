@@ -112,6 +112,10 @@ class EdgeType:
 # ═══════════════════════════════════════════════════════════
 
 _EMBED_MODEL = None
+# 模块加载时抑制HF/transformers日志
+import logging as _hf_log
+_hf_log.getLogger("sentence_transformers").setLevel(_hf_log.ERROR)
+_hf_log.getLogger("transformers").setLevel(_hf_log.ERROR)
 def _get_embed_model():
     """懒加载: 首次查询才下载/加载模型(420MB)。"""
     global _EMBED_MODEL
