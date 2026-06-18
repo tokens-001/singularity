@@ -79,13 +79,8 @@ body {
   font-family: var(--mono); letter-spacing: .04em; text-transform: uppercase;
   transition: color .1s, background .1s;
 }
-.tab::before { content: '['; opacity: 0; transition: opacity .1s; }
-.tab::after  { content: ']'; opacity: 0; transition: opacity .1s; }
 .tab:hover { color: var(--text2); background: var(--bg3); }
-.tab:hover::before, .tab:hover::after { opacity: .3; }
-.tab.active { color: var(--cyan); background: var(--bg3); }
-.tab.active::before, .tab.active::after { opacity: .6; content: ''; }
-.tab.active { border-bottom: 1px solid var(--cyan); margin-bottom: -1px; }
+.tab.active { color: var(--cyan); background: var(--bg3); border-bottom: 1px solid var(--cyan); }
 
 /* ═══ Content ═══ */
 .tab-content { display: none; padding: 12px 16px; }
