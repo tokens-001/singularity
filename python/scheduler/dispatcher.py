@@ -43,11 +43,11 @@ def load_agents() -> dict:
 
 
 def agent_api_available(agent_cfg: dict) -> bool:
-    """检查 agent 的 API 是否可用。claude-cli 总是可用。"""
-    etype = agent_cfg.get("type", "")
-    if etype == "claude-cli":
-        return True
+    """检查 agent 的 API 是否可用。
 
+    所有类型都经过 model_registry → api_store 检查。
+    claude-cli 也检查 api_store 状态。
+    """
     model = agent_cfg.get("model", "")
     if model:
         try:
@@ -55,9 +55,15 @@ def agent_api_available(agent_cfg: dict) -> bool:
             provider = mr.provider_for_model(model)
             if provider:
                 from . import api_store
-                return api_store.is_available(provider)
+                if not api_store.is_available(provider):
+                    return False
         except Exception:
             pass
+
+    # claude-cli: api_store 通过了就算通过
+    etype = agent_cfg.get("type", "")
+    if etype == "claude-cli":
+        return True
 
     env_key = agent_cfg.get("api_key_env", "")
     if env_key:
@@ -66,11 +72,21 @@ def agent_api_available(agent_cfg: dict) -> bool:
     return True
 
 
+def _find_agent_by_model(agents: dict, model_name: str) -> dict | None:
+    """跨所有层搜索 agent 配置。"""
+    for level_cfgs in agents.values():
+        for a in level_cfgs:
+            if a.get("model") == model_name:
+                return a
+    return None
+
+
 def pick_agent(agents: dict, level: str, role: str = None,
                project_lineup: dict[str, list[str]] = None) -> dict:
     """选 agent: project_lineup > role > default。
 
     API 不可用的 agent 自动跳过。
+    project_lineup 里的模型找不到时跨层搜索。
     """
     candidates = agents.get(level, [])
     if not candidates:
@@ -80,9 +96,14 @@ def pick_agent(agents: dict, level: str, role: str = None,
     lineup = (project_lineup or {}).get(level, [])
     if lineup:
         for model_name in lineup:
+            # 先在本层找
             for a in candidates:
                 if a.get("model") == model_name and agent_api_available(a):
                     return a
+            # 跨层找 (如 D 层 lineup 里配 glm-5.2，它在 E+ 配置里)
+            cross = _find_agent_by_model(agents, model_name)
+            if cross and agent_api_available(cross):
+                return cross
 
     # role 匹配
     if role:
@@ -120,12 +141,21 @@ def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
     lineup = (project_lineup or {}).get(level, [])
     if lineup:
         for model_name in lineup:
+            found = None
             for a in candidates:
                 key = a.get("model", "")
                 if key == model_name and key not in seen and key not in exclude:
                     if agent_api_available(a):
-                        result.append(a)
-                        seen.add(key)
+                        found = a
+            # 跨层找
+            if not found:
+                cross = _find_agent_by_model(agents, model_name)
+                if cross and agent_api_available(cross):
+                    found = cross
+            if found:
+                key = found.get("model", "")
+                result.append(found)
+                seen.add(key)
 
     if role:
         for a in candidates:
