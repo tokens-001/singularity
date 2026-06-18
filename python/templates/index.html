@@ -1085,23 +1085,8 @@ async function loadProject(id){
   `;
   document.getElementById('project-detail').style.display='block';
 }
-    document.getElementById('proj-cost').innerHTML=`<div style="margin-bottom:6px">花费 <b style="color:${bc}">$${c.token_spent.toFixed(2)}</b> / $${c.token_budget_total.toFixed(2)}</div><div style="background:var(--bg3);border-radius:4px;height:8px;overflow:hidden;margin-bottom:4px"><div style="background:${bc};height:100%;width:${pct}%;transition:width .3s"></div></div><div style="font-size:10px;color:var(--text2)">剩余 $${c.remaining.toFixed(2)}${c.over_budget?' <span style="color:var(--red)">⚠超预算</span>':''}</div>`;}})();
-  // Lineage panel
-  (async()=>{const l=await api('/api/projects/'+id+'/lineage?limit=20');if(!l.error&&l.entries&&l.entries.length){
-    document.getElementById('proj-lineage').innerHTML=l.entries.map(e=>`<div style="padding:3px 0;border-bottom:1px solid var(--border)"><span style="color:var(--text2)">${new Date((e.ts||0)*1000).toLocaleTimeString()}</span> <span style="color:var(--purple)">${esc(e.event||'?')}</span> ${e.msg?esc(e.msg).slice(0,60):''}${e.snapshot_id?` <span style="color:var(--cyan);font-family:monospace;font-size:9px">snap:${esc(e.snapshot_id).slice(-8)}</span>`:''}</div>`).join('')+(l.total>20?`<div style="color:var(--text2)">…共${l.total}条</div>`:'');}})();
-  // Supervision panel
-  if(p.supervision_log&&p.supervision_log.length){
-    document.getElementById('proj-supervision').innerHTML=p.supervision_log.map(s=>{
-      const vc=s.verdict==='pass'?'var(--green)':s.verdict==='fail'?'var(--red)':'var(--orange)';
-      return `<div style="padding:3px 0;border-bottom:1px solid var(--border)"><span style="color:${vc};font-weight:600">${s.verdict||'?'}</span> <span style="color:var(--text2)">${esc((s.task_id||'').slice(-8))}</span>${s.issues&&s.issues.length?`<div style="font-size:9px;color:var(--red)">${s.issues.map(i=>esc(i)).join('<br>')}</div>`:''}</div>`;}).join('');}
-}
-async function newProject(){
-  const name=prompt('项目名称:');if(!name)return;
-  const r=await api('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,description:prompt('描述:')||'',scope:prompt('范围:')||''})});
-  if(r.ok){loadProjects();loadProject(r.project.id);}
-}
-// Load projects on init
-loadProjects();
+// (orphaned code block removed)
+
 
 // ═══════════════════════════════════════════════════════
 // Loop Control
@@ -1437,8 +1422,6 @@ async function switchLayerAgent(tier, modelId){
   }
   renderLayerSwitch();
 }
-
-async function populateLineupProjects(){
 
 async function populateLineupProjects(){
   const sel = document.getElementById('lineup-project-select');
