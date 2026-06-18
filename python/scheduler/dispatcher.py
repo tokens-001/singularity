@@ -327,6 +327,4 @@ def update_agent(level: str, model: str, updates: dict) -> dict:
 
 
 def escalate(level: str) -> str | None:
-
-def escalate(level: str) -> str | None:
     return _ESCALATION.get(level)
