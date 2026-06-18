@@ -472,7 +472,7 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
                     pre_search_top_decisions=batch.pre_search_top_decisions,
                     pre_search_memory=batch.pre_search_memory)
         results.append((task.id, reason, validation))
-        # 宰相: 评估是否需要奏报
+        # 奇点: 评估是否需要奏报
         try:
             changed = disp_result.executor_result.changed_files if disp_result else []
             report = chan_mod.assess(task.description, term_reason, changed)
