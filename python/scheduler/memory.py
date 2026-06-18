@@ -119,10 +119,18 @@ def _get_embed_model():
         import os, time
         # 检查是否在 CI/快速模式 — 跳过模型加载
         if os.environ.get("QIDIAN_SKIP_EMBED"):
-            _EMBED_MODEL = False  # sentinel: 不可用
+            _EMBED_MODEL = False
             return None
+        import sys, io, logging as _log
+        _log.getLogger("sentence_transformers").setLevel(_log.ERROR)
+        _log.getLogger("transformers").setLevel(_log.ERROR)
         from sentence_transformers import SentenceTransformer
-        _EMBED_MODEL = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+        _stderr = sys.stderr
+        try:
+            sys.stderr = io.StringIO()
+            _EMBED_MODEL = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+        finally:
+            sys.stderr = _stderr
     return _EMBED_MODEL if _EMBED_MODEL is not False else None
 
 def _embed(text: str) -> list[float]:

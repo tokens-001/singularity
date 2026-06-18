@@ -1622,9 +1622,16 @@ function connectSSE(){
     } catch(_){}
   };
   es.onerror = () => {
-    // SSE断了 → 回退到轮询
     es.close();
     setInterval(refreshAll, 3000);
+    toast('实时推送断开，已切换轮询模式', 'error');
+    // 状态栏红色闪烁提示
+    const ind = document.getElementById('live-indicator');
+    if(ind) { ind.style.color = 'var(--red)'; ind.textContent = '◇'; }
+  };
+  es.onopen = () => {
+    const ind = document.getElementById('live-indicator');
+    if(ind) { ind.style.color = 'var(--green)'; ind.textContent = '◆'; }
   };
 }
 
