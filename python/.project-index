@@ -79,5 +79,4 @@
   neijinglu.py (243行) — 审计日志
   app.py               — Flask :5050, 全部API端点
   templates/index.html — 前端面板(总览/项目/任务/决策/干预)
-  codex_proxy.py       — Codex responses↔chat翻译代理
   tests/ (62测试)
