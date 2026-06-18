@@ -181,6 +181,12 @@ textarea { resize: vertical; min-height: 50px; }
 .flow-node .count { font-size: 16px; font-weight: 700; }
 .flow-label { font-size: 9px; fill: var(--text2); text-anchor: middle; }
 
+/* ── Phase Pipeline ── */
+.phase-step { flex:1; text-align:center; padding:3px 1px; border-radius:3px; background:var(--bg3); transition:background .3s,color .3s; overflow:hidden; white-space:nowrap; }
+.phase-step.done { background:rgba(78,201,122,.15); color:var(--green); }
+.phase-step.current { background:rgba(163,113,247,.2); color:var(--purple); font-weight:600; }
+.phase-step.future { color:var(--text2); }
+
 /* ── Timeline ── */
 .timeline { position: relative; padding-left: 16px; border-left: 1px solid var(--border); }
 .tl-node { position: relative; padding: 4px 0 14px 16px; }
@@ -375,9 +381,10 @@ pre.agent-out { background: var(--bg); border: 1px solid var(--border); border-r
     <div class="section" style="flex:1;min-width:200px">
       <div class="section-title">流程控制</div>
       <div class="section-body">
-        <div id="proj-phase" style="font-size:13px;margin-bottom:8px">
+        <div id="proj-phase" style="font-size:13px;margin-bottom:6px">
           <span style="color:var(--text2)">当前阶段:</span> <b id="proj-phase-name">--</b>
         </div>
+        <div id="proj-phase-bar" style="display:flex;gap:2px;margin-bottom:10px;font-size:8px;font-family:'SF Mono',monospace;color:var(--text2)"></div>
         <div style="display:flex;gap:6px;flex-wrap:wrap" id="proj-actions">
           <button class="btn cyan sm" onclick="runProjectPhase()">▶ 执行当前阶段</button>
           <button class="btn purple sm" onclick="projectGate('gate1','approved')">Gate1 ✓</button>
@@ -1076,6 +1083,8 @@ async function loadProject(){
     ${p.task_ids&&p.task_ids.length?`<br>任务: ${p.task_ids.length}个`:''}
   `;
   document.getElementById('proj-phase-name').textContent=p.phase||'?';
+  // Phase pipeline bar
+  (()=>{const phases=['template','researching','gate1','planning','gate2','executing','gate3','reviewing','fixing','gate4','done'];const labels=['模板','调研','朱批①','架构','朱批②','执行','朱批③','审查','修复','朱批④','完成'];const idx=phases.indexOf(p.phase);const bar=phases.map((ph,i)=>{let cls='future';if(i<idx)cls='done';else if(i===idx)cls='current';return `<span class='phase-step ${cls}'>${labels[i]}</span>`;}).join('');document.getElementById('proj-phase-bar').innerHTML=bar;})();
   document.getElementById('proj-msg').textContent='';
   document.getElementById('proj-artifact').innerHTML=
     (p.research_report?`<details><summary>调研报告</summary><pre style="font-size:10px;max-height:200px;overflow-y:auto">${esc(JSON.stringify(p.research_report,null,2))}</pre></details>`:'')+
