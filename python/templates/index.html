@@ -208,6 +208,8 @@ textarea { resize: vertical; min-height: 40px; }
 .phase-step.done    { color:var(--green); }
 .phase-step.current { color:var(--purple); font-weight:500; }
 .phase-step.future  { color:var(--text3); }
+.phase-bar { display:flex; gap:1px; margin-bottom:8px; }
+.artifact { font-size:9px; padding:2px 0; color:var(--text2); border-bottom:1px solid var(--bg3); }
 
 /* ═══ Timeline ═══ */
 .timeline { position: relative; padding-left: 12px; border-left: 1px solid var(--grid); }
@@ -1105,25 +1107,88 @@ async function loadProject(id){
   const p = await api('/api/projects/'+id);
   if (p.error) { document.getElementById('project-detail-body').innerHTML=`<span style="color:var(--red)">${esc(p.error)}</span>`; return; }
   const phases=['template','researching','gate1','planning','gate2','executing','gate3','reviewing','fixing','gate4','done'];
-  const labels=['模板','调研','①','架构','②','执行','③','审查','修复','④','完成'];
+  const labels=['📋模板','🔍调研','①门','🏗架构','②门','⚡执行','③门','🔎审查','🔧修复','④门','✅完成'];
   const idx = phases.indexOf(p.phase);
   const bar = phases.map((ph,i)=>{
     let cls='future'; if(i<idx) cls='done'; else if(i===idx) cls='current';
-    return `<span class="phase-step ${cls}">${labels[i]}</span>`;
+    return `<span class="phase-step ${cls}" title="${ph}">${labels[i]}</span>`;
   }).join('');
-  document.getElementById('project-detail-title').innerHTML = `${esc(p.name)} <span style="font-weight:normal;font-size:9px;color:var(--text3)">${p.phase}</span>`;
+
+  // Artifacts display
+  let artifacts = '';
+  if (p.research_report) {
+    const rr = p.research_report;
+    const refs = rr.references||[];
+    artifacts += `<div class="artifact"><b>📊 调研报告</b>: ${refs.length}条引用, 推荐: ${esc((rr.recommendation||'N/A')).slice(0,100)}</div>`;
+  }
+  if (p.architecture) {
+    const arch = p.architecture;
+    const tasks = arch.tasks||[];
+    const cons = arch.constraints||[];
+    artifacts += `<div class="artifact"><b>🏗 架构方案</b>: ${tasks.length}任务, ${cons.length}约束 — ${esc((arch.architecture||'')).slice(0,120)}</div>`;
+  }
+  if (p.issues && p.issues.length) {
+    const bugs = p.issues.filter(i=>i.severity==='bug').length;
+    artifacts += `<div class="artifact"><b>🐛 问题清单</b>: ${p.issues.length}个 (bug=${bugs})</div>`;
+  }
+  if (p.task_ids && p.task_ids.length) {
+    artifacts += `<div class="artifact"><b>📋 关联任务</b>: ${p.task_ids.length}个</div>`;
+  }
+
+  // Budget
+  const budgetInfo = `<span style="font-size:9px;color:var(--text3)">💰 $${(p.token_spent||0).toFixed(2)} / $${(p.token_budget_total||5).toFixed(2)}</span>`;
+
+  // Phase-specific actions
+  let actions = '';
+  const isGate = p.phase.startsWith('gate');
+  if (p.phase === 'template') {
+    actions = `<button class="btn purple sm" onclick="startProject('${esc(p.id)}')">▶ 启动工作流</button>`;
+  } else if (isGate) {
+    actions = `<button class="btn green sm" onclick="gateConfirm('${esc(p.id)}','approved')">✓ 批准</button>
+               <button class="btn red sm" onclick="gateConfirm('${esc(p.id)}','rejected')">✗ 打回</button>`;
+  } else if (p.phase !== 'done') {
+    actions = `<button class="btn cyan sm" onclick="advanceWithCost('${esc(p.id)}')">▶ 执行 ${labels[idx]}</button>`;
+  }
+
+  document.getElementById('project-detail-title').innerHTML = `${esc(p.name)} <span style="font-weight:normal;font-size:9px;color:var(--text3)">${p.phase}</span> ${budgetInfo}`;
   document.getElementById('project-detail-body').innerHTML = `
-    <div style="display:flex;gap:4px;margin-bottom:8px">${bar}</div>
-    <div style="font-size:9px;color:var(--text2)">${esc(p.description||'暂无描述').slice(0,200)}</div>
-    ${p.scope?`<div style="font-size:9px;color:var(--text3);margin-top:4px">范围: ${esc(p.scope)}</div>`:''}
-    ${p.task_ids&&p.task_ids.length?`<div style="margin-top:4px;font-size:9px;font-family:var(--mono)">任务: ${p.task_ids.length}个</div>`:''}
-    <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">
-      ${p.phase==='template'?`<button class="btn purple sm" onclick="startProject('${esc(p.id)}')">启动工作流</button>`:''}
-      ${!['template','done'].includes(p.phase)?`<button class="btn cyan sm" onclick="runPhase('${esc(p.id)}')">执行下一阶段</button>`:''}
+    <div class="phase-bar">${bar}</div>
+    <div style="font-size:9px;color:var(--text2);margin:6px 0">${esc(p.description||'暂无描述').slice(0,200)}</div>
+    ${p.scope?`<div style="font-size:9px;color:var(--text3);margin:4px 0">范围: ${esc(p.scope)}</div>`:''}
+    ${artifacts?`<div style="margin:6px 0">${artifacts}</div>`:''}
+    <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+      ${actions}
       <button class="btn sm" onclick="document.getElementById('project-detail').style.display='none'">关闭</button>
     </div>
   `;
   document.getElementById('project-detail').style.display='block';
+}
+
+async function gateConfirm(id, decision) {
+  const sure = decision==='approved' ? '批准进入下一阶段?' : `打回? 将回到上一阶段`;
+  if (!confirm(sure)) return;
+  const r = await api('/api/projects/'+id+'/gate-confirm', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({decision})
+  });
+  if (r.ok) { loadProject(id); loadProjects(); }
+  else alert(r.error||'操作失败');
+}
+
+async function advanceWithCost(id) {
+  // Show cost estimate first, then confirm
+  try {
+    const costR = await api('/api/projects/'+id+'/cost');
+    if (costR.cost > 0) {
+      const msg = `即将执行付费阶段\n估算费用: ~$${costR.cost.toFixed(2)}\n阶段: ${costR.phase}\nAgent层: ${costR.level}\n\n确认执行?`;
+      if (!confirm(msg)) return;
+    }
+  } catch(e) {}
+  // Run the phase
+  const r = await api('/api/projects/'+id+'/run-phase', {method:'POST'});
+  if (r.ok) { loadProject(id); loadProjects(); refreshAll(); }
+  else alert(r.error||'失败');
 }
 // (orphaned code block removed)
 

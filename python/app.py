@@ -780,7 +780,24 @@ def api_apply_patch(task_id):
 def api_project_cost(project_id):
     p = proj_mod.load(project_id)
     if not p: return jsonify({"error": "项目不存在"}), 404
+    cost_rates = {Phase.RESEARCHING: 0.02, Phase.PLANNING: 2.50, Phase.REVIEWING: 1.00}
+    phase_levels = {Phase.RESEARCHING: "E", Phase.PLANNING: "D", Phase.REVIEWING: "D"}
+    phase = p.phase
+    cost = 0
+    level = "-"
+    if phase == Phase.TEMPLATE:
+        # 从start_project_workflow判断下一步
+        from scheduler.workflow import _needs_research
+        if _needs_research(p):
+            cost = cost_rates.get(Phase.RESEARCHING, 0)
+            level = phase_levels.get(Phase.RESEARCHING, "-")
+    elif phase in cost_rates:
+        cost = cost_rates[phase]
+        level = phase_levels[phase]
     return jsonify({
+        "cost": round(cost, 2),
+        "phase": phase.value,
+        "level": level,
         "token_spent": p.token_spent,
         "token_budget_total": p.token_budget_total,
         "over_budget": p.over_budget(),
