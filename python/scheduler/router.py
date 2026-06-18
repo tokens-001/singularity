@@ -36,7 +36,7 @@ class RouteResult:
 # 优先级从高到低; 0 优先级只置 gate_required, 级别留给 1-3 判 (审计 2.1)
 _GATE_FILE_RE = re.compile(r"\b(core|tokenizer|graph|search)\.py\b", re.ASCII)
 _LEVEL_PATTERNS = [
-    (1, "E+", re.compile(r"重写|多文件|新模块|从零开始|大规模重构|跨模块")),
+    (1, "E+", re.compile(r"重写|多文件|新模块|插件|从零开始|大规模重构|跨模块")),
     (2, "D",  re.compile(r"审|设计|架构|方案|重构|review|审查")),
     (3, "E",  re.compile(r"新建|创建|搭建|建立|写代码|编写|实现|加个|添加|修改|修复|查|找|解释|怎么|报错|坏了|不对|异常|删掉")),
 ]
@@ -56,7 +56,7 @@ _LEADING_QUERY_RE = re.compile(
 )
 
 # 真复杂关键词——命中就不降级，必须走 E+
-_GENUINELY_COMPLEX_RE = re.compile(r"重写|多文件|新模块|从零开始|大规模|跨模块")
+_GENUINELY_COMPLEX_RE = re.compile(r"重写|多文件|新模块|插件|从零开始|大规模|跨模块")
 
 # D-lite: 简单架构任务不走 D 层, 降级到 E (省 Opus $15/M→$0.5/M)
 _SIMPLE_D_RE = re.compile(r"加个|加一个|增加|添加|删掉|去掉|修改配置|改个|调一下|小改|微调|单文件")
