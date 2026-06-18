@@ -1253,6 +1253,25 @@ async function addModel(){
     renderModels();
   }
 }
+async function updateModel(id, field, value){
+  const body = {};
+  if (field === 'tiers') {
+    // toggle tier in/out
+    const m = (await api('/api/models')).value || {};
+    const model = Object.values(m).find(x => x.id === id);
+    if (!model) return;
+    const tiers = [...(model.tiers || [])];
+    const idx = tiers.indexOf(value);
+    if (idx >= 0) tiers.splice(idx, 1);
+    else tiers.push(value);
+    if (!tiers.length) return;
+    body.tiers = tiers;
+  } else {
+    body[field] = value;
+  }
+  const r = await api('/api/models/'+id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if (r.error) { /* ignore */ } else renderModels();
+}
 async function removeModel(id){
   if(!confirm('删除模型 '+id+' ？')) return;
   const r=await api('/api/models/'+id,{method:'DELETE'});
@@ -1286,6 +1305,14 @@ async function renderModels(){
           <span style="font-size:8px;font-family:var(--mono)">${tiers}</span> <button class="btn sm" style="color:var(--red);font-size:7px;padding:1px 3px;margin-left:4px" onclick="event.stopPropagation();removeModel('${esc(m.id)}')">DEL</button>
         </div>
         <div style="font-size:8px;color:var(--text3);margin-top:2px;font-family:var(--mono)">${esc(m.notes)}</div>
+        <div style="margin-top:2px;display:flex;gap:2px">
+          ${['E','E+','D'].map(t => {
+            const on = (m.tiers||[]).includes(t);
+            const tc = {E:'var(--cyan)',E_plus:'var(--orange)',D:'var(--purple)'}[t]||'var(--text3)';
+            return '<span onclick="event.stopPropagation();updateModel(\''+esc(m.id)+'\',\'tiers\',\''+t+'\')" style="cursor:pointer;font-size:7px;font-family:var(--mono);padding:1px 4px;color:'+(on?tc:'var(--text3)')+';background:'+(on?'var(--bg3)':'transparent')+'">['+t+']</span>';
+          }).join('')}
+          <span style="font-size:7px;color:var(--text3);font-family:var(--mono)">点击切换层级</span>
+        </div>
       </div>`;
     }).join('');
   } catch(e) { body.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`; }

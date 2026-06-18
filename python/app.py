@@ -1066,6 +1066,29 @@ def api_models_remove(model_id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/models/<model_id>", methods=["PUT"])
+def api_models_update(model_id):
+    """更新模型属性 (层级/速度/价格等)。"""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "缺少更新数据"}), 400
+    try:
+        m = model_registry.add_model(
+            model_id=model_id,
+            provider=data.get("provider", ""),
+            display=data.get("display", ""),
+            tiers=data.get("tiers", None),
+            speed=data.get("speed", ""),
+            cost=data.get("cost", ""),
+            reasoning=data.get("reasoning", None),
+            max_turns=data.get("max_turns", 0),
+            notes=data.get("notes", ""),
+        )
+        return jsonify({"ok": True, "model": m.to_dict()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/projects/<project_id>/lineup")
 def api_project_lineup(project_id):
     """获取项目的 Agent 编组。"""
