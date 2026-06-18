@@ -338,13 +338,13 @@ pre.agent-out {
   </div>
 
   <div style="display:flex;gap:1px;flex-wrap:wrap;margin-bottom:8px">
-    <div class="section" style="flex:1;min-width:240px">
+    <div class="section" id="event-section" style="flex:1;min-width:240px">
       <div class="section-title">实时事件</div>
       <div class="section-body event-feed" id="event-feed" style="min-height:60px;max-height:200px;overflow-y:auto">
         <span style="color:var(--text3);font-family:var(--mono);font-size:9px">等待调度循环启动...</span>
       </div>
     </div>
-    <div class="section" style="flex:1;min-width:200px">
+    <div class="section" id="reports-section" style="flex:1;min-width:200px">
       <div class="section-title">奏报</div>
       <div class="section-body" id="reports-body" style="font-size:9px;max-height:200px;overflow-y:auto;font-family:var(--mono)"></div>
     </div>
@@ -376,7 +376,11 @@ pre.agent-out {
   </div>
 
   <div class="agent-row" id="agent-row"></div>
-  <div style="font-size:9px;color:var(--text3);font-family:var(--mono);margin-top:4px" id="token-stats"></div>
+  <div style="font-size:9px;color:var(--text3);font-family:var(--mono);margin-top:4px" id="timing-line"></div>
+  <div class="section" id="token-section" style="margin-top:4px;display:none">
+    <div class="section-title">Token 消耗</div>
+    <div class="section-body" id="token-body" style="font-size:9px;font-family:var(--mono)"></div>
+  </div>
 
 </div>
 
@@ -412,6 +416,9 @@ pre.agent-out {
       <option value="E+">E+</option>
       <option value="D">D</option>
     </select>
+    <label style="font-size:9px;display:flex;align-items:center;gap:2px;margin-left:6px">
+      <input type="checkbox" id="f-held" onchange="renderTasks()"> 仅扣留
+    </label>
     <span style="flex:1"></span>
     <span style="font-size:9px;color:var(--text3);font-family:var(--mono)" id="task-count"></span>
   </div>
@@ -430,7 +437,12 @@ pre.agent-out {
   <div class="section" style="margin-top:8px">
     <div class="section-title">决策链</div>
     <div class="section-body" id="decision-cards" style="font-size:10px">
-      <span style="color:var(--text2)">选择任务后加载决策链</span>
+      <select id="dc-task-picker" onchange="loadDecisions()" style="width:100%;margin-bottom:4px;font-size:9px;padding:2px">
+        <option value="">-- 选择已完成任务 --</option>
+      </select>
+      <div id="decision-cards-content" style="font-size:10px">
+        <span style="color:var(--text2)">选择任务后加载决策链</span>
+      </div>
     </div>
   </div>
 
@@ -536,6 +548,24 @@ pre.agent-out {
   <div class="section" style="margin-bottom:8px">
     <div class="section-title">架构切换 <button class="btn cyan sm" style="margin-left:8px" onclick="renderLayerSwitch()">刷新</button></div>
     <div class="section-body" id="layer-switch-body" style="font-size:10px"></div>
+  </div>
+
+  <div class="section" style="margin-bottom:8px">
+    <div class="section-title">队列干预</div>
+    <div class="section-body" id="queue-list" style="font-size:10px;max-height:300px;overflow-y:auto">
+      <span style="color:var(--text2)">无排队任务</span>
+    </div>
+    <div style="padding:4px 10px;border-top:1px solid var(--grid);display:flex;gap:4px;align-items:center">
+      <select id="batch-level" style="font-size:9px;padding:2px;width:80px">
+        <option value="">批量改层</option>
+        <option value="E">E</option>
+        <option value="E+">E+</option>
+        <option value="D">D</option>
+      </select>
+      <button class="btn purple sm" onclick="batchHold()">批量扣留</button>
+      <button class="btn cyan sm" onclick="batchRelease()">批量释放</button>
+      <button class="btn orange sm" onclick="batchOverride()">批量覆盖</button>
+    </div>
   </div>
 
 </div>
@@ -948,7 +978,7 @@ async function loadDecisions(){
       </div></div>`;
   }
 
-  document.getElementById('decision-cards').innerHTML=html||'<span style="color:var(--text2)">选择任务后加载决策链</span>';
+  document.getElementById('decision-cards-content').innerHTML=html||'<span style="color:var(--text2)">选择任务后加载决策链</span>';
 }
 
 // ═══════════════════════════════════════════════════════
