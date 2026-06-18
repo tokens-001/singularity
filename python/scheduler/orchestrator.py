@@ -625,7 +625,7 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
                 reason += f"; QA:{sv.verdict}"
                 tracker.transition(task.id, task.status, error=f"QA:{sv.verdict}: " + "; ".join(sv.issues[:2]))
         except Exception as e:
-            try: witness.heartbeat(task_id=task.id, level="warn", status=f"qa_gate:{e}")
+            try: witness.heartbeat(task_id=task.id, status="error", detail=f"qa_gate:{e}")
             except: pass
         # 奇点: 评估是否需要奏报
         try:
@@ -635,7 +635,7 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
                 report.task_ids = [task.id]
                 chan_mod.save_report(report)
         except Exception as e:
-            try: witness.heartbeat(task_id=task.id, level="warn", status=f"chancellor:{e}")
+            try: witness.heartbeat(task_id=task.id, status="error", detail=f"chancellor:{e}")
             except: pass
 
     return results
@@ -1171,7 +1171,7 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 if post_warnings:
                     batch.term_reason += f"; post_hook: {', '.join(post_warnings)}"
         except Exception as e:
-            try: witness.heartbeat(task_id=task.id, level="warn", status=f"post_hook:{e}")
+            try: witness.heartbeat(task_id=task.id, status="error", detail=f"post_hook:{e}")
             except: pass
 
         if batch.validation.action == "pass" or batch.planner_decomposed:

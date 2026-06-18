@@ -18,21 +18,13 @@ def _hb_path(task_id: str, agent_level: str) -> Path:
     return _heartbeat_dir() / f"{task_id}_{agent_level}.json"
 
 
-def heartbeat(task_id: str, agent_level: str) -> None:
+def heartbeat(task_id: str, agent_level: str, status: str = "running", detail: str = "") -> None:
+    """写入心跳。异常时 status="error" + detail。"""
     p = _hb_path(task_id, agent_level)
-    p.write_text(
-        json.dumps(
-            {
-                "task_id": task_id,
-                "level": agent_level,
-                "last_beat": time.time(),
-                "status": "running",
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    payload = {"task_id": task_id, "level": agent_level, "last_beat": time.time(), "status": status}
+    if detail:
+        payload["detail"] = detail[:2000]
+    p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def check_stalled(timeout_seconds: float = 600) -> list[str]:
