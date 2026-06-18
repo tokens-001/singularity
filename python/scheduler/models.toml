@@ -75,13 +75,13 @@ strengths = ["架构设计", "安全审查", "代码审查", "方案设计"]
 notes = "D 层默认。Claude Code CLI。最贵但架构能力最强。"
 
 [[models]]
-id = "gpt-5"
+id = "gpt-5.5"
 provider = "openai"
-display = "GPT-5"
+display = "GPT-5.5"
 tiers = ["D", "E+"]
-speed = "medium"
+speed = "fast"
 cost = "premium"
 reasoning = false
-max_turns = 3
-strengths = ["架构设计", "编码", "审查"]
-notes = "D 层备选。需要配置 OPENAI_API_KEY。"
+max_turns = 5
+strengths = ["架构设计", "编码", "审查", "方案设计"]
+notes = "D 层强力。1M上下文。需要 OPENAI_API_KEY + 代理。"
