@@ -572,7 +572,7 @@ def _phase_agent_level(phase: Phase) -> str:
     return {
         Phase.RESEARCHING: "E",
         Phase.PLANNING: "D",
-        Phase.REVIEWING: "E+",
+        Phase.REVIEWING: "D",
     }.get(phase, "-")
 
 
@@ -581,7 +581,7 @@ def _phase_cost_estimate(phase: Phase, proj) -> float:
     rates = {
         Phase.RESEARCHING: 0.02,   # E层 DeepSeek/GLM 廉价
         Phase.PLANNING: 2.50,      # D层 Opus/GPT 架构
-        Phase.REVIEWING: 0.05,     # E+层 GLM-5.2 审查(扫描活)
+        Phase.REVIEWING: 1.00,     # D层审查(需推理能力出优化方案)
     }
     # 如果已有产出，跳过不重复收费
     if phase == Phase.RESEARCHING and proj.research_report:

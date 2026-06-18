@@ -373,13 +373,13 @@ def _run_review(project: ProjectState, agents: dict) -> str:
         changed_files=changed_str,
     )
 
-    # 3. 同步 dispatch 到 E+ 层 (审查是扫描活, 不需要D层)
+    # 3. 同步 dispatch 到 D 层 (审查需要真推理能力)
     task_id = f"review_{project.id}"
     disp_result = None
     raw = ""
     try:
         disp_result = disp_mod.dispatch(
-            prompt, "E_plus", task_id, agents,
+            prompt, "D", task_id, agents,
             project_lineup=project.agent_lineup,
         )
         raw = disp_result.executor_result.raw_output if disp_result else ""
