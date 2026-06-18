@@ -8,16 +8,39 @@
 # sandbox = "worktree" → orchestrator 创建 git worktree 隔离
 # mode = "planner"     → 只读分析, worktree 文件锁只读
 
+# ═══ E 层: 日常执行 (4个agent, 按价格从低到高排列) ═══
+
+# E层子模型1: DeepSeek V4 Flash — 最便宜($0.14/M), 日常快速任务首选
 [[agents.E]]
-model = "deepseek-v4-pro"
-type = "claude-cli"
-entry = "/Users/jingzhe/.claude/local/claude --exclude-dynamic-system-prompt-sections -p {prompt}"
-max_turns = 2
-default = true
+model = "deepseek-v4-flash"
+type = "openai-agent"
+entry = "https://api.deepseek.com/v1/chat/completions"
+api_key_env = "DEEPSEEK_API_KEY"
+max_turns = 5
+default = false
 roles = ["daily"]
 sandbox = "worktree"
 
-# Kimi K2 — E层第二选择, openai-agent runtime
+[agents.E.request_template]
+model = "deepseek-v4-flash"
+max_tokens = 4096
+
+# E层子模型2: GLM-5-turbo — 便宜推理模型, 第二选择
+[[agents.E]]
+model = "glm-5-turbo"
+type = "openai-agent"
+entry = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+api_key_env = "ZHIPU_API_KEY"
+max_turns = 5
+default = false
+roles = ["daily"]
+sandbox = "worktree"
+
+[agents.E.request_template]
+model = "glm-5-turbo"
+max_tokens = 4096
+
+# Kimi K2.7 — E层第三选择, 推理模型
 [[agents.E]]
 model = "kimi-k2.7-code"
 type = "openai-agent"
@@ -31,6 +54,18 @@ sandbox = "worktree"
 [agents.E.request_template]
 model = "kimi-k2.7-code"
 max_tokens = 4096
+
+# DeepSeek V4 Pro — E层主力(Claude Code CLI), 默认
+[[agents.E]]
+model = "deepseek-v4-pro"
+type = "claude-cli"
+entry = "/Users/jingzhe/.claude/local/claude --exclude-dynamic-system-prompt-sections -p {prompt}"
+max_turns = 2
+default = true
+roles = ["daily"]
+sandbox = "worktree"
+
+# ═══ E+ 层: 复杂构建 ═══
 
 [[agents.E_plus]]
 model = "glm-5.2"
@@ -46,6 +81,8 @@ sandbox = "worktree"
 model = "glm-5.2"
 temperature = 0.3
 max_tokens = 4096
+
+# ═══ D 层: 架构设计 ═══
 
 [[agents.D]]
 model = "claude-opus-4-8"

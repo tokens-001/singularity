@@ -151,7 +151,9 @@ class OpenAIAgentExecutor(BaseExecutor):
             choice = resp_data.get("choices", [{}])[0]
             msg = choice.get("message", {})
             total_tokens += resp_data.get("usage", {}).get("total_tokens", 0)
-            messages.append(msg)
+            # 推理模型(如Kimi/GLM)返回reasoning_content, API输入不接受此字段
+            msg_clean = {k: v for k, v in msg.items() if k != "reasoning_content"}
+            messages.append(msg_clean)
 
             # 有 tool_calls → 执行工具
             tool_calls = msg.get("tool_calls", [])
@@ -169,7 +171,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                 continue  # 继续下一轮，让模型看工具结果
 
             # 无 tool_calls → 任务完成
-            content = msg.get("content", "")
+            content = msg.get("content", "") or msg.get("reasoning_content", "")
             if content.strip():
                 elapsed = time.time() - start
                 # 用 git diff 追踪改动的文件
