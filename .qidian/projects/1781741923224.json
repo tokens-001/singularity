@@ -1,0 +1,26 @@
+{
+  "id": "1781741923224",
+  "name": "重构日志",
+  "template": "product_dev",
+  "phase": "gate2",
+  "description": "统一输出格式",
+  "scope": "scheduler",
+  "raw_constraints": [],
+  "owner_confirm": {
+    "gate1": "approved",
+    "gate2": "approved"
+  },
+  "research_report": null,
+  "architecture": null,
+  "constraints_checklist": [],
+  "task_ids": [
+    "1781741923242"
+  ],
+  "issues": [],
+  "supervision_log": [],
+  "lineage": [],
+  "token_budget_total": 5.0,
+  "token_spent": 0.0,
+  "created_at": 1781741923.223485,
+  "updated_at": 1781741960.667181
+}

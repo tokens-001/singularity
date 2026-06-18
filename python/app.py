@@ -661,6 +661,63 @@ def api_memory_rebuild():
 
 
 # ═══════════════════════════════════════════════════════════
+# Project CRUD API
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/projects", methods=["GET", "POST"])
+def api_projects():
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        if not data.get("name", "").strip():
+            return jsonify({"error": "缺少 name"}), 400
+        p = proj_mod.create(
+            name=data["name"].strip(),
+            template=data.get("template", "product_dev"),
+            description=data.get("description", ""),
+            scope=data.get("scope", ""),
+            constraints=data.get("constraints", []),
+            budget=float(data.get("budget", 5.0)),
+        )
+        return jsonify({"ok": True, "project": p.to_dict()})
+    projects = proj_mod.list_all()
+    return jsonify({"projects": [p.to_dict() for p in projects]})
+
+
+@app.route("/api/projects/<project_id>")
+def api_project_detail(project_id):
+    p = proj_mod.load(project_id)
+    if not p:
+        return jsonify({"error": "项目不存在"}), 404
+    return jsonify(p.to_dict())
+
+
+@app.route("/api/projects/<project_id>/gate-confirm", methods=["POST"])
+def api_project_gate(project_id):
+    p = proj_mod.load(project_id)
+    if not p:
+        return jsonify({"error": "项目不存在"}), 404
+    data = request.get_json(silent=True) or {}
+    gate_str = data.get("gate", "")
+    decision = data.get("decision", "")
+    try:
+        gate = Phase(gate_str)
+    except ValueError:
+        return jsonify({"error": f"无效 gate: {gate_str}, 可选: {[p.value for p in Phase if p.value.startswith('gate')]}"}), 400
+    next_phase = p.confirm_gate(gate, decision)
+    proj_mod.save(p)
+    return jsonify({
+        "ok": True, "phase": p.phase.value,
+        "next_phase": next_phase.value if next_phase else None,
+    })
+
+
+@app.route("/api/templates")
+def api_templates():
+    from scheduler.project import TEMPLATES
+    return jsonify(TEMPLATES)
+
+
+# ═══════════════════════════════════════════════════════════
 # Workflow API
 # ═══════════════════════════════════════════════════════════
 

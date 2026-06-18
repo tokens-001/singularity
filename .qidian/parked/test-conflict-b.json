@@ -1,0 +1,10 @@
+{
+  "task_id": "test-conflict-b",
+  "branch": "bd61a4b77d04d893ffadebb954a500e0df5cc50e",
+  "base_ref": "88bcc65eae3776817f0edab87d65638be9e34b79",
+  "changed_files": [
+    "_mq_conflict.py"
+  ],
+  "depends_on": [],
+  "status": "conflict"
+}

@@ -1,0 +1,10 @@
+{
+  "task_id": "test-L1-a",
+  "branch": "b86a79adac72669f7a619309dcab2b1f334e5869",
+  "base_ref": "eb58a6d33e1c86fe6c1cdd13c4b39f917d214333",
+  "changed_files": [
+    "_mq_test_a.py"
+  ],
+  "depends_on": [],
+  "status": "conflict"
+}

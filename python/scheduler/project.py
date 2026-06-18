@@ -127,13 +127,19 @@ class ProjectState:
         return True
 
     def confirm_gate(self, gate: Phase, decision: str) -> Optional[Phase]:
-        """Owner 批 Gate。返回下一个 phase 或 None(等待其他条件)。"""
+        """Owner 批 Gate。自动推进 phase。返回下一个 phase 或 None。"""
         self.owner_confirm[gate.value] = decision
         self.updated_at = time.time()
         if decision == "approved":
-            return _GATE_NEXT.get(gate)
+            next_p = _GATE_NEXT.get(gate)
+            if next_p:
+                self.phase = next_p
+            return next_p
         elif decision == "rejected":
-            return _REJECT_FALLBACK.get(gate)
+            fallback = _REJECT_FALLBACK.get(gate)
+            if fallback:
+                self.phase = fallback
+            return fallback
         return None
 
     def architecture_redo(self) -> bool:
