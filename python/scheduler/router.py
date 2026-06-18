@@ -99,11 +99,10 @@ def route(task: str) -> RouteResult:
     # Step 1c: D-lite —— 简单架构任务降级到 E (省钱, Opus $15/M → DeepSeek $0.5/M)
     if result.level == "D":
         simple_d = _SIMPLE_D_RE.search(task)
-        very_short = len(task) <= 20
-        if simple_d or very_short:
+        if simple_d:
             result.level = "E"
             result.cost_tier = "standard"
-            result.matched_signals.append("D-lite: 简单架构/短任务 → E (省$14.5/M)")
+            result.matched_signals.append(f"D-lite: {simple_d.group()} → E (省$14.5/M)")
             result.matched_signals.append("降级 E+: 单文件/简单任务 → E")
 
     # 任务类型独立扫描 (v1 仅记录)
