@@ -1,0 +1,87 @@
+# 模型能力注册表
+# [[models]] 数组格式，支持 model id 里的点号 (如 kimi-k2.7-code)
+# provider 对应 api_store 里的 api_id
+
+[[models]]
+id = "deepseek-v4-flash"
+provider = "deepseek"
+display = "DeepSeek V4 Flash"
+tiers = ["E"]
+speed = "fast"
+cost = "budget"
+reasoning = true
+max_turns = 5
+strengths = ["日常编码", "bugfix", "查询"]
+notes = "最便宜的 E 层首选。推理模型(reasoning_content)。适合简单单文件任务。"
+
+[[models]]
+id = "deepseek-v4-pro"
+provider = "deepseek"
+display = "DeepSeek V4 Pro"
+tiers = ["E", "E+"]
+speed = "medium"
+cost = "standard"
+reasoning = false
+max_turns = 2
+strengths = ["编码", "调试", "中等复杂度"]
+notes = "E 层主力(Claude Code CLI)。能力均衡。"
+
+[[models]]
+id = "kimi-k2.7-code"
+provider = "kimi"
+display = "Kimi K2.7 Code"
+tiers = ["E", "E+"]
+speed = "medium"
+cost = "standard"
+reasoning = true
+max_turns = 5
+strengths = ["编码", "长上下文", "工具使用"]
+notes = "推理模型(reasoning_content)。工具使用流畅，自我验证。"
+
+[[models]]
+id = "glm-5-turbo"
+provider = "zhipu"
+display = "GLM-5 Turbo"
+tiers = ["E", "E+"]
+speed = "slow"
+cost = "budget"
+reasoning = true
+max_turns = 5
+strengths = ["编码", "推理", "仔细"]
+notes = "便宜的推理模型。慢但仔细，会自己验证产物。"
+
+[[models]]
+id = "glm-5.2"
+provider = "zhipu"
+display = "GLM-5.2"
+tiers = ["E+", "D"]
+speed = "slow"
+cost = "standard"
+reasoning = false
+max_turns = 8
+strengths = ["复杂编码", "多文件重构", "架构设计"]
+notes = "E+ 层默认。能力强但慢。D 层备选(当 Anthropic 不可用时顶上)。"
+
+[[models]]
+id = "claude-opus-4-8"
+provider = "anthropic"
+display = "Claude Opus 4.8"
+tiers = ["D"]
+speed = "slow"
+cost = "premium"
+reasoning = false
+max_turns = 2
+strengths = ["架构设计", "安全审查", "代码审查", "方案设计"]
+notes = "D 层默认。Claude Code CLI。最贵但架构能力最强。"
+
+[[models]]
+id = "gpt-5"
+provider = "openai"
+display = "GPT-5"
+tiers = ["D", "E+"]
+speed = "medium"
+cost = "premium"
+reasoning = false
+max_turns = 3
+strengths = ["架构设计", "编码", "审查"]
+notes = "D 层备选。需要配置 OPENAI_API_KEY。"

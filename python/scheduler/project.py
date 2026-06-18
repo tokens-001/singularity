@@ -78,6 +78,10 @@ class ProjectState:
     token_budget_total: float = 5.0        # $ (默认 $5)
     token_spent: float = 0.0               # $ 累计
 
+    # Agent 编组: {"E": ["flash","kimi"], "E+": ["glm-5.2"], "D": ["opus"]}
+    # 不设则使用 agents.toml 全局配置
+    agent_lineup: dict[str, list[str]] = field(default_factory=dict)
+
     created_at: float = 0.0
     updated_at: float = 0.0
 
@@ -95,6 +99,7 @@ class ProjectState:
             "auto_mode": self.auto_mode,
             "token_budget_total": self.token_budget_total,
             "token_spent": self.token_spent,
+            "agent_lineup": self.agent_lineup,
             "created_at": self.created_at, "updated_at": self.updated_at,
         }
         return d
@@ -117,6 +122,7 @@ class ProjectState:
         d.setdefault("auto_mode", False)
         d.setdefault("token_budget_total", 5.0)
         d.setdefault("token_spent", 0.0)
+        d.setdefault("agent_lineup", {})
         d.setdefault("created_at", 0.0)
         d.setdefault("updated_at", 0.0)
         return cls(**d)
