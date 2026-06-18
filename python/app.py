@@ -894,10 +894,49 @@ def api_agents():
                     "type": c.get("type", ""),
                     "roles": c.get("roles", []),
                     "max_turns": c.get("max_turns", 0),
+                    "entry": c.get("entry", ""),
+                    "api_key_env": c.get("api_key_env", ""),
+                    "default": c.get("default", False),
+                    "mode": c.get("mode", ""),
+                    "sandbox": c.get("sandbox", ""),
                 })
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": f"读取 agents.toml 失败: {e}"}), 500
+
+
+@app.route("/api/agents", methods=["POST"])
+def api_agents_add():
+    """添加自定义 agent 到指定层。"""
+    data = request.get_json(silent=True)
+    if not data or not data.get("model") or not data.get("level"):
+        return jsonify({"error": "缺少 model / level"}), 400
+    try:
+        cfg = disp_mod.add_agent(
+            level=data["level"],
+            model=data["model"],
+            agent_type=data.get("type", "openai-agent"),
+            entry=data.get("entry", ""),
+            api_key_env=data.get("api_key_env", ""),
+            max_turns=data.get("max_turns", 5),
+            roles=data.get("roles", []),
+            sandbox=data.get("sandbox", "worktree"),
+            mode=data.get("mode", ""),
+            request_template=data.get("request_template"),
+        )
+        return jsonify({"ok": True, "agent": cfg})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/agents/<level>/<model>", methods=["DELETE"])
+def api_agents_remove(level, model):
+    """删除自定义 agent。"""
+    try:
+        ok = disp_mod.remove_agent(level, model)
+        return jsonify({"ok": ok})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ═══════════════════════════════════════════════════════════

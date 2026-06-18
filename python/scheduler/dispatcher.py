@@ -72,6 +72,31 @@ def agent_api_available(agent_cfg: dict) -> bool:
     return True
 
 
+def _build_agent_from_registry(model_name: str) -> dict | None:
+    """模型不在 agents.toml 时，从 model_registry + api_store 自动构造配置。"""
+    try:
+        from . import model_registry as mr
+        from . import api_store
+        m = mr.get(model_name)
+        if not m:
+            return None
+        apis = api_store.list_all()
+        api = apis.get(m.provider, {}) if hasattr(apis, 'get') else {}
+        return {
+            "model": model_name,
+            "type": "openai-agent",
+            "entry": getattr(api, "base_url", "") + "/chat/completions" if hasattr(api, "base_url") else "",
+            "api_key_env": getattr(api, "api_key_env", ""),
+            "max_turns": m.max_turns,
+            "default": False,
+            "roles": ["daily"],
+            "sandbox": "worktree",
+            "request_template": {"model": model_name, "max_tokens": 4096},
+        }
+    except Exception:
+        return None
+
+
 def _find_agent_by_model(agents: dict, model_name: str) -> dict | None:
     """跨所有层搜索 agent 配置。"""
     for level_cfgs in agents.values():
@@ -104,6 +129,10 @@ def pick_agent(agents: dict, level: str, role: str = None,
             cross = _find_agent_by_model(agents, model_name)
             if cross and agent_api_available(cross):
                 return cross
+            # 不在 agents.toml 中，从 model_registry 自动构造
+            built = _build_agent_from_registry(model_name)
+            if built and agent_api_available(built):
+                return built
 
     # role 匹配
     if role:
