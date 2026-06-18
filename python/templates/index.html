@@ -329,6 +329,11 @@ pre.agent-out { background: var(--bg); border: 1px solid var(--border); border-r
     <div class="section-body event-feed" id="event-feed"></div>
   </div>
 
+  <div class="section" id="reports-section" style="display:none">
+    <div class="section-title">奇点奏报</div>
+    <div class="section-body" id="reports-body" style="font-size:10px;max-height:200px;overflow-y:auto"></div>
+  </div>
+
   <div style="display:flex;gap:14px;flex-wrap:wrap">
     <div class="section" style="flex:2;min-width:280px">
       <div class="section-title">新建任务</div>
@@ -583,9 +588,10 @@ async function refreshAll(){
   const ind=document.getElementById('live-indicator');
   ind.className='live'; ind.textContent='◆';
 
-  const [s,t,c]=await Promise.all([
-    api('/api/status'),api('/api/tasks'),api('/api/conflicts')
+  const [s,t,c,r]=await Promise.all([
+    api('/api/status'),api('/api/tasks'),api('/api/conflicts'),api('/api/reports/critical')
   ]);
+  if(r&&r.length){renderReports(r);}
   statusData=s; conflicts=c.conflicts||[];
   const newTasks=t.tasks||[];
 
@@ -1165,6 +1171,19 @@ setInterval(pollLoopEvents,2000);
 // ═══════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════
+function renderReports(reports){
+  const sec=document.getElementById('reports-section');
+  const body=document.getElementById('reports-body');
+  if(!reports.length){sec.style.display='none';return;}
+  sec.style.display='block';
+  const colors={critical:'var(--red)',alert:'var(--orange)'};
+  body.innerHTML=reports.map(r=>`<div style="padding:6px 0;border-bottom:1px solid var(--border)">
+    <span style="color:${colors[r.severity]||'var(--text2)'};font-weight:600">[${r.severity}]</span>
+    <b>${esc(r.title)}</b>
+    <div style="color:var(--text2);margin-top:2px">${esc(r.what||'')}</div>
+    ${r.suggestion?`<div style="color:var(--cyan);font-size:9px;margin-top:2px">→ ${esc(r.suggestion)}</div>`:''}
+  </div>`).join('');
+}
 function esc(s){if(!s)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 function fmtDur(s){if(s<60)return Math.round(s)+'s';if(s<3600)return(s/60).toFixed(1)+'m';return(s/3600).toFixed(1)+'h';}
 function unix2str(ts){if(!ts)return'--';return new Date(ts*1000).toLocaleString('zh-CN');}
