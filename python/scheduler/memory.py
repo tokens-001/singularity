@@ -342,18 +342,27 @@ def _rrf_anchors(
             sem_scores[tid] = s
     signals.append(("semantic", sem_scores))
 
-    # Signal 2: Lexical (description keyword + file path overlap)
+    # Signal 2: Lexical (keyword substring + file path overlap)
     lex_scores: dict[str, float] = {}
     query_lower = query_text.lower()
+    # 提取查询中的关键词 (中文双字 + 英文单词)
+    q_keywords = set()
+    for seg in re.findall(r"[一-鿿]{2,}", query_text):
+        q_keywords.add(seg)
+    for w in re.findall(r"[a-zA-Z0-9_./]{2,}", query_text):
+        q_keywords.add(w.lower())
     for tid, node in events.items():
         score = 0.0
-        # 描述命中
-        content_tokens = _embed(node.content)
-        score += len(query_tokens & content_tokens) * 0.5
+        # 描述命中: 关键词子串匹配
+        desc_lower = node.content.lower()
+        for kw in q_keywords:
+            if kw in desc_lower:
+                score += 0.5
         # 文件路径命中
         for fp in node.attrs.get("files", []):
-            for qt in query_tokens:
-                if qt.lower() in fp.lower():
+            fp_lower = fp.lower()
+            for kw in q_keywords:
+                if kw in fp_lower:
                     score += 1.0
         if score > 0:
             lex_scores[tid] = score
