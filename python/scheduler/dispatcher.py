@@ -57,8 +57,8 @@ def agent_api_available(agent_cfg: dict) -> bool:
                 from . import api_store
                 if not api_store.is_available(provider):
                     return False
-        except Exception:
-            pass
+        except Exception as e:
+            from . import witness; witness.heartbeat(task_id="dispatch", level="warn", status=f"api_check:{e}")
 
     # claude-cli: api_store 通过了就算通过
     etype = agent_cfg.get("type", "")
@@ -93,7 +93,8 @@ def _build_agent_from_registry(model_name: str) -> dict | None:
             "sandbox": "worktree",
             "request_template": {"model": model_name, "max_tokens": 4096},
         }
-    except Exception:
+    except Exception as e:
+        from . import witness; witness.heartbeat(task_id="dispatch", level="warn", status=f"build_agent:{e}")
         return None
 
 
