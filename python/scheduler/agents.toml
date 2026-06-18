@@ -148,21 +148,6 @@ roles = ["architecture"]
 mode = "planner"
 sandbox = "worktree"
 
-# Kimi K2.7 — D层架构 (Kimi头部模型,推理强)
-[[agents.D]]
-model = "kimi-k2.7-code"
-type = "openai-agent"
-entry = "https://api.moonshot.cn/v1/chat/completions"
-api_key_env = "KIMI_API_KEY"
-max_turns = 5
-default = false
-roles = ["architecture"]
-sandbox = "worktree"
-
-[agents.D.request_template]
-model = "kimi-k2.7-code"
-max_tokens = 4096
-
 # GLM-5.2 — D层备选 (Opus欠费时顶上)
 [[agents.D]]
 model = "glm-5.2"

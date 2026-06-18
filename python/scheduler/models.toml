@@ -30,13 +30,13 @@ notes = "E 层主力 + D 层 DeepSeek 头部模型。Claude Code CLI。能力均
 id = "kimi-k2.7-code"
 provider = "kimi"
 display = "Kimi K2.7 Code"
-tiers = ["E", "E+", "D"]
+tiers = ["E", "E+"]
 speed = "medium"
 cost = "standard"
 reasoning = true
 max_turns = 5
 strengths = ["编码", "长上下文", "工具使用", "架构审查"]
-notes = "推理模型(reasoning_content)。Kimi 头部模型，D 层可用。工具使用流畅，自我验证。"
+notes = "推理模型(reasoning_content)。工具使用流畅，自我验证。"
 
 [[models]]
 id = "glm-5-turbo"
