@@ -295,6 +295,7 @@ pre.agent-out { background: var(--bg); border: 1px solid var(--border); border-r
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-bar" id="tab-bar">
   <div class="tab active" data-tab="overview">总览</div>
+  <div class="tab" data-tab="project">项目</div>
   <div class="tab" data-tab="flow">任务流</div>
   <div class="tab" data-tab="decisions">决策链</div>
   <div class="tab" data-tab="intervene">干预面板</div>
@@ -351,7 +352,55 @@ pre.agent-out { background: var(--bg); border: 1px solid var(--border); border-r
 </div>
 
 <!-- ═══════════════════════════════════════════════════════
-     Tab 2: 任务流
+     Tab 2: 项目工作流
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tab-project">
+
+  <div style="display:flex;gap:14px;flex-wrap:wrap">
+    <div class="section" style="flex:2;min-width:300px">
+      <div class="section-title">项目</div>
+      <div class="section-body">
+        <div class="form-row" style="margin-bottom:8px">
+          <select id="proj-select" onchange="loadProject()" style="flex:1">
+            <option value="">-- 选择项目 --</option>
+          </select>
+          <button class="btn purple sm" onclick="newProject()">+新建</button>
+        </div>
+        <div id="proj-detail" style="font-size:12px">
+          <span style="color:var(--text2)">选择项目查看详情</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="section" style="flex:1;min-width:200px">
+      <div class="section-title">流程控制</div>
+      <div class="section-body">
+        <div id="proj-phase" style="font-size:13px;margin-bottom:8px">
+          <span style="color:var(--text2)">当前阶段:</span> <b id="proj-phase-name">--</b>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap" id="proj-actions">
+          <button class="btn cyan sm" onclick="runProjectPhase()">▶ 执行当前阶段</button>
+          <button class="btn purple sm" onclick="projectGate('gate1','approved')">Gate1 ✓</button>
+          <button class="btn purple sm" onclick="projectGate('gate2','approved')">Gate2 ✓</button>
+          <button class="btn purple sm" onclick="projectGate('gate3','approved')">Gate3 ✓</button>
+          <button class="btn purple sm" onclick="projectGate('gate4','approved')">Gate4 ✓</button>
+        </div>
+        <div style="margin-top:8px;font-size:10px;color:var(--text2)" id="proj-msg"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Artifact</div>
+    <div class="section-body" id="proj-artifact" style="font-size:11px">
+      <span style="color:var(--text2)">加载项目后显示</span>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     Tab 3: 任务流
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-content" id="tab-flow">
 
@@ -983,6 +1032,54 @@ async function resolveConflict(id,action){
   const r=await api('/api/conflicts/'+id+'/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});
   if(r.ok)refreshAll();else alert('操作失败: '+(r.error||'?'));
 }
+
+// ═══════════════════════════════════════════════════════
+// Project
+// ═══════════════════════════════════════════════════════
+async function loadProjects(){
+  const r=await api('/api/projects');
+  const sel=document.getElementById('proj-select');
+  sel.innerHTML='<option value="">-- 选择项目 --</option>'+
+    (r.projects||[]).map(p=>`<option value="${p.id}">${(p.id||'').slice(-8)} ${esc(p.name||'?')} [${p.phase}]</option>`).join('');
+}
+async function loadProject(){
+  const id=document.getElementById('proj-select').value;
+  if(!id)return;
+  const p=await api('/api/projects/'+id);
+  if(p.error){document.getElementById('proj-detail').innerHTML=`<span style="color:var(--red)">${esc(p.error)}</span>`;return;}
+  document.getElementById('proj-detail').innerHTML=`
+    <b>${esc(p.name||'?')}</b> · ${p.template||'?'} · 预算$${p.token_budget_total||0}
+    <br>${esc(p.description||'').slice(0,120)}
+    ${p.scope?`<br>范围: ${esc(p.scope)}`:''}
+    ${p.task_ids&&p.task_ids.length?`<br>任务: ${p.task_ids.length}个`:''}
+  `;
+  document.getElementById('proj-phase-name').textContent=p.phase||'?';
+  document.getElementById('proj-msg').textContent='';
+  document.getElementById('proj-artifact').innerHTML=
+    (p.research_report?`<details><summary>调研报告</summary><pre style="font-size:10px;max-height:200px;overflow-y:auto">${esc(JSON.stringify(p.research_report,null,2))}</pre></details>`:'')+
+    (p.architecture?`<details><summary>架构方案</summary><pre style="font-size:10px;max-height:200px;overflow-y:auto">${esc(JSON.stringify(p.architecture,null,2))}</pre></details>`:'')+
+    (p.constraints_checklist&&p.constraints_checklist.length?`<div>约束: ${p.constraints_checklist.map(c=>esc(c)).join(' · ')}</div>`:'')+
+    (!p.research_report&&!p.architecture?'<span style="color:var(--text2)">暂无产出</span>':'');
+}
+async function newProject(){
+  const name=prompt('项目名称:');if(!name)return;
+  const r=await api('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,description:prompt('描述:')||'',scope:prompt('范围:')||''})});
+  if(r.ok){loadProjects();document.getElementById('proj-select').value=r.project.id;loadProject();}
+}
+async function runProjectPhase(){
+  const id=document.getElementById('proj-select').value;if(!id)return;
+  const r=await api('/api/projects/'+id+'/run-phase',{method:'POST'});
+  document.getElementById('proj-msg').textContent=r.message||r.error||'';
+  if(r.ok)loadProject();
+}
+async function projectGate(gate,decision){
+  const id=document.getElementById('proj-select').value;if(!id)return;
+  const r=await api('/api/projects/'+id+'/gate-confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate,decision})});
+  document.getElementById('proj-msg').textContent=r.ok?`${gate}=${decision} → ${r.next_phase||'?'}`:(r.error||'?');
+  loadProject();
+}
+// Load projects on init
+loadProjects();
 
 // ═══════════════════════════════════════════════════════
 // Loop Control
