@@ -280,6 +280,8 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 changed_files=exec_result.changed_files,
                 snap=snap, turn=turn, max_turns=level_max,
             )
+            validation.confidence = quality.get("confidence", 0.5)
+            validation.quality_signals = quality.get("quality_signals", {})
             last_validation = validation
 
             if validation.action == "pass":
@@ -292,7 +294,12 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 )
 
             if validation.action == "retry":
-                feedback = json.dumps(validation.evidence, ensure_ascii=False, indent=2)
+                fb = [json.dumps(validation.evidence, ensure_ascii=False, indent=2)]
+                if quality.get("warnings"):
+                    fb.append("质量警告:\n" + "\n".join(f"- {w}" for w in quality["warnings"]))
+                if quality.get("failure_kind") and quality["failure_kind"] != "ok":
+                    fb.append(f"失败类型: {quality['failure_kind']}, 置信度: {quality['confidence']:.2f}")
+                feedback = "\n\n".join(fb)
                 continue
 
             _cleanup_wt(wt)

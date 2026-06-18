@@ -66,6 +66,8 @@ class ValidationReport:
     unverified: list = field(default_factory=list)  # 未验证项 (写进 neijinglu)
     evidence: dict = field(default_factory=dict)    # validate 全文, 供打回附给 agent
     turns_used: int = 0
+    confidence: float = 0.0        # 0-1 质量置信度
+    quality_signals: dict = field(default_factory=dict)
 
 
 def validate(
@@ -209,12 +211,42 @@ def _annotate_unverified(report: ValidationReport, task_type: str, changed_files
         report.unverified.append("无变更文件 (可能是查询类任务或 E+ patch 未 apply)")
 
 
-# ── L5 生命周期钩子 (v2 占位) ─────────────────────────────────────────
+# ── L5 生命周期钩子 ────────────────────────────────────────────────────
 def pre_execution_hook(task: str, snap) -> list[str]:
-    """执行前钩子, 返回 warning 列表。v2 占位, 默认空。"""
+    """执行前钩子, 返回 warning 列表。"""
     return []
 
 
-def post_execution_hook(exec_result, snap) -> list[str]:
-    """执行后钩子, 返回 warning 列表。v2 占位, 默认空。"""
-    return []
+def post_execution_hook(exec_result, snap) -> dict:
+    """执行后钩子: 提取质量信号。返回 {warnings, quality_signals, confidence, failure_kind}。"""
+    warnings = []
+    signals = {}
+    confidence = 0.5
+    if exec_result is None:
+        return {"warnings": ["no result"], "quality_signals": {}, "confidence": 0.0, "failure_kind": "no_result"}
+    raw = exec_result.raw_output or ""
+    changed = exec_result.changed_files or []
+    out_len = len(raw)
+    signals["output_length"] = out_len
+    if out_len < 80:
+        warnings.append("产出过短<80字符"); confidence -= 0.2
+    elif out_len > 500:
+        confidence += 0.1
+    fc = len(changed)
+    signals["changed_files_count"] = fc
+    if fc > 10:
+        warnings.append(f"改动文件过多({fc})"); confidence -= 0.15
+    errs = sum(raw.count(m) for m in ["Traceback","Error:","error:","FAILED","Exception","exit=1"])
+    signals["error_marker_count"] = errs
+    failure_kind = "error_output" if errs > 3 else ("ok" if errs == 0 else "uncertain")
+    if errs > 3:
+        warnings.append(f"输出含{errs}个错误特征"); confidence -= 0.2
+    elif errs > 0:
+        confidence -= 0.05 * errs
+    has_verify = any(kw in raw for kw in ["passed","PASSED","测试通过","exit=0"])
+    signals["has_verification"] = has_verify
+    if has_verify: confidence += 0.15
+    if confidence < 0.3: failure_kind = "low_quality"
+    elif confidence < 0.5 and failure_kind == "ok": failure_kind = "uncertain"
+    confidence = max(0.0, min(1.0, confidence))
+    return {"warnings": warnings, "quality_signals": signals, "confidence": confidence, "failure_kind": failure_kind}
