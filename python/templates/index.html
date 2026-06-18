@@ -511,6 +511,20 @@ pre.agent-out {
 </div>
 
 <script>
+
+async function startProject(id){ const r=await api('/api/projects/'+id+'/start',{method:'POST'}); if(r.ok||r.output) loadProject(id); else alert(r.error||'失败'); }
+async function runPhase(id){ const r=await api('/api/projects/'+id+'/run-phase',{method:'POST'}); if(r.ok||r.output) loadProject(id); else alert(r.error||'失败'); }
+async function createProject(){
+  const name=document.getElementById('new-project-name').value.trim();
+  if(!name) return alert('需要项目名称');
+  const r=await api('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    name,template:document.getElementById('new-project-template').value,
+    description:document.getElementById('new-project-desc').value.trim()
+  })});
+  if(r.ok){ document.getElementById('new-project-name').value=''; document.getElementById('new-project-desc').value=''; loadProjects(); loadProject(r.project.id); }
+  else alert(r.error||'创建失败');
+}
+
 // ═══════════════════════════════════════════════════════
 // State
 // ═══════════════════════════════════════════════════════
@@ -1038,35 +1052,44 @@ async function resolveConflict(id,action){
 // ═══════════════════════════════════════════════════════
 async function loadProjects(){
   const r=await api('/api/projects');
-  const sel=document.getElementById('proj-select');
-  sel.innerHTML='<option value="">-- 选择项目 --</option>'+
-    (r.projects||[]).map(p=>`<option value="${p.id}">${(p.id||'').slice(-8)} ${esc(p.name||'?')} [${p.phase}]</option>`).join('');
+  const list = document.getElementById('project-list');
+  const projects = r.projects || [];
+  if (!projects.length) { list.innerHTML='<span style="color:var(--text3);font-family:var(--mono);font-size:9px">暂无项目</span>'; return; }
+  const phases=['template','researching','gate1','planning','gate2','executing','gate3','reviewing','fixing','gate4','done'];
+  const labels=['模板','调研','①','架构','②','执行','③','审查','修复','④','完成'];
+  list.innerHTML = projects.map(p => {
+    const idx = phases.indexOf(p.phase); const phaseLabel = idx>=0 ? labels[idx] : p.phase;
+    return `<div onclick="loadProject('${esc(p.id)}')" style="padding:6px 0;border-bottom:1px solid var(--bg3);cursor:pointer;display:flex;justify-content:space-between;align-items:center">
+      <span style="font-family:var(--mono);font-size:10px">${esc(p.name||'?')} <span style="color:var(--text3);font-size:8px">${esc((p.id||'').slice(-8))}</span></span>
+      <span style="font-size:9px;color:var(--text3)">${p.template||'?'} · ${phaseLabel} · $${p.token_budget_total||0}</span>
+    </div>`;
+  }).join('');
 }
-async function loadProject(){
-  const id=document.getElementById('proj-select').value;
-  if(!id)return;
-  const p=await api('/api/projects/'+id);
-  if(p.error){document.getElementById('proj-detail').innerHTML=`<span style="color:var(--red)">${esc(p.error)}</span>`;return;}
-  document.getElementById('proj-detail').innerHTML=`
-    <b>${esc(p.name||'?')}</b> · ${p.template||'?'} · 预算$${p.token_budget_total||0}
-    <br>${esc(p.description||'').slice(0,120)}
-    ${p.scope?`<br>范围: ${esc(p.scope)}`:''}
-    ${p.task_ids&&p.task_ids.length?`<br>任务: ${p.task_ids.length}个`:''}
+async function loadProject(id){
+  if (!id) return;
+  const p = await api('/api/projects/'+id);
+  if (p.error) { document.getElementById('project-detail-body').innerHTML=`<span style="color:var(--red)">${esc(p.error)}</span>`; return; }
+  const phases=['template','researching','gate1','planning','gate2','executing','gate3','reviewing','fixing','gate4','done'];
+  const labels=['模板','调研','①','架构','②','执行','③','审查','修复','④','完成'];
+  const idx = phases.indexOf(p.phase);
+  const bar = phases.map((ph,i)=>{
+    let cls='future'; if(i<idx) cls='done'; else if(i===idx) cls='current';
+    return `<span class="phase-step ${cls}">${labels[i]}</span>`;
+  }).join('');
+  document.getElementById('project-detail-title').innerHTML = `${esc(p.name)} <span style="font-weight:normal;font-size:9px;color:var(--text3)">${p.phase}</span>`;
+  document.getElementById('project-detail-body').innerHTML = `
+    <div style="display:flex;gap:4px;margin-bottom:8px">${bar}</div>
+    <div style="font-size:9px;color:var(--text2)">${esc(p.description||'暂无描述').slice(0,200)}</div>
+    ${p.scope?`<div style="font-size:9px;color:var(--text3);margin-top:4px">范围: ${esc(p.scope)}</div>`:''}
+    ${p.task_ids&&p.task_ids.length?`<div style="margin-top:4px;font-size:9px;font-family:var(--mono)">任务: ${p.task_ids.length}个</div>`:''}
+    <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">
+      ${p.phase==='template'?`<button class="btn purple sm" onclick="startProject('${esc(p.id)}')">启动工作流</button>`:''}
+      ${!['template','done'].includes(p.phase)?`<button class="btn cyan sm" onclick="runPhase('${esc(p.id)}')">执行下一阶段</button>`:''}
+      <button class="btn sm" onclick="document.getElementById('project-detail').style.display='none'">关闭</button>
+    </div>
   `;
-  document.getElementById('proj-phase-name').textContent=p.phase||'?';
-  // Phase pipeline bar
-  (()=>{const phases=['template','researching','gate1','planning','gate2','executing','gate3','reviewing','fixing','gate4','done'];const labels=['模板','调研','朱批①','架构','朱批②','执行','朱批③','审查','修复','朱批④','完成'];const idx=phases.indexOf(p.phase);const bar=phases.map((ph,i)=>{let cls='future';if(i<idx)cls='done';else if(i===idx)cls='current';return `<span class='phase-step ${cls}'>${labels[i]}</span>`;}).join('');document.getElementById('proj-phase-bar').innerHTML=bar;})();
-  document.getElementById('proj-msg').textContent='';
-  document.getElementById('proj-artifact').innerHTML=
-    (p.research_report?`<details><summary>调研报告</summary><pre style="font-size:10px;max-height:200px;overflow-y:auto">${esc(JSON.stringify(p.research_report,null,2))}</pre></details>`:'')+
-    (p.architecture?`<details><summary>架构方案</summary><pre style="font-size:10px;max-height:200px;overflow-y:auto">${esc(JSON.stringify(p.architecture,null,2))}</pre></details>`:'')+
-    (p.constraints_checklist&&p.constraints_checklist.length?`<div>约束: ${p.constraints_checklist.map(c=>esc(c)).join(' · ')}</div>`:'')+
-    (p.issues&&p.issues.length?`<div style="color:var(--orange)">问题: ${p.issues.length}个</div>`:'')+
-    (!p.research_report&&!p.architecture?'<span style="color:var(--text2)">暂无产出</span>':'');
-  // Cost panel
-  (async()=>{const c=await api('/api/projects/'+id+'/cost');if(!c.error){
-    const pct=c.token_budget_total>0?Math.min(100,(c.token_spent/c.token_budget_total)*100):0;
-    const bc=pct>90?'var(--red)':pct>60?'var(--orange)':'var(--green)';
+  document.getElementById('project-detail').style.display='block';
+}
     document.getElementById('proj-cost').innerHTML=`<div style="margin-bottom:6px">花费 <b style="color:${bc}">$${c.token_spent.toFixed(2)}</b> / $${c.token_budget_total.toFixed(2)}</div><div style="background:var(--bg3);border-radius:4px;height:8px;overflow:hidden;margin-bottom:4px"><div style="background:${bc};height:100%;width:${pct}%;transition:width .3s"></div></div><div style="font-size:10px;color:var(--text2)">剩余 $${c.remaining.toFixed(2)}${c.over_budget?' <span style="color:var(--red)">⚠超预算</span>':''}</div>`;}})();
   // Lineage panel
   (async()=>{const l=await api('/api/projects/'+id+'/lineage?limit=20');if(!l.error&&l.entries&&l.entries.length){
@@ -1080,19 +1103,7 @@ async function loadProject(){
 async function newProject(){
   const name=prompt('项目名称:');if(!name)return;
   const r=await api('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,description:prompt('描述:')||'',scope:prompt('范围:')||''})});
-  if(r.ok){loadProjects();document.getElementById('proj-select').value=r.project.id;loadProject();}
-}
-async function runProjectPhase(){
-  const id=document.getElementById('proj-select').value;if(!id)return;
-  const r=await api('/api/projects/'+id+'/run-phase',{method:'POST'});
-  document.getElementById('proj-msg').textContent=r.message||r.error||'';
-  if(r.ok)loadProject();
-}
-async function projectGate(gate,decision){
-  const id=document.getElementById('proj-select').value;if(!id)return;
-  const r=await api('/api/projects/'+id+'/gate-confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate,decision})});
-  document.getElementById('proj-msg').textContent=r.ok?`${gate}=${decision} → ${r.next_phase||'?'}`:(r.error||'?');
-  loadProject();
+  if(r.ok){loadProjects();loadProject(r.project.id);}
 }
 // Load projects on init
 loadProjects();
