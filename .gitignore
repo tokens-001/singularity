@@ -13,3 +13,5 @@ sessions/
 python/qidian-knowledge/data/chroma/
 python/qidian-knowledge/data/.eval_baseline
 python/qidian-knowledge/data/index/corpus.json
+.qidian/
+.qidian/
