@@ -331,13 +331,13 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
 
 
 def _run_review(project: ProjectState, agents: dict) -> str:
-    """调 Reviewer(D层) 增量审查 — 只扫本次改动文件。"""
+    """调 Reviewer(D层) 同步增量审查 → 解析 JSON → 写入 project.issues。"""
     if _should_skip(project, "skip_gate3"):
-        project.phase = Phase.FIXING
+        project.phase = Phase.GATE4
         save(project)
         return "审查已跳过 (Owner 设定 skip_gate3)"
 
-    # 收集本次改动的文件 (从 task traces)
+    # 1. 收集本次改动的文件 (从 task traces)
     changed_files = set()
     for tid in project.task_ids:
         trace_path = config.TRACE_DIR / f"{tid}.json"
@@ -352,29 +352,62 @@ def _run_review(project: ProjectState, agents: dict) -> str:
                     witness.heartbeat("workflow", f"warn:trace_read:{e}"[:80])
                 except Exception:
                     pass
-                pass
     changed_str = ", ".join(sorted(changed_files)) if changed_files else "全项目"
 
     architecture_json = json.dumps(project.architecture, ensure_ascii=False, indent=2) \
         if project.architecture else "无架构方案"
     task_ids_str = ", ".join(project.task_ids) if project.task_ids else "无任务"
 
+    # 2. 构建 prompt
     prompt = _REVIEWER_PREAMBLE.format(
         architecture=architecture_json,
         task_ids=task_ids_str,
         changed_files=changed_str,
     )
 
-    task = tracker.create(
-        f"[审查] {project.name}: 增量审查 ({len(changed_files)} 文件)",
-        depth=1,
-    )
-    tracker.transition(task.id, TaskStatus.PENDING,
-                       route_level="D", route_locked=True)
-    project.task_ids.append(task.id)
+    # 3. 同步 dispatch 到 D 层
+    task_id = f"review_{project.id}"
+    disp_result = None
+    raw = ""
+    try:
+        disp_result = disp_mod.dispatch(
+            prompt, "D", task_id, agents,
+            project_lineup=project.agent_lineup,
+        )
+        raw = disp_result.executor_result.raw_output if disp_result else ""
+    except Exception:
+        raw = ""
+
+    # 4. 解析 JSON 产出
+    import re as _re
+    review = None
+    if raw:
+        try:
+            m = _re.search(r"```json\s*\n(.*?)\n```", raw, _re.DOTALL)
+            if m:
+                review = json.loads(m.group(1))
+            else:
+                m2 = _re.search(r"\{[\s\S]*\}", raw)
+                if m2:
+                    review = json.loads(m2.group())
+        except (json.JSONDecodeError, Exception):
+            pass
+    if review is None:
+        review = {"raw_output": raw[:5000], "parse_error": True}
+
+    issues = review.get("issues", [])
+    project.issues = issues
+    project.add_lineage({"action": "review_complete",
+                         "agent": disp_result.agent_cfg.get("model","?") if disp_result else "?",
+                         "issue_count": len(issues)})
+
+    # 5. 推进到 GATE4
     project.phase = Phase.GATE4
     save(project)
-    return f"审查任务 {task.id[:8]} 已入队(D层)，等待 Owner Gate4 确认审查结果"
+    return (
+        f"审查完成: 发现 {len(issues)} 个问题 "
+        + (f"(bug={sum(1 for i in issues if i.get('severity')=='bug')})" if issues else "")
+    )
 
 
 def _run_fixing(project: ProjectState, agents: dict) -> str:
