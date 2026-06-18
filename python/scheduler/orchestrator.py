@@ -600,7 +600,6 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
         try:
             from .supervisor import supervise
             changed = disp_result.executor_result.changed_files if disp_result else []
-            # 从项目加载约束和验收标准
             constraints = []
             checklist = []
             pid = getattr(task, 'project_id', '')
@@ -623,7 +622,13 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
                           task.id)
             if sv.verdict != "pass":
                 reason += f"; QA:{sv.verdict}"
-                tracker.transition(task.id, task.status, error=f"QA:{sv.verdict}: " + "; ".join(sv.issues[:2]))
+                # 硬证据失败 → 阻止标 DONE, 标 FAILED
+                if sv.verdict == "fail":
+                    tracker.transition(t.id, TaskStatus.FAILED, error=f"QA:fail: " + "; ".join(sv.issues[:2]))
+                    results.append((t.id, reason + " (QA拒绝)", validation))
+                    continue  # 跳过 DONE 标记
+                else:
+                    tracker.transition(task.id, task.status, error=f"QA:{sv.verdict}: " + "; ".join(sv.issues[:2]))
         except Exception as e:
             try: witness.heartbeat(task_id=task.id, status="error", detail=f"qa_gate:{e}")
             except: pass

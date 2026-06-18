@@ -339,7 +339,7 @@ pre.agent-out {
 
   <div class="loop-bar">
     <span class="loop-indicator off" id="loop-dot"></span>
-    <span class="loop-status off" id="loop-label">调度循环 · 未启动</span>
+    <span class="loop-status off" id="loop-label">⚠ 调度循环未启动 — 任务不会被执行</span>
     <span style="font-size:9px;color:var(--text3);font-family:var(--mono)" id="loop-info"></span>
     <span style="flex:1"></span>
     <button class="btn cyan sm" id="btn-loop-start" onclick="startLoop()">启动</button>
@@ -428,6 +428,7 @@ pre.agent-out {
     <label style="font-size:9px;display:flex;align-items:center;gap:2px;margin-left:6px">
       <input type="checkbox" id="f-held" onchange="renderTasks()"> 仅扣留
     </label>
+    <input id="filter-search" placeholder="搜索关键词..." oninput="renderTasks()" style="width:120px;font-size:9px;padding:2px 4px;background:var(--bg2);border:1px solid var(--grid);color:var(--text);margin-left:4px">
     <span style="flex:1"></span>
     <span style="font-size:9px;color:var(--text3);font-family:var(--mono)" id="task-count"></span>
   </div>
@@ -1226,19 +1227,30 @@ async function gateConfirm(id, decision) {
 }
 
 async function advanceWithCost(id) {
-  // Show cost estimate first, then confirm
   try {
     const costR = await api('/api/projects/'+id+'/cost');
     if (costR.cost > 0) {
-      const msg = `即将执行付费阶段\n估算费用: ~$${costR.cost.toFixed(2)}\n阶段: ${costR.phase}\nAgent层: ${costR.level}\n\n确认执行?`;
-      if (!confirm(msg)) return;
+      document.getElementById('cost-modal-body').innerHTML = `
+        <div>阶段: <b>${costR.phase}</b></div>
+        <div>Agent层: <b>${costR.level}</b></div>
+        <div>估算费用: <b>$${costR.cost.toFixed(2)}</b></div>
+        <div style="margin-top:4px;color:var(--text3)">累计: $${(costR.token_spent||0).toFixed(2)} / 预算: $${(costR.token_budget_total||5).toFixed(2)}</div>
+      `;
+      document.getElementById('cost-modal-confirm').onclick = async () => {
+        closeCostModal();
+        const r = await api('/api/projects/'+id+'/run-phase', {method:'POST'});
+        if (r.ok) { loadProject(id); loadProjects(); refreshAll(); toast(r.message||'完成','success'); }
+        else toast(r.error||'执行失败','error');
+      };
+      document.getElementById('cost-modal').style.display = 'flex';
+      return;
     }
   } catch(e) {}
-  // Run the phase
   const r = await api('/api/projects/'+id+'/run-phase', {method:'POST'});
-  if (r.ok) { loadProject(id); loadProjects(); refreshAll(); }
-  else alert(r.error||'失败');
+  if (r.ok) { loadProject(id); loadProjects(); refreshAll(); toast(r.message||'完成','success'); }
+  else toast(r.error||'执行失败','error');
 }
+function closeCostModal(){ document.getElementById('cost-modal').style.display='none'; }
 // (orphaned code block removed)
 
 
@@ -1641,5 +1653,16 @@ function connectSSE(){
 refreshAll();
 connectSSE();
 </script>
+
+<div class="modal-overlay" id="cost-modal" style="display:none" onclick="if(event.target===this)closeCostModal()">
+  <div class="modal-box" style="max-width:360px">
+    <div style="font-size:11px;font-weight:600;margin-bottom:8px">💰 费用确认</div>
+    <div id="cost-modal-body" style="font-size:10px;margin-bottom:12px"></div>
+    <div style="display:flex;gap:4px;justify-content:flex-end">
+      <button class="btn sm" onclick="closeCostModal()">取消</button>
+      <button class="btn purple sm" id="cost-modal-confirm">确认执行</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>

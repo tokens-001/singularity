@@ -21,6 +21,24 @@ from . import snapshot as snap_mod
 from . import orchestrator
 from . import tracker
 from .tracker import TaskStatus
+def _cmd_project_delete(project_id: str) -> int:
+    from .project import load as load_proj
+    proj = load_proj(project_id)
+    if proj is None:
+        print(f"项目不存在: {project_id}", file=sys.stderr)
+        return 1
+    # 删除关联的任务文件
+    from . import tracker as _tk
+    for tid in proj.task_ids:
+        p = _tk._path(tid)
+        if p.exists():
+            p.unlink()
+    # 删除项目文件
+    from .project import _path as _proj_path
+    _proj_path(project_id).unlink()
+    print(f"[project] 已删除: {proj.id[:8]} {proj.name}")
+    return 0
+
 from .project import Phase
 
 _LOOP_POLL_SECS = 3  # 队列空时的轮询间隔
@@ -426,6 +444,8 @@ def _cmd_project(argv: list) -> int:
         return _cmd_project_advance(args[0], approve=approve, yes=yes)
     if sub == "reject" and len(args) >= 1:
         return _cmd_project_reject(args[0])
+    if sub == "delete" and len(args) >= 1:
+        return _cmd_project_delete(args[0])
 
     print(f"未知 project 子命令: {sub}", file=sys.stderr)
     return 2

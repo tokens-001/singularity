@@ -284,6 +284,30 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
         except (json.JSONDecodeError, Exception):
             pass
     if arch is None:
+        # 重试一次: 附加格式指令
+        retry_prompt = prompt + "\n\n[格式错误] 上一次输出不是合法JSON。请用 ```json ... ``` 包裹输出，确保可以被 JSON.parse 解析。"
+        raw2 = ""
+        try:
+            disp_result2 = disp_mod.dispatch(
+                retry_prompt, "D", task_id + "_r", agents,
+                project_lineup=project.agent_lineup,
+            )
+            raw2 = disp_result2.executor_result.raw_output if disp_result2 else ""
+        except Exception:
+            pass
+        if raw2:
+            import re as _re3
+            try:
+                m = _re3.search(r"```json\s*\n(.*?)\n```", raw2, _re3.DOTALL)
+                if m:
+                    arch = json.loads(m.group(1))
+                else:
+                    m2 = _re3.search(r"\{[\s\S]*\}", raw2)
+                    if m2:
+                        arch = json.loads(m2.group())
+            except (json.JSONDecodeError, Exception):
+                pass
+    if arch is None:
         arch = {"raw_output": raw[:5000], "parse_error": True}
 
     project.architecture = arch

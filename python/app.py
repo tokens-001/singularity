@@ -91,6 +91,16 @@ def _loop_worker():
                     level = t.route_level if t else "?"
                     verdict = getattr(validation, "action", "?")
                     _push_event("task", f"[{tid[:8]}] level={level} {verdict}: {reason}")
+                    # 任务失败时推送桌面通知
+                    if verdict != "pass":
+                        try:
+                            import subprocess, sys
+                            subprocess.run([
+                                "osascript", "-e",
+                                f'display notification "任务 {tid[:8]} {verdict}" with title "奇点调度"'
+                            ], capture_output=True, timeout=3)
+                        except Exception:
+                            pass
 
                 # MAGMA 慢通道整合
                 try:
