@@ -84,70 +84,58 @@ max_tokens = 4096
 
 # ═══ D 层: 架构设计 ═══
 
-# DeepSeek V4 Pro — D层架构 (便宜替代Opus/GPT)
 [[agents.D]]
-model = "deepseek-v4-pro"
+model = "claude-opus-4-8"
 type = "claude-cli"
-entry = "/Users/jingzhe/.claude/local/claude --exclude-dynamic-system-prompt-sections -p {prompt}"
-max_turns = 3
+entry = "/opt/homebrew/bin/claude --model claude-opus-4-8 -p {prompt}"
+max_turns = 2
 default = true
 roles = ["architecture", "security-review"]
 mode = "planner"
 sandbox = "worktree"
 
-# --- 暂时禁用: Opus/GPT 太贵 ---
-# [[agents.D]]
-# model = "claude-opus-4-8"
-# type = "claude-cli"
-# entry = "/opt/homebrew/bin/claude --model claude-opus-4-8 -p {prompt}"
-# max_turns = 2
-# default = true
-# roles = ["architecture", "security-review"]
-# mode = "planner"
-# sandbox = "worktree"
-#
-# [agents.D.env]
-# ANTHROPIC_API_KEY = "{ANTHROPIC_API_KEY}"
-# HTTPS_PROXY = "http://127.0.0.1:7892"
-#
-# [agents.D.env_unset]
-# keys = ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"]
+[agents.D.env]
+ANTHROPIC_API_KEY = "{ANTHROPIC_API_KEY}"
+HTTPS_PROXY = "http://127.0.0.1:7892"
 
-# GPT-5.5 — D层强力 (暂时禁用)
-# [[agents.D]]
-# model = "gpt-5.5"
-# type = "openai-agent"
-# entry = "https://api.openai.com/v1/chat/completions"
-# api_key_env = "OPENAI_API_KEY"
-# max_turns = 5
-# default = false
-# roles = ["architecture"]
-# sandbox = "worktree"
-#
-# [agents.D.request_template]
-# model = "gpt-5.5"
-# max_completion_tokens = 4096
-#
-# [agents.D.env]
-# HTTPS_PROXY = "http://127.0.0.1:7892"
+[agents.D.env_unset]
+keys = ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"]
 
-# GPT-5.5 Pro — D层终极 (暂时禁用)
-# [[agents.D]]
-# model = "gpt-5.5-pro"
-# type = "openai-agent"
-# entry = "https://api.openai.com/v1/responses"
-# api_key_env = "OPENAI_API_KEY"
-# max_turns = 5
-# default = false
-# roles = ["architecture", "security-review"]
-# sandbox = "worktree"
-#
-# [agents.D.request_template]
-# model = "gpt-5.5-pro"
-# max_output_tokens = 4096
-#
-# [agents.D.env]
-# HTTPS_PROXY = "http://127.0.0.1:7892"
+# GPT-5.5 — D层强力 (via OpenAI API, 需代理)
+[[agents.D]]
+model = "gpt-5.5"
+type = "openai-agent"
+entry = "https://api.openai.com/v1/chat/completions"
+api_key_env = "OPENAI_API_KEY"
+max_turns = 5
+default = false
+roles = ["architecture"]
+sandbox = "worktree"
+
+[agents.D.request_template]
+model = "gpt-5.5"
+max_completion_tokens = 4096
+
+[agents.D.env]
+HTTPS_PROXY = "http://127.0.0.1:7892"
+
+# GPT-5.5 Pro — D层终极 (超大项目, 能力最强)
+[[agents.D]]
+model = "gpt-5.5-pro"
+type = "openai-agent"
+entry = "https://api.openai.com/v1/responses"
+api_key_env = "OPENAI_API_KEY"
+max_turns = 5
+default = false
+roles = ["architecture", "security-review"]
+sandbox = "worktree"
+
+[agents.D.request_template]
+model = "gpt-5.5-pro"
+max_output_tokens = 4096
+
+[agents.D.env]
+HTTPS_PROXY = "http://127.0.0.1:7892"
 
 # GLM-5.2 — D层备选 (Opus欠费时顶上)
 [[agents.D]]
