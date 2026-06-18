@@ -1163,23 +1163,26 @@ async function renderAPIStore(){
     const d = await api('/api/api-store');
     if (d.error) { body.innerHTML = `<span style="color:var(--red)">${esc(d.error)}</span>`; return; }
     const entries = Object.values(d);
-    if (!entries.length) { body.innerHTML = '<span style="color:var(--text2)">暂无 API 条目</span>'; return; }
+    if (!entries.length) { body.innerHTML = '<span style="color:var(--text3);font-family:var(--mono);font-size:9px">NO_API_CONFIGURED</span>'; return; }
+    const statusDot = {active:'<span style="color:var(--green);font-size:7px">●</span>',quota_exhausted:'<span style="color:var(--orange);font-size:7px">◑</span>',rate_limited:'<span style="color:var(--orange);font-size:7px">◐</span>',disabled:'<span style="color:var(--red);font-size:7px">○</span>'};
+    const statusLabel = {active:'ON',quota_exhausted:'QTA',rate_limited:'RTL',disabled:'OFF'};
     body.innerHTML = entries.map(e => {
-      const statusColor = {'active':'var(--green)','quota_exhausted':'var(--orange)','rate_limited':'var(--orange)','disabled':'var(--red)'}[e.status]||'var(--text2)';
-      const dot = e.available ? '🟢' : '🔴';
-      return `<div style="padding:6px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
-        <span>${dot}</span>
-        <span style="font-weight:600;min-width:70px">${esc(e.provider)}</span>
-        <span style="color:var(--text2);font-size:9px;flex:1">${esc(e.base_url)}</span>
-        <span style="color:${statusColor};font-size:9px;min-width:60px;text-align:right">${e.status}</span>
-        <select onchange="setAPIStatus('${esc(e.id)}',this.value)" style="background:var(--bg);border:1px solid var(--border);color:var(--text);font-size:9px;padding:2px">
-          <option value="">状态...</option>
-          <option value="active">active</option>
-          <option value="quota_exhausted">欠费</option>
-          <option value="rate_limited">限流</option>
-          <option value="disabled">禁用</option>
+      const dot = statusDot[e.status]||statusDot.disabled;
+      const lbl = statusLabel[e.status]||'OFF';
+      const models = (e._models||[]).slice(0,3).join(' ');
+      return `<div style="padding:4px 0;border-bottom:1px solid var(--bg3);display:flex;align-items:center;gap:8px;font-size:10px">
+        <span style="width:12px;text-align:center">${dot}</span>
+        <span style="font-family:var(--mono);font-weight:500;min-width:66px;color:var(--text)">${esc(e.provider)}</span>
+        <span style="font-family:var(--mono);font-size:9px;color:var(--text3);min-width:28px">[${lbl}]</span>
+        <span style="font-size:9px;color:var(--text3);flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${esc(e.base_url)}</span>
+        <select onchange="setAPIStatus('${esc(e.id)}',this.value)" style="background:var(--bg);border:none;border-bottom:1px solid var(--grid);color:var(--text2);font-size:9px;padding:2px 4px;font-family:var(--mono);width:auto">
+          <option value="">—</option>
+          <option value="active">ON</option>
+          <option value="quota_exhausted">QTA</option>
+          <option value="rate_limited">RTL</option>
+          <option value="disabled">OFF</option>
         </select>
-        <button class="btn red sm" style="font-size:9px;padding:2px 6px" onclick="removeAPI('${esc(e.id)}')">✕</button>
+        <button class="btn sm" style="color:var(--red);font-size:8px;padding:1px 4px" onclick="removeAPI('${esc(e.id)}')">DEL</button>
       </div>`;
     }).join('');
   } catch(e) { body.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`; }
@@ -1219,24 +1222,27 @@ async function renderModels(){
     const d = await api('/api/models');
     if (d.error) { body.innerHTML = `<span style="color:var(--red)">${esc(d.error)}</span>`; return; }
     const models = Object.values(d);
-    if (!models.length) { body.innerHTML = '<span style="color:var(--text2)">暂无模型</span>'; return; }
-    const costLabels = {budget:'💰',standard:'💵',premium:'💎'};
+    if (!models.length) { body.innerHTML = '<span style="color:var(--text3);font-family:var(--mono);font-size:9px">NO_MODELS_REGISTERED</span>'; return; }
+    const speedIcon = {fast:'▶',medium:'◅▻',slow:'◅'};
     const tierColors = {E:'var(--cyan)',E_plus:'var(--orange)',D:'var(--purple)'};
     body.innerHTML = models.map(m => {
-      const tiers = m.tiers.map(t => `<span style="color:${tierColors[t]||'var(--text2)'};font-size:9px">${t}</span>`).join(' ');
-      const dot = m.api_available ? '🟢' : '🔴';
-      return `<div style="padding:6px 0;border-bottom:1px solid var(--border)">
-        <div style="display:flex;align-items:center;gap:6px">
-          <span>${dot}</span>
-          <span style="font-weight:600">${esc(m.display)}</span>
-          <span style="color:var(--text2);font-size:9px">${esc(m.id)}</span>
-          <span style="font-size:9px">${costLabels[m.cost]||''}</span>
-          <span style="font-size:9px;color:var(--text2)">${m.speed}</span>
-          ${m.reasoning?'<span style="font-size:8px;color:var(--blue)">推理</span>':''}
+      const tiers = m.tiers.map(t => `<span style="color:${tierColors[t]||'var(--text3)'};font-family:var(--mono);font-size:8px">${t}</span>`).join('/');
+      const dot = m.api_available
+        ? '<span style="color:var(--green);font-size:7px">●</span>'
+        : '<span style="color:var(--text3);font-size:7px">○</span>';
+      const costMark = {budget:'_',standard:'=',premium:'≡'}[m.cost]||'_';
+      return `<div style="padding:4px 0;border-bottom:1px solid var(--bg3)">
+        <div style="display:flex;align-items:center;gap:8px;font-size:10px">
+          <span style="width:12px;text-align:center">${dot}</span>
+          <span style="font-family:var(--mono);font-weight:500;min-width:80px;color:var(--text)">${esc(m.display)}</span>
+          <span style="font-family:var(--mono);font-size:9px;color:var(--text3)">${esc(m.id)}</span>
+          <span style="font-size:9px;color:var(--text3);font-family:var(--mono)">${costMark}</span>
+          <span style="font-size:8px;color:var(--text3)">${m.speed}</span>
+          ${m.reasoning?'<span style="font-size:8px;color:var(--purple);font-family:var(--mono)">RSN</span>':''}
           <span style="flex:1"></span>
-          <span style="font-size:9px;color:var(--text2)">${tiers}</span>
+          <span style="font-size:8px;font-family:var(--mono)">${tiers}</span>
         </div>
-        <div style="font-size:9px;color:var(--text2);margin-top:2px">${esc(m.notes)}</div>
+        <div style="font-size:8px;color:var(--text3);margin-top:2px;font-family:var(--mono)">${esc(m.notes)}</div>
       </div>`;
     }).join('');
   } catch(e) { body.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`; }
