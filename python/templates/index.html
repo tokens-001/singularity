@@ -359,6 +359,20 @@ pre.agent-out {
     </div>
   </div>
 
+  <div style="display:flex;gap:1px;flex-wrap:wrap;margin-bottom:8px">
+    <div class="section" style="flex:1;min-width:200px">
+      <div class="section-title">活跃任务</div>
+      <div class="section-body" id="active-list" style="font-size:10px"><span style="color:var(--text3)">无</span></div>
+    </div>
+    <div class="section" style="flex:1;min-width:200px">
+      <div class="section-title">合并冲突 <span id="conflict-count" style="font-size:9px;color:var(--orange)"></span></div>
+      <div class="section-body" id="conflict-section" style="display:none;font-size:10px">
+        <div id="conflict-body"></div>
+      </div>
+      <div class="section-body" id="conflict-empty" style="font-size:10px"><span style="color:var(--text3)">无冲突</span></div>
+    </div>
+  </div>
+
   <div class="agent-row" id="agent-row"></div>
   <div style="font-size:9px;color:var(--text3);font-family:var(--mono);margin-top:4px" id="token-stats"></div>
 
@@ -409,6 +423,13 @@ pre.agent-out {
       任务流图 <span style="font-size:9px;color:var(--text3);font-weight:normal;text-transform:none">点击折叠</span>
     </div>
     <div class="section-body" id="flow-body" style="padding:0"></div>
+  </div>
+
+  <div class="section" style="margin-top:8px">
+    <div class="section-title">决策链</div>
+    <div class="section-body" id="decision-cards" style="font-size:10px">
+      <span style="color:var(--text2)">选择任务后加载决策链</span>
+    </div>
   </div>
 
 </div>
@@ -487,6 +508,25 @@ pre.agent-out {
         </select>
         <label style="font-size:9px;color:var(--text3);font-family:var(--mono);display:flex;align-items:center;gap:2px"><input type="checkbox" id="model-new-reasoning">推理</label>
         <button class="btn cyan sm" onclick="addModel()">添加</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" style="margin-bottom:8px">
+    <div class="section-title">项目编组 <button class="btn cyan sm" style="margin-left:8px" onclick="populateLineupProjects()">刷新</button></div>
+    <div class="section-body" style="font-size:10px">
+      <div style="display:flex;gap:4px;margin-bottom:8px;align-items:center">
+        <select id="lineup-project-select" style="font-size:9px;padding:2px" onchange="loadLineupForProject()"></select>
+        <span style="font-size:9px;font-family:var(--mono)" id="lineup-status"></span>
+      </div>
+      <div id="lineup-editor" style="display:none">
+        <div class="section-title" style="font-size:9px">E 层</div>
+        <div id="lineup-e" style="margin-bottom:8px"></div>
+        <div class="section-title" style="font-size:9px">E+ 层</div>
+        <div id="lineup-ep" style="margin-bottom:8px"></div>
+        <div class="section-title" style="font-size:9px">D 层</div>
+        <div id="lineup-d" style="margin-bottom:8px"></div>
+        <button class="btn purple sm" onclick="saveLineup()">保存编组</button>
       </div>
     </div>
   </div>
@@ -1023,7 +1063,7 @@ async function rollbackTask(taskId){
 
 function renderConflicts(){
   const sec=document.getElementById('conflict-section'),body=document.getElementById('conflict-body');
-  if(!conflicts.length){sec.style.display='none';return;}sec.style.display='';
+  if(!conflicts.length){sec.style.display='none';const e=document.getElementById('conflict-empty');if(e)e.style.display='';const c=document.getElementById('conflict-count');if(c)c.textContent='';return;}sec.style.display='';const e=document.getElementById('conflict-empty');if(e)e.style.display='none';const c=document.getElementById('conflict-count');if(c)c.textContent='('+conflicts.length+')';
   body.innerHTML=conflicts.map(c=>`
     <div class="intervention-row">
       <span>
