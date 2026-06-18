@@ -605,7 +605,7 @@ function renderStatusCards(){
   }).join('');
 
   // Populate filter dropdown
-  const sel=document.getElementById('f-status');
+  const sel=document.getElementById('filter-status');
   if(sel.options.length<=1){
     [...new Set(tasks.map(t=>t.status))].sort().forEach(s=>{
       if(!sel.querySelector(`[value="${s}"]`)){
@@ -690,12 +690,12 @@ function renderFlowDiagram(){
     </g>`;
   });
   svg+=`</svg>`;
-  document.getElementById('flow-diagram').innerHTML=svg;
+  document.getElementById('flow-body').innerHTML=svg;
 }
 
 function flowClick(nodeId){
   flowClickFilter=flowClickFilter===nodeId?'':nodeId;
-  document.getElementById('f-status').value=flowClickFilter;
+  document.getElementById('filter-status').value=flowClickFilter;
   renderFlowDiagram();
   renderTasks();
 }
@@ -704,8 +704,8 @@ function flowClick(nodeId){
 // Task Table
 // ═══════════════════════════════════════════════════════
 function renderTasks(){
-  const fs=document.getElementById('f-status').value;
-  const fl=document.getElementById('f-level').value;
+  const fs=document.getElementById('filter-status').value;
+  const fl=document.getElementById('filter-level').value;
   const fh=document.getElementById('f-held').checked;
 
   let filtered=tasks;
@@ -715,7 +715,7 @@ function renderTasks(){
 
   document.getElementById('task-count').textContent=`${filtered.length} 条`;
 
-  const tbody=document.getElementById('task-tbody');
+  const tbody=document.getElementById('task-table');
   tbody.innerHTML=filtered.map(t=>{
     const idShort=(t.id||'').slice(-8);
     const desc=(t.description||'').slice(0,70);

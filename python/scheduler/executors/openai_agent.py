@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import ssl
 import subprocess
 import time
@@ -277,17 +278,20 @@ class OpenAIAgentExecutor(BaseExecutor):
         return f"已写入 {path} ({len(content)} 字符)"
 
     def _tool_run(self, command: str) -> str:
-        # 安全: 禁止危险命令
-        dangerous = ["rm -rf /", "sudo", "mkfs", "dd if=", ":(){ :|:& };:"]
-        for d in dangerous:
-            if d in command:
-                return f"命令被拒绝: 含危险操作 '{d}'"
         try:
-            r = subprocess.run(command, shell=True, capture_output=True,
-                               text=True, timeout=30, cwd=str(self._cwd))
+            argv = shlex.split(command)
+        except ValueError as e:
+            return f"命令解析失败: {e}"
+        if not argv:
+            return "空命令"
+        safe_env = {k:v for k,v in os.environ.items() if not any(p in k.upper() for p in ("API_KEY","TOKEN","SECRET","PASSWORD"))}
+        try:
+            r = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=30, cwd=str(self._cwd), env=safe_env)
             out = r.stdout[-4000:] if r.stdout else ""
             err = r.stderr[-2000:] if r.stderr else ""
             return f"exit={r.returncode}\nstdout:\n{out}\nstderr:\n{err}"
+        except FileNotFoundError:
+            return f"命令不存在: {argv[0]}"
         except subprocess.TimeoutExpired:
             return "命令超时 (30s)"
 
