@@ -294,6 +294,14 @@ pre.agent-out {
 .gap-1 { display: flex; gap: 1px; flex-wrap: wrap; }
 .gap-1 > * { flex: 1; }
 
+/* ═══ Toast ═══ */
+.toast-container { position:fixed; top:40px; right:12px; z-index:999; display:flex; flex-direction:column; gap:4px; }
+.toast { padding:8px 14px; border-radius:4px; font-size:10px; font-family:var(--mono); max-width:320px;
+  animation: toastIn .2s ease; cursor:pointer; }
+.toast.error { background:#3d1515; color:#f44747; border:1px solid #f44747; }
+.toast.success { background:#153d1f; color:#4ec97a; border:1px solid #4ec97a; }
+@keyframes toastIn { from{opacity:0;transform:translateX(20px)} to{opacity:1;transform:translateX(0)} }
+
 @media (max-width: 768px) {
   .cards { flex-direction: column; }
   .detail-grid { grid-template-columns: 1fr; }
@@ -314,6 +322,7 @@ pre.agent-out {
 <!-- ═══════════════════════════════════════════════════════
      Tab Bar
      ═══════════════════════════════════════════════════════ -->
+<div class="toast-container" id="toast-container"></div>
 <div class="tab-bar" id="tab-bar">
   <div class="tab active" data-tab="dashboard">仪表盘</div>
   <div class="tab" data-tab="tasks">任务</div>
@@ -622,9 +631,19 @@ document.getElementById('tab-bar').addEventListener('click',e=>{
 // ═══════════════════════════════════════════════════════
 // API
 // ═══════════════════════════════════════════════════════
+function toast(msg,type='error'){
+  const c=document.getElementById('toast-container');
+  const t=document.createElement('div');
+  t.className='toast '+type; t.textContent=msg;
+  t.onclick=()=>t.remove();
+  c.appendChild(t);
+  setTimeout(()=>{if(t.parentNode)t.remove();},4000);
+}
 async function api(path,opts){
-  try{const r=await fetch(path,opts);return await r.json();}
-  catch(e){return{error:e.message}};
+  try{const r=await fetch(path,opts);const d=await r.json();
+    if(!r.ok&&d.error){toast(d.error);return{error:d.error};}
+    return d;
+  }catch(e){toast(e.message);return{error:e.message}};
 }
 
 // ═══════════════════════════════════════════════════════

@@ -287,17 +287,20 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
         arch = {"raw_output": raw[:5000], "parse_error": True}
 
     project.architecture = arch
-    # 校验架构完整性
+    # 校验架构完整性 — 阻塞级错误不许过
     arch_issues = _validate_architecture(arch)
+    blockers = [i for i in arch_issues if "缺少" in i or "无效" in i or "应为" in i]
     project.add_lineage({"action": "planning_complete",
                          "agent": disp_result.agent_cfg.get("model","?") if disp_result else "?",
                          "task_count": len(arch.get("tasks", [])),
-                         "validation_issues": len(arch_issues)})
+                         "validation_issues": len(arch_issues),
+                         "blockers": len(blockers)})
 
-    # 4. 推进到 GATE2
+    # 4. 推进到 GATE2 (有阻塞级问题就标记,但不过早中止——让 Owner 在 Gate 看到警告)
     project.phase = Phase.GATE2
     save(project)
-    warn = f" (校验警告: {'; '.join(arch_issues[:3])})" if arch_issues else ""
+    block_warn = f" (⚠阻塞: {'; '.join(blockers[:2])})" if blockers else ""
+    warn = f" (校验: {'; '.join(arch_issues[:3])})" if arch_issues and not blockers else block_warn
     return (
         f"架构完成: {len(arch.get('tasks', []))} 个任务, "
         f"{len(arch.get('constraints', []))} 条约束"

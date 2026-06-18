@@ -35,6 +35,7 @@ from scheduler import orchestrator
 from scheduler import project as proj_mod
 from scheduler.project import Phase
 from scheduler import api_store
+from scheduler.log import info as _log_info, warn as _log_warn
 from scheduler import model_registry
 
 app = Flask(__name__)
@@ -66,6 +67,7 @@ def _loop_worker():
     if recovered:
         _push_event("system", f"恢复 {recovered} 个中断任务")
 
+    _log_info("loop", "scheduler loop started")
     _push_event("system", "loop started")
     idle_ticks = 0
 
