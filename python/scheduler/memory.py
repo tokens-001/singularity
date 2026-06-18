@@ -13,7 +13,7 @@
   Stage 4 — Narrative Synthesis: 拓扑排序 + 溯源元数据 + 显著性预算
 
 Dual-Stream:
-  Fast Path  — 同步摄入 (分词+向量+时间骨架), 零 LLM
+  Fast Path  — 同步摄入 (embedding+时间骨架), 零 LLM
   Slow Path  — 异步后台 LLM 推理隐含因果/实体边
 """
 
@@ -67,13 +67,13 @@ class EventNode:
 
     content  : 任务描述文本
     timestamp: 创建时间戳 (t_i)
-    tokens   : 稀疏词袋表示 (v_i 的轻量近似, 避免依赖 ChromaDB)
+    emb      : sentence-transformers embedding (384-dim)
     attrs    : 结构化属性 (A_i): files, status, route_level, route_type, snapshot_id
     """
     task_id: str
     content: str
     timestamp: float
-    tokens: set[str] = field(default_factory=set)
+    emb: list[float] = field(default_factory=list)  # embedding (384-dim)
     attrs: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -81,7 +81,7 @@ class EventNode:
             "task_id": self.task_id,
             "content": self.content[:200],
             "timestamp": self.timestamp,
-            "tokens": sorted(self.tokens),
+            "emb": self.emb,
             "attrs": self.attrs,
         }
 
@@ -91,7 +91,7 @@ class EventNode:
             task_id=d["task_id"],
             content=d.get("content", ""),
             timestamp=d.get("timestamp", 0),
-            tokens=set(d.get("tokens", [])),
+            emb=d.get("emb", d.get("tokens", [])),  # backward compat
             attrs=d.get("attrs", {}),
         )
 
@@ -111,27 +111,36 @@ class EdgeType:
 # 中文分词
 # ═══════════════════════════════════════════════════════════
 
-def _tokenize(text: str) -> set[str]:
-    tokens: set[str] = set()
-    chinese = re.findall(r"[一-鿿]+", text)
-    for seg in chinese:
-        for i in range(len(seg) - 1):
-            tokens.add(seg[i:i + 2])
-        if len(seg) == 1:
-            tokens.add(seg)
-    eng = re.findall(r"[a-zA-Z0-9_./]+", text)
-    tokens.update(t.lower() for t in eng if len(t) >= 2)
-    return tokens
+_EMBED_MODEL = None
+def _get_embed_model():
+    global _EMBED_MODEL
+    if _EMBED_MODEL is None:
+        from sentence_transformers import SentenceTransformer
+        _EMBED_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+    return _EMBED_MODEL
+
+def _embed(text: str) -> list[float]:
+    """384维归一化向量。空文本返回空列表。"""
+    if not text or not text.strip():
+        return []
+    return _get_embed_model().encode(text.strip(), normalize_embeddings=True).tolist()
 
 
 # ═══════════════════════════════════════════════════════════
-# Jaccard 相似度
+# cosine 相似度
 # ═══════════════════════════════════════════════════════════
 
-def _jaccard(a: set[str], b: set[str]) -> float:
+def _cosine_sim(a, b) -> float:
+    """余弦相似度。a,b为embedding列表。"""
     if not a or not b:
         return 0.0
-    return len(a & b) / len(a | b)
+    import math
+    dot = sum(x*y for x,y in zip(a,b))
+    na = math.sqrt(sum(x*x for x in a))
+    nb = math.sqrt(sum(y*y for y in b))
+    if na==0 or nb==0:
+        return 0.0
+    return dot/(na*nb)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -218,7 +227,7 @@ def index_task(
 ) -> None:
     """快通道摄入: 创建 EventNode + 更新四图边。
 
-    - 分词建向量 (tokens)
+    - embedding 向量 (384-dim)
     - 追加时间链
     - 添显式因果边 (depends_on)
     - 连实体边 (changed_files)
@@ -233,7 +242,7 @@ def index_task(
 
     # ── EventNode ──
     events = _load_events()
-    tokens = _tokenize(description)
+    tokens = _embed(description)
     node = EventNode(
         task_id=task_id,
         content=description,
@@ -273,8 +282,8 @@ def index_task(
     for existing_id, existing_node in events.items():
         if existing_id == task_id:
             continue
-        sim = _jaccard(tokens, existing_node.tokens)
-        if sim >= 0.15:
+        sim = _cosine_sim(tokens, existing_node.tokens)
+        if sim >= 0.6:
             # 无向边, 去重
             pair = sorted([task_id, existing_id])
             if not any((e[0] == pair[0] and e[1] == pair[1]) for e in edges["semantic"]):
@@ -317,7 +326,7 @@ def _rrf_anchors(
 ) -> list[tuple[str, float]]:
     """RRF 融合三信号找入口节点。
 
-    Signal 1 — Semantic: Jaccard(query_tokens, event.tokens)
+    Signal 1 — Semantic: cosine(query_emb, event.emb)
     Signal 2 — Lexical:  关键词命中 event.content + event.attrs['files']
     Signal 3 — Temporal:  时间衰减 1/(1 + hours_ago)
     """
@@ -328,7 +337,7 @@ def _rrf_anchors(
     # Signal 1: Semantic
     sem_scores: dict[str, float] = {}
     for tid, node in events.items():
-        s = _jaccard(query_tokens, node.tokens)
+        s = _cosine_sim(query_tokens, node.tokens)
         if s > 0:
             sem_scores[tid] = s
     signals.append(("semantic", sem_scores))
@@ -339,7 +348,7 @@ def _rrf_anchors(
     for tid, node in events.items():
         score = 0.0
         # 描述命中
-        content_tokens = _tokenize(node.content)
+        content_tokens = _embed(node.content)
         score += len(query_tokens & content_tokens) * 0.5
         # 文件路径命中
         for fp in node.attrs.get("files", []):
@@ -441,7 +450,7 @@ def traverse(
     # Stage 1: 意图分类 + 边权重
     intent = detect_intent(query)
     w = _INTENT_EDGE_WEIGHTS.get(intent, _INTENT_EDGE_WEIGHTS["semantic"])
-    query_tokens = _tokenize(query)
+    query_tokens = _embed(query)
 
     # Stage 2: RRF 锚点
     anchors = _rrf_anchors(query_tokens, query, events, edges, top_n=beam_width)
@@ -471,8 +480,8 @@ def traverse(
                 if not neighbor:
                     continue
 
-                # 语义部分: sim(n_j, q) — Jaccard on tokens
-                sim = _jaccard(query_tokens, neighbor.tokens)
+                # 语义部分: sim(n_j, q) — cosine on tokens
+                sim = _cosine_sim(query_tokens, neighbor.tokens)
 
                 # 结构部分: Ψ(e_k, I_q) — intent-weighted edge bonus
                 structural = w.get(edge_type, 0.3)
@@ -666,15 +675,15 @@ def find_by_files(files: list[str]) -> dict[str, list[str]]:
 
 
 def find_similar(description: str, top_k: int = 5) -> list[dict]:
-    """语义图直查: Jaccard 相似度 (不走遍历, 快但浅)。"""
+    """语义图直查: cosine 相似度 (不走遍历, 快但浅)。"""
     events = _load_events()
-    query_tokens = _tokenize(description)
+    query_tokens = _embed(description)
     if not query_tokens or not events:
         return []
 
     scored: list[dict] = []
     for tid, node in events.items():
-        sim = _jaccard(query_tokens, node.tokens)
+        sim = _cosine_sim(query_tokens, node.tokens)
         if sim > 0:
             scored.append({
                 "task_id": tid,
@@ -767,7 +776,7 @@ def find_candidate_latent_edges() -> list[dict]:
 
                 shared = list(set(node_a.attrs.get("files", [])) &
                               set(node_b.attrs.get("files", [])))
-                sim = _jaccard(node_a.tokens, node_b.tokens)
+                sim = _cosine_sim(node_a.tokens, node_b.tokens)
                 time_gap = abs(node_a.timestamp - node_b.timestamp) / 3600
 
                 candidates.append({

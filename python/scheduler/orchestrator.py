@@ -699,8 +699,8 @@ def consolidate_memory() -> int:
     """慢通道启发式整合: 从候选对中发现隐含因果边。
 
     当前使用启发式规则 (不调 LLM):
-      - 共享文件 + sim > 0.4 + 时间差 < 4h → 高置信因果边
-      - 共享文件 + sim > 0.25 → 中置信因果边
+      - 共享文件 + sim > 0.85 + 时间差 < 4h → 高置信因果边
+      - 共享文件 + sim > 0.7 → 中置信因果边
 
     LLM 推理版本留作未来升级 (见 memory.find_candidate_latent_edges 的注释)。
 
@@ -716,7 +716,7 @@ def consolidate_memory() -> int:
             shared = c["shared_files"]
 
             # 高置信: 同一批文件 + 高语义相似 + 时间接近
-            if sim >= 0.4 and gap < 4.0 and len(shared) >= 1:
+            if sim >= 0.85 and gap < 4.0 and len(shared) >= 1:
                 a, b = c["task_a"], c["task_b"]
                 # 时间早的 → 时间晚的
                 events = mem_mod._load_events()
@@ -733,7 +733,7 @@ def consolidate_memory() -> int:
                     )
                     added += 1
             # 中置信: 共享文件 + 一定语义相似
-            elif sim >= 0.25 and len(shared) >= 1:
+            elif sim >= 0.7 and len(shared) >= 1:
                 a, b = c["task_a"], c["task_b"]
                 events = mem_mod._load_events()
                 node_a = events.get(a)
