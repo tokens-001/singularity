@@ -95,7 +95,7 @@ mode = "planner"
 sandbox = "worktree"
 
 [agents.D.env]
-ANTHROPIC_API_KEY = "{ANTHROPIC_API_KEY_OPS}"
+ANTHROPIC_API_KEY = "{ANTHROPIC_API_KEY}"
 HTTPS_PROXY = "http://127.0.0.1:7892"
 
 [agents.D.env_unset]
