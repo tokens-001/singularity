@@ -697,6 +697,58 @@ def api_project_start(project_id):
 
 
 # ═══════════════════════════════════════════════════════════
+# Supervisor API
+# ═══════════════════════════════════════════════════════════
+
+from scheduler.supervisor import supervise
+
+@app.route("/api/tasks/<task_id>/supervise", methods=["POST"])
+def api_supervise(task_id):
+    """对已完成的任务执行 Supervisor 校验。"""
+    t = tracker._read(task_id)
+    if not t:
+        return jsonify({"error": "任务不存在"}), 404
+
+    # 尝试获取关联项目的约束+checklist
+    constraints = []
+    checklist = []
+    for proj in proj_mod.recover_all():
+        if task_id in proj.task_ids:
+            constraints = proj.constraints_checklist
+            if proj.architecture:
+                tasks = proj.architecture.get("tasks", [])
+                for td in tasks:
+                    checklist.append(td.get("acceptance", ""))
+            break
+
+    changed = []  # 从 trace 或 task 记录中获取
+    trace_path = sched_config.TRACE_DIR / f"{task_id}.json"
+    if trace_path.exists():
+        try:
+            trace = json.loads(trace_path.read_text(encoding="utf-8"))
+            changed = trace.get("changed_files", [])
+        except Exception:
+            pass
+
+    result = supervise(
+        task_description=t.description,
+        changed_files=changed,
+        constraints=constraints,
+        checklist=checklist,
+        agent_output=getattr(t, "error", "") or "",
+        task_id=task_id,
+    )
+    return jsonify({
+        "verdict": result.verdict,
+        "checks": {k: {"passed": v.passed, "reason": v.reason}
+                    for k, v in result.checks.items()},
+        "issues": result.issues,
+        "hard_evidence": result.hard_evidence_count,
+        "escalate_to_owner": result.soft_escalation,
+    })
+
+
+# ═══════════════════════════════════════════════════════════
 # GET /api/agents — Agent 配置
 # ═══════════════════════════════════════════════════════════
 
