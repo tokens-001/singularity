@@ -1277,57 +1277,59 @@ async function renderModels(){
   const body = document.getElementById('models-body');
   try {
     const d = await api('/api/models');
-    if (d.error) { body.innerHTML = `<span style="color:var(--red)">${esc(d.error)}</span>`; return; }
+    if (d.error) { body.innerHTML = '<span style="color:var(--red)">'+esc(d.error)+'</span>'; return; }
     const models = Object.values(d);
     if (!models.length) { body.innerHTML = '<span style="color:var(--text3);font-family:var(--mono);font-size:9px">NO_MODELS_REGISTERED</span>'; return; }
-    const speedIcon = {fast:'▶',medium:'◅▻',slow:'◅'};
-    const tierColors = {E:'var(--cyan)',E_plus:'var(--orange)',D:'var(--purple)'};
-      // 获取当前默认配置
-  let agentData = {};
-  try { agentData = await api('/api/agents'); } catch(e) {}
-  const defaults = {};
-  for (const [lvl, agents] of Object.entries(agentData)) {
-    for (const a of agents) {
-      if (a.default) defaults[a.model] = defaults[a.model] || {};
-      if (a.default) defaults[a.model][lvl] = true;
+    let agentData = {};
+    try { agentData = await api('/api/agents'); } catch(e) {}
+    const defaults = {};
+    for (const [lvl, agents] of Object.entries(agentData)) {
+      for (const a of agents) {
+        if (a.default) { defaults[a.model] = defaults[a.model] || {}; defaults[a.model][lvl] = true; }
+      }
     }
-  }
-  body.innerHTML = models.map(m => {
-    m._isDefault = defaults[m.id] || {};
-      const tiers = m.tiers.map(t => `<span style="color:${tierColors[t]||'var(--text3)'};font-family:var(--mono);font-size:8px">${t}</span>`).join('/');
+    const costMark = {budget:'_',standard:'=',premium:'≡'};
+    body.innerHTML = models.map(m => {
+      m._isDefault = defaults[m.id] || {};
+      const tiers = (m.tiers||[]).map(t => {
+        const tc = {E:'var(--cyan)','E+':'var(--orange)',D:'var(--purple)'}[t]||'var(--text3)';
+        return '<span style="color:'+tc+';font-family:var(--mono);font-size:8px">'+t+'</span>';
+      }).join('/');
       const dot = m.api_available
         ? '<span style="color:var(--green);font-size:7px">●</span>'
         : '<span style="color:var(--text3);font-size:7px">○</span>';
-      const costMark = {budget:'_',standard:'=',premium:'≡'}[m.cost]||'_';
-      return `<div style="padding:4px 0;border-bottom:1px solid var(--bg3)">
-        <div style="display:flex;align-items:center;gap:8px;font-size:10px">
-          <span style="width:12px;text-align:center">${dot}</span>
-          <span style="font-family:var(--mono);font-weight:500;min-width:80px;color:var(--text)">${esc(m.display)}</span>
-          <span style="font-family:var(--mono);font-size:9px;color:var(--text3)">${esc(m.id)}</span>
-          <span style="font-size:9px;color:var(--text3);font-family:var(--mono)">${costMark}</span>
-          <span style="font-size:8px;color:var(--text3)">${m.speed}</span>
-          ${m.reasoning?'<span style="font-size:8px;color:var(--purple);font-family:var(--mono)">RSN</span>':''}
-          <span style="flex:1"></span>
-          <span style="font-size:8px;font-family:var(--mono)">${tiers}</span> <button class="btn sm" style="color:var(--red);font-size:7px;padding:1px 3px;margin-left:4px" onclick="event.stopPropagation();removeModel('${esc(m.id)}')">DEL</button>
-        </div>
-        <div style="font-size:8px;color:var(--text3);margin-top:2px;font-family:var(--mono)">${esc(m.notes)}</div>
-        <div style="margin-top:2px;display:flex;gap:2px">
-          ${['E','E+','D'].map(t => {
-            const on = (m.tiers||[]).includes(t);
-            const tc = {E:'var(--cyan)',E_plus:'var(--orange)',D:'var(--purple)'}[t]||'var(--text3)';
-            return '<span onclick="event.stopPropagation();updateModel(\''+esc(m.id)+'\',\'tiers\',\''+t+'\')" style="cursor:pointer;font-size:7px;font-family:var(--mono);padding:1px 4px;color:'+(on?tc:'var(--text3)')+';background:'+(on?'var(--bg3)':'transparent')+'">['+t+']</span>';
-          }).join('')}
-          <span style="font-size:7px;color:var(--text3);font-family:var(--mono)">层级</span>
-          ${['E','E+','D'].map(t => {
-            if (!(m.tiers||[]).includes(t)) return '';
-            const isDef = m._isDefault && m._isDefault[t];
-            return '<span onclick="event.stopPropagation();setDefaultModel(\''+esc(m.id)+'\',\''+t+'\')" style="cursor:pointer;font-size:7px;font-family:var(--mono);padding:1px 4px;color:'+(isDef?'var(--cyan)':'var(--text3)')+';background:'+(isDef?'rgba(57,210,192,.12)':'transparent')+'">'+(isDef?'DEF':'def')+'</span>';
-          }).join('')}
-        </div>
-      </div>`;
+      const cm = costMark[m.cost]||'_';
+      let html = '<div style="padding:4px 0;border-bottom:1px solid var(--bg3)">';
+      html += '<div style="display:flex;align-items:center;gap:8px;font-size:10px">';
+      html += '<span style="width:12px;text-align:center">'+dot+'</span>';
+      html += '<span style="font-family:var(--mono);font-weight:500;min-width:80px;color:var(--text)">'+esc(m.display)+'</span>';
+      html += '<span style="font-family:var(--mono);font-size:9px;color:var(--text3)">'+esc(m.id)+'</span>';
+      html += '<span style="font-size:9px;color:var(--text3);font-family:var(--mono)">'+cm+'</span>';
+      html += '<span style="font-size:8px;color:var(--text3)">'+m.speed+'</span>';
+      if (m.reasoning) html += '<span style="font-size:8px;color:var(--purple);font-family:var(--mono)">RSN</span>';
+      html += '<span style="flex:1"></span>';
+      html += '<span style="font-size:8px;font-family:var(--mono)">'+tiers+'</span>';
+      html += ' <button class="btn sm" style="color:var(--red);font-size:7px;padding:1px 3px;margin-left:4px" onclick="event.stopPropagation();removeModel(\''+esc(m.id)+'\')">DEL</button>';
+      html += '</div>';
+      html += '<div style="font-size:8px;color:var(--text3);margin-top:2px;font-family:var(--mono)">'+esc(m.notes||'')+'</div>';
+      html += '<div style="margin-top:2px;display:flex;gap:2px">';
+      for (const t of ['E','E+','D']) {
+        const on = (m.tiers||[]).includes(t);
+        const tc = {E:'var(--cyan)','E+':'var(--orange)',D:'var(--purple)'}[t]||'var(--text3)';
+        html += '<span onclick="event.stopPropagation();updateModel(\''+esc(m.id)+'\',\'tiers\',\''+t+'\')" style="cursor:pointer;font-size:7px;font-family:var(--mono);padding:1px 4px;color:'+(on?tc:'var(--text3)')+';background:'+(on?'var(--bg3)':'transparent')+'">['+t+']</span>';
+      }
+      html += '<span style="font-size:7px;color:var(--text3);font-family:var(--mono)"> 层级</span>';
+      for (const t of ['E','E+','D']) {
+        if (!(m.tiers||[]).includes(t)) continue;
+        const isDef = m._isDefault && m._isDefault[t];
+        html += '<span onclick="event.stopPropagation();setDefaultModel(\''+esc(m.id)+'\',\''+t+'\')" style="cursor:pointer;font-size:7px;font-family:var(--mono);padding:1px 4px;color:'+(isDef?'var(--cyan)':'var(--text3)')+';background:'+(isDef?'rgba(57,210,192,.12)':'transparent')+'">'+(isDef?'DEF':'def')+'</span>';
+      }
+      html += '</div></div>';
+      return html;
     }).join('');
-  } catch(e) { body.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`; }
+  } catch(e) { body.innerHTML = '<span style="color:var(--red)">'+esc(e.message)+'</span>'; }
 }
+
 
 async function loadLineup(){
   const sel = document.getElementById('lineup-project-select');
