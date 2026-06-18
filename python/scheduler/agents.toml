@@ -137,6 +137,32 @@ max_output_tokens = 4096
 [agents.D.env]
 HTTPS_PROXY = "http://127.0.0.1:7892"
 
+# DeepSeek V4 Pro — D层架构 (DeepSeek头部模型,便宜)
+[[agents.D]]
+model = "deepseek-v4-pro"
+type = "claude-cli"
+entry = "/Users/jingzhe/.claude/local/claude --exclude-dynamic-system-prompt-sections -p {prompt}"
+max_turns = 3
+default = false
+roles = ["architecture"]
+mode = "planner"
+sandbox = "worktree"
+
+# Kimi K2.7 — D层架构 (Kimi头部模型,推理强)
+[[agents.D]]
+model = "kimi-k2.7-code"
+type = "openai-agent"
+entry = "https://api.moonshot.cn/v1/chat/completions"
+api_key_env = "KIMI_API_KEY"
+max_turns = 5
+default = false
+roles = ["architecture"]
+sandbox = "worktree"
+
+[agents.D.request_template]
+model = "kimi-k2.7-code"
+max_tokens = 4096
+
 # GLM-5.2 — D层备选 (Opus欠费时顶上)
 [[agents.D]]
 model = "glm-5.2"

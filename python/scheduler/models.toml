@@ -18,25 +18,25 @@ notes = "最便宜的 E 层首选。推理模型(reasoning_content)。适合简�
 id = "deepseek-v4-pro"
 provider = "deepseek"
 display = "DeepSeek V4 Pro"
-tiers = ["E", "E+"]
+tiers = ["E", "E+", "D"]
 speed = "medium"
 cost = "standard"
 reasoning = false
 max_turns = 2
-strengths = ["编码", "调试", "中等复杂度"]
-notes = "E 层主力(Claude Code CLI)。能力均衡。"
+strengths = ["编码", "调试", "中等复杂度", "架构设计"]
+notes = "E 层主力 + D 层 DeepSeek 头部模型。Claude Code CLI。能力均衡，性价比高。"
 
 [[models]]
 id = "kimi-k2.7-code"
 provider = "kimi"
 display = "Kimi K2.7 Code"
-tiers = ["E", "E+"]
+tiers = ["E", "E+", "D"]
 speed = "medium"
 cost = "standard"
 reasoning = true
 max_turns = 5
-strengths = ["编码", "长上下文", "工具使用"]
-notes = "推理模型(reasoning_content)。工具使用流畅，自我验证。"
+strengths = ["编码", "长上下文", "工具使用", "架构审查"]
+notes = "推理模型(reasoning_content)。Kimi 头部模型，D 层可用。工具使用流畅，自我验证。"
 
 [[models]]
 id = "glm-5-turbo"
