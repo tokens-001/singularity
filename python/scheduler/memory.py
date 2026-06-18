@@ -91,7 +91,7 @@ class EventNode:
             task_id=d["task_id"],
             content=d.get("content", ""),
             timestamp=d.get("timestamp", 0),
-            emb=d.get("emb", d.get("tokens", [])),  # backward compat
+            emb=list(d.get("emb", d.get("tokens", []))),  # backward compat
             attrs=d.get("attrs", {}),
         )
 
@@ -116,7 +116,7 @@ def _get_embed_model():
     global _EMBED_MODEL
     if _EMBED_MODEL is None:
         from sentence_transformers import SentenceTransformer
-        _EMBED_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+        _EMBED_MODEL = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
     return _EMBED_MODEL
 
 def _embed(text: str) -> list[float]:
