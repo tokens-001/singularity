@@ -113,11 +113,17 @@ class EdgeType:
 
 _EMBED_MODEL = None
 def _get_embed_model():
+    """懒加载: 首次查询才下载/加载模型(420MB)。"""
     global _EMBED_MODEL
     if _EMBED_MODEL is None:
+        import os, time
+        # 检查是否在 CI/快速模式 — 跳过模型加载
+        if os.environ.get("QIDIAN_SKIP_EMBED"):
+            _EMBED_MODEL = False  # sentinel: 不可用
+            return None
         from sentence_transformers import SentenceTransformer
         _EMBED_MODEL = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
-    return _EMBED_MODEL
+    return _EMBED_MODEL if _EMBED_MODEL is not False else None
 
 def _embed(text: str) -> list[float]:
     """384维归一化向量。空文本返回空列表。"""

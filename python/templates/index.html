@@ -1581,10 +1581,39 @@ async function populateLineupProjects(){
 }
 
 // ═══════════════════════════════════════════════════════
+// SSE 事件流 — 替代轮询
+// ═══════════════════════════════════════════════════════
+function connectSSE(){
+  const es = new EventSource('/api/events');
+  es.onmessage = e => {
+    try {
+      const d = JSON.parse(e.data);
+      if (d.kind === 'init') {
+        // 初始状态 → 轻量更新
+        statusData = {counts: d.counts||{}, running_total: d.running_total||0, heartbeat_levels:{}, agents:{}, avg_wait:'--', avg_done:'--'};
+        renderStatusCards();
+      } else {
+        // 事件推送 → 更新事件流
+        const feed = document.getElementById('event-feed');
+        if (feed && d.kind && d.msg) {
+          const cls = d.kind==='task'?'ev-task':d.kind==='error'?'ev-error':d.kind==='system'?'ev-system':'ev-idle';
+          feed.innerHTML = `<div class="event-row"><span class="ev-ts">${new Date(d.ts*1000).toLocaleTimeString('zh-CN')}</span><span class="${cls}">${esc(d.msg)}</span></div>` + feed.innerHTML;
+        }
+      }
+    } catch(_){}
+  };
+  es.onerror = () => {
+    // SSE断了 → 回退到轮询
+    es.close();
+    setInterval(refreshAll, 3000);
+  };
+}
+
+// ═══════════════════════════════════════════════════════
 // Init
 // ═══════════════════════════════════════════════════════
 refreshAll();
-setInterval(refreshAll,2000);
+connectSSE();
 </script>
 </body>
 </html>

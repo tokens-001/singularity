@@ -10,7 +10,7 @@ import threading
 from collections import deque
 from pathlib import Path
 
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, Response, render_template, request, jsonify
 
 # ── 加载 .env ──────────────────────────────────────────────
 _ENV_PATH = Path(__file__).parent / ".env"
@@ -51,6 +51,7 @@ _loop_concurrent: int = 1
 _loop_events: deque = deque(maxlen=50)  # 最近 50 个事件
 _loop_running: bool = False
 _loop_lock = threading.Lock()
+_sse_clients: list = []  # SSE 连接的客户端队列
 
 
 def _loop_worker():
@@ -77,6 +78,9 @@ def _loop_worker():
                 idle_ticks += 1
                 if idle_ticks == 1:
                     _push_event("idle", "队列空，等待新任务...")
+                # 空转时也推送状态(低频)
+                if idle_ticks % 5 == 0:
+                    _sse_broadcast("heartbeat", "", time.time())
                 time.sleep(3)
             else:
                 idle_ticks = 0
@@ -123,6 +127,25 @@ def _loop_worker():
 def _push_event(kind: str, msg: str):
     ts = time.time()
     _loop_events.appendleft({"kind": kind, "msg": msg, "ts": ts})
+    _sse_broadcast(kind, msg, ts)
+
+
+def _sse_broadcast(kind: str, msg: str, ts: float = None):
+    """向所有 SSE 客户端推送事件。"""
+    if ts is None:
+        ts = time.time()
+    data = json.dumps({"kind": kind, "msg": msg, "ts": ts})
+    dead = []
+    for q in _sse_clients:
+        try:
+            q.append(data)
+        except Exception:
+            dead.append(q)
+    for q in dead:
+        try:
+            _sse_clients.remove(q)
+        except ValueError:
+            pass
 
 
 def start_loop(concurrent: int = 1):
@@ -1243,6 +1266,55 @@ def api_resolve_conflict(task_id):
         return jsonify({"ok": True, "message": "已放弃合并并回滚"})
     else:
         return jsonify({"error": "action 必须是 manual 或 abort"}), 400
+
+
+# ═══════════════════════════════════════════════════════════
+# SSE 事件流 — 替代轮询,服务器主动推送状态变更
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/events")
+def api_sse_events():
+    """SSE 端点: 服务器主动推送调度事件。"""
+    import queue
+    q = queue.Queue()
+    _sse_clients.append(q)
+
+    def generate():
+        # 初始状态
+        try:
+            counts = witness._count_by_status()
+            initial = json.dumps({
+                "kind": "init",
+                "counts": counts,
+                "running_total": sum(witness._heartbeat_task_levels().values()),
+            })
+            yield f"data: {initial}\n\n"
+        except Exception:
+            pass
+
+        while True:
+            try:
+                data = q.get(timeout=15)
+                yield f"data: {data}\n\n"
+            except queue.Empty:
+                yield ": heartbeat\n\n"
+            except GeneratorExit:
+                break
+
+    try:
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    finally:
+        try:
+            _sse_clients.remove(q)
+        except ValueError:
+            pass
 
 
 # ═══════════════════════════════════════════════════════════
