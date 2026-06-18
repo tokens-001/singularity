@@ -31,6 +31,12 @@ class DispatchResult:
 
 
 def load_agents() -> dict:
+    """加载 agent 配置: agents.toml (基础) + agents_custom.json (覆盖)。
+
+    custom 文件中可包含:
+      - 每层追加的 agent 配置 (add)
+      - _disabled: [model_name, ...] — 从 toml 中禁用的模型
+    """
     import tomllib
     with open(config.AGENTS_TOML, "rb") as f:
         data = tomllib.load(f)
@@ -38,7 +44,29 @@ def load_agents() -> dict:
     agents = {}
     for k, v in raw.items():
         key = "E+" if k == "E_plus" else k
-        agents[key] = v
+        agents[key] = list(v)  # shallow copy
+
+    # 合并自定义覆盖
+    custom = _load_custom_agents()
+    for k, cfgs in custom.items():
+        if k.startswith("_"):
+            continue
+        level = "E+" if k == "E_plus" else k
+        if level not in agents:
+            agents[level] = []
+        for c in cfgs:
+            if isinstance(c, dict) and c.get("model"):
+                # 避免重复
+                existing = [a.get("model") for a in agents[level]]
+                if c["model"] not in existing:
+                    agents[level].append(c)
+
+    # 应用禁用列表
+    for level in agents:
+        disabled = custom.get("_disabled", {}).get(level, [])
+        if disabled:
+            agents[level] = [a for a in agents[level] if a.get("model") not in disabled]
+
     return agents
 
 
@@ -277,8 +305,25 @@ def add_agent(level: str, model: str, agent_type: str = "openai-agent",
               request_template: dict = None) -> dict:
     custom = _load_custom_agents()
     key = "E_plus" if level == "E+" else level
+
+    # 1. 如果之前在禁用列表里，移除禁用标记即可 (重新启用 toml 内置 agent)
+    disabled = custom.get("_disabled", {}).get(level, [])
+    if model in disabled:
+        disabled.remove(model)
+        custom.setdefault("_disabled", {})[level] = disabled
+        _save_custom_agents(custom)
+        # 从 toml 找到原始配置返回
+        agents = load_agents()
+        for a in agents.get(level, []):
+            if a.get("model") == model:
+                return a
+
+    # 2. 新增自定义 agent
     if key not in custom:
         custom[key] = []
+    # 避免重复
+    if any(a.get("model") == model for a in custom[key]):
+        return next(a for a in custom[key] if a.get("model") == model)
     cfg = {
         "model": model, "type": agent_type,
         "entry": entry, "api_key_env": api_key_env,
@@ -294,15 +339,26 @@ def add_agent(level: str, model: str, agent_type: str = "openai-agent",
     return cfg
 
 def remove_agent(level: str, model: str) -> bool:
+    """禁用 agent: 加入 _disabled 列表。支持 toml 内置和 custom 两种来源。"""
     custom = _load_custom_agents()
     key = "E_plus" if level == "E+" else level
+
+    # 1. 如果是 custom 里的，直接删
     cfgs = custom.get(key, [])
     new_cfgs = [a for a in cfgs if a.get("model") != model]
-    if len(new_cfgs) == len(cfgs):
-        return False
-    custom[key] = new_cfgs
-    _save_custom_agents(custom)
-    return True
+    if len(new_cfgs) != len(cfgs):
+        custom[key] = new_cfgs
+        _save_custom_agents(custom)
+        return True
+
+    # 2. 如果是 toml 内置的，加入禁用列表
+    custom.setdefault("_disabled", {})
+    custom["_disabled"].setdefault(level, [])
+    if model not in custom["_disabled"][level]:
+        custom["_disabled"][level].append(model)
+        _save_custom_agents(custom)
+        return True
+    return False
 
 def update_agent(level: str, model: str, updates: dict) -> dict:
     # 先在自定义 overlay 里找，再在 TOML 内置里找
