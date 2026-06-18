@@ -126,7 +126,15 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
             witness.heartbeat(task.id, f"pre_hook: {w[:80]}")
 
     # 容灾: 获取 fallback 链, 当前 agent 失败自动切下一个
+    # 如果任务已重试多次，强制优先用 premium 模型
+    total_failures = getattr(task, 'retry_count', 0)
+    force_premium = total_failures >= 2  # 2次失败 → 跳过便宜模型直上 premium
     fallback_chain = disp_mod.pick_agent_fallback_chain(agents, level)
+    if force_premium and fallback_chain:
+        # 把 premium 模型移到最前面 (model 名含 glm 或 opus)
+        premium = [a for a in fallback_chain if any(p in a.get('model','').lower() for p in ('glm','opus'))]
+        cheap = [a for a in fallback_chain if a not in premium]
+        fallback_chain = premium + cheap
     tried_models: set[str] = set()
 
     while True:
