@@ -247,7 +247,7 @@ def index_task(
         task_id=task_id,
         content=description,
         timestamp=created_at,
-        tokens=tokens,
+        emb=tokens,
         attrs={"files": changed_files, "depends_on": depends_on},
     )
     events[task_id] = node
