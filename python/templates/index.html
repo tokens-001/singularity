@@ -497,30 +497,8 @@ pre.agent-out {
   </div>
 
   <div class="section" style="margin-bottom:8px">
-    <div class="section-title">Agent 编组 <span style="font-weight:normal;font-size:9px;color:var(--text3);text-transform:none">— 选项目后配置每层模型</span></div>
-    <div style="padding:8px 10px;display:flex;gap:8px;align-items:center">
-      <select id="lineup-project-select" onchange="loadLineup()" style="min-width:160px;width:auto">
-        <option value="">— 选择项目 —</option>
-      </select>
-      <span id="lineup-status" style="font-size:9px;color:var(--text3);font-family:var(--mono)"></span>
-      <button class="btn cyan sm" style="margin-left:auto" onclick="saveLineup()">保存编组</button>
-    </div>
-    <div id="lineup-editor" style="padding:0 10px 8px;display:none">
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <div style="flex:1;min-width:160px">
-          <div style="font-size:9px;color:var(--cyan);margin-bottom:3px;font-family:var(--mono);text-transform:uppercase">E 层</div>
-          <div id="lineup-e" style="font-size:9px"></div>
-        </div>
-        <div style="flex:1;min-width:160px">
-          <div style="font-size:9px;color:var(--orange);margin-bottom:3px;font-family:var(--mono);text-transform:uppercase">E+ 层</div>
-          <div id="lineup-ep" style="font-size:9px"></div>
-        </div>
-        <div style="flex:1;min-width:160px">
-          <div style="font-size:9px;color:var(--purple);margin-bottom:3px;font-family:var(--mono);text-transform:uppercase">D 层</div>
-          <div id="lineup-d" style="font-size:9px"></div>
-        </div>
-      </div>
-    </div>
+    <div class="section-title">架构切换 <button class="btn cyan sm" style="margin-left:8px" onclick="renderLayerSwitch()">刷新</button></div>
+    <div class="section-body" id="layer-switch-body" style="font-size:10px"></div>
   </div>
 
 </div>
@@ -557,7 +535,7 @@ document.getElementById('tab-bar').addEventListener('click',e=>{
   document.getElementById('tab-'+activeTab).classList.add('active');
   if(activeTab==='tasks') renderTasks();
   if(activeTab==='project') loadProjects();
-  if(activeTab==='config'){ renderAPIStore(); renderModels(); populateLineupProjects(); renderIntervention(); }
+  if(activeTab==='config'){ renderAPIStore(); renderModels(); renderLayerSwitch(); renderIntervention(); }
 });
 
 // ═══════════════════════════════════════════════════════
@@ -1253,6 +1231,17 @@ async function addModel(){
     renderModels();
   }
 }
+async function setDefaultModel(id, tier){
+  // 先获取当前 agents 配置
+  const ag = await api('/api/agents');
+  if (!ag[tier]) return;
+  // 把该层所有 agent 的 default 置 false，目标置 true
+  for (const a of ag[tier]) {
+    const body = {default: a.model === id};
+    await api('/api/agents/'+tier+'/'+a.model, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  }
+  renderModels();
+}
 async function updateModel(id, field, value){
   const body = {};
   if (field === 'tiers') {
@@ -1287,7 +1276,18 @@ async function renderModels(){
     if (!models.length) { body.innerHTML = '<span style="color:var(--text3);font-family:var(--mono);font-size:9px">NO_MODELS_REGISTERED</span>'; return; }
     const speedIcon = {fast:'▶',medium:'◅▻',slow:'◅'};
     const tierColors = {E:'var(--cyan)',E_plus:'var(--orange)',D:'var(--purple)'};
-    body.innerHTML = models.map(m => {
+      // 获取当前默认配置
+  let agentData = {};
+  try { agentData = await api('/api/agents'); } catch(e) {}
+  const defaults = {};
+  for (const [lvl, agents] of Object.entries(agentData)) {
+    for (const a of agents) {
+      if (a.default) defaults[a.model] = defaults[a.model] || {};
+      if (a.default) defaults[a.model][lvl] = true;
+    }
+  }
+  body.innerHTML = models.map(m => {
+    m._isDefault = defaults[m.id] || {};
       const tiers = m.tiers.map(t => `<span style="color:${tierColors[t]||'var(--text3)'};font-family:var(--mono);font-size:8px">${t}</span>`).join('/');
       const dot = m.api_available
         ? '<span style="color:var(--green);font-size:7px">●</span>'
@@ -1311,7 +1311,12 @@ async function renderModels(){
             const tc = {E:'var(--cyan)',E_plus:'var(--orange)',D:'var(--purple)'}[t]||'var(--text3)';
             return '<span onclick="event.stopPropagation();updateModel(\''+esc(m.id)+'\',\'tiers\',\''+t+'\')" style="cursor:pointer;font-size:7px;font-family:var(--mono);padding:1px 4px;color:'+(on?tc:'var(--text3)')+';background:'+(on?'var(--bg3)':'transparent')+'">['+t+']</span>';
           }).join('')}
-          <span style="font-size:7px;color:var(--text3);font-family:var(--mono)">点击切换层级</span>
+          <span style="font-size:7px;color:var(--text3);font-family:var(--mono)">层级</span>
+          ${['E','E+','D'].map(t => {
+            if (!(m.tiers||[]).includes(t)) return '';
+            const isDef = m._isDefault && m._isDefault[t];
+            return '<span onclick="event.stopPropagation();setDefaultModel(\''+esc(m.id)+'\',\''+t+'\')" style="cursor:pointer;font-size:7px;font-family:var(--mono);padding:1px 4px;color:'+(isDef?'var(--cyan)':'var(--text3)')+';background:'+(isDef?'rgba(57,210,192,.12)':'transparent')+'">'+(isDef?'DEF':'def')+'</span>';
+          }).join('')}
         </div>
       </div>`;
     }).join('');
@@ -1374,6 +1379,58 @@ async function saveLineup(){
   document.getElementById('lineup-status').textContent = '已保存 ✓';
   document.getElementById('lineup-status').style.color = 'var(--green)';
 }
+
+async function renderLayerSwitch(){
+  const body = document.getElementById('layer-switch-body');
+  const [agents, models] = await Promise.all([api('/api/agents'), api('/api/models')]);
+  if (agents.error || models.error) { body.innerHTML = '<span style="color:var(--red)">加载失败</span>'; return; }
+
+  const tiers = [
+    {id:'E', color:'var(--cyan)', label:'E 层 · 日常执行', desc:'简单任务、bugfix、查询'},
+    {id:'E+', color:'var(--orange)', label:'E+ 层 · 复杂构建', desc:'多文件重构、新模块、跨模块'},
+    {id:'D', color:'var(--purple)', label:'D 层 · 架构设计', desc:'方案设计、安全审查、架构决策'},
+  ];
+
+  body.innerHTML = tiers.map(t => {
+    // Find current default for this tier
+    const tierAgents = agents[t.id] || [];
+    const current = tierAgents.find(a => a.default) || tierAgents[0] || {};
+    // Find all models capable of this tier
+    const available = Object.values(models).filter(m => (m.tiers||[]).includes(t.id));
+
+    const options = available.map(m => {
+      const sel = m.id === current.model ? 'selected' : '';
+      const apiOk = m.api_available ? '●' : '○';
+      return `<option value="${esc(m.id)}" ${sel}>${apiOk} ${esc(m.display||m.id)} [${m.provider}] ${m.cost}</option>`;
+    }).join('');
+
+    return `<div style="padding:8px 0;border-bottom:1px solid var(--bg3);display:flex;align-items:center;gap:10px">
+      <div style="min-width:140px">
+        <div style="font-size:10px;font-weight:600;color:${t.color};font-family:var(--mono)">${t.label}</div>
+        <div style="font-size:8px;color:var(--text3)">${t.desc}</div>
+      </div>
+      <select onchange="switchLayerAgent('${t.id}',this.value)" style="flex:1;font-size:9px;font-family:var(--mono);width:auto">
+        ${options}
+      </select>
+      <span style="font-size:8px;color:var(--text3);font-family:var(--mono);min-width:40px;text-align:right">${current.model||'未设置'}</span>
+    </div>`;
+  }).join('');
+}
+
+async function switchLayerAgent(tier, modelId){
+  // 获取该层所有 agent，把目标设为 default，其余取消
+  const agents = await api('/api/agents');
+  const tierAgents = agents[tier] || [];
+  for (const a of tierAgents) {
+    await api('/api/agents/'+tier+'/'+a.model, {
+      method:'PUT', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({default: a.model === modelId})
+    });
+  }
+  renderLayerSwitch();
+}
+
+async function populateLineupProjects(){
 
 async function populateLineupProjects(){
   const sel = document.getElementById('lineup-project-select');

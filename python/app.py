@@ -929,6 +929,17 @@ def api_agents_add():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/agents/<level>/<model>", methods=["PUT"])
+def api_agents_update(level, model):
+    """更新 agent 配置 (default 等)。"""
+    data = request.get_json(silent=True) or {}
+    try:
+        cfg = disp_mod.update_agent(level, model, data)
+        return jsonify({"ok": True, "agent": cfg})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/agents/<level>/<model>", methods=["DELETE"])
 def api_agents_remove(level, model):
     """删除自定义 agent。"""

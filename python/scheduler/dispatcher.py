@@ -248,5 +248,85 @@ def dispatch(
     )
 
 
+# ── Agent CRUD (写入自定义 JSON overlay) ──
+
+import json as _json
+
+def _custom_agents_path():
+    from . import config
+    return config.QIDIAN_DIR / "agents_custom.json"
+
+def _load_custom_agents() -> dict:
+    p = _custom_agents_path()
+    if p.exists():
+        try:
+            return _json.loads(p.read_text())
+        except (_json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+def _save_custom_agents(data: dict) -> None:
+    from . import config
+    config.QIDIAN_DIR.mkdir(parents=True, exist_ok=True)
+    _custom_agents_path().write_text(_json.dumps(data, ensure_ascii=False, indent=2))
+
+def add_agent(level: str, model: str, agent_type: str = "openai-agent",
+              entry: str = "", api_key_env: str = "", max_turns: int = 5,
+              roles: list = None, sandbox: str = "worktree", mode: str = "",
+              request_template: dict = None) -> dict:
+    custom = _load_custom_agents()
+    key = "E_plus" if level == "E+" else level
+    if key not in custom:
+        custom[key] = []
+    cfg = {
+        "model": model, "type": agent_type,
+        "entry": entry, "api_key_env": api_key_env,
+        "max_turns": max_turns, "default": False,
+        "roles": roles or ["daily"], "sandbox": sandbox,
+    }
+    if mode:
+        cfg["mode"] = mode
+    if request_template:
+        cfg["request_template"] = request_template
+    custom[key].append(cfg)
+    _save_custom_agents(custom)
+    return cfg
+
+def remove_agent(level: str, model: str) -> bool:
+    custom = _load_custom_agents()
+    key = "E_plus" if level == "E+" else level
+    cfgs = custom.get(key, [])
+    new_cfgs = [a for a in cfgs if a.get("model") != model]
+    if len(new_cfgs) == len(cfgs):
+        return False
+    custom[key] = new_cfgs
+    _save_custom_agents(custom)
+    return True
+
+def update_agent(level: str, model: str, updates: dict) -> dict:
+    # 先在自定义 overlay 里找，再在 TOML 内置里找
+    custom = _load_custom_agents()
+    key = "E_plus" if level == "E+" else level
+    cfgs = custom.get(key, [])
+    for a in cfgs:
+        if a.get("model") == model:
+            a.update(updates)
+            _save_custom_agents(custom)
+            return a
+    # 不在自定义里，从内置 TOML 复制一份到 overlay 再更新
+    agents = load_agents()
+    tier_agents = agents.get(level, [])
+    for a in tier_agents:
+        if a.get("model") == model:
+            new_cfg = dict(a)
+            new_cfg.update(updates)
+            custom.setdefault(key, []).append(new_cfg)
+            _save_custom_agents(custom)
+            return new_cfg
+    raise RuntimeError(f"Agent {model} 不在 {level} 层")
+
+
+def escalate(level: str) -> str | None:
+
 def escalate(level: str) -> str | None:
     return _ESCALATION.get(level)
