@@ -620,7 +620,27 @@ def api_cancel_task(task_id):
         return jsonify({"ok": True, "message": "已发送取消信号，将在当前 turn 结束后生效"})
     else:
         tracker.transition(task_id, TaskStatus.FAILED, error="用户手动取消")
-        return jsonify({"ok": True, "message": "已取消"})k_id)
+        return jsonify({"ok": True, "message": "已取消"})
+
+
+@app.route("/api/tasks/<task_id>/delete", methods=["POST"])
+def api_delete_task(task_id):
+    """彻底删除任务文件。"""
+    sched_config.ensure_dirs()
+    deleted = 0
+    for d in [sched_config.CANCEL_DIR, sched_config.TRACE_DIR, tracker._tasks_dir()]:
+        p = d / f"{task_id}.json"
+        try:
+            if p.exists(): p.unlink(); deleted += 1
+        except Exception: pass
+    if deleted: return jsonify({"ok": True, "message": f"已删除 {deleted} 个文件"})
+    return jsonify({"error": "任务文件不存在"}), 404
+
+
+@app.route("/api/tasks/<task_id>/retry", methods=["POST"])
+def api_retry_task(task_id):
+    """重试失败任务。"""
+    task = tracker._read(task_id)
     if task is None:
         return jsonify({"error": "任务不存在"}), 404
     if task.status not in (TaskStatus.FAILED, TaskStatus.ROLLED_BACK):
