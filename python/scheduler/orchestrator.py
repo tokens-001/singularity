@@ -108,7 +108,7 @@ def _inject_memory(description: str) -> str:
         for item in items[:3]:
             desc = item.get("description", "")[:60]
             score = item.get("score", 0)
-            if score < 0.1:
+            if score < 0.01:
                 continue
             similarity = item.get("similarity", "")
             tag = f"(相似度 {similarity})" if similarity else ""
