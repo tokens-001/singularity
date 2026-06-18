@@ -16,6 +16,7 @@ v1 边界:
 from __future__ import annotations
 import json
 import os
+import ssl
 import time
 import urllib.request
 import urllib.error
@@ -102,6 +103,8 @@ class ZhipuApiExecutor(BaseExecutor):
             raise _FormatError(f"HTTP {e.code}: {e.reason}")
         except urllib.error.URLError as e:
             raise _ExecError(f"网络不可达: {e.reason}")
+        except ssl.SSLError as e:
+            raise _ExecError(f"SSL错误: {e}")
         except TimeoutError:
             raise _TimeoutError()
 
