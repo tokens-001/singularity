@@ -12,6 +12,15 @@ from pathlib import Path
 
 from flask import Flask, render_template, request, jsonify
 
+# ── 加载 .env ──────────────────────────────────────────────
+_ENV_PATH = Path(__file__).parent / ".env"
+if _ENV_PATH.exists():
+    for _line in _ENV_PATH.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip())
+
 # ── 调度器模块路径 ──────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent))
 from scheduler import tracker
