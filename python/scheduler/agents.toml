@@ -123,7 +123,7 @@ HTTPS_PROXY = "http://127.0.0.1:7892"
 [[agents.D]]
 model = "gpt-5.5-pro"
 type = "openai-agent"
-entry = "https://api.openai.com/v1/chat/completions"
+entry = "https://api.openai.com/v1/responses"
 api_key_env = "OPENAI_API_KEY"
 max_turns = 5
 default = false
@@ -132,7 +132,7 @@ sandbox = "worktree"
 
 [agents.D.request_template]
 model = "gpt-5.5-pro"
-max_completion_tokens = 4096
+max_output_tokens = 4096
 
 [agents.D.env]
 HTTPS_PROXY = "http://127.0.0.1:7892"

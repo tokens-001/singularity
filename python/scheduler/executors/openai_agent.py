@@ -113,6 +113,7 @@ class OpenAIAgentExecutor(BaseExecutor):
         for k, v in cfg.get("env", {}).items():
             os.environ[k] = v
         self._url = cfg.get("entry", "")
+        self._is_responses_api = "/v1/responses" in self._url or "/responses" in self._url
         self._model = cfg.get("request_template", {}).get("model", cfg.get("model", ""))
         self._max_turns = cfg.get("max_turns", 10)
         self._cwd = Path(cwd) if cwd else config.PROJECT_ROOT
@@ -132,21 +133,42 @@ class OpenAIAgentExecutor(BaseExecutor):
         for turn in range(1, self._max_turns + 1):
             # 从 request_template 读取参数，只传模型支持的
             tmpl = self.cfg.get("request_template", {})
-            body = {
-                "model": self._model,
-                "messages": messages,
-                "tools": TOOLS,
-                "tool_choice": "auto",
-            }
-            # GPT-5.5+ 用 max_completion_tokens, 旧模型用 max_tokens
-            if "max_completion_tokens" in tmpl:
-                body["max_completion_tokens"] = tmpl["max_completion_tokens"]
-            elif "max_tokens" in tmpl:
-                body["max_tokens"] = tmpl["max_tokens"]
+            if self._is_responses_api:
+                # responses API 格式: input 代 messages, tools 结构不同
+                resp_tools = []
+                for t in TOOLS:
+                    f = t.get("function", {})
+                    resp_tools.append({
+                        "type": "function",
+                        "name": f.get("name", ""),
+                        "description": f.get("description", ""),
+                        "parameters": f.get("parameters", {}),
+                    })
+                body = {
+                    "model": self._model,
+                    "input": [{"role": m.get("role","user"), "content": m.get("content","")} for m in messages],
+                    "tools": resp_tools,
+                    "tool_choice": "auto",
+                    "max_output_tokens": tmpl.get("max_output_tokens", tmpl.get("max_completion_tokens", tmpl.get("max_tokens", 4096))),
+                }
+                if "temperature" in tmpl:
+                    body["temperature"] = tmpl["temperature"]
             else:
-                body["max_tokens"] = 4096
-            if "temperature" in tmpl:
-                body["temperature"] = tmpl["temperature"]
+                body = {
+                    "model": self._model,
+                    "messages": messages,
+                    "tools": TOOLS,
+                    "tool_choice": "auto",
+                }
+                # GPT-5.5+ 用 max_completion_tokens, 旧模型用 max_tokens
+                if "max_completion_tokens" in tmpl:
+                    body["max_completion_tokens"] = tmpl["max_completion_tokens"]
+                elif "max_tokens" in tmpl:
+                    body["max_tokens"] = tmpl["max_tokens"]
+                else:
+                    body["max_tokens"] = 4096
+                if "temperature" in tmpl:
+                    body["temperature"] = tmpl["temperature"]
 
             try:
                 resp_data = self._api_call(body)
@@ -157,8 +179,27 @@ class OpenAIAgentExecutor(BaseExecutor):
                 return ExecutorResult(success=False, error=str(e),
                                       error_kind="exec", elapsed=time.time() - start)
 
-            choice = resp_data.get("choices", [{}])[0]
-            msg = choice.get("message", {})
+            if self._is_responses_api:
+                # responses API → chat format
+                output = resp_data.get("output", [])
+                msg = {}
+                tool_calls_list = []
+                for item in output:
+                    if item.get("type") == "message":
+                        for c in item.get("content", []):
+                            if c.get("type") == "output_text":
+                                msg["content"] = (msg.get("content","") + c.get("text","")).strip()
+                    elif item.get("type") == "function_call":
+                        tool_calls_list.append({
+                            "id": item.get("call_id", ""),
+                            "type": "function",
+                            "function": {"name": item.get("name",""), "arguments": item.get("arguments","")}
+                        })
+                if tool_calls_list:
+                    msg["tool_calls"] = tool_calls_list
+            else:
+                choice = resp_data.get("choices", [{}])[0]
+                msg = choice.get("message", {})
             total_tokens += resp_data.get("usage", {}).get("total_tokens", 0)
             # 推理模型(如Kimi/GLM)返回reasoning_content, API输入不接受此字段
             msg_clean = {k: v for k, v in msg.items() if k != "reasoning_content"}
@@ -315,7 +356,7 @@ class OpenAIAgentExecutor(BaseExecutor):
 
         try:
             data = json.loads(raw)
-            if "error" in data:
+            if data.get("error"):
                 raise _FormatError(f"API错误: {data['error']}")
             return data
         except json.JSONDecodeError as e:
