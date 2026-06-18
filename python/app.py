@@ -23,6 +23,8 @@ from scheduler import dispatcher as disp_mod
 from scheduler import snapshot as snap_mod
 from scheduler import merge as merge_mod
 from scheduler import orchestrator
+from scheduler import project as proj_mod
+from scheduler.project import Phase
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
@@ -78,6 +80,25 @@ def _loop_worker():
                     added = orchestrator.consolidate_memory()
                     if added:
                         _push_event("memory", f"慢通道: +{added} 条隐含因果边")
+                except Exception:
+                    pass
+
+                # 项目工作流推进: 检查已完成的任务是否属于某个项目
+                try:
+                    for tid, reason, validation in results:
+                        for proj in proj_mod.recover_all():
+                            if tid in proj.task_ids and proj.phase in (Phase.EXECUTING, Phase.GATE3):
+                                # 检查是否所有子任务完成 → 推进到 Gate3
+                                all_done = True
+                                for tid2 in proj.task_ids:
+                                    t = tracker._read(tid2)
+                                    if t and t.status not in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.ROLLED_BACK):
+                                        all_done = False
+                                        break
+                                if all_done and proj.phase == Phase.EXECUTING:
+                                    proj.phase = Phase.GATE3
+                                    proj_mod.save(proj)
+                                    _push_event("workflow", f"项目 {proj.name[:20]}: 执行完成 → Gate3")
                 except Exception:
                     pass
         except Exception as e:
@@ -637,6 +658,42 @@ def api_memory_rebuild():
         return jsonify({"ok": True, "indexed": count})
     except Exception as e:
         return jsonify({"error": f"重建失败: {e}"}), 500
+
+
+# ═══════════════════════════════════════════════════════════
+# Workflow API
+# ═══════════════════════════════════════════════════════════
+
+from scheduler import workflow as wf_mod
+
+@app.route("/api/projects/<project_id>/run-phase", methods=["POST"])
+def api_project_run_phase(project_id):
+    """手动触发当前 phase 的执行动作。"""
+    p = proj_mod.load(project_id)
+    if not p:
+        return jsonify({"error": "项目不存在"}), 404
+    try:
+        agents = disp_mod.load_agents()
+    except Exception:
+        agents = {}
+    msg = wf_mod.run_phase(p, agents)
+    proj_mod.save(p)
+    return jsonify({"ok": True, "phase": p.phase.value, "message": msg})
+
+
+@app.route("/api/projects/<project_id>/start", methods=["POST"])
+def api_project_start(project_id):
+    """启动项目工作流 (从 TEMPLATE 推进到第一个动作 phase)。"""
+    p = proj_mod.load(project_id)
+    if not p:
+        return jsonify({"error": "项目不存在"}), 404
+    try:
+        agents = disp_mod.load_agents()
+    except Exception:
+        agents = {}
+    msg = wf_mod.start_project_workflow(p, agents)
+    proj_mod.save(p)
+    return jsonify({"ok": True, "phase": p.phase.value, "message": msg})
 
 
 # ═══════════════════════════════════════════════════════════
