@@ -429,6 +429,30 @@ def run_queue(agents: dict, max_concurrent: int = 1) -> list[tuple]:
     return _run_queue_v3(agents, max_concurrent)
 
 
+def schedule_policy(tasks: list) -> list:
+    """拓扑自适应调度策略: 综合多信号排序就绪任务。
+
+    信号权重:
+      - starvation_score (1.0): 防饥饿, 等越久越优先
+      - priority (0.5): 用户指定优先级
+      - dependency_weight (0.5): 阻塞越多子任务越优先 (关键路径)
+      - level_bonus (0.3): D > E+ > E, 复杂任务优先启动
+
+    返回按综合得分降序排列的任务列表。
+    """
+    def _score(t) -> float:
+        level_bonus = {"D": 3, "E+": 2, "E": 1}.get(t.route_level, 0)
+        dep_weight = len(t.children) if hasattr(t, 'children') else 0
+        return (
+            1.0 * t.starvation_score +
+            0.5 * t.priority +
+            0.5 * dep_weight +
+            0.3 * level_bonus
+        )
+    # 不修改原列表, 返回排序后的新列表
+    return sorted(tasks, key=_score, reverse=True)
+
+
 def _run_queue_v2(agents: dict) -> list[tuple]:
     """v2 顺序: 主线程同步调 run(merge_queue=None), 终态在这写。"""
     results: list[tuple] = []
@@ -438,9 +462,12 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
         if stalled:
             pass
 
-        task = tracker.next_ready()
-        if task is None:
+        # 拓扑自适应: 从所有就绪任务中选最优
+        ready = tracker.list_pending()
+        if not ready:
             break
+        ready = schedule_policy(ready)
+        task = ready[0]
 
         # 尊重 planner 建议层级, 不重新路由 (建议 #6)
         if task.route_locked:
@@ -574,6 +601,7 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
         while True:
             # ① 选就绪任务 (ready_tasks 已把 PENDING/BLOCKED→ROUTED, 修复 #1)
             ready = tracker.ready_tasks(exclude=dispatched)
+            ready = schedule_policy(ready)  # 拓扑自适应排序
             for t in ready:
                 # ② cas 抢占 ROUTED→DISPATCHED (主线程写)
                 # 尊重 planner 建议层级, 不重新路由 (建议 #6)
