@@ -390,10 +390,32 @@ pre.agent-out { background: var(--bg); border: 1px solid var(--border); border-r
     </div>
   </div>
 
-  <div class="section">
-    <div class="section-title">Artifact</div>
-    <div class="section-body" id="proj-artifact" style="font-size:11px">
-      <span style="color:var(--text2)">加载项目后显示</span>
+  <div style="display:flex;gap:14px;flex-wrap:wrap">
+    <div class="section" style="flex:1;min-width:280px">
+      <div class="section-title">Artifact</div>
+      <div class="section-body" id="proj-artifact" style="font-size:11px">
+        <span style="color:var(--text2)">加载项目后显示</span>
+      </div>
+    </div>
+    <div class="section" style="flex:1;min-width:220px">
+      <div class="section-title">成本</div>
+      <div class="section-body" id="proj-cost" style="font-size:11px">
+        <span style="color:var(--text2)">加载项目后显示</span>
+      </div>
+    </div>
+  </div>
+  <div style="display:flex;gap:14px;flex-wrap:wrap">
+    <div class="section" style="flex:2;min-width:300px">
+      <div class="section-title">血缘</div>
+      <div class="section-body" id="proj-lineage" style="font-size:10px;max-height:200px;overflow-y:auto">
+        <span style="color:var(--text2)">加载项目后显示</span>
+      </div>
+    </div>
+    <div class="section" style="flex:1;min-width:240px">
+      <div class="section-title">监督记录</div>
+      <div class="section-body" id="proj-supervision" style="font-size:10px;max-height:200px;overflow-y:auto">
+        <span style="color:var(--text2)">加载项目后显示</span>
+      </div>
     </div>
   </div>
 
@@ -1059,7 +1081,21 @@ async function loadProject(){
     (p.research_report?`<details><summary>调研报告</summary><pre style="font-size:10px;max-height:200px;overflow-y:auto">${esc(JSON.stringify(p.research_report,null,2))}</pre></details>`:'')+
     (p.architecture?`<details><summary>架构方案</summary><pre style="font-size:10px;max-height:200px;overflow-y:auto">${esc(JSON.stringify(p.architecture,null,2))}</pre></details>`:'')+
     (p.constraints_checklist&&p.constraints_checklist.length?`<div>约束: ${p.constraints_checklist.map(c=>esc(c)).join(' · ')}</div>`:'')+
+    (p.issues&&p.issues.length?`<div style="color:var(--orange)">问题: ${p.issues.length}个</div>`:'')+
     (!p.research_report&&!p.architecture?'<span style="color:var(--text2)">暂无产出</span>':'');
+  // Cost panel
+  (async()=>{const c=await api('/api/projects/'+id+'/cost');if(!c.error){
+    const pct=c.token_budget_total>0?Math.min(100,(c.token_spent/c.token_budget_total)*100):0;
+    const bc=pct>90?'var(--red)':pct>60?'var(--orange)':'var(--green)';
+    document.getElementById('proj-cost').innerHTML=`<div style="margin-bottom:6px">花费 <b style="color:${bc}">$${c.token_spent.toFixed(2)}</b> / $${c.token_budget_total.toFixed(2)}</div><div style="background:var(--bg3);border-radius:4px;height:8px;overflow:hidden;margin-bottom:4px"><div style="background:${bc};height:100%;width:${pct}%;transition:width .3s"></div></div><div style="font-size:10px;color:var(--text2)">剩余 $${c.remaining.toFixed(2)}${c.over_budget?' <span style="color:var(--red)">⚠超预算</span>':''}</div>`;}})();
+  // Lineage panel
+  (async()=>{const l=await api('/api/projects/'+id+'/lineage?limit=20');if(!l.error&&l.entries&&l.entries.length){
+    document.getElementById('proj-lineage').innerHTML=l.entries.map(e=>`<div style="padding:3px 0;border-bottom:1px solid var(--border)"><span style="color:var(--text2)">${new Date((e.ts||0)*1000).toLocaleTimeString()}</span> <span style="color:var(--purple)">${esc(e.event||'?')}</span> ${e.msg?esc(e.msg).slice(0,60):''}${e.snapshot_id?` <span style="color:var(--cyan);font-family:monospace;font-size:9px">snap:${esc(e.snapshot_id).slice(-8)}</span>`:''}</div>`).join('')+(l.total>20?`<div style="color:var(--text2)">…共${l.total}条</div>`:'');}})();
+  // Supervision panel
+  if(p.supervision_log&&p.supervision_log.length){
+    document.getElementById('proj-supervision').innerHTML=p.supervision_log.map(s=>{
+      const vc=s.verdict==='pass'?'var(--green)':s.verdict==='fail'?'var(--red)':'var(--orange)';
+      return `<div style="padding:3px 0;border-bottom:1px solid var(--border)"><span style="color:${vc};font-weight:600">${s.verdict||'?'}</span> <span style="color:var(--text2)">${esc((s.task_id||'').slice(-8))}</span>${s.issues&&s.issues.length?`<div style="font-size:9px;color:var(--red)">${s.issues.map(i=>esc(i)).join('<br>')}</div>`:''}</div>`;}).join('');}
 }
 async function newProject(){
   const name=prompt('项目名称:');if(!name)return;

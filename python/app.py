@@ -754,6 +754,38 @@ def api_project_start(project_id):
 
 
 # ═══════════════════════════════════════════════════════════
+# P3 保障层: Cost / Lineage / Project Snapshot
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/projects/<project_id>/cost")
+def api_project_cost(project_id):
+    p = proj_mod.load(project_id)
+    if not p: return jsonify({"error": "项目不存在"}), 404
+    return jsonify({
+        "token_spent": p.token_spent,
+        "token_budget_total": p.token_budget_total,
+        "over_budget": p.over_budget(),
+        "remaining": max(0, p.token_budget_total - p.token_spent),
+    })
+
+@app.route("/api/projects/<project_id>/lineage")
+def api_project_lineage(project_id):
+    p = proj_mod.load(project_id)
+    if not p: return jsonify({"error": "项目不存在"}), 404
+    limit = request.args.get("limit", 50, type=int)
+    lineage = p.lineage[-limit:] if limit > 0 else p.lineage
+    return jsonify({"total": len(p.lineage), "shown": len(lineage), "entries": lineage})
+
+@app.route("/api/projects/<project_id>/snapshot", methods=["POST"])
+def api_project_snapshot(project_id):
+    p = proj_mod.load(project_id)
+    if not p: return jsonify({"error": "项目不存在"}), 404
+    snap = snap_mod.take(f"proj_{project_id}")
+    p.add_lineage({"event": "snapshot", "snapshot_id": snap.id, "method": snap.method})
+    proj_mod.save(p)
+    return jsonify({"ok": True, "snapshot_id": snap.id, "method": snap.method})
+
+# ═══════════════════════════════════════════════════════════
 # Supervisor API
 # ═══════════════════════════════════════════════════════════
 
