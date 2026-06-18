@@ -282,7 +282,7 @@ def index_task(
     for existing_id, existing_node in events.items():
         if existing_id == task_id:
             continue
-        sim = _cosine_sim(tokens, existing_node.tokens)
+        sim = _cosine_sim(tokens, existing_node.emb)
         if sim >= 0.6:
             # 无向边, 去重
             pair = sorted([task_id, existing_id])
@@ -337,7 +337,7 @@ def _rrf_anchors(
     # Signal 1: Semantic
     sem_scores: dict[str, float] = {}
     for tid, node in events.items():
-        s = _cosine_sim(query_tokens, node.tokens)
+        s = _cosine_sim(query_tokens, node.emb)
         if s > 0:
             sem_scores[tid] = s
     signals.append(("semantic", sem_scores))
@@ -481,7 +481,7 @@ def traverse(
                     continue
 
                 # 语义部分: sim(n_j, q) — cosine on tokens
-                sim = _cosine_sim(query_tokens, neighbor.tokens)
+                sim = _cosine_sim(query_tokens, neighbor.emb)
 
                 # 结构部分: Ψ(e_k, I_q) — intent-weighted edge bonus
                 structural = w.get(edge_type, 0.3)
@@ -683,7 +683,7 @@ def find_similar(description: str, top_k: int = 5) -> list[dict]:
 
     scored: list[dict] = []
     for tid, node in events.items():
-        sim = _cosine_sim(query_tokens, node.tokens)
+        sim = _cosine_sim(query_tokens, node.emb)
         if sim > 0:
             scored.append({
                 "task_id": tid,
@@ -776,7 +776,7 @@ def find_candidate_latent_edges() -> list[dict]:
 
                 shared = list(set(node_a.attrs.get("files", [])) &
                               set(node_b.attrs.get("files", [])))
-                sim = _cosine_sim(node_a.tokens, node_b.tokens)
+                sim = _cosine_sim(node_a.emb, node_b.emb)
                 time_gap = abs(node_a.timestamp - node_b.timestamp) / 3600
 
                 candidates.append({
