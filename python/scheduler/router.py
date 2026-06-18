@@ -36,9 +36,9 @@ class RouteResult:
 # 优先级从高到低; 0 优先级只置 gate_required, 级别留给 1-3 判 (审计 2.1)
 _GATE_FILE_RE = re.compile(r"\b(core|tokenizer|graph|search)\.py\b", re.ASCII)
 _LEVEL_PATTERNS = [
-    (1, "E+", re.compile(r"新建|创建|搭建|建立|写代码|编写|重写|实现|多文件|新模块|从零开始")),
+    (1, "E+", re.compile(r"重写|多文件|新模块|从零开始|大规模重构|跨模块")),
     (2, "D",  re.compile(r"审|设计|架构|方案|重构|review|审查")),
-    (3, "E",  re.compile(r"查|找|解释|怎么|修bug|修复|报错|坏了|不对|异常")),
+    (3, "E",  re.compile(r"新建|创建|搭建|建立|写代码|编写|实现|加个|添加|修改|修复|查|找|解释|怎么|报错|坏了|不对|异常|删掉")),
 ]
 
 # ── 第二维: 任务类型 (独立扫描, v1 仅记录不分支) ──────────────────────
