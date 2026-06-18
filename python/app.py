@@ -607,28 +607,20 @@ def api_cancel_task(task_id):
     task = tracker._read(task_id)
     if task is None:
         return jsonify({"error": "任务不存在"}), 404
-    # 任何状态均可删除
+    if task.status in (TaskStatus.DONE, TaskStatus.FAILED,
+                       TaskStatus.ROLLED_BACK, TaskStatus.DECOMPOSED):
+        return jsonify({"error": f"终态任务 {task.status.value} 不可取消"}), 400
+
     sched_config.ensure_dirs()
-    # 清理关联文件
-    task_path = tracker._path(task_id)
-    cancel_path = sched_config.CANCEL_DIR / f"{task_id}.json"
-    trace_path = sched_config.TRACE_DIR / f"{task_id}.json"
-    for p in [task_path, cancel_path, trace_path]:
-        try:
-            if p.exists():
-                p.unlink()
-        except Exception:
-            pass
-    return jsonify({"ok": True, "message": "已删除"})
-
-
-# ═══════════════════════════════════════════════════════════
-# POST /api/tasks/<id>/retry — 重试失败任务
-# ═══════════════════════════════════════════════════════════
-
-@app.route("/api/tasks/<task_id>/retry", methods=["POST"])
-def api_retry_task(task_id):
-    task = tracker._read(task_id)
+    if task.status in (TaskStatus.RUNNING, TaskStatus.DISPATCHED):
+        cancel_path = sched_config.CANCEL_DIR / f"{task_id}.json"
+        cancel_path.write_text(json.dumps({
+            "task_id": task_id, "cancelled_at": time.time(),
+        }), encoding="utf-8")
+        return jsonify({"ok": True, "message": "已发送取消信号，将在当前 turn 结束后生效"})
+    else:
+        tracker.transition(task_id, TaskStatus.FAILED, error="用户手动取消")
+        return jsonify({"ok": True, "message": "已取消"})k_id)
     if task is None:
         return jsonify({"error": "任务不存在"}), 404
     if task.status not in (TaskStatus.FAILED, TaskStatus.ROLLED_BACK):

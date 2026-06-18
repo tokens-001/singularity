@@ -824,7 +824,7 @@ function renderTasks(){
       <td><span class="badge ${t.status}">${status}</span></td>
       <td>${lvl?`<span class="level-tag ${lvls}">${lvl}</span>`:'--'}</td>
       <td style="font-size:11px;color:var(--text2)">${t.priority||0}</td>
-      <td>${['pending','routed'].includes(t.status)?`<button class="btn red sm" style="font-size:8px;padding:1px 4px" onclick="event.stopPropagation();cancelTask('${t.id}')">删除</button>`:''}</td>
+      <td>${['pending','routed'].includes(t.status)?`<button class="btn red sm" style="font-size:8px;padding:1px 4px" onclick="event.stopPropagation();cancelTask('${t.id}')">取消</button>`:["failed","rolled_back"].includes(t.status)?`<button class="btn orange sm" style="font-size:8px;padding:1px 4px;margin-left:2px" onclick="event.stopPropagation();deleteTask('${t.id}')">删除</button>`:''}</td>
       <td style="font-size:10px;color:var(--text2)">${wait}</td>
     </tr><tr class="detail" id="detail-${t.id}"><td colspan="6"></td></tr>`;
   }).join('')||`<tr><td colspan="6" style="color:var(--text2);text-align:center;padding:24px">-- 暂无任务 --</td></tr>`;
