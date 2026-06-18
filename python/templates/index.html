@@ -46,6 +46,18 @@ body {
   background: var(--bg); color: var(--text);
   line-height: 1.45; min-height: 100vh;
   -webkit-font-smoothing: antialiased;
+  /* 微妙网格 — cockpit 感 */
+  background-image:
+    linear-gradient(rgba(255,255,255,.012) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.012) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* ── Top accent line ── */
+body::before {
+  content: ''; position: fixed; top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, var(--cyan), var(--purple), var(--orange));
+  z-index: 999; opacity: .7;
 }
 
 /* ── Top Bar ── */
@@ -73,7 +85,7 @@ body {
   position: relative;
 }
 .tab:hover { color: var(--text2); }
-.tab.active { color: var(--cyan); border-bottom-color: var(--cyan); }
+.tab.active { color: var(--cyan); border-bottom-color: var(--cyan); background: rgba(46,213,187,.04); }
 
 /* ── Tab Content ── */
 .tab-content { display: none; padding: 16px 20px; }
@@ -100,8 +112,11 @@ body {
 /* ── Section (the basic block) ── */
 .section {
   background: var(--bg2); border: 1px solid var(--border);
+  border-left: 2px solid var(--border-hi);
   margin-bottom: 12px; overflow: hidden;
+  transition: border-left-color .3s;
 }
+.section:hover { border-left-color: var(--text3); }
 .section-title {
   font-size: 10px; font-weight: 600; padding: 8px 14px;
   background: var(--bg3); border-bottom: 1px solid var(--border);
