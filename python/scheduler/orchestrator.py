@@ -728,13 +728,12 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
 # ═══════════════════════════════════════════════════════════
 
 def consolidate_memory() -> int:
-    """慢通道启发式整合: 从候选对中发现隐含因果边。
+    """慢通道整合: embedding粗筛 + LLM精判 → 发现隐含因果边。
 
-    当前使用启发式规则 (不调 LLM):
-      - 共享文件 + sim > 0.85 + 时间差 < 4h → 高置信因果边
-      - 共享文件 + sim > 0.7 → 中置信因果边
-
-    LLM 推理版本留作未来升级 (见 memory.find_candidate_latent_edges 的注释)。
+    三档逻辑:
+      - sim ≥ 0.85 + 时间<4h + 共享文件 → 高置信，直接加边（不调LLM）
+      - sim < 0.55 → 丢弃
+      - 0.55 ≤ sim < 0.85 → LLM精判（DeepSeek E层）
 
     返回添加的隐含边数。
     """
@@ -747,45 +746,112 @@ def consolidate_memory() -> int:
             gap = c["time_gap_hours"]
             shared = c["shared_files"]
 
-            # 高置信: 同一批文件 + 高语义相似 + 时间接近
+            # Tier 1: 高置信直接加边
             if sim >= 0.85 and gap < 4.0 and len(shared) >= 1:
-                a, b = c["task_a"], c["task_b"]
-                # 时间早的 → 时间晚的
-                events = mem_mod._load_events()
-                node_a = events.get(a)
-                node_b = events.get(b)
-                if node_a and node_b:
-                    if node_a.timestamp <= node_b.timestamp:
-                        src, dst = a, b
-                    else:
-                        src, dst = b, a
+                src, dst = _resolve_direction(c)
+                if src:
                     mem_mod.add_inferred_causal_edge(
                         src, dst,
-                        reason=f"shared:{','.join(shared)} sim={sim:.2f} gap={gap:.1f}h"
+                        reason=f"high_conf:shared:{','.join(shared)} sim={sim:.2f} gap={gap:.1f}h"
                     )
                     added += 1
-            # 中置信: 共享文件 + 一定语义相似
-            elif sim >= 0.7 and len(shared) >= 1:
-                a, b = c["task_a"], c["task_b"]
-                events = mem_mod._load_events()
-                node_a = events.get(a)
-                node_b = events.get(b)
-                if node_a and node_b:
-                    if node_a.timestamp <= node_b.timestamp:
-                        src, dst = a, b
-                    else:
-                        src, dst = b, a
-                    mem_mod.add_inferred_causal_edge(
-                        src, dst,
-                        reason=f"medium:shared:{','.join(shared)} sim={sim:.2f}"
-                    )
-                    added += 1
+                continue
+
+            # Tier 2: 低于阈值跳过
+            if sim < 0.55:
+                continue
+
+            # Tier 3: LLM 精判 (0.55 ≤ sim < 0.85)
+            src, dst = _resolve_direction(c)
+            if not src:
+                continue
+            judge = _llm_judge_causal(c, src, dst)
+            if judge.get("is_causal"):
+                mem_mod.add_inferred_causal_edge(
+                    src, dst,
+                    reason=f"llm:{judge.get('reason','')}"
+                )
+                added += 1
 
         return added
     except Exception as e:
-        try: witness.heartbeat(task_id="memory", level="warn", status=f"consolidate:{e}")
+        try: witness.heartbeat("memory", f"warn:consolidate:{e}")
         except: pass
         return 0
+
+
+def _resolve_direction(c: dict) -> tuple:
+    """根据时间戳判断因果方向: 早→晚。返回 (src, dst) 或 (None, None)。"""
+    a, b = c["task_a"], c["task_b"]
+    events = mem_mod._load_events()
+    node_a = events.get(a)
+    node_b = events.get(b)
+    if not node_a or not node_b:
+        return None, None
+    if node_a.timestamp <= node_b.timestamp:
+        return a, b
+    return b, a
+
+
+def _llm_judge_causal(c: dict, src: str, dst: str) -> dict:
+    """用 DeepSeek (E层) 判断候选对是否有因果关系。
+
+    返回: {"is_causal": bool, "reason": str}
+    失败时返回 {"is_causal": False, "reason": "llm_error"}
+    """
+    import os, urllib.request, json as _json
+
+    prompt = f"""判断以下两个任务之间是否存在因果关系（一个导致了另一个）。
+
+任务A [{src[:8]}]：{c.get('desc_a','')}
+任务B [{dst[:8]}]：{c.get('desc_b','')}
+共享文件：{', '.join(c.get('shared_files',[]))}
+语义相似度：{c.get('semantic_sim',0):.3f}
+时间间隔：{c.get('time_gap_hours',0):.1f}小时
+
+只回答 JSON：{{"is_causal": true/false, "reason": "一句话原因"}}
+如果任务A导致了任务B，is_causal=true。否则 false。不确定时 false。"""
+
+    try:
+        agents = disp_mod.load_agents()
+        e_agents = agents.get("E", [])
+        if not e_agents:
+            return {"is_causal": False, "reason": "no_e_agent"}
+
+        e_cfg = e_agents[0]
+        api_key = os.environ.get(e_cfg.get("api_key_env", ""), "")
+        if not api_key:
+            return {"is_causal": False, "reason": "no_api_key"}
+
+        base_url = e_cfg.get("base_url", "https://api.deepseek.com/v1")
+        model = e_cfg.get("model", "deepseek-chat")
+
+        body = _json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 200,
+            "temperature": 0.1,
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            f"{base_url}/chat/completions",
+            data=body, method="POST",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+            raw = data["choices"][0]["message"]["content"]
+
+        import re as _re
+        m = _re.search(r'\{[^}]+\}', raw)
+        if m:
+            return _json.loads(m.group())
+        return {"is_causal": False, "reason": "parse_error"}
+    except Exception as e:
+        return {"is_causal": False, "reason": f"llm_error:{e}"}
 
 
 def _materialize_in_main(batch: BatchOutput, parent_task) -> None:
