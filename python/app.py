@@ -1339,6 +1339,24 @@ def api_sse_events():
 
 
 # ═══════════════════════════════════════════════════════════
+# 健康检查
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/health")
+def health():
+    """健康检查端点 — Docker/monitoring 用。"""
+    import shutil
+    disk = shutil.disk_usage(str(sched_config.QIDIAN_DIR))
+    return jsonify({
+        "status": "ok",
+        "disk_free_mb": disk.free // (1024*1024),
+        "loop_running": _loop_running,
+        "sse_clients": len(_sse_clients),
+        "projects": len(proj_mod.list_all()),
+    })
+
+
+# ═══════════════════════════════════════════════════════════
 # 启动
 # ═══════════════════════════════════════════════════════════
 
