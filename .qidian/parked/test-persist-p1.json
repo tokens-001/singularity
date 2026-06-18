@@ -1,0 +1,10 @@
+{
+  "task_id": "test-persist-p1",
+  "branch": "1e39fa9a89546d9cf91565ed9a090a87af6892e4",
+  "base_ref": "2f5205e488a6173e0b7ab10a4d5ba621972af13a",
+  "changed_files": [
+    "_mq_persist.py"
+  ],
+  "depends_on": [],
+  "status": "conflict"
+}
