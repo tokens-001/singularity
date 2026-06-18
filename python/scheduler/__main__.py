@@ -161,7 +161,12 @@ def _drain_queue(agents: dict, max_concurrent: int = 1) -> tuple[int, int]:
             added = orchestrator.consolidate_memory()
             if added:
                 print(f"[memory] 慢通道整合: +{added} 条隐含因果边", file=sys.stderr)
-        except Exception:
+        except Exception as e:
+            try:
+                from . import witness
+                witness.heartbeat("main", f"warn:consolidate_mem:{e}"[:80])
+            except Exception:
+                pass
             pass
 
     exit_code = 0
@@ -237,7 +242,12 @@ def _cmd_merge(args: list) -> int:
             try:
                 import json as _json
                 task = tracker.Task.from_dict(_json.loads(p.read_text(encoding="utf-8")))
-            except Exception:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001
+                try:
+                    from . import witness
+                    witness.heartbeat("main", f"warn:task_scan:{e}"[:80])
+                except Exception:
+                    pass
                 continue
             if task.status == TaskStatus.CONFLICT_HELD:
                 held.append(task)

@@ -121,7 +121,12 @@ def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True) ->
             semantic_baseline=mem_result.get("semantic_baseline", []),
             graph_coverage=traversal.get("graph_coverage", {}),
         )
-    except Exception:
+    except Exception as e:
+        try:
+            from . import witness
+            witness.heartbeat("pre_search", f"warn:magma:{e}"[:80])
+        except Exception:
+            pass
         pass  # 记忆挂了不阻塞
 
     return res

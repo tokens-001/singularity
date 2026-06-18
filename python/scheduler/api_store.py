@@ -89,7 +89,12 @@ def _seed() -> dict[str, APIEntry]:
                     notes="自动发现" if has_key else "自动发现 — 需要配置 key",
                     created_at=now, updated_at=now,
                 )
-    except Exception:
+    except Exception as e:
+        try:
+            from . import witness
+            witness.heartbeat("api_store", f"warn:discovery:{e}"[:80])
+        except Exception:
+            pass
         pass
 
     # 补充已知但 agents.toml 里没配的 (如 Anthropic via Claude CLI)

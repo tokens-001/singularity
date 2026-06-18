@@ -251,6 +251,11 @@ class OpenAIAgentExecutor(BaseExecutor):
                 return self._tool_search(args.get("pattern", ""), args.get("path", ""))
             return f"未知工具: {name}"
         except Exception as e:
+            try:
+                from . import witness
+                witness.heartbeat("openai_agent", f"warn:tool_exec:{e}"[:80])
+            except Exception:
+                pass
             return f"工具执行错误: {e}"
 
     def _safe_path(self, path: str) -> Path:
@@ -308,10 +313,20 @@ class OpenAIAgentExecutor(BaseExecutor):
                             results.append(f"{f.relative_to(self._cwd)}:{i}: {line.strip()[:120]}")
                             if len(results) > 20:
                                 return "\n".join(results) + "\n... (截断)"
-                except Exception:
+                except Exception as e:
+                    try:
+                        from . import witness
+                        witness.heartbeat("openai_agent", f"warn:search_file:{e}"[:80])
+                    except Exception:
+                        pass
                     pass
             return "\n".join(results) if results else f"未找到匹配 '{pattern}' 的行"
         except Exception as e:
+            try:
+                from . import witness
+                witness.heartbeat("openai_agent", f"warn:search:{e}"[:80])
+            except Exception:
+                pass
             return f"搜索错误: {e}"
 
     def _track_changed_files(self):
@@ -325,7 +340,12 @@ class OpenAIAgentExecutor(BaseExecutor):
                 for f in r.stdout.strip().splitlines():
                     if f and f not in self._changed_files:
                         self._changed_files.append(f)
-        except Exception:
+        except Exception as e:
+            try:
+                from . import witness
+                witness.heartbeat("openai_agent", f"warn:git_diff:{e}"[:80])
+            except Exception:
+                pass
             pass
 
     # ── API 调用 ──

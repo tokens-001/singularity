@@ -263,7 +263,12 @@ def _run_review(project: ProjectState, agents: dict) -> str:
                 trace = json.loads(trace_path.read_text(encoding="utf-8"))
                 for f in trace.get("changed_files", []):
                     changed_files.add(f)
-            except Exception:
+            except Exception as e:
+                try:
+                    from . import witness
+                    witness.heartbeat("workflow", f"warn:trace_read:{e}"[:80])
+                except Exception:
+                    pass
                 pass
     changed_str = ", ".join(sorted(changed_files)) if changed_files else "全项目"
 
