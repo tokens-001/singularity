@@ -542,9 +542,22 @@ def _cmd_project_advance(project_id: str, approve: bool = False) -> int:
                   file=sys.stderr)
             return 1
 
+    # ── 费用估算 & 确认 ──
+    cost = _phase_cost_estimate(phase, proj)
+    yes_flag = "--yes" in sys.argv[1:] or "-y" in sys.argv[1:]
+    if cost > 0 and not yes_flag:
+        level = _phase_agent_level(phase)
+        print(f"[project] {proj.id[:8]}  即将进入 {phase.value} 阶段")
+        print(f"  调用: {level} 层 agent")
+        print(f"  估算费用: ~${cost:.2f}  (累计已花费: ${proj.token_spent:.2f})")
+        print(f"  预算剩余: ${proj.token_budget_total - proj.token_spent:.2f}")
+        if proj.token_spent + cost > proj.token_budget_total:
+            print(f"  ⚠ 预算将超支!", file=sys.stderr)
+        print(f"\n  确认执行? 加上 --yes 跳过此提示")
+        return 1
+
     agents = disp_mod.load_agents()
     if phase == Phase.TEMPLATE:
-        # 首次启动: 先跑 start_project_workflow 判断是否需要调研
         msg = start_project_workflow(proj, agents)
         print(f"[project] {proj.id[:8]}  {msg}")
     else:
@@ -552,6 +565,32 @@ def _cmd_project_advance(project_id: str, approve: bool = False) -> int:
         print(f"[project] {proj.id[:8]}  {phase.value} → {proj.phase.value}")
         print(f"  {msg}")
     return 0
+
+
+def _phase_agent_level(phase: Phase) -> str:
+    """返回 phase 调用的 agent 层级。"""
+    return {
+        Phase.RESEARCHING: "E",
+        Phase.PLANNING: "D",
+        Phase.REVIEWING: "D",
+    }.get(phase, "-")
+
+
+def _phase_cost_estimate(phase: Phase, proj) -> float:
+    """估算 phase 的费用 ($)。返回 0 表示免费。"""
+    rates = {
+        Phase.RESEARCHING: 0.02,   # E层 DeepSeek/GLM 廉价
+        Phase.PLANNING: 2.50,      # D层 Opus/GPT 架构
+        Phase.REVIEWING: 1.00,     # D层审查
+    }
+    # 如果已有产出，跳过不重复收费
+    if phase == Phase.RESEARCHING and proj.research_report:
+        return 0
+    if phase == Phase.PLANNING and proj.architecture:
+        return 0
+    if phase == Phase.REVIEWING and proj.issues:
+        return 0
+    return rates.get(phase, 0)
 
 
 def _cmd_project_reject(project_id: str) -> int:
