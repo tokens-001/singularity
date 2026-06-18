@@ -352,7 +352,15 @@ def _run_review(project: ProjectState, agents: dict) -> str:
                     witness.heartbeat("workflow", f"warn:trace_read:{e}"[:80])
                 except Exception:
                     pass
-    changed_str = ", ".join(sorted(changed_files)) if changed_files else "全项目"
+    # 无改动文件 → 跳过审查, 不调LLM
+    if not changed_files:
+        project.issues = []
+        project.add_lineage({"action": "review_skipped", "reason": "no_changed_files"})
+        project.phase = Phase.GATE4
+        save(project)
+        return "审查跳过: 无改动文件"
+
+    changed_str = ", ".join(sorted(changed_files))
 
     architecture_json = json.dumps(project.architecture, ensure_ascii=False, indent=2) \
         if project.architecture else "无架构方案"
@@ -365,13 +373,13 @@ def _run_review(project: ProjectState, agents: dict) -> str:
         changed_files=changed_str,
     )
 
-    # 3. 同步 dispatch 到 D 层
+    # 3. 同步 dispatch 到 E+ 层 (审查是扫描活, 不需要D层)
     task_id = f"review_{project.id}"
     disp_result = None
     raw = ""
     try:
         disp_result = disp_mod.dispatch(
-            prompt, "D", task_id, agents,
+            prompt, "E_plus", task_id, agents,
             project_lineup=project.agent_lineup,
         )
         raw = disp_result.executor_result.raw_output if disp_result else ""
