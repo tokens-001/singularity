@@ -109,6 +109,9 @@ class OpenAIAgentExecutor(BaseExecutor):
                  baseline_ref: str = "", cwd: str = ""):
         super().__init__(cfg, task, task_id, baseline_ref=baseline_ref, cwd=cwd)
         self._api_key = os.environ.get(cfg.get("api_key_env", ""), "")
+        # 从 agent cfg env 设置代理等环境变量
+        for k, v in cfg.get("env", {}).items():
+            os.environ[k] = v
         self._url = cfg.get("entry", "")
         self._model = cfg.get("request_template", {}).get("model", cfg.get("model", ""))
         self._max_turns = cfg.get("max_turns", 10)
@@ -134,8 +137,14 @@ class OpenAIAgentExecutor(BaseExecutor):
                 "messages": messages,
                 "tools": TOOLS,
                 "tool_choice": "auto",
-                "max_tokens": tmpl.get("max_tokens", 4096),
             }
+            # GPT-5.5+ 用 max_completion_tokens, 旧模型用 max_tokens
+            if "max_completion_tokens" in tmpl:
+                body["max_completion_tokens"] = tmpl["max_completion_tokens"]
+            elif "max_tokens" in tmpl:
+                body["max_tokens"] = tmpl["max_tokens"]
+            else:
+                body["max_tokens"] = 4096
             if "temperature" in tmpl:
                 body["temperature"] = tmpl["temperature"]
 
