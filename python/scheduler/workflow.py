@@ -131,6 +131,10 @@ def run_phase(project: ProjectState, agents: dict) -> str:
         return _run_research(project, agents)
 
     elif phase in (Phase.GATE1, Phase.GATE2, Phase.GATE3, Phase.GATE4):
+        if project.auto_mode:
+            project.confirm_gate(phase, "approved")
+            save(project)
+            return f"auto: {phase.value} → {project.phase.value}"
         return f"等待 Owner {phase.value} 确认"
 
     elif phase == Phase.PLANNING:

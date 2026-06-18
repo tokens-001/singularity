@@ -125,8 +125,14 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
         for w in pre_warnings:
             witness.heartbeat(task.id, f"pre_hook: {w[:80]}")
 
+    # 容灾: 获取 fallback 链, 当前 agent 失败自动切下一个
+    fallback_chain = disp_mod.pick_agent_fallback_chain(agents, level)
+    tried_models: set[str] = set()
+
     while True:
-        agent_cfg = disp_mod.pick_agent(agents, level)
+        if not fallback_chain:
+            break
+        agent_cfg = fallback_chain[0]
         level_max = agent_cfg.get("max_turns", config.DEFAULT_MAX_TURNS)
         is_planner = agent_cfg.get("mode") == "planner"
 
@@ -164,14 +170,19 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
             exec_result = disp_result.executor_result
 
             if not exec_result.success:
+                # 容灾: 切下一个 agent
+                tried_models.add(agent_cfg.get("model", ""))
+                fallback_chain = [a for a in fallback_chain if a.get("model", "") not in tried_models]
+                _cleanup_wt(wt)
+                if fallback_chain:
+                    witness.heartbeat(task.id, f"fallback: {agent_cfg.get('model','')}→{fallback_chain[0].get('model','')}")
+                    break  # 跳出 turn loop, 用新 agent
                 last_validation = val_mod.ValidationReport(
                     verdict="未知",
-                    action="retry" if turn < level_max else "abort",
-                    unverified=[f"executor 失败: {exec_result.error_kind}: {exec_result.error}"],
+                    action="abort",
+                    unverified=[f"executor 失败 (已试 {len(tried_models)} agent): {exec_result.error_kind}: {exec_result.error}"],
                     turns_used=turn,
                 )
-                if turn < level_max:
-                    continue
                 break
 
             # planner: 存 patch + 尝试分解 (先建后定: decompose 非空才 materialize)

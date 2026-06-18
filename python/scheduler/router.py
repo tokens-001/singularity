@@ -24,6 +24,7 @@ class RouteResult:
     level: str                       # "E" | "D" | "E+"
     gate_required: bool = False      # 命中引擎核心文件
     task_type: str = "default"       # bugfix | feature | refactor | docs | default
+    cost_tier: str = "standard"      # "budget" | "standard" | "premium"
     matched_signals: list = field(default_factory=list)  # 命中证据, 供 trace
 
     def with_level(self, level: str) -> "RouteResult":
@@ -73,6 +74,7 @@ def route(task: str) -> RouteResult:
     if len(task) < 20 and _LEADING_QUERY_RE.match(task):
         result.level = "E"
         result.task_type = "default"
+        result.cost_tier = "budget"
         result.matched_signals.append("leading-query: 短查询开头动词 → E, type=default")
         return result
 
@@ -93,6 +95,16 @@ def route(task: str) -> RouteResult:
 
     # 任务类型独立扫描 (v1 仅记录)
     _scan_task_type(task, result)
+
+    if result.level == "E":
+        if _LEADING_QUERY_RE.match(task):
+            result.cost_tier = "budget"
+        elif result.task_type == "bugfix":
+            result.cost_tier = "standard"
+        elif result.task_type == "feature":
+            result.cost_tier = "premium"
+    elif result.level in ("E+", "D"):
+        result.cost_tier = "premium"
 
     return result
 

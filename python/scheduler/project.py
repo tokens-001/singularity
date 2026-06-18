@@ -55,6 +55,7 @@ class ProjectState:
     name: str
     template: str = "product_dev"   # 选题模板
     phase: Phase = Phase.TEMPLATE
+    auto_mode: bool = False     # 自动流转: 跳过所有 Owner Gate
 
     # Owner 填写的需求
     description: str = ""
@@ -91,6 +92,7 @@ class ProjectState:
             "constraints_checklist": self.constraints_checklist,
             "task_ids": self.task_ids, "issues": self.issues,
             "supervision_log": self.supervision_log, "lineage": self.lineage,
+            "auto_mode": self.auto_mode,
             "token_budget_total": self.token_budget_total,
             "token_spent": self.token_spent,
             "created_at": self.created_at, "updated_at": self.updated_at,
@@ -112,6 +114,7 @@ class ProjectState:
         d.setdefault("issues", [])
         d.setdefault("supervision_log", [])
         d.setdefault("lineage", [])
+        d.setdefault("auto_mode", False)
         d.setdefault("token_budget_total", 5.0)
         d.setdefault("token_spent", 0.0)
         d.setdefault("created_at", 0.0)
@@ -232,6 +235,7 @@ def create(
     description: str = "", scope: str = "",
     constraints: list[str] = None,
     budget: float = 5.0,
+    auto_mode: bool = False,
 ) -> ProjectState:
     now = time.time()
     proj = ProjectState(

@@ -71,6 +71,26 @@ def pick_agent(agents: dict, level: str, role: str = None) -> dict:
     return candidates[0]
 
 
+def pick_agent_fallback_chain(agents: dict, level: str, role: str = None, exclude: set = None) -> list[dict]:
+    """返回该层所有可用 agent，第一个是首选，后续是容灾备选。"""
+    candidates = agents.get(level, [])
+    if not candidates:
+        return []
+    exclude = exclude or set()
+    result = []
+    seen = set()
+    for a in candidates:
+        if role and role in (a.get("roles") or []) and a.get("model", "") not in seen and a.get("model", "") not in exclude:
+            result.append(a); seen.add(a.get("model", ""))
+    for a in candidates:
+        if a.get("default") and a.get("model", "") not in seen and a.get("model", "") not in exclude:
+            result.append(a); seen.add(a.get("model", ""))
+    for a in candidates:
+        if a.get("model", "") not in seen and a.get("model", "") not in exclude:
+            result.append(a); seen.add(a.get("model", ""))
+    return result
+
+
 def dispatch(
     task: str,
     level: str,
