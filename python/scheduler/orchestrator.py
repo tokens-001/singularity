@@ -327,8 +327,13 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 changed_files=exec_result.changed_files,
                 snap=snap, turn=turn, max_turns=level_max,
             )
-            validation.confidence = quality.get("confidence", 0.5)
-            validation.quality_signals = quality.get("quality_signals", {})
+            # 补充质量信号
+            try:
+                quality = val_mod.post_execution_hook(exec_result, snap)
+                validation.confidence = quality.get("confidence", 0.5)
+                validation.quality_signals = quality.get("quality_signals", {})
+            except Exception:
+                pass
             last_validation = validation
 
             if validation.action == "pass":
