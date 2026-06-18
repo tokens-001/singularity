@@ -119,8 +119,49 @@ def _inject_memory(description: str) -> str:
         lines.append("参考以上历史任务的改动方案。\n")
         return "\n".join(lines)
     except Exception as e:
-        try: witness.heartbeat(task_id="memory", level="warn", status=f"inject_memory:{e}")
+        try: witness.heartbeat("memory", f"warn:inject_memory:{e}")
         except: pass
+        return ""
+
+
+def _build_project_context(task) -> str:
+    """项目上下文注入: 从 project 提取调研推荐+约束+验收标准。
+
+    只在 task 有 project_id 且 project 存在时生效。
+    返回空字符串表示无需注入。
+    """
+    pid = getattr(task, 'project_id', '')
+    if not pid:
+        return ""
+    try:
+        from .project import load as _load_proj
+        proj = _load_proj(pid)
+        if not proj:
+            return ""
+        parts = [f"[项目上下文] {proj.name}"]
+        # 调研推荐
+        if proj.research_report:
+            rec = proj.research_report.get("recommendation", "")
+            pitfalls = proj.research_report.get("pitfalls", [])
+            if rec:
+                parts.append(f"调研推荐: {rec[:200]}")
+            if pitfalls:
+                parts.append(f"注意事项: {'; '.join(pitfalls[:3])}")
+        # 约束清单
+        if proj.constraints_checklist:
+            parts.append(f"约束清单: {'; '.join(proj.constraints_checklist[:5])}")
+        # 架构验收标准 (匹配子任务)
+        if proj.architecture:
+            tasks = proj.architecture.get("tasks", [])
+            desc = getattr(task, 'description', '')
+            for tdef in tasks:
+                if tdef.get("title", "") in desc or tdef.get("id", "") in desc:
+                    acceptance = tdef.get("acceptance", "")
+                    if acceptance:
+                        parts.append(f"验收标准: {acceptance}")
+                    break
+        return "\n".join(parts) if len(parts) > 1 else ""
+    except Exception:
         return ""
 
 
@@ -208,6 +249,10 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     effective_task = mem_ctx + "\n\n" + effective_task
             if is_planner:
                 effective_task = _PLANNER_PREAMBLE + effective_task
+            # ── 项目上下文注入 ──
+            proj_ctx = _build_project_context(task)
+            if proj_ctx:
+                effective_task = proj_ctx + "\n\n---\n" + effective_task
 
             disp_result = disp_mod.dispatch(
                 effective_task, level, task.id, agents,

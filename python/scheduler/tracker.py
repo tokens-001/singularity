@@ -60,6 +60,7 @@ class Task:
     route_locked: bool = False  # planner 已指定层级 → 跳过 re-route (建议 #6)
     held: bool = False           # 人工扣留, 不进调度队列
     held_reason: str = ""        # 扣留原因
+    project_id: str = ""         # 所属项目 ID (空=独立任务)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -77,6 +78,7 @@ class Task:
         d.setdefault("route_locked", False)
         d.setdefault("held", False)
         d.setdefault("held_reason", "")
+        d.setdefault("project_id", "")
         return cls(**d)
 
     def compute_starvation(self) -> float:

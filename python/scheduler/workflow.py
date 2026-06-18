@@ -159,31 +159,77 @@ def run_phase(project: ProjectState, agents: dict) -> str:
 
 
 def _run_research(project: ProjectState, agents: dict) -> str:
-    """调 Researcher(E层) 搜集可借鉴方案。"""
+    """调 Researcher(E层) 同步搜集可借鉴方案 → 解析 JSON → 写入 project。
+
+    与旧版不同: 不创建 tracker task (不丢产出), 直接 dispatch 等结果。
+    """
     if _should_skip(project, "gate1"):
-        project.phase = Phase.PLANNING
+        project.phase = Phase.GATE1
         save(project)
         return "调研已跳过 (Owner 设定)"
 
+    # 1. 构建 prompt
     prompt = _RESEARCHER_PREAMBLE.format(
         description=project.description,
         scope=project.scope,
         constraints=project.raw_constraints,
     )
 
-    # 作为任务提交执行
-    task = tracker.create(
-        f"[调研] {project.name}: 搜集可借鉴架构方案",
-        depth=1,
-    )
-    tracker.transition(task.id, TaskStatus.PENDING,
-                       route_level="E", route_locked=True)
-    project.task_ids.append(task.id)
+    # 2. MAGMA 记忆上下文 (已有历史任务参考)
+    try:
+        from . import pre_search as pre_mod
+        from . import router as router_mod
+        route = router_mod.route(project.description)
+        pre = pre_mod.pre_search(project.description, route, use_hybrid=True)
+        if pre.memory and pre.memory.narrative:
+            items = pre.memory.narrative[:5]
+            mem_ctx = "已知相关历史任务:\n" + "\n".join(
+                f"- [{it.get('task_id','')[-8:]}] {it.get('description','')[:80]}"
+                for it in items
+            )
+            prompt = f"[背景记忆]\n{mem_ctx}\n\n{prompt}"
+    except Exception:
+        pass  # 记忆挂了不阻塞调研
 
-    # 推进到 gate1
+    # 3. 同步 dispatch 到 E 层
+    task_id = f"research_{project.id}"
+    try:
+        disp_result = disp_mod.dispatch(
+            prompt, "E", task_id, agents,
+            project_lineup=project.agent_lineup,
+        )
+        raw = disp_result.executor_result.raw_output if disp_result else ""
+    except Exception as e:
+        raw = ""
+
+    # 4. 解析 JSON 产出
+    import re as _re
+    report = None
+    if raw:
+        try:
+            m = _re.search(r"```json\s*\n(.*?)\n```", raw, _re.DOTALL)
+            if m:
+                report = json.loads(m.group(1))
+            else:
+                m2 = _re.search(r"\{[\s\S]*\}", raw)
+                if m2:
+                    report = json.loads(m2.group())
+        except (json.JSONDecodeError, Exception):
+            pass
+    if report is None:
+        report = {"raw_output": raw[:5000], "parse_error": True}
+
+    project.research_report = report
+    project.add_lineage({"action": "research_complete",
+                         "agent": disp_result.agent_cfg.get("model","?") if disp_result else "?"})
+
+    # 5. 推进到 GATE1
     project.phase = Phase.GATE1
     save(project)
-    return f"调研任务 {task.id[:8]} 已入队，等待 Owner Gate1 确认"
+    return (
+        f"调研完成: {len(report.get('references', []))} 条引用, "
+        f"推荐: {report.get('recommendation', 'N/A')[:80]}"
+    )
 
 
 def _run_planning(project: ProjectState, agents: dict) -> str:
@@ -235,7 +281,8 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
             depth=2,
         )
         tracker.transition(child.id, TaskStatus.PENDING,
-                           route_level=level, route_locked=True)
+                           route_level=level, route_locked=True,
+                           project_id=project.id)
         project.task_ids.append(child.id)
         if not parent_id:
             parent_id = child.id
