@@ -449,8 +449,22 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
             tracker.transition(task.id, TaskStatus.ROLLED_BACK, error=f"{validation.verdict}: {term_reason}")
             reason = f"rolled_back: {term_reason}"
         else:
-            tracker.transition(task.id, TaskStatus.FAILED, error=f"{validation.verdict}: {term_reason}")
-            reason = f"failed: {term_reason}"
+            # D 层分析完有方案 → 建新任务给 E+ 执行
+            d_plan = _read_planner_patch(task.id)
+            if d_plan and "escalation_exhausted" in term_reason:
+                fix_task = tracker.create(
+                    f"[D方案执行] {task.description[:80]}",
+                    depends_on=[task.id],
+                    depth=task.depth,
+                )
+                tracker.transition(fix_task.id, TaskStatus.PENDING,
+                                   route_level="E+", route_locked=True)
+                tracker.transition(task.id, TaskStatus.FAILED,
+                                   error=f"已生成E+修复任务 {fix_task.id[:8]}: {term_reason}")
+                reason = f"escalated_to_E+: {fix_task.id[:8]}"
+            else:
+                tracker.transition(task.id, TaskStatus.FAILED, error=f"{validation.verdict}: {term_reason}")
+                reason = f"failed: {term_reason}"
 
         _save_trace(task, route, snap, disp_result, validation, validation.action == "rollback",
                     pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
@@ -744,6 +758,17 @@ def _save_planner_patch(task_id: str, content: str) -> None:
     patch_path = config.PATCH_DIR / f"{task_id}_plan.md"
     patch_path.parent.mkdir(parents=True, exist_ok=True)
     patch_path.write_text(content, encoding="utf-8")
+
+
+def _read_planner_patch(task_id: str) -> str | None:
+    """读 D 层的分析方案 patch，用于创建 E+ 修复任务。"""
+    patch_path = config.PATCH_DIR / f"{task_id}_plan.md"
+    if not patch_path.exists():
+        return None
+    try:
+        return patch_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
 
 
 def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
