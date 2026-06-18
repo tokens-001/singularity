@@ -877,32 +877,122 @@ def _run_committee_member(task, ctx, agents, agent_cfg):
 
 
 def _synthesize_plans(task_desc: str, plans: list, models: list) -> str:
-    """机械合成：列出各方方案要点 + 对比。不调LLM。"""
-    lines = [
-        f"# 委员会方案合成",
-        f"任务: {task_desc[:200]}",
-        f"参与: {', '.join(models)}",
-        "",
-    ]
-    for i, p in enumerate(plans, 1):
+    """委员会真合成: LLM 分析各方方案，提取共识+冲突+择优合并。
+
+    先尝试调 DeepSeek (E层廉价) 做语义合成。
+    LLM 失败时回退到机械拼接。
+    """
+    # 把各方方案压缩为摘要
+    summaries = []
+    for i, p in enumerate(plans):
         model = p.get("model", "?")
-        lines.append(f"## 方案{i}: {model}")
         plan_text = p.get("plan", p.get("error", "无输出"))
-        # 提取 JSON 块或前 2000 字
+        # 提取 JSON 块或纯文本
         import re as _re2
         m = _re2.search(r"```json\s*\n(.*?)\n```", plan_text, _re2.DOTALL)
         if m:
-            lines.append("```json")
-            lines.append(m.group(1)[:4000])
-            lines.append("```")
+            body = m.group(1)[:3000]
         else:
-            lines.append(plan_text[:2000])
-        lines.append("")
+            body = plan_text[:3000]
+        summaries.append(f"### 方案{i+1}: {model}\n{body}")
 
-    lines.append("## 对比建议")
-    lines.append(f"共 {len(plans)} 份方案。请 Owner 对比各方案的架构/任务分解/风险，取长补短。")
-    lines.append("委员会不自动合并——测试是唯一裁判。")
+    summary_text = "\n\n".join(summaries)
+
+    # 尝试 LLM 合成
+    synthesis = _llm_synthesize(task_desc, summary_text, models)
+    if synthesis:
+        return synthesis
+
+    # 回退: 机械拼接
+    lines = [
+        f"# 委员会方案合成 (机械)",
+        f"任务: {task_desc[:200]}",
+        f"参与: {', '.join(models)}",
+        "",
+        summary_text,
+        "",
+        "## 对比建议",
+        f"共 {len(plans)} 份方案。请 Owner 对比各方案的架构/任务分解/风险，取长补短。",
+    ]
     return "\n".join(lines)
+
+
+def _llm_synthesize(task_desc: str, summary_text: str, models: list) -> str | None:
+    """用 DeepSeek (E层) 分析多方方案，输出结构化合成。
+
+    返回: 合成文本, 或 None (LLM不可用时回退机械拼接)
+    """
+    import os, urllib.request, json as _json
+
+    prompt = f"""你是一个架构委员会主席。有 {len(models)} 位架构师({', '.join(models)})各自提出了方案。
+
+## 任务
+{task_desc[:500]}
+
+## 各方方案
+{summary_text[:8000]}
+
+## 你的工作
+请输出以下结构化分析(用中文)：
+
+### 1. 共识点
+各方方案一致同意的地方。
+
+### 2. 分歧点
+各方方案有冲突的地方，列出不同立场。
+
+### 3. 择优决策
+对每个分歧点，选择最好的方向并说明理由。
+
+### 4. 最终方案
+综合各方优点，给出一个最终方案概要（架构+任务分解+关键风险）。
+
+直接输出markdown，不要JSON包裹。"""
+
+    try:
+        # 获取 E 层 agent 配置
+        agents = disp_mod.load_agents()
+        e_agents = agents.get("E", [])
+        if not e_agents:
+            return None
+
+        e_cfg = e_agents[0]
+        api_key = os.environ.get(e_cfg.get("api_key_env", ""), "")
+        if not api_key:
+            return None
+
+        base_url = e_cfg.get("base_url", "https://api.deepseek.com/v1")
+        model = e_cfg.get("model", "deepseek-chat")
+
+        body = _json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 2000,
+            "temperature": 0.3,
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            f"{base_url}/chat/completions",
+            data=body, method="POST",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+            content = data["choices"][0]["message"]["content"]
+
+        # 拼接最终输出
+        header = f"""# 委员会方案合成 (LLM)
+任务: {task_desc[:200]}
+参与: {', '.join(models)}
+
+"""
+        return header + content
+
+    except Exception:
+        return None
 
 
 def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
