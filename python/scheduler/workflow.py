@@ -79,6 +79,35 @@ _ARCHITECT_PREAMBLE = """你是系统架构师。基于需求和调研报告，�
 - 每个任务必须只改不相交的文件 (并行 merge 的前提)
 - 你只出方案和清单，不写代码。"""
 
+_REVIEWER_PREAMBLE = """你是系统审查员。基于项目架构方案和任务清单，做全项目审查。
+
+架构方案: {architecture}
+已创建的任务 ID: {task_ids}
+
+请逐文件、逐模块审查，输出严格 JSON:
+{{
+  "issues": [
+    {{
+      "id": "I1",
+      "file": "文件路径",
+      "line": null,
+      "severity": "bug|perf|style|arch",
+      "title": "问题标题",
+      "description": "详细描述",
+      "suggestion": "修复建议"
+    }}
+  ]
+}}
+
+扫描维度:
+1. bug: 逻辑错误、空指针、类型不匹配、边界条件
+2. 架构一致性: 是否偏离架构方案、模块职责是否清晰
+3. 性能: N+1 查询、不必要的拷贝、内存泄漏风险
+4. 代码风格: 命名规范、注释缺失、重复代码
+5. 测试覆盖: 关键路径是否有测试、断言是否充分
+
+注意: 如果没有发现问题，返回空 issues 数组。输出必须严格 JSON。"""
+
 
 def _needs_research(project: ProjectState) -> bool:
     """判断是否需要调研阶段。"""
@@ -111,10 +140,10 @@ def run_phase(project: ProjectState, agents: dict) -> str:
         return _run_execution(project, agents)
 
     elif phase == Phase.REVIEWING:
-        return "等待 Supervisor 全项目审查 (P2)"
+        return _run_review(project, agents)
 
     elif phase == Phase.FIXING:
-        return "等待执行修复循环 (P2)"
+        return _run_fixing(project, agents)
 
     elif phase == Phase.DONE:
         return "项目已完成"
@@ -209,6 +238,65 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
     project.phase = Phase.GATE3  # 执行完成后进入 Gate3
     save(project)
     return f"已分发 {created} 个子任务到 E/E+/D 层"
+
+
+def _run_review(project: ProjectState, agents: dict) -> str:
+    """调 Reviewer(D层) 全项目审查。"""
+    if _should_skip(project, "skip_gate3"):
+        project.phase = Phase.FIXING
+        save(project)
+        return "审查已跳过 (Owner 设定 skip_gate3)"
+
+    architecture_json = json.dumps(project.architecture, ensure_ascii=False, indent=2) \
+        if project.architecture else "无架构方案"
+    task_ids_str = ", ".join(project.task_ids) if project.task_ids else "无任务"
+
+    prompt = _REVIEWER_PREAMBLE.format(
+        architecture=architecture_json,
+        task_ids=task_ids_str,
+    )
+
+    task = tracker.create(
+        f"[审查] {project.name}: 全项目代码审查",
+        depth=1,
+    )
+    tracker.transition(task.id, TaskStatus.PENDING,
+                       route_level="D", route_locked=True)
+    project.task_ids.append(task.id)
+    project.phase = Phase.GATE4
+    save(project)
+    return f"审查任务 {task.id[:8]} 已入队(D层)，等待 Owner Gate4 确认审查结果"
+
+
+def _run_fixing(project: ProjectState, agents: dict) -> str:
+    """为 Reviewer 发现的每条 issue 创建修复任务。"""
+    if _should_skip(project, "skip_gate4"):
+        project.phase = Phase.DONE
+        save(project)
+        return "修复已跳过 (Owner 设定 skip_gate4)"
+
+    if not project.issues:
+        project.phase = Phase.DONE
+        save(project)
+        return "无 issues，跳过修复，项目完成"
+
+    created = 0
+    for issue in project.issues:
+        severity = issue.get("severity", "style")
+        level = "E+" if severity == "bug" else "E"
+
+        child = tracker.create(
+            f"[修复] {issue.get('id', '?')} {issue.get('title', '')}: {issue.get('description', '')}",
+            depth=2,
+        )
+        tracker.transition(child.id, TaskStatus.PENDING,
+                           route_level=level, route_locked=True)
+        project.task_ids.append(child.id)
+        created += 1
+
+    project.phase = Phase.GATE4
+    save(project)
+    return f"已创建 {created} 个修复任务，等待 Owner Gate4 验收"
 
 
 def start_project_workflow(project: ProjectState, agents: dict) -> str:
