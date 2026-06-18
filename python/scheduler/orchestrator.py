@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import time
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED, as_completed
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -420,7 +420,15 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
         tracker.transition(task.id, TaskStatus.RUNNING, snapshot_id=snap.id)
 
         ctx = RunContext(batch_id=task.id, snapshot_ref=snap.ref, merge_queue=None)
-        batch = _run_with_retry(task, ctx, agents)
+
+        # D层委员会: 多agent并行出方案，合成最优
+        d_agents = agents.get("D", [])
+        use_committee = route.level == "D" and len(d_agents) >= 2
+        if use_committee:
+            batch = _run_committee(task, ctx, agents, d_agents)
+        else:
+            batch = _run_with_retry(task, ctx, agents)
+
         batch.pre_search_skipped = pre.skipped
         batch.pre_search_reason = pre.reason
         batch.pre_search_top_decisions = pre.top_decisions
@@ -718,6 +726,123 @@ def _maybe_complete_parents(task_id: str) -> None:
                 # parent 刚转 DONE/FAILED → 递归冒泡到 grandparent
                 _maybe_complete_parents(parent.id)
             break  # 一棵树里 task_id 只属于一个 parent
+
+
+def _run_committee(task, ctx: RunContext, agents: dict, d_agents: list) -> BatchOutput:
+    """D层委员会: 所有D agent并行出方案，独立不互看，合成最优。
+
+    每个人扮演不同视角:
+      - Opus: 稳——风险、边界、回滚
+      - GPT:  新——替代思路、业界实践
+      - DeepSeek: 实——落地性、文件量、复杂度
+    """
+    models = [a.get("model", "?") for a in d_agents]
+    plans = []
+
+    # 并行调度，每个人拿到相同的任务 + 不同视角
+    futures = {}
+    with ThreadPoolExecutor(max_workers=len(d_agents)) as pool:
+        for agent_cfg in d_agents:
+            single = dict(agents)
+            single["D"] = [agent_cfg]
+            fut = pool.submit(_run_committee_member, task, ctx, single, agent_cfg)
+            futures[fut] = agent_cfg
+
+        for fut in as_completed(futures):
+            agent_cfg = futures[fut]
+            try:
+                batch = fut.result(timeout=300)
+                if batch.ok and batch.dispatch_result:
+                    raw = batch.dispatch_result.executor_result.raw_output
+                    plans.append({
+                        "model": agent_cfg.get("model", "?"),
+                        "plan": raw[:8000],  # 截断，委员会不拼全文
+                        "term": batch.term_reason,
+                        "batch": batch,
+                    })
+            except Exception as e:
+                plans.append({"model": agent_cfg.get("model", "?"), "error": str(e)})
+
+    if not plans:
+        # 全失败 → 回退普通模式
+        return _run_with_retry(task, ctx, agents)
+
+    # 合成: 机械拼接 + 标注各方贡献
+    synthesis = _synthesize_plans(task.description, plans, models)
+
+    # 用第一个成功的 batch 作为载体，替换 raw_output 为合成结果
+    winner = next((p for p in plans if "batch" in p), None)
+    if winner:
+        batch = winner["batch"]
+        exec_result = batch.dispatch_result.executor_result
+        exec_result.raw_output = synthesis
+        from . import dispatcher as _disp
+        batch.dispatch_result = _disp.DispatchResult(
+            level="D", agent_cfg={"model": "committee"},
+            executor_result=exec_result, attempts=1,
+        )
+        batch.term_reason = f"committee({len(plans)}/{len(d_agents)}): " + ", ".join(p["model"] for p in plans)
+        return batch
+
+    return BatchOutput(ok=False, task_id=task.id,
+                       term_reason="committee_all_failed",
+                       validation=val_mod.ValidationReport(verdict="阻断", action="abort",
+                           unverified=[f"委员会 {len(d_agents)} 人全败"]))
+
+
+def _run_committee_member(task, ctx, agents, agent_cfg):
+    """委员会单个成员: 按模型注入视角后独立执行。"""
+    model = agent_cfg.get("model", "?")
+    perspectives = {
+        "opus": "你关注: 风险点、边界条件、回滚策略。方案必须稳健，不能炸。",
+        "gpt": "你关注: 有没有完全不同的思路？业界最新实践是什么？大胆提替代方案。",
+        "deepseek": "你关注: 这方案E/E+能落地吗？需要多少个文件？现有代码风格兼容吗？复杂度实际是多少？",
+        "glm": "你关注: 和现有架构的一致性。不要引入不兼容的变更。",
+    }
+    extra = ""
+    for k, v in perspectives.items():
+        if k in model.lower():
+            extra = f"\n\n[你的视角] {v}"
+            break
+
+    if extra:
+        # 临时加视角到 task description
+        orig = task.description
+        task.description = f"{orig}{extra}"
+        try:
+            return _run_with_retry(task, ctx, agents)
+        finally:
+            task.description = orig  # 恢复
+    return _run_with_retry(task, ctx, agents)
+
+
+def _synthesize_plans(task_desc: str, plans: list, models: list) -> str:
+    """机械合成：列出各方方案要点 + 对比。不调LLM。"""
+    lines = [
+        f"# 委员会方案合成",
+        f"任务: {task_desc[:200]}",
+        f"参与: {', '.join(models)}",
+        "",
+    ]
+    for i, p in enumerate(plans, 1):
+        model = p.get("model", "?")
+        lines.append(f"## 方案{i}: {model}")
+        plan_text = p.get("plan", p.get("error", "无输出"))
+        # 提取 JSON 块或前 2000 字
+        import re as _re2
+        m = _re2.search(r"```json\s*\n(.*?)\n```", plan_text, _re2.DOTALL)
+        if m:
+            lines.append("```json")
+            lines.append(m.group(1)[:4000])
+            lines.append("```")
+        else:
+            lines.append(plan_text[:2000])
+        lines.append("")
+
+    lines.append("## 对比建议")
+    lines.append(f"共 {len(plans)} 份方案。请 Owner 对比各方案的架构/任务分解/风险，取长补短。")
+    lines.append("委员会不自动合并——测试是唯一裁判。")
+    return "\n".join(lines)
 
 
 def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
