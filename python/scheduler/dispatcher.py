@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from . import config
 from .executors import (
     BaseExecutor, ExecutorResult,
-    ClaudeCliExecutor, ZhipuApiExecutor,
+    ClaudeCliExecutor, ZhipuApiExecutor, OpenAIAgentExecutor,
 )
 
 # 升级链: E 搞不定→E+, E+ 搞不定→D, D 是顶
@@ -27,6 +27,7 @@ _ESCALATION = {"E": "E+", "E+": "D"}
 _EXECUTOR_BY_TYPE = {
     "claude-cli": ClaudeCliExecutor,
     "zhipu-api": ZhipuApiExecutor,
+    "openai-agent": OpenAIAgentExecutor,
 }
 
 
