@@ -1385,40 +1385,37 @@ async function renderLayerSwitch(){
   ];
 
   body.innerHTML = tiers.map(t => {
-    // Find current default for this tier
     const tierAgents = agents[t.id] || [];
-    const current = tierAgents.find(a => a.default) || tierAgents[0] || {};
-    // Find all models capable of this tier
+    const activeModels = tierAgents.map(a => a.model);
     const available = Object.values(models).filter(m => (m.tiers||[]).includes(t.id));
 
-    const options = available.map(m => {
-      const sel = m.id === current.model ? 'selected' : '';
-      const apiOk = m.api_available ? '●' : '○';
-      return `<option value="${esc(m.id)}" ${sel}>${apiOk} ${esc(m.display||m.id)} [${m.provider}] ${m.cost}</option>`;
+    const checks = available.map(m => {
+      const checked = activeModels.includes(m.id) ? 'checked' : '';
+      const dot = m.api_available
+        ? '<span style="color:var(--green);font-size:7px">●</span>'
+        : '<span style="color:var(--text3);font-size:7px">○</span>';
+      return `<label style="display:inline-flex;align-items:center;gap:3px;margin-right:8px;cursor:pointer;font-size:9px;font-family:var(--mono)">
+        <input type="checkbox" value="${esc(m.id)}" ${checked} onchange="toggleLayerAgent('${t.id}','${esc(m.id)}',this.checked)"
+          ${m.api_available?'':'disabled'}>
+        ${dot} ${esc(m.display||m.id)}
+        <span style="color:var(--text3);font-size:8px">${m.cost}</span>
+      </label>`;
     }).join('');
 
-    return `<div style="padding:8px 0;border-bottom:1px solid var(--bg3);display:flex;align-items:center;gap:10px">
-      <div style="min-width:140px">
-        <div style="font-size:10px;font-weight:600;color:${t.color};font-family:var(--mono)">${t.label}</div>
-        <div style="font-size:8px;color:var(--text3)">${t.desc}</div>
-      </div>
-      <select onchange="switchLayerAgent('${t.id}',this.value)" style="flex:1;font-size:9px;font-family:var(--mono);width:auto">
-        ${options}
-      </select>
-      <span style="font-size:8px;color:var(--text3);font-family:var(--mono);min-width:40px;text-align:right">${current.model||'未设置'}</span>
+    return `<div style="padding:8px 0;border-bottom:1px solid var(--bg3)">
+      <div style="font-size:10px;font-weight:600;color:${t.color};font-family:var(--mono);margin-bottom:4px">${t.label}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:2px">${checks||'<span style="color:var(--text3);font-size:9px">该层无可用模型</span>'}</div>
     </div>`;
   }).join('');
 }
 
-async function switchLayerAgent(tier, modelId){
-  // 获取该层所有 agent，把目标设为 default，其余取消
-  const agents = await api('/api/agents');
-  const tierAgents = agents[tier] || [];
-  for (const a of tierAgents) {
-    await api('/api/agents/'+tier+'/'+a.model, {
-      method:'PUT', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({default: a.model === modelId})
-    });
+async function toggleLayerAgent(tier, modelId, enable){
+  if (enable) {
+    // Add to this layer: clone from existing config or create new
+    await api('/api/agents', {method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({level:tier,model:modelId})});
+  } else {
+    await api('/api/agents/'+tier+'/'+modelId, {method:'DELETE'});
   }
   renderLayerSwitch();
 }
