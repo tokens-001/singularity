@@ -29,6 +29,7 @@ from . import neijinglu as nj_mod
 from . import witness
 from . import memory as mem_mod
 from . import pre_search as pre_mod
+from . import chancellor as chan_mod
 from .executors.worktree import (
     Worktree, create as wt_create, cleanup as wt_cleanup,
     merge_back as wt_merge_back, commit_wt, changed_files_between,
@@ -471,6 +472,15 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
                     pre_search_top_decisions=batch.pre_search_top_decisions,
                     pre_search_memory=batch.pre_search_memory)
         results.append((task.id, reason, validation))
+        # 宰相: 评估是否需要奏报
+        try:
+            changed = disp_result.executor_result.changed_files if disp_result else []
+            report = chan_mod.assess(task.description, term_reason, changed)
+            if report.severity in ("alert", "critical"):
+                report.task_ids = [task.id]
+                chan_mod.save_report(report)
+        except Exception:
+            pass
 
     return results
 

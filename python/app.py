@@ -858,6 +858,27 @@ def api_supervise(task_id):
 # GET /api/agents — Agent 配置
 # ═══════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════
+# Chancellor API — 宰相奏报
+# ═══════════════════════════════════════════════════════════
+
+from scheduler import chancellor as chan_mod
+
+
+@app.route("/api/reports")
+def api_reports():
+    """列出奏报。?min=alert 只看重要的，?limit=30。"""
+    min_sev = request.args.get("min", "routine")
+    limit = request.args.get("limit", 30, type=int)
+    return jsonify(chan_mod.list_reports(limit=limit, min_severity=min_sev))
+
+
+@app.route("/api/reports/critical")
+def api_reports_critical():
+    """最近的关键奏报。"""
+    return jsonify(chan_mod.recent_critical())
+
+
 @app.route("/api/agents")
 def api_agents():
     try:
