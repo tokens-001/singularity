@@ -92,6 +92,36 @@ class BatchOutput:
     pre_search_memory: dict = field(default_factory=dict)
 
 
+def _inject_memory(description: str) -> str:
+    """MAGMA 记忆注入: 查询相关历史，生成简短上下文前缀。"""
+    try:
+        mem_mod._ensure_dir()
+        events = mem_mod._load_events()
+        if not events or len(events) < 2:
+            return ""
+        result = mem_mod.query(description, beam_width=2, max_hops=2)
+        items = result.get("traversal", {}).get("narrative", [])
+        if not items:
+            return ""
+        lines = ["[相关历史]"]
+        count = 0
+        for item in items[:3]:
+            desc = item.get("description", "")[:60]
+            score = item.get("score", 0)
+            if score < 0.1:
+                continue
+            similarity = item.get("similarity", "")
+            tag = f"(相似度 {similarity})" if similarity else ""
+            lines.append(f"- {desc} {tag}")
+            count += 1
+        if count == 0:
+            return ""
+        lines.append("参考以上历史任务的改动方案。\n")
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
 def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     """纯执行: dispatch + validate, 返回 BatchOutput。
 
@@ -169,8 +199,13 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 )
 
             effective_task = task.description
+            # ── MAGMA 记忆注入 ──
+            if turn == 1 and feedback == "":
+                mem_ctx = _inject_memory(task.description)
+                if mem_ctx:
+                    effective_task = mem_ctx + "\n\n" + effective_task
             if is_planner:
-                effective_task = _PLANNER_PREAMBLE + task.description
+                effective_task = _PLANNER_PREAMBLE + effective_task
 
             disp_result = disp_mod.dispatch(
                 effective_task, level, task.id, agents,
