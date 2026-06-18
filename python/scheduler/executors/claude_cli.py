@@ -150,7 +150,12 @@ def _git_changed_files(baseline_ref: str = "", cwd: str = "") -> list:
         )
         if untracked.returncode == 0:
             changed.extend(f for f in untracked.stdout.strip().splitlines() if f)
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        try:
+            from .. import witness
+            witness.heartbeat("claude_cli", f"warn:collect_changes:{e}"[:80])
+        except Exception:
+            pass
         pass
 
     # 排除调度器基础设施 (.qidian/ 是 snapshot/trace/patch 产物, 不是 agent 改动)

@@ -252,7 +252,7 @@ class OpenAIAgentExecutor(BaseExecutor):
             return f"未知工具: {name}"
         except Exception as e:
             try:
-                from . import witness
+                from .. import witness
                 witness.heartbeat("openai_agent", f"warn:tool_exec:{e}"[:80])
             except Exception:
                 pass
@@ -315,7 +315,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                                 return "\n".join(results) + "\n... (截断)"
                 except Exception as e:
                     try:
-                        from . import witness
+                        from .. import witness
                         witness.heartbeat("openai_agent", f"warn:search_file:{e}"[:80])
                     except Exception:
                         pass
@@ -323,7 +323,7 @@ class OpenAIAgentExecutor(BaseExecutor):
             return "\n".join(results) if results else f"未找到匹配 '{pattern}' 的行"
         except Exception as e:
             try:
-                from . import witness
+                from .. import witness
                 witness.heartbeat("openai_agent", f"warn:search:{e}"[:80])
             except Exception:
                 pass
@@ -342,7 +342,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                         self._changed_files.append(f)
         except Exception as e:
             try:
-                from . import witness
+                from .. import witness
                 witness.heartbeat("openai_agent", f"warn:git_diff:{e}"[:80])
             except Exception:
                 pass
