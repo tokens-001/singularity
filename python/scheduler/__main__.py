@@ -580,8 +580,8 @@ def _phase_cost_estimate(phase: Phase, proj) -> float:
     """估算 phase 的费用 ($)。返回 0 表示免费。"""
     rates = {
         Phase.RESEARCHING: 0.02,   # E层 DeepSeek/GLM 廉价
-        Phase.PLANNING: 2.50,      # D层 Opus/GPT 架构
-        Phase.REVIEWING: 1.00,     # D层审查
+        Phase.PLANNING: 0.15,      # D层 DeepSeek 架构 (~$0.3/M tokens)
+        Phase.REVIEWING: 0.08,     # D层 DeepSeek 审查
     }
     # 如果已有产出，跳过不重复收费
     if phase == Phase.RESEARCHING and proj.research_report:
