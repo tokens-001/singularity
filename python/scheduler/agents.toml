@@ -12,7 +12,7 @@
 
 # E层子模型1: DeepSeek V4 Flash — 最便宜($0.14/M), 日常快速任务首选
 [[agents.E]]
-model = "deepseek-v4-flash"
+model = "deepseek-chat"
 type = "openai-agent"
 entry = "https://api.deepseek.com/v1/chat/completions"
 api_key_env = "DEEPSEEK_API_KEY"
@@ -22,7 +22,7 @@ roles = ["daily"]
 sandbox = "worktree"
 
 [agents.E.request_template]
-model = "deepseek-v4-flash"
+model = "deepseek-chat"
 max_tokens = 4096
 
 # E层子模型2: GLM-5-turbo — 便宜推理模型, 第二选择

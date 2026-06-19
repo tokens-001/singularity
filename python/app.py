@@ -42,6 +42,13 @@ app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24).hex()
 
+# 可选认证: QIDIAN_AUTH=1 时启用
+_AUTH_ENABLED = os.environ.get("QIDIAN_AUTH") == "1"
+if _AUTH_ENABLED:
+    from scheduler._auth import get_auth
+    _admin = get_auth().bootstrap()
+    _log_info("auth", f"认证已启用, admin token: {_admin.token[:8]}...")
+
 # ═══════════════════════════════════════════════════════════
 # 调度循环后台线程
 # ═══════════════════════════════════════════════════════════
@@ -203,18 +210,38 @@ def _read_task_file(path: Path) -> dict | None:
 
 
 def _list_all_tasks() -> list[dict]:
-    """扫描 tasks 目录，返回全部任务 dict 列表（按创建时间倒序）。"""
+    """扫描 tasks 目录，返回全部任务 dict 列表（按创建时间倒序）。
+
+    2秒 TTL 缓存: /api/tasks 被前端每秒轮询时避免重复读盘。
+    任何写操作 (create/transition/delete) 通过 _cache_invalidate() 清缓存。
+    """
+    from scheduler._cache import task_cache
+
     tasks_dir = tracker._tasks_dir()
     if not tasks_dir.exists():
         return []
+
+    # 缓存 key = 目录 mtime (文件有增删改时自动失效)
+    cache_key = f"all_tasks_{int(tasks_dir.stat().st_mtime)}"
+    cached = task_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     tasks = []
     for p in sorted(tasks_dir.glob("*.json"), reverse=True):
         data = _read_task_file(p)
         if data:
-            # 补 computed 字段
             data["_filename"] = p.stem
             tasks.append(data)
+
+    task_cache.set(cache_key, tasks)
     return tasks
+
+
+def _invalidate_task_cache() -> None:
+    """任务写操作后调用，清缓存。"""
+    from scheduler._cache import task_cache
+    task_cache.invalidate()
 
 
 def _format_duration(sec: float) -> str:
@@ -295,6 +322,70 @@ def api_status():
         "loop_running": _loop_running,
         "loop_concurrent": _loop_concurrent,
     })
+
+
+# ═══════════════════════════════════════════════════════════
+# POST /api/cleanup — 清理残留 (心跳/任务/缓存)
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/cleanup", methods=["POST"])
+def api_cleanup():
+    import shutil
+    cleaned = {"heartbeats": 0, "tasks": 0}
+    try:
+        from scheduler.witness import _heartbeat_dir
+        hb_dir = _heartbeat_dir()
+        if hb_dir.exists():
+            for f in hb_dir.glob("*.json"):
+                f.unlink()
+                cleaned["heartbeats"] += 1
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    # 清任务缓存
+    try:
+        _invalidate_task_cache()
+    except Exception:
+        pass
+    return jsonify({"ok": True, "cleaned": cleaned})
+
+
+# ═══════════════════════════════════════════════════════════
+# GET /api/token-usage — Token 消耗 & 预算
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/token-usage")
+def api_token_usage():
+    try:
+        from scheduler._token_budget import get_usage_stats
+        return jsonify(get_usage_stats())
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
+@app.route("/api/token-budget", methods=["PUT"])
+def api_token_budget():
+    try:
+        from scheduler._token_budget import get_budget
+        data = request.get_json(force=True) or {}
+        daily = float(data.get("daily", 0))
+        monthly = float(data.get("monthly", 0))
+        get_budget().set_budget(daily=daily, monthly=monthly)
+        return jsonify({"ok": True, "daily": daily, "monthly": monthly})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+# ═══════════════════════════════════════════════════════════
+# GET /api/perf — 性能分析
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/perf")
+def api_perf():
+    try:
+        from scheduler._profiler import get_perf_stats
+        return jsonify(get_perf_stats())
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 
 # ═══════════════════════════════════════════════════════════
@@ -754,6 +845,9 @@ def api_project_gate(project_id):
     data = request.get_json(silent=True) or {}
     gate_str = data.get("gate", "")
     decision = data.get("decision", "")
+    # 如果前端没传 gate，从项目当前 phase 自动推断
+    if not gate_str and p.phase.value.startswith("gate"):
+        gate_str = p.phase.value
     try:
         gate = Phase(gate_str)
     except ValueError:
@@ -780,32 +874,54 @@ from scheduler import workflow as wf_mod
 
 @app.route("/api/projects/<project_id>/run-phase", methods=["POST"])
 def api_project_run_phase(project_id):
-    """手动触发当前 phase 的执行动作。"""
+    """手动触发当前 phase 的执行动作 (后台线程，避免超时)。"""
     p = proj_mod.load(project_id)
     if not p:
         return jsonify({"error": "项目不存在"}), 404
-    try:
-        agents = disp_mod.load_agents()
-    except Exception:
-        agents = {}
-    msg = wf_mod.run_phase(p, agents)
-    proj_mod.save(p)
-    return jsonify({"ok": True, "phase": p.phase.value, "message": msg})
+
+    import threading
+    def _run():
+        try:
+            agents = disp_mod.load_agents()
+        except Exception:
+            agents = {}
+        p2 = proj_mod.load(project_id)
+        if not p2:
+            return
+        wf_mod.run_phase(p2, agents)
+        proj_mod.save(p2)
+        _push_event("system", f"项目 {p2.name}: {p2.phase.value}", time.time())
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"ok": True, "phase": p.phase.value, "message": "后台执行中，稍后刷新查看"})
 
 
 @app.route("/api/projects/<project_id>/start", methods=["POST"])
 def api_project_start(project_id):
-    """启动项目工作流 (从 TEMPLATE 推进到第一个动作 phase)。"""
+    """启动项目工作流 (后台线程执行，避免浏览器超时)。"""
     p = proj_mod.load(project_id)
     if not p:
         return jsonify({"error": "项目不存在"}), 404
-    try:
-        agents = disp_mod.load_agents()
-    except Exception:
-        agents = {}
-    msg = wf_mod.start_project_workflow(p, agents)
-    proj_mod.save(p)
-    return jsonify({"ok": True, "phase": p.phase.value, "message": msg})
+    if p.phase != Phase.TEMPLATE:
+        return jsonify({"error": f"项目已在 {p.phase.value} 阶段"}), 400
+    if not p.description:
+        return jsonify({"error": "请先填写需求描述"}), 400
+
+    import threading
+    def _run():
+        try:
+            agents = disp_mod.load_agents()
+        except Exception:
+            agents = {}
+        p2 = proj_mod.load(project_id)
+        if not p2:
+            return
+        wf_mod.start_project_workflow(p2, agents)
+        proj_mod.save(p2)
+        _push_event("system", f"项目 {p2.name}: {p2.phase.value}", time.time())
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"ok": True, "phase": p.phase.value, "message": "后台执行中，稍后刷新查看"})
 
 
 # ═══════════════════════════════════════════════════════════
@@ -873,6 +989,42 @@ def api_project_snapshot(project_id):
     p.add_lineage({"event": "snapshot", "snapshot_id": snap.id, "method": snap.method})
     proj_mod.save(p)
     return jsonify({"ok": True, "snapshot_id": snap.id, "method": snap.method})
+
+# ═══════════════════════════════════════════════════════════
+# Conductor API — 自动推进项目流程
+# ═══════════════════════════════════════════════════════════
+
+from scheduler import conductor as _conductor
+
+@app.route("/api/projects/<project_id>/auto", methods=["POST"])
+def api_conductor_auto(project_id):
+    """自动推进一个阶段。"""
+    p = proj_mod.load(project_id)
+    if not p:
+        return jsonify({"error": "项目不存在"}), 404
+
+    try:
+        agents = disp_mod.load_agents()
+    except Exception:
+        agents = {}
+
+    result = _conductor.auto_advance(project_id, agents)
+    return jsonify(result)
+
+
+@app.route("/api/projects/<project_id>/autopilot", methods=["POST"])
+def api_conductor_start_autopilot(project_id):
+    """启动后台自动推进（一直推到 done）。"""
+    result = _conductor.start_autopilot(project_id)
+    return jsonify(result)
+
+
+@app.route("/api/projects/<project_id>/autopilot", methods=["DELETE"])
+def api_conductor_stop_autopilot(project_id):
+    """停止后台自动推进。"""
+    result = _conductor.stop_autopilot(project_id)
+    return jsonify(result)
+
 
 # ═══════════════════════════════════════════════════════════
 # Supervisor API
@@ -1082,6 +1234,63 @@ def api_store_status(api_id):
         return jsonify({"ok": True, "entry": entry.to_dict()})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════
+# 认证 & 用户管理 (QIDIAN_AUTH=1 时启用)
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/auth/status")
+def api_auth_status():
+    from scheduler._auth import get_auth
+    users = get_auth().list_users()
+    return jsonify({"enabled": _AUTH_ENABLED, "users": users})
+
+
+@app.route("/api/auth/bootstrap", methods=["POST"])
+def api_auth_bootstrap():
+    from scheduler._auth import get_auth
+    admin = get_auth().bootstrap()
+    return jsonify({"ok": True, "user": admin.to_dict(),
+                    "message": "Admin token — 请保存: " + admin.token})
+
+
+@app.route("/api/auth/users", methods=["POST"])
+def api_auth_add_user():
+    if _AUTH_ENABLED:
+        from scheduler._auth import require_auth
+        user, err = require_auth(request)
+        if err:
+            return jsonify({"error": err}), 401
+        if not user.can_manage:
+            return jsonify({"error": "需要 admin 权限"}), 403
+    from scheduler._auth import get_auth
+    data = request.get_json(silent=True) or {}
+    uid = data.get("id", "").strip()
+    name = data.get("name", "").strip()
+    role = data.get("role", "viewer")
+    if not uid:
+        return jsonify({"error": "需要 id"}), 400
+    try:
+        u = get_auth().add_user(uid, name, role)
+        return jsonify({"ok": True, "user": u.to_dict()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/auth/users/<user_id>", methods=["DELETE"])
+def api_auth_remove_user(user_id):
+    if _AUTH_ENABLED:
+        from scheduler._auth import require_auth
+        user, err = require_auth(request)
+        if err:
+            return jsonify({"error": err}), 401
+        if not user.can_manage:
+            return jsonify({"error": "需要 admin 权限"}), 403
+    from scheduler._auth import get_auth
+    if get_auth().remove_user(user_id):
+        return jsonify({"ok": True})
+    return jsonify({"error": "用户不存在"}), 404
 
 
 @app.route("/api/models")

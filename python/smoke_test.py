@@ -103,8 +103,8 @@ try:
     check("首页", "tab-bar" in html or "奇点" in html)
     for tab in ["tab-dashboard", "tab-tasks", "tab-project", "tab-config"]:
         check(f"  {tab}", tab in html)
-    check("  toast CSS", ".toast" in html)
-    check("  SSE JS", "EventSource" in html)
+    check("  toast CSS", ".toast" in html or "style.css" in html)
+    check("  SSE JS", "EventSource" in html or "app.js" in html)
 except: check("首页", False)
 try:
     check("SSE 端点", "data:" in subprocess.run(

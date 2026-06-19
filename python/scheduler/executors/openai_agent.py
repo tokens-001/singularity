@@ -15,10 +15,10 @@ import shlex
 import ssl
 import subprocess
 import time
-import urllib.request
-import urllib.error
 from pathlib import Path
 from typing import Optional
+
+import httpx
 
 from .base import BaseExecutor, ExecutorResult
 from .. import config
@@ -90,17 +90,16 @@ TOOLS = [
 SYSTEM_PROMPT = """你是奇点调度平台的 AI Agent。你有工具可以用：读文件、写代码、跑命令、搜代码。
 
 工作方式:
-1. 先读相关文件，理解上下文
-2. 修改代码
-3. 跑测试/编译验证
-4. 如果测试失败，读错误信息、修复、重试
-5. 完成后输出一句话总结
+- 如果是纯分析/调研任务（不需要改代码），直接输出分析结果，不要调用工具
+- 如果需要改代码：先读相关文件→修改→跑测试验证→修复→输出总结
+- 如果工具返回"文件不存在"或空结果超过2次，停止用工具，基于已有知识直接回答
 
 规则:
 - 改代码前必须 read_file 看原文件
 - 不要在注释里留 TODO，要么实现要么删掉
 - 参数 path 是相对于项目根目录的路径，不要用绝对路径
-- 写文件时给完整内容，不只给 diff"""
+- 写文件时给完整内容，不只给 diff
+- 分析/调研/总结类任务：第一轮直接输出答案，不调用工具"""
 
 
 class OpenAIAgentExecutor(BaseExecutor):
@@ -130,6 +129,9 @@ class OpenAIAgentExecutor(BaseExecutor):
             {"role": "user", "content": self.task},
         ]
         total_tokens = 0
+        tool_turns = 0          # 连续工具调用轮数
+        last_tool_calls = ""     # 上一轮工具调用指纹 (去重)
+        max_tool_turns = self.cfg.get("max_tool_turns", 3)
 
         for turn in range(1, self._max_turns + 1):
             # 从 request_template 读取参数，只传模型支持的
@@ -212,16 +214,38 @@ class OpenAIAgentExecutor(BaseExecutor):
                 for tc in tool_calls:
                     func = tc.get("function", {})
                     name = func.get("name", "")
-                    args = json.loads(func.get("arguments", "{}"))
+                    try:
+                        args = json.loads(func.get("arguments", "{}"))
+                    except (json.JSONDecodeError, Exception):
+                        # 模型吐的 JSON 可能有单引号/中文标点 → 尝试修复
+                        raw_args = func.get("arguments", "{}")
+                        try:
+                            fixed = raw_args.replace("'", '"')
+                            args = json.loads(fixed)
+                        except Exception:
+                            args = {}
                     result = self._execute_tool(name, args)
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.get("id", ""),
                         "content": result,
                     })
+                # 死循环检测
+                tool_turns += 1
+                call_fingerprint = str([(tc.get("function", {}).get("name", ""),
+                                        tc.get("function", {}).get("arguments", "")[:80])
+                                        for tc in tool_calls])
+                if tool_turns >= max_tool_turns or (call_fingerprint == last_tool_calls and tool_turns >= 2):
+                    # 强制完成: 注入系统消息，下一轮必须输出
+                    messages.append({
+                        "role": "system",
+                        "content": "[系统] 已收集足够信息。停止使用工具，直接输出最终答案。"
+                    })
+                last_tool_calls = call_fingerprint
                 continue  # 继续下一轮，让模型看工具结果
 
             # 无 tool_calls → 任务完成
+            tool_turns = 0  # 重置工具计数
             content = msg.get("content", "") or msg.get("reasoning_content", "")
             if content.strip():
                 elapsed = time.time() - start
@@ -351,40 +375,53 @@ class OpenAIAgentExecutor(BaseExecutor):
     # ── API 调用 ──
 
     def _api_call(self, body: dict) -> dict:
-        data = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(
-            self._url, data=data, method="POST",
-            headers={
-                "Authorization": f"Bearer {self._api_key}",
-                "Content-Type": "application/json",
-            },
-        )
+        """通过 httpx 连接池调用 API。复用 TCP 连接，自动重试。"""
+        client = _get_http_client()
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                raw = resp.read().decode("utf-8")
-        except urllib.error.HTTPError as e:
-            if e.code == 429:
-                raise _RateLimitError()
-            err_body = ""
-            try:
-                err_body = e.read().decode("utf-8", errors="replace")[:500]
-            except Exception:
-                pass
-            raise _FormatError(f"HTTP {e.code}: {err_body}")
-        except urllib.error.URLError as e:
-            raise _NetworkError(f"网络错误: {e.reason}")
-        except ssl.SSLError as e:
-            raise _NetworkError(f"SSL错误: {e}")
-        except TimeoutError:
+            resp = client.post(
+                self._url,
+                json=body,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+        except httpx.TimeoutException:
             raise _NetworkError("超时")
+        except httpx.ConnectError as e:
+            raise _NetworkError(f"连接失败: {e}")
+        except Exception as e:
+            raise _NetworkError(f"网络错误: {e}")
+
+        if resp.status_code == 429:
+            raise _RateLimitError()
+        if resp.status_code >= 400:
+            err_text = resp.text[:500] if resp.text else ""
+            raise _FormatError(f"HTTP {resp.status_code}: {err_text}")
 
         try:
-            data = json.loads(raw)
+            data = resp.json()
             if data.get("error"):
                 raise _FormatError(f"API错误: {data['error']}")
             return data
         except json.JSONDecodeError as e:
             raise _FormatError(f"JSON解析失败: {e}")
+
+
+# ── 全局 httpx 客户端 (连接池复用) ──
+
+_HTTPX_CLIENT: "Optional[httpx.Client]" = None
+
+
+def _get_http_client() -> httpx.Client:
+    global _HTTPX_CLIENT
+    if _HTTPX_CLIENT is None:
+        _HTTPX_CLIENT = httpx.Client(
+            timeout=httpx.Timeout(120.0, connect=15.0),
+            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+            follow_redirects=True,
+        )
+    return _HTTPX_CLIENT
 
 
 # ── 错误类型 ──

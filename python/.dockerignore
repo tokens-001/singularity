@@ -1,0 +1,32 @@
+# 敏感文件
+.env
+*.key
+*.pem
+
+# 运行时数据 (挂载到 volume)
+.qidian/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.eggs/
+*.egg-info/
+
+# 测试残留
+.qidian/tasks/*.json
+.qidian/tmp/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# Git
+.git/
+.gitignore

@@ -15,9 +15,64 @@ from typing import Optional
 from . import config
 from . import tracker
 from . import dispatcher as disp_mod
-from . import orchestrator
 from .project import ProjectState, Phase, save, load
 from .tracker import TaskStatus
+
+
+def _repair_truncated_json(raw: str) -> dict | None:
+    """尝试修复被截断的 JSON —— 补全未闭合的括号和引号。"""
+    if not raw:
+        return None
+    import re as _re
+    # 提取 JSON 块
+    body = raw
+    m = _re.search(r"```(?:json)?\s*\n(.*)", raw, _re.DOTALL)
+    if m:
+        body = m.group(1).strip()
+    # 找到第一个 {
+    start = body.find("{")
+    if start == -1:
+        return None
+    body = body[start:]
+    # 数括号，补充未闭合的
+    depth = 0
+    in_string = False
+    escaped = False
+    for ch in body:
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+    # 补全
+    if in_string:
+        body += '"'
+    while depth > 0:
+        # 找到最后一个完整结构来决定补 ] 还是 }
+        stripped = body.rstrip()
+        if stripped.endswith("]"):
+            body += "}"
+            depth -= 1
+        elif stripped.endswith("}") or stripped.endswith('"'):
+            body += "}"
+            depth -= 1
+        else:
+            body += "]}"
+            depth -= 2
+    try:
+        return json.loads(body)
+    except (json.JSONDecodeError, Exception):
+        return None
 
 
 # ═══════════════════════════════════════════════════════════
@@ -30,7 +85,7 @@ _RESEARCHER_PREAMBLE = """你是项目调研员。基于项目需求，搜集可
 项目范围: {scope}
 原始约束: {constraints}
 
-请搜索并输出结构化调研报告（JSON）:
+请分析并输出结构化调研报告（JSON，不要调用工具，直接输出）:
 {{
   "references": [
     {{"name": "...", "source": "...", "core_idea": "...", "pros": [...], "cons": [...], "applicability": "high|medium|low"}}
@@ -49,7 +104,7 @@ _ARCHITECT_PREAMBLE = """你是系统架构师。基于需求和调研报告，�
 原始约束: {constraints}
 调研报告: {research}
 
-你需要产出架构方案 + 任务分解清单 + 约束。输出严格 JSON，必须符合以下 Schema:
+你需要产出架构方案 + 任务分解清单 + 约束。不要调用工具，直接输出 JSON。必须符合以下 Schema:
 
 {{
   "architecture": "主设计思路 + 模块划分 + 数据流 (必填, <500字)",
@@ -91,7 +146,7 @@ _REVIEWER_PREAMBLE = """你是系统审查员。只审查本次改动的文件�
 本次改动的任务: {task_ids}
 改动范围: {changed_files}
 
-只审查上述 changed_files 中的文件，不要扫描未改动的模块。输出严格 JSON:
+只审查上述 changed_files 中的文件，不要扫描未改动的模块。不要调用工具，直接输出 JSON:
 {{
   "issues": [
     {{
@@ -212,18 +267,31 @@ def _run_research(project: ProjectState, agents: dict) -> str:
     import re as _re
     report = None
     if raw:
-        try:
-            m = _re.search(r"```json\s*\n(.*?)\n```", raw, _re.DOTALL)
+        # 尝试多种方式提取 JSON
+        candidates = []
+        # 方式1: ```json ... ``` 代码块
+        for m in _re.finditer(r"```(?:json)?\s*\n(.*?)```", raw, _re.DOTALL):
+            candidates.append(m.group(1).strip())
+        # 方式2: 裸 {...} 块 (找最外层的)
+        if not candidates:
+            m = _re.search(r"\{[\s\S]*\}", raw)
             if m:
-                report = json.loads(m.group(1))
-            else:
-                m2 = _re.search(r"\{[\s\S]*\}", raw)
-                if m2:
-                    report = json.loads(m2.group())
-        except (json.JSONDecodeError, Exception):
-            pass
+                candidates.append(m.group().strip())
+        for c in candidates:
+            try:
+                report = json.loads(c)
+                break
+            except json.JSONDecodeError:
+                # 修复常见 JSON 错误
+                try:
+                    fixed = _re.sub(r',\s*}', '}', c)  # trailing comma
+                    fixed = _re.sub(r',\s*]', ']', fixed)
+                    report = json.loads(fixed)
+                    break
+                except Exception:
+                    continue
     if report is None:
-        report = {"raw_output": raw[:5000], "parse_error": True}
+        report = {"raw_output": raw[:5000] if raw else "", "parse_error": True}
 
     project.research_report = report
     project.add_lineage({"action": "research_complete",
@@ -282,7 +350,7 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
                 if m2:
                     arch = json.loads(m2.group())
         except (json.JSONDecodeError, Exception):
-            pass
+            arch = _repair_truncated_json(raw)
     if arch is None:
         # 重试一次: 附加格式指令
         retry_prompt = prompt + "\n\n[格式错误] 上一次输出不是合法JSON。请用 ```json ... ``` 包裹输出，确保可以被 JSON.parse 解析。"
@@ -306,7 +374,7 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
                     if m2:
                         arch = json.loads(m2.group())
             except (json.JSONDecodeError, Exception):
-                pass
+                arch = _repair_truncated_json(raw2) or _repair_truncated_json(raw)
     if arch is None:
         arch = {"raw_output": raw[:5000], "parse_error": True}
 
@@ -539,12 +607,17 @@ def _run_fixing(project: ProjectState, agents: dict) -> str:
 
 def start_project_workflow(project: ProjectState, agents: dict) -> str:
     """项目工作流入口: 根据 phase 执行下一步。"""
+    if project.phase != Phase.TEMPLATE:
+        return run_phase(project, agents)
+
     # 需求确认 → research
-    if project.phase == Phase.TEMPLATE and project.description:
-        if _needs_research(project):
-            project.phase = Phase.RESEARCHING
-        else:
-            project.phase = Phase.PLANNING
-        save(project)
+    if not project.description:
+        return "请先填写需求描述再启动工作流"
+
+    if _needs_research(project):
+        project.phase = Phase.RESEARCHING
+    else:
+        project.phase = Phase.PLANNING
+    save(project)
 
     return run_phase(project, agents)

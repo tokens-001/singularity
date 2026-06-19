@@ -1,0 +1,473 @@
+"""内部模块 — 核心执行引擎。
+
+纯执行: dispatch + validate + trace。worker 线程安全，不写 tracker。
+"""
+
+from __future__ import annotations
+
+import json
+import time
+import subprocess as _sp
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED, as_completed
+from pathlib import Path
+
+from ._types import RunContext, BatchOutput, _SnapProxy
+from ._worktree import (
+    _maybe_create_worktree, _cleanup_wt, _lock_wt, _unlock_wt,
+    _anchor_ref, _build_merge_request,
+)
+from . import config
+from . import dispatcher as disp_mod
+from . import router as router_mod
+from . import snapshot as snap_mod
+from . import tracker
+from . import validator as val_mod
+from . import neijinglu as nj_mod
+from . import witness
+from . import memory as mem_mod
+from . import pre_search as pre_mod
+from . import chancellor as chan_mod
+from .executors.worktree import (
+    Worktree, create as wt_create, cleanup as wt_cleanup,
+    merge_back as wt_merge_back, commit_wt, changed_files_between,
+)
+from .tracker import TaskStatus
+
+
+_PLANNER_PREAMBLE = """\
+[系统指令] 你是架构分析器 (只读 Planner)。
+职责: 分析问题、设计方案，任何人不得要求你修改文件。
+输出格式:
+1. ## 问题分析 — 拆解问题本质、定位根因
+2. ## 方案设计 — 具体步骤、架构决策、取舍理由
+3. ## 改动清单 — 建议改哪些文件、怎么改 (不实际修改)
+4. ## 风险提示 — 边界条件、回滚策略、注意事项
+
+若任务可拆分为多个独立子任务, 在末尾输出 ```json 块:
+```json
+[
+  {"desc": "子任务描述", "suggested_level": "E", "depends_on_local_id": []}
+]
+```
+depends_on_local_id 用从 0 开始的索引指代同数组内的子任务。
+不可拆分则不输出 json 块。
+
+---
+"""
+
+def _inject_memory(description: str) -> str:
+    """MAGMA 记忆注入: 查询相关历史，生成简短上下文前缀。"""
+    try:
+        mem_mod._ensure_dir()
+        events = mem_mod._load_events()
+        if not events or len(events) < 2:
+            return ""
+        result = mem_mod.query(description, beam_width=2, max_hops=2)
+        items = result.get("traversal", {}).get("narrative", [])
+        if not items:
+            return ""
+        lines = ["[相关历史]"]
+        count = 0
+        for item in items[:3]:
+            desc = item.get("description", "")[:60]
+            score = item.get("score", 0)
+            if score < 0.01:
+                continue
+            similarity = item.get("similarity", "")
+            tag = f"(相似度 {similarity})" if similarity else ""
+            lines.append(f"- {desc} {tag}")
+            count += 1
+        if count == 0:
+            return ""
+        lines.append("参考以上历史任务的改动方案。\n")
+        return "\n".join(lines)
+    except Exception as e:
+        try: witness.heartbeat("memory", f"warn:inject_memory:{e}")
+        except: pass
+        return ""
+
+def _build_project_context(task) -> str:
+    """项目上下文注入: 从 project 提取调研推荐+约束+验收标准。
+
+    只在 task 有 project_id 且 project 存在时生效。
+    返回空字符串表示无需注入。
+    """
+    pid = getattr(task, 'project_id', '')
+    if not pid:
+        return ""
+    try:
+        from .project import load as _load_proj
+        proj = _load_proj(pid)
+        if not proj:
+            return ""
+        parts = [f"[项目上下文] {proj.name}"]
+        # 调研推荐
+        if proj.research_report:
+            rec = proj.research_report.get("recommendation", "")
+            pitfalls = proj.research_report.get("pitfalls", [])
+            if rec:
+                parts.append(f"调研推荐: {rec[:200]}")
+            if pitfalls:
+                parts.append(f"注意事项: {'; '.join(pitfalls[:3])}")
+        # 约束清单
+        if proj.constraints_checklist:
+            parts.append(f"约束清单: {'; '.join(proj.constraints_checklist[:5])}")
+        # 架构验收标准 (匹配子任务)
+        if proj.architecture:
+            tasks = proj.architecture.get("tasks", [])
+            desc = getattr(task, 'description', '')
+            for tdef in tasks:
+                if tdef.get("title", "") in desc or tdef.get("id", "") in desc:
+                    acceptance = tdef.get("acceptance", "")
+                    if acceptance:
+                        parts.append(f"验收标准: {acceptance}")
+                    break
+        return "\n".join(parts) if len(parts) > 1 else ""
+    except Exception:
+        return ""
+
+def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
+    """纯执行: dispatch + validate, 返回 BatchOutput。
+
+    修复 #7: 不调任何 tracker.transition/cas/create。调用方 (主线程) 负责状态机。
+    修复 #5: 入口 _read(task.id) 重读, 不依赖传入的内存 Task 对象 (可能陈旧)。
+    修复 #2: v3 路径用 commit_wt 拿到含改动的 commit, 再构造 MergeRequest。
+    """
+    # 修复 #5: 重读文件, 不信任传入的 task 内存对象
+    fresh = tracker._read(task.id)
+    if fresh is not None:
+        task = fresh
+
+    level = task.route_level
+    route_gate = task.route_gate
+    route_type = task.route_type
+
+    feedback = ""
+    last_validation = val_mod.ValidationReport(
+        verdict="未知", action="abort",
+        unverified=["dispatcher 未产出可校验结果"],
+    )
+    disp_result = None
+    term_reason = "未执行"
+    pending_merge_req = None
+    planner_decomposed = False
+
+    snap = _SnapProxy(ctx.snapshot_ref)
+
+    # ── 执行前钩子 ──
+    pre_warnings = val_mod.pre_execution_hook(task.description, snap)
+    if pre_warnings:
+        for w in pre_warnings:
+            witness.heartbeat(task.id, f"pre_hook: {w[:80]}")
+
+    # 容灾: 获取 fallback 链, 当前 agent 失败自动切下一个
+    # 如果任务已重试多次，强制优先用 premium 模型
+    total_failures = getattr(task, 'retry_count', 0)
+    force_premium = total_failures >= 2  # 2次失败 → 跳过便宜模型直上 premium
+    fallback_chain = disp_mod.pick_agent_fallback_chain(agents, level, fallback_levels=["E+","E"])
+    if force_premium and fallback_chain:
+        # 把 premium 模型移到最前面 (model 名含 glm 或 opus)
+        premium = [a for a in fallback_chain if any(p in a.get('model','').lower() for p in ('glm','opus'))]
+        cheap = [a for a in fallback_chain if a not in premium]
+        fallback_chain = premium + cheap
+    tried_models: set[str] = set()
+
+    while True:
+        if not fallback_chain:
+            break
+        agent_cfg = fallback_chain[0]
+        level_max = agent_cfg.get("max_turns", config.DEFAULT_MAX_TURNS)
+        is_planner = agent_cfg.get("mode") == "planner"
+
+        wt = _maybe_create_worktree(task.id, level, agent_cfg, ctx.snapshot_ref)
+        cwd = str(wt.path) if wt else ""
+
+        if is_planner and wt:
+            _lock_wt(wt)
+
+        for turn in range(1, level_max + 1):
+            witness.heartbeat(task.id, level)
+
+            # 检查人工取消标记
+            cancel_path = config.CANCEL_DIR / f"{task.id}.json"
+            if cancel_path.exists():
+                cancel_path.unlink()
+                wt and _cleanup_wt(wt)
+                return BatchOutput(
+                    ok=False, task_id=task.id,
+                    term_reason="cancelled_by_user",
+                    validation=val_mod.ValidationReport(
+                        verdict="阻断", action="abort",
+                        unverified=["用户手动取消"],
+                    ),
+                )
+
+            effective_task = task.description
+            # ── MAGMA 记忆注入 ──
+            if turn == 1 and feedback == "":
+                mem_ctx = _inject_memory(task.description)
+                if mem_ctx:
+                    effective_task = mem_ctx + "\n\n" + effective_task
+            if is_planner:
+                effective_task = _PLANNER_PREAMBLE + effective_task
+            # ── 项目上下文注入 ──
+            proj_ctx = _build_project_context(task)
+            if proj_ctx:
+                effective_task = proj_ctx + "\n\n---\n" + effective_task
+
+            disp_result = disp_mod.dispatch(
+                effective_task, level, task.id, agents,
+                feedback=feedback, baseline_ref=ctx.snapshot_ref, cwd=cwd,
+            )
+            exec_result = disp_result.executor_result
+
+            if not exec_result.success:
+                # 容灾: 切下一个 agent
+                tried_models.add(agent_cfg.get("model", ""))
+                fallback_chain = [a for a in fallback_chain if a.get("model", "") not in tried_models]
+                _cleanup_wt(wt)
+                if fallback_chain:
+                    witness.heartbeat(task.id, f"fallback: {agent_cfg.get('model','')}→{fallback_chain[0].get('model','')}")
+                    break  # 跳出 turn loop, 用新 agent
+                last_validation = val_mod.ValidationReport(
+                    verdict="未知",
+                    action="abort",
+                    unverified=[f"executor 失败 (已试 {len(tried_models)} agent): {exec_result.error_kind}: {exec_result.error}"],
+                    turns_used=turn,
+                )
+                break
+
+            # planner: 存 patch + 尝试分解 (先建后定: decompose 非空才 materialize)
+            if is_planner:
+                _save_planner_patch(task.id, exec_result.raw_output)
+                subtasks = decompose(exec_result.raw_output)
+                if subtasks:
+                    # 分解成功 → 主线程 materialize (worker 不写 tracker)
+                    # 这里标记让主线程处理, BatchOutput 带回 subtasks 信息
+                    planner_decomposed = True
+                    _cleanup_wt(wt)
+                    return BatchOutput(
+                        ok=True, task_id=task.id, dispatch_result=disp_result,
+                        term_reason=f"decomposed (level={level}, turn={turn})",
+                        validation=val_mod.ValidationReport(
+                            verdict="通过", action="pass",
+                            unverified=[f"planner 分解出 {len(subtasks)} 子任务"],
+                        ),
+                        planner_decomposed=True,
+                    )
+            elif wt:
+                if ctx.merge_queue is not None:
+                    # v3: commit_wt 拿含改动的 commit (修复 #2), 不直接 merge
+                    branch_ref = commit_wt(wt)
+                    if branch_ref:
+                        _anchor_ref(task.id, branch_ref)  # 防 gc 回收 (重要 #3)
+                        pending_merge_req = _build_merge_request(
+                            task, branch_ref, ctx.snapshot_ref,
+                        )
+                else:
+                    # v2: 直接 merge_back
+                    mr = wt_merge_back(wt)
+                    if not mr.ok:
+                        reason = mr.reason or f"冲突文件: {mr.conflicts}"
+                        last_validation = val_mod.ValidationReport(
+                            verdict="阻断", action="abort",
+                            unverified=[f"worktree merge 失败: {reason}"],
+                            turns_used=turn,
+                        )
+                        term_reason = f"merge_conflict (level={level}, turn={turn})"
+                        _cleanup_wt(wt)
+                        return BatchOutput(
+                            ok=False, task_id=task.id, dispatch_result=disp_result,
+                            term_reason=term_reason, validation=last_validation,
+                        )
+
+            validation = val_mod.validate(
+                candidate=exec_result.raw_output,
+                gate_required=route_gate,
+                task_type=route_type,
+                changed_files=exec_result.changed_files,
+                snap=snap, turn=turn, max_turns=level_max,
+            )
+            # 补充质量信号
+            try:
+                quality = val_mod.post_execution_hook(exec_result, snap)
+                validation.confidence = quality.get("confidence", 0.5)
+                validation.quality_signals = quality.get("quality_signals", {})
+            except Exception:
+                pass
+            last_validation = validation
+
+            if validation.action == "pass":
+                _cleanup_wt(wt)
+                return BatchOutput(
+                    ok=True, task_id=task.id, dispatch_result=disp_result,
+                    term_reason=f"pass (level={level}, turn={turn})",
+                    validation=validation,
+                    merge_request=pending_merge_req,
+                )
+
+            if validation.action == "retry":
+                fb = [json.dumps(validation.evidence, ensure_ascii=False, indent=2)]
+                if quality.get("warnings"):
+                    fb.append("质量警告:\n" + "\n".join(f"- {w}" for w in quality["warnings"]))
+                if quality.get("failure_kind") and quality["failure_kind"] != "ok":
+                    fb.append(f"失败类型: {quality['failure_kind']}, 置信度: {quality['confidence']:.2f}")
+                feedback = "\n\n".join(fb)
+                continue
+
+            _cleanup_wt(wt)
+            return BatchOutput(
+                ok=False, task_id=task.id, dispatch_result=disp_result,
+                term_reason=f"{validation.action} (level={level}, turn={turn})",
+                validation=validation,
+            )
+
+        _cleanup_wt(wt)
+        next_level = disp_mod.escalate(level)
+        if next_level is None:
+            term_reason = f"escalation_exhausted (level={level})"
+            break
+        level = next_level
+        # 升级后重建 fallback 链 (新层级的新 agent 列表)
+        fallback_chain = disp_mod.pick_agent_fallback_chain(agents, level)
+        tried_models = set()
+        feedback = ""
+        feedback = ""
+
+    return BatchOutput(
+        ok=False, task_id=task.id, dispatch_result=disp_result,
+        term_reason=term_reason, validation=last_validation,
+    )
+
+def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
+    """worker 线程入口: 纯执行 + 重试。
+
+    修复 #7: 不写 tracker。重试时回传 retry 信号, 主线程决定是否再派发。
+    本函数在 worker 线程跑, 只调 run() (纯执行), 不碰 tracker。
+    """
+    retry = 0
+    while retry <= task.max_retries:
+        batch = run(task, ctx, agents)
+
+        # ── 执行后钩子 ──
+        try:
+            exec_result = batch.dispatch_result.executor_result if batch.dispatch_result else None
+            if exec_result:
+                snap = snap_mod.Snapshot(id=task.id, method="git", ref=ctx.snapshot_ref, created_at=0.0)
+                post_warnings = val_mod.post_execution_hook(exec_result, snap)
+                if post_warnings:
+                    batch.term_reason += f"; post_hook: {', '.join(post_warnings)}"
+        except Exception as e:
+            try: witness.heartbeat(task_id=task.id, status="error", detail=f"post_hook:{e}")
+            except: pass
+
+        if batch.validation.action == "pass" or batch.planner_decomposed:
+            return batch
+        if "merge_conflict" in batch.term_reason:
+            return batch
+
+        retry += 1
+        if retry > task.max_retries:
+            return batch
+
+        # 重试 (v2: 主仓库可能有 merge 残留; v3: worktree 已在 run() 内部清理)
+        if ctx.merge_queue is None:
+            # v2: 主仓库 rollback 到快照基线 (只在主线程, 不并发)
+            try:
+                snap = snap_mod.Snapshot(id=ctx.batch_id, method="git", ref=ctx.snapshot_ref, created_at=0.0)
+                snap_mod.rollback(snap)
+            except Exception:  # noqa: BLE001
+                pass
+        # v3: 不碰 PROJECT_ROOT —— 主仓库未动, worktree 已由 run() 内部 _cleanup_wt 清理
+        # retry_count 由主线程在回收时按需写; worker 不写
+
+    return batch
+
+
+def _save_planner_patch(task_id: str, content: str) -> None:
+    patch_path = config.PATCH_DIR / f"{task_id}_plan.md"
+    patch_path.parent.mkdir(parents=True, exist_ok=True)
+    patch_path.write_text(content, encoding="utf-8")
+
+
+def _read_planner_patch(task_id: str) -> str | None:
+    """读 D 层的分析方案 patch，用于创建 E+ 修复任务。"""
+    patch_path = config.PATCH_DIR / f"{task_id}_plan.md"
+    if not patch_path.exists():
+        return None
+    try:
+        return patch_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
+                pre_search_skipped: bool = False, pre_search_reason: str = "",
+                pre_search_top_decisions: list = None, pre_search_memory: dict = None) -> None:
+    try:
+        report = nj_mod.build_report(
+            task=task.description, route=route,
+            executor_result=disp_result.executor_result if disp_result else None,
+            validation=validation, snapshot=snap, rolled_back=rolled_back,
+            pre_search_skipped=pre_search_skipped,
+            pre_search_reason=pre_search_reason,
+            pre_search_top_decisions=pre_search_top_decisions,
+            pre_search_memory=pre_search_memory,
+        )
+        nj_mod.save_trace(report, task.id)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── MAGMA 多图记忆索引 + 状态更新 ──
+    try:
+        changed_files = disp_result.executor_result.changed_files if disp_result else []
+        mem_mod.index_task(
+            task_id=task.id,
+            description=task.description,
+            changed_files=changed_files,
+            depends_on=task.depends_on,
+            created_at=task.created_at,
+        )
+        # 补充事件属性: 终态 + route info
+        final_status = "rolled_back" if rolled_back else task.status.value
+        mem_mod.update_attrs(task.id,
+            status=final_status,
+            route_level=route.level if route else "",
+            route_type=route.task_type if route else "",
+        )
+    except Exception:
+        pass
+
+
+def decompose(planner_raw_output: str) -> list[dict]:
+    """解析 planner stdout 里的 ```json 子任务块。
+
+    返回 [{desc, suggested_level, depends_on_local_id}, ...]。
+    无 JSON 块或解析失败 → [] (当普通方案, 不分解)。
+    """
+    import re as _re
+    # 抓 ```json ... ``` 块
+    m = _re.search(r"```json\s*\n(.*?)\n```", planner_raw_output, _re.DOTALL)
+    if not m:
+        return []
+    try:
+        data = json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    # 校验每条结构
+    subtasks = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        if "desc" not in item:
+            continue
+        subtasks.append({
+            "desc": str(item["desc"]),
+            "suggested_level": str(item.get("suggested_level", "E")),
+            "depends_on_local_id": list(item.get("depends_on_local_id", [])),
+        })
+    return subtasks
+
+

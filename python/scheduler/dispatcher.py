@@ -184,59 +184,53 @@ def pick_agent(agents: dict, level: str, role: str = None,
 
 def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
                                exclude: set = None,
-                               project_lineup: dict[str, list[str]] = None) -> list[dict]:
+                               project_lineup: dict[str, list[str]] = None,
+                               fallback_levels: list[str] = None) -> list[dict]:
     """返回该层可用 agent 列表。project_lineup > role > default > 其他。
 
     API 不可用的自动跳过。
+    若目标层无可用 agent，尝试 fallback_levels 列表。
     """
-    candidates = agents.get(level, [])
-    if not candidates:
-        return []
-    exclude = exclude or set()
-    result = []
-    seen = set()
+    def _collect(tier: str):
+        cands = agents.get(tier, [])
+        if not cands:
+            return []
+        excl = exclude or set()
+        res = []; s = set()
+        lineup = (project_lineup or {}).get(tier, [])
+        if lineup:
+            for mn in lineup:
+                found = None
+                for a in cands:
+                    k = a.get("model","")
+                    if k == mn and k not in s and k not in excl and agent_api_available(a):
+                        found = a; break
+                if not found:
+                    cross = _find_agent_by_model(agents, mn)
+                    if cross and agent_api_available(cross): found = cross
+                if found:
+                    res.append(found); s.add(found.get("model",""))
+        if role:
+            for a in cands:
+                k = a.get("model","")
+                if role in (a.get("roles") or []) and k not in s and k not in excl and agent_api_available(a):
+                    res.append(a); s.add(k)
+        for a in cands:
+            k = a.get("model","")
+            if a.get("default") and k not in s and k not in excl and agent_api_available(a):
+                res.append(a); s.add(k)
+        for a in cands:
+            k = a.get("model","")
+            if k not in s and k not in excl and agent_api_available(a):
+                res.append(a); s.add(k)
+        return res
 
-    lineup = (project_lineup or {}).get(level, [])
-    if lineup:
-        for model_name in lineup:
-            found = None
-            for a in candidates:
-                key = a.get("model", "")
-                if key == model_name and key not in seen and key not in exclude:
-                    if agent_api_available(a):
-                        found = a
-            # 跨层找
-            if not found:
-                cross = _find_agent_by_model(agents, model_name)
-                if cross and agent_api_available(cross):
-                    found = cross
-            if found:
-                key = found.get("model", "")
-                result.append(found)
-                seen.add(key)
-
-    if role:
-        for a in candidates:
-            key = a.get("model", "")
-            if role in (a.get("roles") or []) and key not in seen and key not in exclude:
-                if agent_api_available(a):
-                    result.append(a)
-                    seen.add(key)
-
-    for a in candidates:
-        key = a.get("model", "")
-        if a.get("default") and key not in seen and key not in exclude:
-            if agent_api_available(a):
-                result.append(a)
-                seen.add(key)
-
-    for a in candidates:
-        key = a.get("model", "")
-        if key not in seen and key not in exclude:
-            if agent_api_available(a):
-                result.append(a)
-                seen.add(key)
-
+    result = _collect(level)
+    if not result and fallback_levels:
+        for fl in fallback_levels:
+            result = _collect(fl)
+            if result:
+                break
     return result
 
 

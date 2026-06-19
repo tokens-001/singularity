@@ -294,4 +294,9 @@ TEMPLATES = {
         "fields": ["重构目标", "现有问题", "不改的接口", "预期收益"],
         "research_domains": ["设计模式参考", "业界实践"],
     },
+    "agent_dev": {
+        "name": "Agent开发",
+        "fields": ["Agent名称", "能力需求", "目标模型", "工具需求", "性能要求", "验收标准"],
+        "research_domains": ["Agent框架参考", "工具调用优化", "同类Agent实现"],
+    },
 }

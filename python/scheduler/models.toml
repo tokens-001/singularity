@@ -3,9 +3,9 @@
 # provider 对应 api_store 里的 api_id
 
 [[models]]
-id = "deepseek-v4-flash"
+id = "deepseek-chat"
 provider = "deepseek"
-display = "DeepSeek V4 Flash"
+display = "DeepSeek V3 (Chat)"
 tiers = ["E"]
 speed = "fast"
 cost = "budget"

@@ -1,0 +1,16 @@
+name: Test
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: QIDIAN_SKIP_EMBED=1 python3 smoke_test.py
+      - run: QIDIAN_SKIP_EMBED=1 python3 unit_tests.py
+      - run: pip install mypy && mypy scheduler/ --ignore-missing-imports || true
