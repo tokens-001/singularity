@@ -37,7 +37,7 @@ class RouteResult:
 _GATE_FILE_RE = re.compile(r"\b(core|tokenizer|graph|search)\.py\b", re.ASCII)
 _LEVEL_PATTERNS = [
     (1, "E+", re.compile(r"重写|多文件|新模块|插件|从零开始|大规模重构|跨模块")),
-    (2, "D",  re.compile(r"审|设计|架构|方案|重构|review|审查")),
+    (2, "D",  re.compile(r"架构设计|系统设计|安全审计|架构方案|技术方案|架构审查|代码审查|系统审查|深度重构|系统架构")),
     (3, "E",  re.compile(r"新建|创建|搭建|建立|写代码|编写|实现|加个|添加|修改|修复|查|找|解释|怎么|报错|坏了|不对|异常|删掉")),
 ]
 
