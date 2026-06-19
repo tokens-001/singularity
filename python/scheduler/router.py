@@ -273,3 +273,49 @@ def _apply_phase_boost(ranked: list[dict], phase: str,
     # 按加成后分数重排
     ranked.sort(key=lambda r: r["_score"], reverse=True)
     return [r["model"] for r in ranked]
+
+
+# ── 拓扑路由 (AdaptOrch 论文) ──────────────────────────────────
+
+def select_topology() -> dict:
+    """基于 DAG 结构指标选择执行拓扑。
+
+    AdaptOrch 论文条件:
+      τP (并行): ω>1, γ<0.3 — 宽图，多独立子任务并行
+      τH (层级): δ大, k大 — 深链，层级分解
+      τX (混合): γ中等 — 部分并行部分顺序
+      τS (顺序): 默认 — 单链或小图
+
+    返回: {"topology": "τP"|"τS"|"τH"|"τX", "omega": ω, "delta": δ, "gamma": γ, ...}
+    """
+    try:
+        from . import tracker
+        m = tracker.dag_metrics()
+    except Exception:
+        return {"topology": "τS", "omega": 1, "delta": 1, "gamma": 0.0,
+                "node_count": 1, "reason": "metrics_unavailable"}
+
+    omega = m["omega"]
+    delta = m["delta"]
+    gamma = m["gamma"]
+    n = m["node_count"]
+
+    # 单节点 → 顺序
+    if n <= 1:
+        return {**m, "topology": "τS", "reason": "single_node"}
+
+    # AdaptOrch 决策表
+    if omega >= 3 and gamma < 0.3:
+        topo = "τP"
+        reason = f"ω={omega}≥3 且 γ={gamma:.2f}<0.3 → 并行拓扑"
+    elif delta >= 5 and gamma > 0.5:
+        topo = "τH"
+        reason = f"δ={delta}≥5 且 γ={gamma:.2f}>0.5 → 层级分解"
+    elif gamma > 0.5:
+        topo = "τX"
+        reason = f"γ={gamma:.2f}>0.5 → 混合拓扑"
+    else:
+        topo = "τS"
+        reason = f"ω={omega} δ={delta} γ={gamma:.2f} → 默认顺序"
+
+    return {**m, "topology": topo, "reason": reason}

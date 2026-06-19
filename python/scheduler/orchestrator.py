@@ -207,20 +207,98 @@ def _judge_and_profile(task, batch: BatchOutput) -> None:
         pass
 
 
+def _process_batch(task, batch, route, snap, agents: dict, results: list) -> str:
+    """处理 BatchOutput: 状态转换 + trace + 事件 + QA Gate。返回 reason。"""
+    _judge_and_profile(task, batch)
+    validation = batch.validation
+    term_reason = batch.term_reason
+    disp_result = batch.dispatch_result
+
+    if batch.planner_decomposed:
+        _materialize_in_main(batch, task)
+        reason = f"decomposed: {term_reason}"
+    elif validation and validation.action == "pass":
+        tracker.transition(task.id, TaskStatus.DONE)
+        _maybe_complete_parents(task.id)
+        reason = f"pass: {term_reason}"
+    elif validation and validation.action == "rollback":
+        snap_mod.rollback(snap)
+        tracker.transition(task.id, TaskStatus.ROLLED_BACK, error=f"{validation.verdict}: {term_reason}")
+        reason = f"rolled_back: {term_reason}"
+    else:
+        d_plan = _read_planner_patch(task.id)
+        if d_plan and "escalation_exhausted" in term_reason:
+            fix_task = tracker.create(f"[D方案执行] {task.description[:80]}", depends_on=[task.id], depth=task.depth)
+            tracker.transition(fix_task.id, TaskStatus.PENDING, route_level="E+", route_locked=True)
+            tracker.transition(task.id, TaskStatus.FAILED, error=f"E+修复任务 {fix_task.id[:8]}: {term_reason}")
+            reason = f"escalated: {fix_task.id[:8]}"
+        else:
+            verdict = getattr(validation, 'verdict', '未知') if validation else '未知'
+            tracker.transition(task.id, TaskStatus.FAILED, error=f"{verdict}: {term_reason}")
+            reason = f"failed: {term_reason}"
+
+    _save_trace(task, route, snap, disp_result, validation,
+                validation.action == "rollback" if validation else False,
+                pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
+                pre_search_top_decisions=batch.pre_search_top_decisions, pre_search_memory=batch.pre_search_memory)
+    # SSE events
+    for te in (getattr(batch, 'tool_events', []) or []):
+        te['task_id'] = task.id; _pending_sse_events.append(te)
+    turn = getattr(batch, 'turn_count', 0) or 0
+    if turn > 0:
+        _pending_sse_events.append({"kind": "turn", "msg": f"[{task.id[:8]}] {turn} 轮", "ts": time.time(), "task_id": task.id})
+    results.append((task.id, reason, validation))
+    return reason
+
+
 def _run_queue_v2(agents: dict) -> list[tuple]:
-    """v2 顺序: 主线程同步调 run(merge_queue=None), 终态在这写。"""
+    """v2 拓扑自适应: 根据 DAG 结构选 τP(并行)/τS(顺序)。"""
     results: list[tuple] = []
 
     while True:
         stalled = witness.check_stalled()
-        if stalled:
-            pass
+        if stalled: pass
 
-        # 拓扑自适应: 从所有就绪任务中选最优
         ready = tracker.list_pending()
-        if not ready:
-            break
+        if not ready: break
         ready = schedule_policy(ready)
+
+        # ── 拓扑路由: τP 并行 (ω≥3) → 多任务并发 ──
+        try:
+            topo = router_mod.select_topology()
+        except Exception:
+            topo = {"topology": "τS", "omega": 1}
+        if topo.get("topology") == "τP" and len(ready) >= 2:
+            batch_size = min(topo.get("omega", 3), len(ready), 6)
+            batch = ready[:batch_size]
+            _pending_sse_events.append({"kind": "system", "msg": f"τP: {batch_size} 并行", "ts": time.time()})
+            # 路由+快照
+            setups = []
+            for t in batch:
+                if not t.route_locked:
+                    r = router_mod.route(t.description)
+                    t.route_level = r.level; t.route_gate = r.gate_required; t.route_type = r.task_type
+                tracker.transition(t.id, TaskStatus.ROUTED, route_level=t.route_level,
+                                   route_gate=t.route_gate, route_type=t.route_type)
+                snap = snap_mod.take(t.id)
+                tracker.transition(t.id, TaskStatus.RUNNING, snapshot_id=snap.id)
+                setups.append((t, snap))
+            # 并行执行
+            futures = {}
+            with ThreadPoolExecutor(max_workers=batch_size) as pool:
+                for t, snap in setups:
+                    ctx = RunContext(batch_id=t.id, snapshot_ref=snap.ref, merge_queue=None)
+                    futures[pool.submit(_run_with_retry, t, ctx, agents)] = (t, snap)
+                for fut in as_completed(futures):
+                    t, snap = futures[fut]
+                    try:
+                        b_result = fut.result(timeout=600)
+                        route = router_mod.RouteResult(level=t.route_level, gate_required=t.route_gate, task_type=t.route_type)
+                        _process_batch(t, b_result, route, snap, agents, results)
+                    except Exception as e:
+                        results.append((t.id, f"τP_error:{e}", None))
+            continue
+
         task = ready[0]
 
         # 尊重 planner 建议层级, 不重新路由 (建议 #6)
