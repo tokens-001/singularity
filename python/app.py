@@ -2185,6 +2185,16 @@ def api_agent_skills_update(level, model):
 # 健康检查
 # ═══════════════════════════════════════════════════════════
 
+@app.route("/api/dag-metrics")
+def api_dag_metrics():
+    """DAG 结构指标: ω(并行度) δ(关键路径) γ(耦合度)。用于拓扑路由决策。"""
+    try:
+        metrics = tracker.dag_metrics()
+        return jsonify(metrics)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/health")
 def health():
     """健康检查端点 — Docker/monitoring 用。"""

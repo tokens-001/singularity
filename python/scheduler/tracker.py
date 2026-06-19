@@ -344,3 +344,120 @@ def recover() -> int:
             _write(task)
             count += 1
     return count
+
+
+# ── DAG 结构分析 (拓扑路由前置) ────────────────────────────────
+
+def dag_metrics() -> dict:
+    """计算当前任务 DAG 的结构指标。
+
+    返回:
+      {"omega": ω, "delta": δ, "gamma": γ,
+       "node_count": n, "edge_count": m,
+       "components": c, "topology_hint": "parallel"|"sequential"|"mixed"}
+    ω = 最大反链 (并行度上限, Dilworth)
+    δ = 关键路径 (最长依赖链, 最小延迟)
+    γ = 耦合密度 (|E| / max_possible_edges)
+    """
+    tasks = _load_all_tasks()
+    if len(tasks) < 2:
+        return {"omega": 1, "delta": 1, "gamma": 0.0,
+                "node_count": len(tasks), "edge_count": 0,
+                "components": 1, "topology_hint": "sequential"}
+
+    # 用 task_id 建图，只考虑非终态任务
+    active_ids = {t.id for t in tasks
+                  if t.status not in _TERMINAL}
+    if not active_ids:
+        active_ids = {t.id for t in tasks}
+
+    # 邻接表: u → [v] (v depends_on u, 所以 u 要先完成)
+    adj: dict[str, list[str]] = {tid: [] for tid in active_ids}
+    indeg: dict[str, int] = {tid: 0 for tid in active_ids}
+    for t in tasks:
+        if t.id not in active_ids:
+            continue
+        for dep_id in t.depends_on:
+            if dep_id in active_ids:
+                adj.setdefault(dep_id, []).append(t.id)
+                indeg[t.id] = indeg.get(t.id, 0) + 1
+
+    edge_count = sum(len(v) for v in adj.values())
+    n = len(active_ids)
+    max_edges = n * (n - 1) / 2
+    gamma = edge_count / max_edges if max_edges > 0 else 0.0
+
+    # δ: 最长路径 (DP on topological order)
+    # 用 Kahn 做拓扑排序同时 DP
+    indeg_copy = dict(indeg)
+    queue = [tid for tid in active_ids if indeg_copy.get(tid, 0) == 0]
+    dist: dict[str, int] = {tid: 1 for tid in active_ids}
+    topo_order: list[str] = []
+
+    while queue:
+        u = queue.pop(0)
+        topo_order.append(u)
+        for v in adj.get(u, []):
+            dist[v] = max(dist.get(v, 1), dist.get(u, 1) + 1)
+            indeg_copy[v] -= 1
+            if indeg_copy[v] == 0:
+                queue.append(v)
+
+    delta = max(dist.values()) if dist else 1
+
+    # ω: 最大反链 ≈ 最大 BFS level 宽度
+    # 用距离作 level，统计每层节点数
+    level_counts: dict[int, int] = {}
+    for tid, d in dist.items():
+        level_counts[d] = level_counts.get(d, 0) + 1
+    omega = max(level_counts.values()) if level_counts else 1
+
+    # 连通分量数 (弱连通)
+    visited: set[str] = set()
+    undirected: dict[str, set[str]] = {tid: set() for tid in active_ids}
+    for u in adj:
+        for v in adj[u]:
+            undirected.setdefault(u, set()).add(v)
+            undirected.setdefault(v, set()).add(u)
+    components = 0
+    for tid in active_ids:
+        if tid not in visited:
+            components += 1
+            stack = [tid]
+            while stack:
+                node = stack.pop()
+                if node in visited:
+                    continue
+                visited.add(node)
+                for nb in undirected.get(node, []):
+                    if nb not in visited:
+                        stack.append(nb)
+
+    # 拓扑提示
+    if omega >= 3 and gamma < 0.3:
+        hint = "parallel"
+    elif gamma > 0.6:
+        hint = "mixed"
+    else:
+        hint = "sequential"
+
+    return {
+        "omega": omega,
+        "delta": delta,
+        "gamma": round(gamma, 4),
+        "node_count": n,
+        "edge_count": edge_count,
+        "components": components,
+        "topology_hint": hint,
+    }
+
+
+def _load_all_tasks() -> list[Task]:
+    """加载所有任务 (供 DAG 分析)。"""
+    tasks = []
+    for p in _tasks_dir().glob("*.json"):
+        try:
+            tasks.append(Task.from_dict(json.loads(p.read_text(encoding="utf-8"))))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+    return tasks
