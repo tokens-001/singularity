@@ -41,6 +41,9 @@ from ._planner import (
 )
 from ._token_budget import record_tokens, get_usage_stats
 from ._profiler import record_perf, get_perf_stats
+from .execution_judge import judge, should_retry, build_reflexion_feedback
+from .model_profile import ProfileStore as _ProfileStore
+from .task_templates import get as _get_template, guess_template as _guess_template
 
 # ── 现有依赖 ────────────────────────────────────────────
 from . import config
@@ -96,6 +99,70 @@ def schedule_policy(tasks: list) -> list:
     return sorted(tasks, key=_score, reverse=True)
 
 
+# ── 执行裁判 + 画像更新 ────────────────────────────────
+
+_profile_store: _ProfileStore | None = None
+
+def _get_profile() -> _ProfileStore:
+    global _profile_store
+    if _profile_store is None:
+        _profile_store = _ProfileStore(config.QIDIAN_DIR / "model_profile.json")
+        _profile_store.load()
+    return _profile_store
+
+def _reorder_agents_by_rank(agents_list: list, ranked_models: list[str]) -> list:
+    """按画像排名重排 agent 列表：排名靠前的模型优先。"""
+    rank_map = {m: i for i, m in enumerate(ranked_models)}
+    return sorted(
+        agents_list,
+        key=lambda a: rank_map.get(a.get("model", ""), 999),
+    )
+
+
+def _judge_and_profile(task, batch: BatchOutput) -> None:
+    """执行裁判钩子：判分 + 画像更新 + Reflexion 重试。"""
+    disp = batch.dispatch_result
+    if disp is None or disp.executor_result is None:
+        return
+
+    output = disp.executor_result.raw_output or ""
+    agent_cfg = disp.agent_cfg or {}
+
+    # 1. 模板推断 + 注入（下次路由时参考）
+    task_type = _guess_template(task.description)
+
+    # 2. 裁判判分
+    verdict = judge(task.description, output, task_type)
+
+    # 3. 更新画像
+    store = _get_profile()
+    model = agent_cfg.get("model", "unknown")
+    elapsed = getattr(disp.executor_result, "elapsed", 0) or 0
+    tokens = getattr(disp.executor_result, "tokens", 0) or 0
+    store.record(model, task_type, verdict.pass_, elapsed, tokens, verdict.failure_mode)
+
+    # 4. 失败 + 可重试 → Reflexion 注入（写到 batch，让上层重试）
+    if not verdict.pass_ and should_retry(verdict, getattr(task, "retry_count", 0)):
+        feedback = build_reflexion_feedback(verdict)
+        batch.term_reason = f"judge_fail: {verdict.reason}"
+        batch.judge_verdict = verdict
+        batch.reflexion_feedback = feedback
+        # 改判：validator 说 pass 但 judge 说 fail → 覆盖
+        if batch.validation.action == "pass":
+            batch.validation = batch.validation.__class__(
+                verdict="fail", action="abort",
+                unverified=[verdict.reason],
+            )
+    else:
+        batch.judge_verdict = verdict
+
+    # 5. 持久化画像
+    try:
+        store.save()
+    except Exception:
+        pass
+
+
 def _run_queue_v2(agents: dict) -> list[tuple]:
     """v2 顺序: 主线程同步调 run(merge_queue=None), 终态在这写。"""
     results: list[tuple] = []
@@ -125,6 +192,18 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
         pre = pre_mod.pre_search(task.description, route)
         pre_mod.apply_escalation(route, pre)
 
+        # ── 画像路由: 给 dispatch 提供模型偏好 ──
+        ranked_models = router_mod.rank_models_for_task(
+            task.description, route.task_type,
+        )
+        effective_agents = agents
+        if ranked_models:
+            # 构造临时 lineup: 画像排名靠前的优先
+            effective_agents = dict(agents)  # 浅拷贝
+            effective_agents[route.level] = _reorder_agents_by_rank(
+                agents.get(route.level, []), ranked_models,
+            )
+
         tracker.transition(
             task.id, TaskStatus.ROUTED,
             route_level=route.level, route_gate=route.gate_required,
@@ -136,12 +215,12 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
         ctx = RunContext(batch_id=task.id, snapshot_ref=snap.ref, merge_queue=None)
 
         # D层委员会: 多agent并行出方案，合成最优
-        d_agents = agents.get("D", [])
+        d_agents = effective_agents.get("D", [])
         use_committee = route.level == "D" and len(d_agents) >= 2
         if use_committee:
-            batch = _run_committee(task, ctx, agents, d_agents)
+            batch = _run_committee(task, ctx, effective_agents, d_agents)
         else:
-            batch = _run_with_retry(task, ctx, agents)
+            batch = _run_with_retry(task, ctx, effective_agents)
 
         batch.pre_search_skipped = pre.skipped
         batch.pre_search_reason = pre.reason
@@ -152,6 +231,9 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
             "entity_matches": pre.memory.entity_matches,
             "graph_coverage": pre.memory.graph_coverage,
         }
+
+        # ── 执行裁判钩子 ──
+        _judge_and_profile(task, batch)
 
         # 主线程写终态 (修复 #3: 无 merge_request → 直接 DONE)
         validation = batch.validation

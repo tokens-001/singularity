@@ -132,3 +132,26 @@ def _scan_task_type(task: str, result: RouteResult) -> None:
             result.matched_signals.append(f"task_type: {pat.pattern} → {ttype}")
             return
     result.task_type = "default"
+
+
+def rank_models_for_task(task_desc: str, task_type: str = "",
+                         exclude: list[str] = None) -> list[str]:
+    """根据画像返回该任务类型的模型排名（最佳→最差），排除熔断模型。
+
+    冷启动（画像不足 5 条记录）时返回空列表，调用方自己兜底。
+    """
+    from .model_profile import ProfileStore
+    from . import config
+    from .task_templates import guess_template
+
+    ttype = task_type or guess_template(task_desc)
+    store = ProfileStore(config.QIDIAN_DIR / "model_profile.json")
+    store.load()
+
+    ranked = store.rank(ttype, exclude_models=exclude)
+    # 至少需要 5 条记录才启用画像路由（避免冷启动随机性）
+    total_records = sum(s.total_attempts for s in ranked)
+    if total_records < 5:
+        return []
+
+    return [s.model for s in ranked]
