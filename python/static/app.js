@@ -1089,12 +1089,17 @@ async function editModel(id){
   const models = await api('/api/models');
   const m = Object.values(models).find(x => x.id === id);
   if (!m) return;
-  const tiers = (m.tiers||[]).join(',');
-  const newTiers = prompt(`编辑模型: ${m.display} (${m.id})\n\n当前层级: ${tiers}\n可选: E, E+, D (逗号分隔)\n\nprovider: ${m.provider}\ncost: ${m.cost}\nspeed: ${m.speed}`, tiers);
-  if (newTiers === null) return;
-  const parsed = newTiers.split(',').map(s=>s.trim()).filter(s=>['E','E+','D'].includes(s));
-  if (!parsed.length) { alert('至少保留一个有效层级 (E, E+, D)'); return; }
-  const r = await api('/api/models/'+id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({tiers:parsed})});
+  const tiers = m.tiers||[];
+  const html = '<div style="padding:8px"><b>'+esc(m.display)+'</b> <span style="color:var(--text3);font-size:9px">'+esc(m.id)+'</span><br><br>层级：<br>'+['E','E+','D'].map(t=>{
+    const checked = tiers.includes(t);
+    return '<label style="display:inline-block;margin-right:12px;cursor:pointer;font-size:11px"><input type="checkbox" id="em-tier-'+t+'" '+(checked?'checked':'')+' onchange="event.stopPropagation()"> '+t+'</label>';
+  }).join('')+'<br><br><button class="btn sm" onclick="saveModelEdit(\''+esc(m.id)+'\')" style="margin-right:6px">保存</button><button class="btn sm" style="color:var(--text3)" onclick="renderModels()">取消</button></div>';
+  document.getElementById('models-body').innerHTML = html;
+}
+async function saveModelEdit(id){
+  const tiers = ['E','E+','D'].filter(t => document.getElementById('em-tier-'+t)?.checked);
+  if (!tiers.length) { alert('至少选一个层级'); return; }
+  const r = await api('/api/models/'+id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({tiers})});
   if (r.error) alert(r.error); else renderModels();
 }
 async function removeModel(id){
