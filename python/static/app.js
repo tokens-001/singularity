@@ -1127,8 +1127,16 @@ async function renderModels(){
       }
     }
     const costMark = {budget:'_',standard:'=',premium:'≡'};
-    body.innerHTML = models.map(m => {
+    // 按 provider 分组
+    const providerNames = {deepseek:'DeepSeek',zhipu:'智谱 GLM',kimi:'Moonshot Kimi',openai:'OpenAI',anthropic:'Anthropic'};
+    const groups = {};
+    for (const m of models) {
       m._isDefault = defaults[m.id] || {};
+      const p = m.provider || 'other';
+      if (!groups[p]) groups[p] = [];
+      groups[p].push(m);
+    }
+    function renderCard(m){
       const tiers = (m.tiers||[]).map(t => {
         const tc = {E:'var(--cyan)','E+':'var(--orange)',D:'var(--purple)'}[t]||'var(--text3)';
         return '<span style="color:'+tc+';font-family:var(--mono);font-size:8px">'+t+'</span>';
@@ -1137,7 +1145,7 @@ async function renderModels(){
         ? '<span style="color:var(--green);font-size:7px">●</span>'
         : '<span style="color:var(--text3);font-size:7px">○</span>';
       const cm = costMark[m.cost]||'_';
-      let html = '<div style="padding:4px 0;border-bottom:1px solid var(--bg3)">';
+      let html = '<div style="padding:4px 0 4px 12px;border-bottom:1px solid var(--bg3)">';
       html += '<div style="display:flex;align-items:center;gap:8px;font-size:10px">';
       html += '<span style="width:12px;text-align:center">'+dot+'</span>';
       html += '<span style="font-family:var(--mono);font-weight:500;min-width:80px;color:var(--text)">'+esc(m.display)+'</span>';
@@ -1165,7 +1173,17 @@ async function renderModels(){
       }
       html += '</div></div>';
       return html;
-    }).join('');
+    }
+    let html = '';
+    const order = ['deepseek','zhipu','kimi','openai','anthropic','other'];
+    for (const p of order) {
+      if (!groups[p] || !groups[p].length) continue;
+      html += '<div style="margin-bottom:8px">';
+      html += '<div style="color:var(--cyan);font-size:10px;font-weight:500;padding:4px 0;border-bottom:1px solid var(--cyan)">'+esc(providerNames[p]||p)+' <span style="color:var(--text3);font-size:8px">'+groups[p].length+'个</span></div>';
+      html += groups[p].map(renderCard).join('');
+      html += '</div>';
+    }
+    body.innerHTML = html;
   } catch(e) { body.innerHTML = '<span style="color:var(--red)">'+esc(e.message)+'</span>'; }
 }
 
