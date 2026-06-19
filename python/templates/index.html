@@ -8,97 +8,320 @@
 </head>
 <body>
 
-<header>
-  <h1>奇点</h1>
-  <nav>
-    <button class="tab active" data-tab="dashboard">仪表盘</button>
-    <button class="tab" data-tab="tasks">任务</button>
-    <button class="tab" data-tab="project">项目</button>
-    <button class="tab" data-tab="config">配置</button>
-  </nav>
-  <div id="header-right">
-    <span id="loop-badge" class="badge off">调度已停</span>
-    <span id="budget-badge" class="badge">💰 --</span>
+<!-- ═══════════════════════════════════════════════════════
+     Top Bar
+     ═══════════════════════════════════════════════════════ -->
+<div class="topbar">
+  <h1><span>奇点</span> / 调度指挥中心</h1>
+  <div class="live on" id="live-indicator">SYS.ONLINE</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     Tab Bar
+     ═══════════════════════════════════════════════════════ -->
+<div class="toast-container" id="toast-container"></div>
+<div class="tab-bar" id="tab-bar">
+  <div class="tab active" data-tab="dashboard">仪表盘</div>
+  <div class="tab" data-tab="tasks">任务</div>
+  <div class="tab" data-tab="project">项目</div>
+  <div class="tab" data-tab="config">配置</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     Tab 1: 仪表盘 — 一眼看完的系统状态
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content active" id="tab-dashboard">
+
+  <div class="cards" id="status-cards"></div>
+
+  <div id="onboarding" style="display:none;padding:20px 24px;margin-bottom:8px;background:var(--bg2);border-left:2px solid var(--cyan)">
+    <div style="font-size:14px;font-weight:600;margin-bottom:12px;color:var(--cyan)">欢迎使用奇点调度平台</div>
+    <div style="font-size:10px;color:var(--text2);line-height:2">
+      <div>1. 在 <strong style="color:var(--text)">配置</strong> tab 中检查 API Key 和模型状态</div>
+      <div>2. 在 <strong style="color:var(--text)">任务</strong> tab 中提交你的第一个任务</div>
+      <div>3. 返回仪表盘，点击 <strong style="color:var(--cyan)">「启动」</strong> 开始调度循环</div>
+    </div>
   </div>
-</header>
 
-<main>
-  <!-- ═══ 仪表盘 ═══ -->
-  <section id="tab-dashboard" class="tab-content active">
-    <div class="cards" id="status-cards"></div>
-    <div class="row">
-      <button id="btn-loop-start" class="btn primary" onclick="toggleLoop()">▶ 启动调度</button>
-      <button id="btn-loop-stop" class="btn danger" onclick="toggleLoop()" style="display:none">⏹ 停止</button>
-      <button class="btn" onclick="cleanup()">🧹 清理残留</button>
-    </div>
-    <div class="panel" id="event-panel" style="display:none">
-      <h3>调度事件</h3>
-      <div id="event-feed"></div>
-    </div>
-  </section>
+  <div class="loop-bar">
+    <span class="loop-indicator off" id="loop-dot"></span>
+    <span class="loop-status off" id="loop-label">⚠ 调度循环未启动 — 任务不会被执行</span>
+    <span style="font-size:9px;color:var(--text3);font-family:var(--mono)" id="loop-info"></span>
+    <span style="flex:1"></span>
+    <button class="btn cyan sm" id="btn-loop-start" onclick="startLoop()">启动</button>
+    <button class="btn red sm" id="btn-loop-stop" onclick="stopLoop()" style="display:none">停止</button>
+    <button class="btn sm" style="color:var(--text3);font-size:9px;margin-left:4px" onclick="cleanupStale()" title="清理残留心跳和缓存">扫除</button>
+  </div>
 
-  <!-- ═══ 任务 ═══ -->
-  <section id="tab-tasks" class="tab-content">
-    <div class="row">
-      <select id="filter-status" onchange="renderTasks()">
-        <option value="">全部状态</option>
-        <option value="pending">待处理</option>
-        <option value="running">运行中</option>
-        <option value="done">完成</option>
-        <option value="failed">失败</option>
-      </select>
-      <input id="filter-search" placeholder="搜索任务..." oninput="renderTasks()">
-      <span id="task-count" class="muted"></span>
-    </div>
-    <table id="task-table">
-      <thead><tr><th>ID</th><th>描述</th><th>状态</th><th>层级</th><th>耗时</th><th>操作</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </section>
-
-  <!-- ═══ 项目 ═══ -->
-  <section id="tab-project" class="tab-content">
-    <div class="panel">
-      <h3>创建项目</h3>
-      <div class="form-grid">
-        <input id="proj-name" placeholder="项目名称">
-        <select id="proj-template">
-          <option value="product_dev">产品开发</option>
-          <option value="bug_fix">Bug 修复</option>
-          <option value="refactor">重构优化</option>
-          <option value="agent_dev">Agent 开发</option>
-        </select>
-        <input id="proj-budget" placeholder="预算 $" value="3.00" type="number" step="0.5">
+  <div style="display:flex;gap:1px;flex-wrap:wrap;margin-bottom:8px">
+    <div class="section" id="event-section" style="flex:1;min-width:240px">
+      <div class="section-title">实时事件</div>
+      <div class="section-body event-feed" id="event-feed" style="min-height:60px;max-height:200px;overflow-y:auto">
+        <span style="color:var(--text3);font-family:var(--mono);font-size:9px">等待调度循环启动...</span>
       </div>
-      <textarea id="proj-desc" placeholder="需求描述（必填）" rows="3"></textarea>
-      <button class="btn primary" onclick="createProject()">创建项目</button>
     </div>
+    <div class="section" id="reports-section" style="flex:1;min-width:200px">
+      <div class="section-title">奏报</div>
+      <div class="section-body" id="reports-body" style="font-size:9px;max-height:200px;overflow-y:auto;font-family:var(--mono)"></div>
+    </div>
+  </div>
 
-    <div class="panel">
-      <h3>项目列表</h3>
-      <div id="project-list"></div>
+  <div style="display:flex;gap:1px;flex-wrap:wrap;margin-bottom:8px">
+    <div class="section" style="flex:1;min-width:200px">
+      <div class="section-title">扣留待处理</div>
+      <div class="section-body" id="held-list" style="font-size:10px"><span style="color:var(--text3)">无</span></div>
     </div>
+    <div class="section" style="flex:1;min-width:200px">
+      <div class="section-title">失败可重试</div>
+      <div class="section-body" id="failed-list" style="font-size:10px"><span style="color:var(--text3)">无</span></div>
+    </div>
+  </div>
 
-    <div class="panel" id="project-detail" style="display:none">
-      <div id="project-detail-content"></div>
+  <div style="display:flex;gap:1px;flex-wrap:wrap;margin-bottom:8px">
+    <div class="section" style="flex:1;min-width:200px">
+      <div class="section-title">活跃任务</div>
+      <div class="section-body" id="active-list" style="font-size:10px"><span style="color:var(--text3)">无</span></div>
     </div>
-  </section>
+    <div class="section" style="flex:1;min-width:200px">
+      <div class="section-title">合并冲突 <span id="conflict-count" style="font-size:9px;color:var(--orange)"></span></div>
+      <div class="section-body" id="conflict-section" style="display:none;font-size:10px">
+        <div id="conflict-body"></div>
+      </div>
+      <div class="section-body" id="conflict-empty" style="font-size:10px"><span style="color:var(--text3)">无冲突</span></div>
+    </div>
+  </div>
 
-  <!-- ═══ 配置 ═══ -->
-  <section id="tab-config" class="tab-content">
-    <div class="panel">
-      <h3>Agent 编组 <span class="muted">（排序=优先级，拖拽调整后点保存）</span></h3>
-      <div id="agent-tiers"></div>
-    </div>
-    <div class="panel">
-      <h3>API 库</h3>
-      <div id="api-store"></div>
-    </div>
-  </section>
-</main>
+  <div class="agent-row" id="agent-row"></div>
+  <div style="font-size:9px;color:var(--text3);font-family:var(--mono);margin-top:4px" id="timing-line"></div>
+  <div class="section" id="token-section" style="margin-top:4px;display:none">
+    <div class="section-title">Token 消耗</div>
+    <div class="section-body" id="token-body" style="font-size:9px;font-family:var(--mono)"></div>
+  </div>
+  <div class="section" id="perf-section" style="margin-top:4px;display:none">
+    <div class="section-title">性能分析</div>
+    <div class="section-body" id="perf-body" style="font-size:9px;font-family:var(--mono)"></div>
+  </div>
 
-<div id="toast-container"></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     Tab 2: 任务 — 提交 / 查看 / 操作
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tab-tasks">
+
+  <div class="section">
+    <div class="section-title">新建任务</div>
+    <div class="section-body">
+      <div class="form-row">
+        <textarea id="new-task-desc" placeholder="描述任务，回车提交..."
+          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();submitTask()}"></textarea>
+        <button class="btn purple" onclick="submitTask()" style="flex-shrink:0">提交</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="filter-bar">
+    <select id="filter-status" onchange="renderTasks()">
+      <option value="">全部状态</option>
+      <option value="pending">pending</option>
+      <option value="routed">routed</option>
+      <option value="dispatched">dispatched</option>
+      <option value="running">running</option>
+      <option value="done">done</option>
+      <option value="failed">failed</option>
+    </select>
+    <select id="filter-level" onchange="renderTasks()">
+      <option value="">全部层级</option>
+      <option value="E">E</option>
+      <option value="E+">E+</option>
+      <option value="D">D</option>
+    </select>
+    <label style="font-size:9px;display:flex;align-items:center;gap:2px;margin-left:6px">
+      <input type="checkbox" id="f-held" onchange="renderTasks()"> 仅扣留
+    </label>
+    <input id="filter-search" placeholder="搜索关键词..." oninput="renderTasks()" style="width:120px;font-size:9px;padding:2px 4px;background:var(--bg2);border:1px solid var(--grid);color:var(--text);margin-left:4px">
+    <span style="flex:1"></span>
+    <span style="font-size:9px;color:var(--text3);font-family:var(--mono)" id="task-count"></span>
+  </div>
+
+  <div class="section" style="overflow-x:auto">
+    <table><tbody id="task-table"></tbody></table>
+  </div>
+
+  <div class="section" style="margin-top:8px" id="flow-section">
+    <div class="section-title" onclick="document.getElementById('flow-body').style.display=document.getElementById('flow-body').style.display==='none'?'block':'none'" style="cursor:pointer">
+      任务流图 <span style="font-size:9px;color:var(--text3);font-weight:normal;text-transform:none">点击折叠</span>
+    </div>
+    <div class="section-body" id="flow-body" style="padding:0"></div>
+  </div>
+
+  <div class="section" style="margin-top:8px">
+    <div class="section-title">决策链</div>
+    <div class="section-body" id="decision-cards" style="font-size:10px">
+      <select id="dc-task-picker" onchange="loadDecisions()" style="width:100%;margin-bottom:4px;font-size:9px;padding:2px">
+        <option value="">-- 选择已完成任务 --</option>
+      </select>
+      <div id="decision-cards-content" style="font-size:10px">
+        <span style="color:var(--text2)">选择任务后加载决策链</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     Tab 3: 项目 — 工作流管理
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tab-project">
+
+  <div class="section">
+    <div class="section-title">创建项目</div>
+    <div class="section-body">
+      <div class="form-row">
+        <input id="new-project-name" placeholder="项目名称" style="flex:1">
+        <select id="new-project-template" style="width:auto">
+          <option value="product_dev">产品开发</option>
+          <option value="bug_fix">Bug修复</option>
+          <option value="refactor">重构优化</option>
+          <option value="agent_dev">Agent开发</option>
+        </select>
+        <button class="btn purple" onclick="createProject()">创建</button>
+      </div>
+      <textarea id="new-project-desc" placeholder="需求描述（必填，否则无法推进调研）" style="width:100%;margin-top:4px;min-height:60px;font-size:10px;background:var(--bg);border:1px solid var(--grid);color:var(--text);padding:4px"></textarea>
+      <div style="display:flex;gap:4px;margin-top:2px">
+        <input id="new-project-scope" placeholder="范围（涉及哪些模块/文件）" style="flex:1;font-size:9px">
+        <input id="new-project-constraints" placeholder="约束（不改哪些接口，用分号分隔）" style="flex:1;font-size:9px">
+        <input id="new-project-budget" placeholder="预算$" style="width:60px;font-size:9px" value="3.00">
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">项目列表</div>
+    <div class="section-body" id="project-list" style="font-size:10px"></div>
+  </div>
+
+  <div class="section" id="project-detail" style="display:none">
+    <div class="section-title" id="project-detail-title"></div>
+    <div class="section-body" id="project-detail-body" style="font-size:10px"></div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     Tab 4: 配置 — API库 / 模型库 / Agent编组 / 干预
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tab-config">
+
+  <div style="display:flex;gap:1px;flex-wrap:wrap;margin-bottom:8px">
+    <div class="section" style="flex:1;min-width:300px">
+      <div class="section-title">API 库 <button class="btn cyan sm" style="margin-left:8px" onclick="renderAPIStore()">刷新</button></div>
+      <div class="section-body" id="api-store-body" style="font-size:10px;max-height:250px;overflow-y:auto"></div>
+      <div style="padding:6px 10px;border-top:1px solid var(--grid);display:flex;gap:4px;flex-wrap:wrap">
+        <input id="api-new-id" placeholder="id" style="width:70px;font-size:9px">
+        <input id="api-new-provider" placeholder="提供商" style="width:70px;font-size:9px">
+        <input id="api-new-url" placeholder="base_url" style="width:130px;font-size:9px">
+        <input id="api-new-env" placeholder="环境变量" style="width:90px;font-size:9px">
+        <button class="btn cyan sm" onclick="addAPI()">添加</button>
+      </div>
+    </div>
+    <div class="section" style="flex:1;min-width:300px">
+      <div class="section-title">模型库 <button class="btn cyan sm" style="margin-left:8px" onclick="renderModels()">刷新</button></div>
+      <div class="section-body" id="models-body" style="font-size:10px;max-height:200px;overflow-y:auto"></div>
+      <div style="padding:4px 10px;border-top:1px solid var(--grid);display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+        <select id="model-new-provider" style="font-size:9px;padding:2px;min-width:80px" onchange="onProviderChange()">
+          <option value="">-- 选 API --</option>
+        </select>
+        <input id="model-new-id" placeholder="模型 id" style="width:100px;font-size:9px">
+        <input id="model-new-display" placeholder="显示名" style="width:80px;font-size:9px">
+        <select id="model-new-tier" style="width:55px;font-size:9px;padding:2px">
+          <option value="E">E</option>
+          <option value="E+">E+</option>
+          <option value="D">D</option>
+        </select>
+        <select id="model-new-speed" style="width:55px;font-size:9px;padding:2px">
+          <option value="fast">快</option>
+          <option value="medium" selected>中</option>
+          <option value="slow">慢</option>
+        </select>
+        <select id="model-new-cost" style="width:55px;font-size:9px;padding:2px">
+          <option value="budget">低</option>
+          <option value="standard" selected>标</option>
+          <option value="premium">高</option>
+        </select>
+        <label style="font-size:9px;color:var(--text3);font-family:var(--mono);display:flex;align-items:center;gap:2px"><input type="checkbox" id="model-new-reasoning">推理</label>
+        <button class="btn cyan sm" onclick="addModel()">添加</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" style="margin-bottom:8px">
+    <div class="section-title">项目编组 <button class="btn cyan sm" style="margin-left:8px" onclick="populateLineupProjects()">刷新</button></div>
+    <div class="section-body" style="font-size:10px">
+      <div style="display:flex;gap:4px;margin-bottom:8px;align-items:center">
+        <select id="lineup-project-select" style="font-size:9px;padding:2px" onchange="loadLineupForProject()"></select>
+        <span style="font-size:9px;font-family:var(--mono)" id="lineup-status"></span>
+      </div>
+      <div id="lineup-editor" style="display:none">
+        <div class="section-title" style="font-size:9px">E 层</div>
+        <div id="lineup-e" style="margin-bottom:8px"></div>
+        <div class="section-title" style="font-size:9px">E+ 层</div>
+        <div id="lineup-ep" style="margin-bottom:8px"></div>
+        <div class="section-title" style="font-size:9px">D 层</div>
+        <div id="lineup-d" style="margin-bottom:8px"></div>
+        <button class="btn purple sm" onclick="saveLineup()">保存编组</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" style="margin-bottom:8px">
+    <div class="section-title">架构切换 <button class="btn cyan sm" style="margin-left:8px" onclick="renderLayerSwitch()">刷新</button></div>
+    <div class="section-body" id="layer-switch-body" style="font-size:10px"></div>
+  </div>
+
+  <div class="section" style="margin-bottom:8px">
+    <div class="section-title">队列干预</div>
+    <div class="section-body" id="queue-list" style="font-size:10px;max-height:300px;overflow-y:auto">
+      <span style="color:var(--text2)">无排队任务</span>
+    </div>
+    <div style="padding:2px 10px;border-top:1px solid var(--grid);display:flex;align-items:center;gap:8px;font-size:9px">
+      <label style="cursor:pointer;color:var(--text2)"><input type="checkbox" onchange="document.querySelectorAll('.q-check').forEach(c=>c.checked=this.checked);updateCheckedCount()"> 全选</label>
+      <span style="color:var(--text3)" id="checked-count">0 选中</span>
+      <span style="flex:1"></span>
+    </div>
+    <div style="padding:4px 10px;border-top:1px solid var(--grid);display:flex;gap:4px;align-items:center">
+      <select id="batch-level" style="font-size:9px;padding:2px;width:80px">
+        <option value="">批量改层</option>
+        <option value="E">E</option>
+        <option value="E+">E+</option>
+        <option value="D">D</option>
+      </select>
+      <button class="btn purple sm batch-btn" onclick="batchHold()" disabled>批量扣留</button>
+      <button class="btn cyan sm batch-btn" onclick="batchRelease()" disabled>批量释放</button>
+      <button class="btn orange sm batch-btn" onclick="batchOverride()" disabled>批量覆盖</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     Trace Modal
+     ═══════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="trace-modal" onclick="if(event.target===this)closeTrace()">
+  <div class="modal-box" id="trace-content"></div>
+</div>
 
 <script src="/static/app.js"></script>
+
+<div class="modal-overlay" id="cost-modal" style="display:none" onclick="if(event.target===this)closeCostModal()">
+  <div class="modal-box" style="max-width:360px">
+    <div style="font-size:11px;font-weight:600;margin-bottom:8px">💰 费用确认</div>
+    <div id="cost-modal-body" style="font-size:10px;margin-bottom:12px"></div>
+    <div style="display:flex;gap:4px;justify-content:flex-end">
+      <button class="btn sm" onclick="closeCostModal()">取消</button>
+      <button class="btn purple sm" id="cost-modal-confirm">确认执行</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
