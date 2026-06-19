@@ -385,8 +385,7 @@ def remove_agent(level: str, model: str) -> bool:
     if model not in custom["_disabled"][level]:
         custom["_disabled"][level].append(model)
         _save_custom_agents(custom)
-        return True
-    return False
+    return True  # 幂等：已禁用也返回 True
 
 def update_agent(level: str, model: str, updates: dict) -> dict:
     custom = _load_custom_agents()
