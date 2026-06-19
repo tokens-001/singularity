@@ -75,8 +75,12 @@ def agent_api_available(agent_cfg: dict) -> bool:
 
     所有类型都经过 model_registry → api_store 检查。
     claude-cli 也检查 api_store 状态。
+
+    硬限制：OpenAI 模型必须在 _order 里显式列出才会被选中，
+    防止误烧 GPT 额度。
     """
     model = agent_cfg.get("model", "")
+    provider = ""
     if model:
         try:
             from . import model_registry as mr
@@ -87,6 +91,15 @@ def agent_api_available(agent_cfg: dict) -> bool:
                     return False
         except Exception as e:
             from . import witness; witness.heartbeat("dispatch", "warn", status="error", detail=f"api_check:{e}")
+
+    # 硬限制：OpenAI 模型除非在 _order 显式列出，否则不可用
+    if provider == "openai":
+        custom = _load_custom_agents()
+        all_ordered = []
+        for tier_order in (custom.get("_order", {}) or {}).values():
+            all_ordered.extend(tier_order)
+        if model not in all_ordered:
+            return False  # 用户没显式列出 → 不自动选
 
     # claude-cli: api_store 通过了就算通过
     etype = agent_cfg.get("type", "")
@@ -376,19 +389,43 @@ def remove_agent(level: str, model: str) -> bool:
     return False
 
 def update_agent(level: str, model: str, updates: dict) -> dict:
-    # 先在自定义 overlay 里找，再在 TOML 内置里找
     custom = _load_custom_agents()
     key = "E_plus" if level == "E+" else level
+
+    # 处理 disabled: 加到 _disabled 列表或从中移除
+    if "disabled" in updates:
+        disabled = updates.pop("disabled")
+        dis_map = custom.setdefault("_disabled", {})
+        dis_list = dis_map.setdefault(level, [])
+        if disabled and model not in dis_list:
+            dis_list.append(model)
+        elif not disabled and model in dis_list:
+            dis_list.remove(model)
+
+    # 处理 default: 清除同层其他 agent 的 default
+    if updates.get("default"):
+        cfgs = custom.get(key, [])
+        for a in cfgs:
+            if a.get("default") and a.get("model") != model:
+                a["default"] = False
+        # 也清除 TOML 内置的 default（需要在 custom 里覆盖）
+        agents = load_agents()
+        for a in agents.get(level, []):
+            if a.get("default") and a.get("model") != model and a.get("model") not in [c.get("model") for c in cfgs]:
+                new_cfg = dict(a)
+                new_cfg["default"] = False
+                custom.setdefault(key, []).append(new_cfg)
+
+    # 更新 agent 配置
     cfgs = custom.get(key, [])
     for a in cfgs:
         if a.get("model") == model:
             a.update(updates)
             _save_custom_agents(custom)
             return a
-    # 不在自定义里，从内置 TOML 复制一份到 overlay 再更新
-    agents = load_agents()
-    tier_agents = agents.get(level, [])
-    for a in tier_agents:
+    # 不在自定义里，从内置 TOML 复制一份
+    agents_all = load_agents()
+    for a in agents_all.get(level, []):
         if a.get("model") == model:
             new_cfg = dict(a)
             new_cfg.update(updates)

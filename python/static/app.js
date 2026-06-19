@@ -249,33 +249,45 @@ async function autoAdvance(id) {
 // ═══════════════════════════════════════════
 // Config
 // ═══════════════════════════════════════════
+let _configCache = {};
 async function renderConfig() {
   const data = await api('/api/agents');
   if (data.error) return;
+  _configCache = data;
   const order = data._order || {};
+  const disabled = data._disabled || {};
   const tiers = { D: 'D · 架构', 'E+': 'E+ · 复杂', E: 'E · 执行' };
   const costColors = { budget: '#16a34a', standard: '#2563eb', premium: '#dc2626' };
 
   document.getElementById('agent-tiers').innerHTML = Object.entries(tiers).map(([lvl, label]) => {
     const agents = data[lvl] || [];
     const tierOrder = order[lvl] || [];
-    const sorted = [...agents].sort((a, b) => {
+    const tierDisabled = disabled[lvl] || [];
+    const visible = agents.filter(a => !tierDisabled.includes(a.model));
+    const sorted = [...visible].sort((a, b) => {
       const ai = tierOrder.indexOf(a.model), bi = tierOrder.indexOf(b.model);
       return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
     });
+    const hidden = agents.filter(a => tierDisabled.includes(a.model));
+
     return `<div class="tier-card">
-      <h4>${label} <span class="muted">（越靠前越优先，拖拽排序暂不支持，手动编辑 agents_custom.json 的 _order）</span></h4>
+      <h4>${label}</h4>
       ${sorted.map((a, i) => `
         <div class="agent-row">
           <span class="pos">#${i + 1}</span>
+          ${i > 0 ? `<button class="btn sm" onclick="moveAgent('${lvl}','${a.model}',-1)" title="上移">↑</button>` : '<span style="width:28px"></span>'}
+          ${i < sorted.length - 1 ? `<button class="btn sm" onclick="moveAgent('${lvl}','${a.model}',1)" title="下移">↓</button>` : '<span style="width:28px"></span>'}
           <span class="model">${esc(a.model)}</span>
           <span class="cost" style="color:${costColors[a.cost] || '#666'}">${a.cost || 'standard'}</span>
-          ${a.default ? '<span class="badge on">默认</span>' : ''}
-          <span class="muted">${(a.roles || []).join(', ')}</span>
-          <span style="flex:1"></span>
-          <span class="muted">${a.api_key_env || ''}</span>
+          <button class="btn sm ${a.default ? 'primary' : ''}" onclick="setDefaultAgent('${lvl}','${a.model}')">${a.default ? '★默认' : '设默认'}</button>
+          <button class="btn sm danger" onclick="disableAgent('${lvl}','${a.model}')">禁用</button>
         </div>
       `).join('')}
+      ${hidden.length ? `<div style="margin-top:6px"><span class="muted">已禁用：</span>${hidden.map(a => `
+        <span style="display:inline-flex;align-items:center;gap:4px;margin-right:8px;opacity:0.5">
+          ${esc(a.model)} <button class="btn sm" onclick="enableAgent('${lvl}','${a.model}')">恢复</button>
+        </span>
+      `).join('')}</div>` : ''}
     </div>`;
   }).join('');
 
@@ -285,6 +297,44 @@ async function renderConfig() {
   document.getElementById('api-store').innerHTML = entries.length
     ? entries.map(e => `<div style="padding:4px 0;font-size:12px">🟢 ${esc(e.provider)} (${e.status || '?'}) — ${esc(e.base_url || '')}</div>`).join('')
     : '<span class="muted">无 API 配置</span>';
+}
+
+async function moveAgent(lvl, model, dir) {
+  const order = _configCache._order || {};
+  let tier = [...(order[lvl] || [])];
+  if (!tier.length) tier = (_configCache[lvl] || []).map(a => a.model);
+  const idx = tier.indexOf(model);
+  if (idx === -1 || idx + dir < 0 || idx + dir >= tier.length) return;
+  [tier[idx], tier[idx + dir]] = [tier[idx + dir], tier[idx]];
+  const r = await api('/api/agents/order', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...order, [lvl]: tier })
+  });
+  if (r.ok) { toast('排序已保存', 'success'); renderConfig(); }
+}
+
+async function setDefaultAgent(lvl, model) {
+  const r = await api('/api/agents/' + lvl + '/' + model, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ default: true })
+  });
+  if (r.ok) { toast(model + ' 已设为默认', 'success'); renderConfig(); }
+}
+
+async function disableAgent(lvl, model) {
+  const r = await api('/api/agents/' + lvl + '/' + model, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ disabled: true })
+  });
+  if (r.ok) { toast(model + ' 已禁用', 'info'); renderConfig(); }
+}
+
+async function enableAgent(lvl, model) {
+  const r = await api('/api/agents/' + lvl + '/' + model, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ disabled: false })
+  });
+  if (r.ok) { toast(model + ' 已恢复', 'success'); renderConfig(); }
 }
 
 // ═══════════════════════════════════════════

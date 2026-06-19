@@ -1128,6 +1128,7 @@ def api_agents():
                     "sandbox": c.get("sandbox", ""),
                 })
         result["_order"] = order_map
+        result["_disabled"] = custom.get("_disabled", {}) or {}
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": f"读取 agents.toml 失败: {e}"}), 500
