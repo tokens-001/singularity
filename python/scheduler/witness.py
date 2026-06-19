@@ -35,9 +35,14 @@ def check_stalled(timeout_seconds: float = 600) -> list[str]:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
+        tid = data.get("task_id", "")
+        # 清理已删除任务的心跳文件
+        if tid and not (tracker._tasks_dir() / f"{tid}.json").exists():
+            try: p.unlink()
+            except OSError: pass
+            continue
         last = data.get("last_beat", 0)
         if now - last > timeout_seconds:
-            tid = data.get("task_id")
             if tid:
                 stalled.append(tid)
     return stalled
@@ -56,12 +61,18 @@ def _count_by_status() -> dict[str, int]:
 
 
 def _heartbeat_task_levels() -> dict[str, int]:
-    """{level: 有心跳文件的任务数}。"""
+    """{level: 有心跳文件的任务数}。跳过已删除任务的残留心跳。"""
     loads: dict[str, int] = {}
     for p in _heartbeat_dir().glob("*.json"):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
+            continue
+        tid = data.get("task_id", "")
+        # 跳过已删除任务的心跳
+        if tid and not (tracker._tasks_dir() / f"{tid}.json").exists():
+            try: p.unlink()
+            except OSError: pass
             continue
         lvl = data.get("level", "?")
         loads[lvl] = loads.get(lvl, 0) + 1
@@ -107,7 +118,11 @@ def status(agents: dict | None = None) -> str:
     pending = counts.get(tracker.TaskStatus.PENDING.value, 0)
     failed = counts.get(tracker.TaskStatus.FAILED.value, 0)
     done = counts.get(tracker.TaskStatus.DONE.value, 0)
-    running = len(list(_heartbeat_dir().glob("*.json")))
+    loads = _heartbeat_task_levels()  # 含清理逻辑，必须先于 running 计算
+    running = sum(loads.values())
+
+    loads = _heartbeat_task_levels()  # 含清理逻辑，必须先于 running 计算
+    running = sum(loads.values())
 
     pending_waits, done_durations = _timing_stats()
     avg_wait = _fmt_avg(pending_waits)
@@ -125,7 +140,6 @@ def status(agents: dict | None = None) -> str:
         "### 各 agent level 负载",
     ]
 
-    loads = _heartbeat_task_levels()
     if agents:
         for level, cfgs in agents.items():
             model = cfgs[0].get("model", "") if cfgs else ""

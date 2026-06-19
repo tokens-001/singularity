@@ -175,9 +175,10 @@ function renderAgentRow(){
   const agents=statusData.agents||{};
   const loads=statusData.heartbeat_levels||{};
   document.getElementById('agent-row').innerHTML=['E','D','E+'].map(l=>{
-    const n=loads[l]||0; const model=agents[l]&&agents[l][0]?agents[l][0].model:'';
+    const n=loads[l]||0;
+    const models=(agents[l]||[]).map(a=>a.model).join(', ');
     const c=l==='E'?'e-dot':l==='D'?'d-dot':'ep-dot';
-    return `<span><span class="agent-dot ${c}"></span>${l} ${model} <b>${n}</b></span>`;
+    return `<span><span class="agent-dot ${c}"></span>${l} ${models} <b>${n}</b></span>`;
   }).join('');
   document.getElementById('timing-line').textContent=
     `等待 ${statusData.avg_wait||'--'} · 完成 ${statusData.avg_done||'--'}`+
