@@ -1766,16 +1766,36 @@ def api_models_update(model_id):
             return jsonify({"error": "max_turns 必须是整数"}), 400
 
     try:
+        # 先读现有值，只覆盖 data 里传了的字段
+        existing = model_registry.get(model_id)
+        if existing:
+            provider = data.get("provider", existing.provider)
+            display = data.get("display", existing.display)
+            tiers = data.get("tiers", existing.tiers)
+            speed = data.get("speed", existing.speed)
+            cost = data.get("cost", existing.cost)
+            reasoning = data.get("reasoning", existing.reasoning)
+            max_turns = data.get("max_turns", existing.max_turns)
+            notes = data.get("notes", existing.notes)
+        else:
+            provider = data.get("provider", "")
+            display = data.get("display", "")
+            tiers = data.get("tiers", None)
+            speed = data.get("speed", "")
+            cost = data.get("cost", "")
+            reasoning = data.get("reasoning", None)
+            max_turns = data.get("max_turns", 0)
+            notes = data.get("notes", "")
         m = model_registry.add_model(
             model_id=model_id,
-            provider=data.get("provider", ""),
-            display=data.get("display", ""),
-            tiers=data.get("tiers", None),
-            speed=data.get("speed", ""),
-            cost=data.get("cost", ""),
-            reasoning=data.get("reasoning", None),
-            max_turns=data.get("max_turns", 0),
-            notes=data.get("notes", ""),
+            provider=provider,
+            display=display,
+            tiers=tiers,
+            speed=speed,
+            cost=cost,
+            reasoning=reasoning,
+            max_turns=max_turns,
+            notes=notes,
         )
         return jsonify({"ok": True, "model": m.to_dict()})
     except Exception as e:
