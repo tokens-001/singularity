@@ -99,7 +99,13 @@ SYSTEM_PROMPT = """你是奇点调度平台的 AI Agent。你有工具可以用�
 - 不要在注释里留 TODO，要么实现要么删掉
 - 参数 path 是相对于项目根目录的路径，不要用绝对路径
 - 写文件时给完整内容，不只给 diff
-- 分析/调研/总结类任务：第一轮直接输出答案，不调用工具"""
+- 分析/调研/总结类任务：第一轮直接输出答案，不调用工具
+- 任务完成时，必须在输出末尾附加 [HANDOFF] 块，格式如下:
+  [HANDOFF]
+  deliverable: <产出文件路径或描述>
+  conclusion: <关键结论，一句话>
+  next: <建议下一个 Agent，如 Coding/QA/Review/None>
+  human_confirm: <true/false，是否需要人工确认>"""
 
 
 class OpenAIAgentExecutor(BaseExecutor):

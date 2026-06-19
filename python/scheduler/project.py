@@ -73,8 +73,7 @@ class ProjectState:
     issues: list[dict] = field(default_factory=list)                # Reviewer 问题清单
     supervision_log: list[dict] = field(default_factory=list)       # Supervisor 校验记录
     lineage: list[dict] = field(default_factory=list)               # 血缘日志
-
-    # 成本
+    handoffs: list[dict] = field(default_factory=list)              # Agent 交接记录
     token_budget_total: float = 5.0        # $ (默认 $5)
     token_spent: float = 0.0               # $ 累计
 

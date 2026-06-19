@@ -1200,7 +1200,7 @@ def api_store_list():
 
 @app.route("/api/api-store", methods=["POST"])
 def api_store_add():
-    """添加或更新 API 条目。"""
+    """添加或更新 API 条目，自动扫描该厂商的模型列表。"""
     data = request.get_json(silent=True)
     if not data or not data.get("id"):
         return jsonify({"error": "缺少 id"}), 400
@@ -1212,7 +1212,21 @@ def api_store_add():
             api_key_env=data.get("api_key_env", ""),
             notes=data.get("notes", ""),
         )
-        return jsonify({"ok": True, "entry": entry.to_dict()})
+        # 自动扫描模型
+        scanned = []
+        try:
+            models = api_store.scan_models(data["id"])
+            for m in models:
+                api_store.save_custom_model(
+                    m["id"], m["provider"], m.get("display", m["id"]))
+                scanned.append(m["id"])
+        except Exception:
+            pass
+        return jsonify({
+            "ok": True,
+            "entry": entry.to_dict(),
+            "scanned_models": scanned,
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

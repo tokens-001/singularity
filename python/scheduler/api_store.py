@@ -215,3 +215,108 @@ def is_available(api_id: str) -> bool:
 def available_apis() -> list[APIEntry]:
     """返回所有当前可用的 API。"""
     return [e for e in _load().values() if is_available(e.id)]
+
+
+def scan_models(api_id: str) -> list[dict]:
+    """扫描 API 厂商的 /models 接口，返回可用模型列表。
+
+    返回: [{"id": "model-name", "display": "Model Name"}, ...]
+    """
+    import httpx
+    entry = get(api_id)
+    if not entry or not entry.base_url:
+        return []
+    api_key = os.environ.get(entry.api_key_env, "")
+    if not api_key:
+        return []
+
+    # 从 base_url 推导 models 接口
+    base = entry.base_url.rstrip("/")
+    # 去掉 /v1/chat/completions 或 /v1 后缀
+    for suffix in ["/chat/completions", "/v1/chat/completions", "/responses"]:
+        if base.endswith(suffix):
+            base = base[:-len(suffix)]
+            break
+    models_url = base.rstrip("/") + "/models"
+
+    try:
+        with httpx.Client(timeout=httpx.Timeout(15)) as client:
+            r = client.get(models_url, headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            })
+            if r.status_code != 200:
+                return []
+            data = r.json()
+            # OpenAI 兼容格式: {"data": [{"id": "...", ...}]}
+            items = data.get("data", [])
+            if not items and isinstance(data, list):
+                items = data
+            models = []
+            for item in items:
+                mid = item.get("id", "")
+                if mid and not mid.startswith("o1-") and "audio" not in mid.lower() and "embedding" not in mid.lower() and "tts" not in mid.lower() and "dall-e" not in mid.lower() and "whisper" not in mid.lower() and "moderation" not in mid.lower():
+                    models.append({
+                        "id": mid,
+                        "display": item.get("id", mid),
+                        "provider": entry.provider,
+                    })
+            return models
+    except Exception:
+        return []
+
+
+# ═══════════════════════════════════════════
+# 自定义模型扩展 (扫描发现后存入)
+# ═══════════════════════════════════════════
+
+def _custom_models_path():
+    from . import config
+    return config.QIDIAN_DIR / "models_custom.json"
+
+
+def load_custom_models() -> dict:
+    """加载自动发现的自定义模型。"""
+    p = _custom_models_path()
+    if p.exists():
+        try:
+            return json.loads(p.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def save_custom_model(model_id: str, provider: str, display: str = "",
+                      tiers: list[str] = None) -> dict:
+    """保存一个扫描发现的模型到自定义注册表。"""
+    custom = load_custom_models()
+    custom[model_id] = {
+        "id": model_id,
+        "provider": provider,
+        "display": display or model_id,
+        "tiers": tiers or _guess_tiers(model_id),
+        "speed": "fast",
+        "cost": _guess_cost(model_id),
+    }
+    _custom_models_path().parent.mkdir(parents=True, exist_ok=True)
+    _custom_models_path().write_text(json.dumps(custom, ensure_ascii=False, indent=2))
+    return custom[model_id]
+
+
+def _guess_tiers(model_id: str) -> list[str]:
+    """根据模型名猜测适合的层级。"""
+    mid = model_id.lower()
+    if any(k in mid for k in ["opus", "gpt-5", "pro", "ultra", "o3", "o4"]):
+        return ["D"]
+    if any(k in mid for k in ["sonnet", "gpt-4", "k2", "flash"]):
+        return ["E+", "E"]
+    return ["E"]
+
+
+def _guess_cost(model_id: str) -> str:
+    mid = model_id.lower()
+    if any(k in mid for k in ["opus", "pro", "ultra", "o3", "o4"]):
+        return "premium"
+    if any(k in mid for k in ["gpt-5", "sonnet", "k2"]):
+        return "standard"
+    return "budget"

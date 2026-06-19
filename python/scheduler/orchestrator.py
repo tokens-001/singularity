@@ -162,6 +162,15 @@ def _judge_and_profile(task, batch: BatchOutput) -> None:
     except Exception:
         pass
 
+    # 6. 交接记录
+    try:
+        from . import handoff as _hf
+        h = _hf.create_handoff(task, batch)
+        if h and getattr(task, "project_id", ""):
+            _hf.append_to_project(task.project_id, h)
+    except Exception:
+        pass
+
 
 def _run_queue_v2(agents: dict) -> list[tuple]:
     """v2 顺序: 主线程同步调 run(merge_queue=None), 终态在这写。"""
