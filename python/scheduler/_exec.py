@@ -335,6 +335,26 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 )
 
             if validation.action == "retry":
+                # ── Cascade Routing: 置信度驱动的升级决策 ──
+                conf = validation.confidence
+                # 高置信 → 跳过升级，接受当前结果 (省钱)
+                if conf >= 0.75:
+                    _cleanup_wt(wt)
+                    return BatchOutput(
+                        ok=True, task_id=task.id, dispatch_result=disp_result,
+                        term_reason=f"cascade_accept (level={level}, conf={conf:.2f})",
+                        validation=validation, merge_request=pending_merge_req,
+                        tool_events=all_tool_events, turn_count=turn,
+                    )
+                # 低置信 + 还有更高级模型 → 立即升级，不浪费重试
+                if conf < 0.35 and len(fallback_chain) > 1:
+                    tried_models.add(agent_cfg.get("model", ""))
+                    fallback_chain = [a for a in fallback_chain if a.get("model", "") not in tried_models]
+                    _cleanup_wt(wt)
+                    if fallback_chain:
+                        witness.heartbeat(task.id, f"cascade_skip:{agent_cfg.get('model','')}→{fallback_chain[0].get('model','')} conf={conf:.2f}")
+                        break  # 跳出 turn loop，用更好的模型
+                # 中置信 → 正常重试（给同一个模型改进机会）
                 fb = [json.dumps(validation.evidence, ensure_ascii=False, indent=2)]
                 if quality.get("warnings"):
                     fb.append("质量警告:\n" + "\n".join(f"- {w}" for w in quality["warnings"]))
