@@ -132,18 +132,23 @@ def create(
     parent_id: str = "",
     depth: int = 0,
 ) -> Task:
-    """建任务。设了 parent_id → child 继承 parent.depth+1。"""
+    """建任务。设了 parent_id → child 继承 parent.depth+1。校验 depends_on 引用有效性。"""
     now = time.time()
     # 有父任务时, depth 从父继承 (parent.depth + 1), 防无限递归分解
     if parent_id:
         parent = _read(parent_id)
         if parent is not None:
             depth = parent.depth + 1
+    # depends_on 校验: 过滤不存在的 task_id
+    valid_deps = []
+    for dep_id in (depends_on or []):
+        if _read(dep_id):
+            valid_deps.append(dep_id)
     task = Task(
         id=_next_id(),
         description=desc,
         priority=priority,
-        depends_on=list(depends_on or []),
+        depends_on=valid_deps,
         created_at=now,
         updated_at=now,
         depth=depth,

@@ -49,9 +49,22 @@ def _release_ref(task_id: str) -> None:
     )
 
 
+_MAX_WORKTREES = 50
+
 def _maybe_create_worktree(task_id: str, level: str, agent_cfg: dict, snapshot_ref: str = ""):
     if agent_cfg.get("sandbox") != "worktree":
         return None
+    # worktree 数量上限检查
+    try:
+        from .executors.worktree import _worktrees_dir
+        wtd = _worktrees_dir()
+        count = len(list(wtd.iterdir())) if wtd.exists() else 0
+        if count >= _MAX_WORKTREES:
+            from . import witness
+            witness.heartbeat(task_id, f"worktree_limit:{count}>={_MAX_WORKTREES}")
+            return None
+    except Exception:
+        pass
     try:
         return wt_create(task_id, level, base_ref=snapshot_ref)  # 修复 #8
     except Exception:  # noqa: BLE001
