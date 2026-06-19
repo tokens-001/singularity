@@ -1084,6 +1084,19 @@ async function updateModel(id, field, value){
   const r = await api('/api/models/'+id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if (r.error) { /* ignore */ } else renderModels();
 }
+async function editModel(id){
+  event.stopPropagation();
+  const models = await api('/api/models');
+  const m = Object.values(models).find(x => x.id === id);
+  if (!m) return;
+  const tiers = (m.tiers||[]).join(',');
+  const newTiers = prompt(`编辑模型: ${m.display} (${m.id})\n\n当前层级: ${tiers}\n可选: E, E+, D (逗号分隔)\n\nprovider: ${m.provider}\ncost: ${m.cost}\nspeed: ${m.speed}`, tiers);
+  if (newTiers === null) return;
+  const parsed = newTiers.split(',').map(s=>s.trim()).filter(s=>['E','E+','D'].includes(s));
+  if (!parsed.length) { alert('至少保留一个有效层级 (E, E+, D)'); return; }
+  const r = await api('/api/models/'+id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({tiers:parsed})});
+  if (r.error) alert(r.error); else renderModels();
+}
 async function removeModel(id){
   if(!confirm('删除模型 '+id+' ？')) return;
   const r=await api('/api/models/'+id,{method:'DELETE'});
@@ -1127,6 +1140,7 @@ async function renderModels(){
       if (m.reasoning) html += '<span style="font-size:8px;color:var(--purple);font-family:var(--mono)">RSN</span>';
       html += '<span style="flex:1"></span>';
       html += '<span style="font-size:8px;font-family:var(--mono)">'+tiers+'</span>';
+      html += ' <button class="btn sm" style="color:var(--cyan);font-size:7px;padding:1px 3px;margin-left:4px" onclick="event.stopPropagation();editModel(\''+esc(m.id)+'\')">✎</button>';
       html += ' <button class="btn sm" style="color:var(--red);font-size:7px;padding:1px 3px;margin-left:4px" onclick="event.stopPropagation();removeModel(\''+esc(m.id)+'\')">DEL</button>';
       html += '</div>';
       html += '<div style="font-size:8px;color:var(--text3);margin-top:2px;font-family:var(--mono)">'+esc(m.notes||'')+'</div>';
