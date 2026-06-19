@@ -92,9 +92,133 @@ def _guard_task_id():
 # 可选认证: QIDIAN_AUTH=1 时启用
 _AUTH_ENABLED = os.environ.get("QIDIAN_AUTH") == "1"
 if _AUTH_ENABLED:
-    from scheduler._auth import get_auth
+    from scheduler._auth import get_auth, require_auth, require_write
     _admin = get_auth().bootstrap()
     _log_info("auth", f"认证已启用, admin token: {_admin.token[:8]}...")
+
+# 无需认证的公开端点
+_PUBLIC_ENDPOINTS = {
+    "api_auth_status", "api_auth_bootstrap",
+    "api_status", "api_loop_status",
+    "index",
+}
+
+# 只读端点（viewer 可访问的 GET 端点）
+_READONLY_ENDPOINTS = {
+    "api_token_usage", "api_token_budget",
+    "api_perf", "api_tasks", "api_task_detail",
+    "api_task_trace", "api_task_timeline",
+    "api_conflicts", "api_memory", "api_memory_chain",
+    "api_projects", "api_project_detail",
+    "api_templates", "api_project_cost", "api_project_lineage",
+    "api_reports", "api_reports_critical",
+    "api_agents", "api_api_store",
+    "api_models", "api_models_tier",
+    "api_memory_rebuild",
+    "api_project_lineup",
+}
+
+
+@app.before_request
+def _guard_auth():
+    """鉴权钩子：QIDIAN_AUTH=1 时对所有 /api/ 端点要求认证。"""
+    if not _AUTH_ENABLED:
+        return None
+    # 公开端点跳过
+    if request.endpoint in _PUBLIC_ENDPOINTS:
+        return None
+    # 只对 /api/ 路径鉴权
+    if not request.path.startswith("/api/"):
+        return None
+    # 非 API 端点跳过
+    if request.endpoint is None:
+        return None
+
+    from scheduler._auth import require_auth, require_write
+
+    if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+        user, err = require_write(request)
+    else:
+        # GET / HEAD / OPTIONS
+        if request.endpoint in _READONLY_ENDPOINTS:
+            user, err = require_auth(request)
+        else:
+            user, err = require_write(request)
+
+    if err:
+        return jsonify({"error": err}), 401
+    # 注入 user 到 g，供路由内使用
+    from flask import g
+    g.auth_user = user
+    return None
+
+
+# ── Rate Limiting：滑动窗口限流 ──────────────────────────
+# 默认：每 IP 每分钟 60 请求，突变端点 (POST/PUT/DELETE) 每分钟 30 请求
+_RATE_WINDOW = 60  # 秒
+_RATE_LIMIT_READ = 60   # GET 每窗口最大请求数
+_RATE_LIMIT_WRITE = 30  # POST/PUT/DELETE 每窗口最大请求数
+_RATE_BUCKETS: dict[str, list[float]] = {}  # ip → [timestamps]
+_MAX_BUCKETS = 10000  # 防止内存无限增长
+
+
+def _cleanup_rate_buckets():
+    """定期清理过期 bucket。"""
+    now = time.time()
+    stale_ips = []
+    for ip, timestamps in _RATE_BUCKETS.items():
+        # 移除窗口外的旧时间戳
+        _RATE_BUCKETS[ip] = [t for t in timestamps if now - t < _RATE_WINDOW]
+        if not _RATE_BUCKETS[ip]:
+            stale_ips.append(ip)
+    for ip in stale_ips:
+        del _RATE_BUCKETS[ip]
+    # 如果 bucket 总数超标，删最旧的
+    if len(_RATE_BUCKETS) > _MAX_BUCKETS:
+        oldest = sorted(_RATE_BUCKETS.keys(), key=lambda ip: min(_RATE_BUCKETS[ip]) if _RATE_BUCKETS[ip] else 0)[:100]
+        for ip in oldest:
+            del _RATE_BUCKETS[ip]
+
+
+@app.before_request
+def _guard_rate_limit():
+    """限流钩子：滑动窗口计数，每个 IP 独立限制。"""
+    # 非 /api/ 路径不限流
+    if not request.path.startswith("/api/"):
+        return None
+
+    now = time.time()
+    ip = request.remote_addr or "127.0.0.1"
+
+    if ip not in _RATE_BUCKETS:
+        _RATE_BUCKETS[ip] = []
+
+    # 清理窗口外旧记录
+    window_start = now - _RATE_WINDOW
+    _RATE_BUCKETS[ip] = [t for t in _RATE_BUCKETS[ip] if t > window_start]
+
+    # 选择限制阈值
+    if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+        limit = _RATE_LIMIT_WRITE
+    else:
+        limit = _RATE_LIMIT_READ
+
+    if len(_RATE_BUCKETS[ip]) >= limit:
+        return jsonify({
+            "error": "请求过于频繁",
+            "retry_after": _RATE_WINDOW,
+            "limit": limit,
+            "window": f"{_RATE_WINDOW}s",
+        }), 429
+
+    _RATE_BUCKETS[ip].append(now)
+
+    # 定期清理（每 100 请求触发一次）
+    if sum(len(v) for v in _RATE_BUCKETS.values()) % 100 == 0:
+        _cleanup_rate_buckets()
+
+    return None
+
 
 # ── SSRF 防护：URL 验证 ─────────────────────────────────
 import ipaddress
@@ -295,6 +419,15 @@ def add_cors_headers(response):
         response.headers["Access-Control-Allow-Origin"] = "http://localhost:5050"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    # Rate limit headers
+    ip = request.remote_addr or "127.0.0.1"
+    bucket = _RATE_BUCKETS.get(ip, [])
+    now = time.time()
+    active = len([t for t in bucket if now - t < _RATE_WINDOW])
+    limit = _RATE_LIMIT_WRITE if request.method in ("POST", "PUT", "DELETE", "PATCH") else _RATE_LIMIT_READ
+    response.headers["X-RateLimit-Limit"] = str(limit)
+    response.headers["X-RateLimit-Remaining"] = str(max(0, limit - active))
+    response.headers["X-RateLimit-Reset"] = str(int(now + _RATE_WINDOW))
     return response
 
 

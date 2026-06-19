@@ -23,6 +23,33 @@ import httpx
 from .base import BaseExecutor, ExecutorResult
 from .. import config
 
+# ── 敏感文件 blocklist（防 LLM 输出注入）──
+# Agent 不可读写的文件/目录模式
+_BLOCKED_PATTERNS = [
+    ".env", ".env.*",
+    "*.token", "*.key", "*.pem", "*.p12", "*.pfx",
+    "*.secret", "*.password", "*.credential",
+    ".qidian/", ".qidian/*",
+    ".git/", ".git/*",
+    ".claude/",
+    "venv/", ".venv/",
+    "__pycache__/",
+    "*.pyc",
+    "users.json",
+    "config.toml", "agents.toml",
+]
+
+# 危险 shell 命令前缀（防命令注入）
+_BLOCKED_COMMANDS = [
+    "rm -rf /", "rm -rf ~", "rm -rf .",
+    "curl", "wget",
+    "chmod 777", "chmod -R",
+    "sudo", "su ",
+    "mkfs.", "dd if=",
+    ":(){ :|:& };:",  # fork bomb
+    "> /dev/sda",
+]
+
 # ── Tool 定义 (OpenAI function calling 格式) ──
 
 TOOLS = [
@@ -296,7 +323,35 @@ class OpenAIAgentExecutor(BaseExecutor):
             raise ValueError(f"路径逃逸被拒绝: {path} → {p}")
         return p
 
+    def _is_blocked_path(self, path: str) -> tuple[bool, str]:
+        """检查路径是否命中敏感文件 blocklist。返回 (blocked, reason)。"""
+        import fnmatch
+        normalized = path.replace("\\", "/")
+        for pattern in _BLOCKED_PATTERNS:
+            # 路径任意段匹配 or 文件名匹配
+            if fnmatch.fnmatch(normalized, pattern):
+                return True, f"敏感文件/目录: {pattern}"
+            if fnmatch.fnmatch(normalized, f"*/{pattern}"):
+                return True, f"敏感文件/目录: {pattern}"
+            # 检查路径中是否包含被屏蔽的目录段
+            parts = normalized.split("/")
+            for part in parts:
+                if fnmatch.fnmatch(part, pattern.rstrip("/*")):
+                    return True, f"敏感文件/目录: {pattern}"
+        return False, ""
+
+    def _is_dangerous_command(self, command: str) -> tuple[bool, str]:
+        """检查 shell 命令是否危险。返回 (dangerous, reason)。"""
+        cmd_lower = command.lower().strip()
+        for blocked in _BLOCKED_COMMANDS:
+            if cmd_lower.startswith(blocked.lower()) or blocked.lower() in cmd_lower:
+                return True, f"危险命令被拦截: {blocked}"
+        return False, ""
+
     def _tool_read(self, path: str) -> str:
+        blocked, reason = self._is_blocked_path(path)
+        if blocked:
+            return f"访问被拒绝: {reason}"
         p = self._safe_path(path)
         if not p.exists():
             return f"文件不存在: {path}"
@@ -306,6 +361,9 @@ class OpenAIAgentExecutor(BaseExecutor):
         return content
 
     def _tool_write(self, path: str, content: str) -> str:
+        blocked, reason = self._is_blocked_path(path)
+        if blocked:
+            return f"写入被拒绝: {reason}"
         p = self._safe_path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
@@ -313,6 +371,9 @@ class OpenAIAgentExecutor(BaseExecutor):
         return f"已写入 {path} ({len(content)} 字符)"
 
     def _tool_run(self, command: str) -> str:
+        dangerous, reason = self._is_dangerous_command(command)
+        if dangerous:
+            return f"命令被拦截: {reason}"
         try:
             argv = shlex.split(command)
         except ValueError as e:
