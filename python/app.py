@@ -358,8 +358,9 @@ def _loop_worker():
     _loop_running = False
 
 
-def _push_event(kind: str, msg: str):
-    ts = time.time()
+def _push_event(kind: str, msg: str, ts: float = None):
+    if ts is None:
+        ts = time.time()
     _loop_events.appendleft({"kind": kind, "msg": msg, "ts": ts})
     _sse_broadcast(kind, msg, ts)
 
