@@ -1534,10 +1534,13 @@ def api_sse_events():
         # 初始状态
         try:
             counts = witness._count_by_status()
+            events_data = list(_loop_events)[:20]
             initial = json.dumps({
                 "kind": "init",
                 "counts": counts,
                 "running_total": sum(witness._heartbeat_task_levels().values()),
+                "running": _loop_running,
+                "events": events_data,
             })
             yield f"data: {initial}\n\n"
         except Exception:

@@ -863,11 +863,11 @@ function closeCostModal(){ document.getElementById('cost-modal').style.display='
 // ═══════════════════════════════════════════════════════
 async function startLoop(){
   const r=await api('/api/loop/start',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"concurrent":1}'});
-  if(r.ok){updateLoopUI(true);refreshAll();}
+  if(r.ok || r.running){_loop_running=true;updateLoopUI(true);refreshAll();pollLoopEvents();}
 }
 async function stopLoop(){
   const r=await api('/api/loop/stop',{method:'POST'});
-  if(r.ok){updateLoopUI(false);refreshAll();}
+  if(r.ok || !r.running){_loop_running=false;updateLoopUI(false);refreshAll();}
 }
 async function cleanupStale(){
   if(!confirm('清理残留心跳文件和任务缓存？'))return;
@@ -885,16 +885,24 @@ function updateLoopUI(running){
 async function pollLoopEvents(){
   try{
     const r=await api('/api/loop/status');
-    if(r.running) updateLoopUI(true);
-    document.getElementById('loop-info').textContent=r.running?`concurrent=${r.concurrent}`:'';
-    if(r.events&&r.events.length){
-      document.getElementById('event-section').style.display='';
-      document.getElementById('event-feed').innerHTML=r.events.map(e=>{
-        const cls=e.kind==='task'?'ev-task':e.kind==='error'?'ev-error':e.kind==='system'?'ev-system':'ev-idle';
-        return `<div class="event-row"><span class="ev-ts">${new Date(e.ts*1000).toLocaleTimeString('zh-CN')}</span><span class="${cls}">${esc(e.msg)}</span></div>`;
-      }).join('');
+    if(r.error) return;
+    _loop_running = !!r.running;
+    if(r.running) updateLoopUI(true); else updateLoopUI(false);
+    const info = document.getElementById('loop-info');
+    if(info) info.textContent = r.running ? `concurrent=${r.concurrent}` : '';
+    if(r.events && r.events.length){
+      const section = document.getElementById('event-section');
+      const feed = document.getElementById('event-feed');
+      if(section) section.style.display = '';
+      if(feed) {
+        feed.innerHTML = r.events.map(e => {
+          const cls = 'ev-' + (e.kind || 'idle');
+          const ts = new Date(e.ts * 1000).toLocaleTimeString('zh-CN');
+          return '<div class="event-row"><span class="ev-ts">' + ts + '</span><span class="' + cls + '">' + esc(e.msg) + '</span></div>';
+        }).join('');
+      }
     }
-  }catch(e){}
+  }catch(e){ console.error('pollLoopEvents:', e); }
 }
 // Check loop status on init
 pollLoopEvents();
@@ -1281,6 +1289,18 @@ function connectSSE(){
         // 初始状态 → 轻量更新
         statusData = {counts: d.counts||{}, running_total: d.running_total||0, heartbeat_levels:{}, agents:{}, avg_wait:'--', avg_done:'--'};
         renderStatusCards();
+        if (d.running) updateLoopUI(true);
+        // 渲染历史事件
+        if (d.events && d.events.length) {
+          const feed = document.getElementById('event-feed');
+          if (feed) {
+            feed.innerHTML = d.events.map(e => {
+              const cls = 'ev-' + (e.kind || 'idle');
+              const ts = new Date(e.ts * 1000).toLocaleTimeString('zh-CN');
+              return '<div class="event-row"><span class="ev-ts">' + ts + '</span><span class="' + cls + '">' + esc(e.msg) + '</span></div>';
+            }).join('');
+          }
+        }
       } else {
         // 事件推送 → 更新事件流
         const feed = document.getElementById('event-feed');
