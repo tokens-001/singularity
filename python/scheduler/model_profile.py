@@ -203,9 +203,10 @@ class ProfileStore:
 
     # ── 持久化 ──
     def save(self, path: Optional[Path] = None) -> None:
-        p = path or self._path
+        p = Path(path) if isinstance(path, str) else (path or self._path)
         if not p:
             return
+        p = Path(p)
         p.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "stats": [s.to_dict() for s in self._stats.values()],
@@ -214,8 +215,11 @@ class ProfileStore:
         p.write_text(json.dumps(data, ensure_ascii=False, indent=2))
 
     def load(self, path: Optional[Path] = None) -> "ProfileStore":
-        p = path or self._path
-        if not p or not p.exists():
+        p = Path(path) if isinstance(path, str) else (path or self._path)
+        if not p:
+            return self
+        p = Path(p)
+        if not p.exists():
             return self
         try:
             data = json.loads(p.read_text())
