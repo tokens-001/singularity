@@ -1069,8 +1069,8 @@ async function updateModel(id, field, value){
   const body = {};
   if (field === 'tiers') {
     // toggle tier in/out
-    const m = (await api('/api/models')).value || {};
-    const model = Object.values(m).find(x => x.id === id);
+    const all = await api('/api/models');
+    const model = all[id];
     if (!model) return;
     const tiers = [...(model.tiers || [])];
     const idx = tiers.indexOf(value);
@@ -1094,12 +1094,12 @@ async function editModel(id){
   const tiers = m.tiers||[];
   const html = '<div id="model-edit-'+esc(m.id)+'" style="margin:4px 0;padding:8px;border:1px solid var(--cyan);background:var(--bg2)">层级：'+['E','E+','D'].map(t=>{
     const checked = tiers.includes(t);
-    return '<label style="display:inline-block;margin-right:12px;cursor:pointer;font-size:11px"><input type="checkbox" id="em-tier-'+t+'" '+(checked?'checked':'')+'> '+t+'</label>';
+    return '<label style="display:inline-block;margin-right:12px;cursor:pointer;font-size:11px"><input type="checkbox" id="em-'+esc(m.id)+'-'+t+'" '+(checked?'checked':'')+'> '+t+'</label>';
   }).join('')+' <button class="btn sm" onclick="saveModelEdit(\''+esc(m.id)+'\')" style="margin-left:8px;margin-right:4px">保存</button><button class="btn sm" style="color:var(--text3)" onclick="editModel(\''+esc(m.id)+'\')">取消</button></div>';
   document.getElementById('models-body').insertAdjacentHTML('afterbegin', html);
 }
 async function saveModelEdit(id){
-  const tiers = ['E','E+','D'].filter(t => document.getElementById('em-tier-'+t)?.checked);
+  const tiers = ['E','E+','D'].filter(t => document.getElementById('em-'+id+'-'+t)?.checked);
   if (!tiers.length) { alert('至少选一个层级'); return; }
   const r = await api('/api/models/'+id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({tiers})});
   if (r.error) alert(r.error); else renderModels();
