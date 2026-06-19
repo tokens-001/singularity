@@ -42,12 +42,61 @@ app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24).hex()
 
+# ── 安全限制 ──────────────────────────────────────────
+_MAX_CONCURRENT = 8          # loop concurrent 上限
+_MAX_SSE_CLIENTS = 20        # SSE 同时连接上限
+_MAX_TASK_DESC_LEN = 8000    # 任务描述最大字符数
+_MAX_PROJECT_NAME_LEN = 200  # 项目名最大字符数
+
 # 可选认证: QIDIAN_AUTH=1 时启用
 _AUTH_ENABLED = os.environ.get("QIDIAN_AUTH") == "1"
 if _AUTH_ENABLED:
     from scheduler._auth import get_auth
     _admin = get_auth().bootstrap()
     _log_info("auth", f"认证已启用, admin token: {_admin.token[:8]}...")
+
+# ── SSRF 防护：URL 验证 ─────────────────────────────────
+import ipaddress
+import re as _re_url
+
+# 已知 API 厂商域名（仅允许这些厂商的 API 调用）
+_ALLOWED_API_HOSTS = {
+    "api.deepseek.com",
+    "api.moonshot.cn",
+    "open.bigmodel.cn",
+    "api.openai.com",
+    "api.anthropic.com",
+    "dashscope.aliyuncs.com",
+    "api.minimax.chat",
+    "api.baichuan-ai.com",
+    "api.stepfun.com",
+    "api.lingyiwanwu.com",
+}
+
+def _is_safe_api_url(url: str) -> bool:
+    """检查 URL 是否安全（允许的 API 厂商 + 非内网）。"""
+    if not url:
+        return True  # 空 URL 允许（使用默认值）
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        # 禁止内网 IP
+        try:
+            addr = ipaddress.ip_address(hostname)
+            if addr.is_private or addr.is_loopback or addr.is_link_local:
+                return False
+        except ValueError:
+            pass  # 不是 IP 地址，继续检查 hostname
+        # 只允许已知 API 厂商
+        for allowed in _ALLOWED_API_HOSTS:
+            if hostname == allowed or hostname.endswith("." + allowed):
+                return True
+        return False
+    except Exception:
+        return False
 
 # ═══════════════════════════════════════════════════════════
 # 调度循环后台线程
@@ -191,7 +240,18 @@ def stop_loop():
 
 @app.after_request
 def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
+    # 仅允许本地来源（安全加固：不再使用 *）
+    origin = request.headers.get("Origin", "")
+    allowed = (
+        not origin
+        or origin.startswith("http://localhost")
+        or origin.startswith("http://127.0.0.1")
+        or origin.startswith("http://0.0.0.0")
+    )
+    if allowed and origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+    elif not origin:
+        response.headers["Access-Control-Allow-Origin"] = "http://localhost:5050"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type"
     return response
@@ -269,6 +329,8 @@ def index():
 def api_loop_start():
     data = request.get_json(silent=True) or {}
     concurrent = int(data.get("concurrent", 1))
+    # 安全加固：限制并发上限
+    concurrent = min(max(concurrent, 1), _MAX_CONCURRENT)
     ok = start_loop(concurrent)
     return jsonify({"ok": ok, "running": _loop_running, "concurrent": _loop_concurrent})
 
@@ -816,8 +878,12 @@ def api_projects():
         data = request.get_json(silent=True) or {}
         if not data.get("name", "").strip():
             return jsonify({"error": "缺少 name"}), 400
+        name = data["name"].strip()
+        # 安全加固：长度限制
+        if len(name) > _MAX_PROJECT_NAME_LEN:
+            return jsonify({"error": f"项目名不能超过 {_MAX_PROJECT_NAME_LEN} 字符"}), 400
         p = proj_mod.create(
-            name=data["name"].strip(),
+            name=name,
             template=data.get("template", "product_dev"),
             description=data.get("description", ""),
             scope=data.get("scope", ""),
@@ -1140,12 +1206,16 @@ def api_agents_add():
     data = request.get_json(silent=True)
     if not data or not data.get("model") or not data.get("level"):
         return jsonify({"error": "缺少 model / level"}), 400
+    # 安全加固：SSRF 防护 — 验证 entry URL
+    entry_url = data.get("entry", "")
+    if entry_url and not _is_safe_api_url(entry_url):
+        return jsonify({"error": "不允许的 entry URL（仅支持已知 API 厂商域名）"}), 400
     try:
         cfg = disp_mod.add_agent(
             level=data["level"],
             model=data["model"],
             agent_type=data.get("type", "openai-agent"),
-            entry=data.get("entry", ""),
+            entry=entry_url,
             api_key_env=data.get("api_key_env", ""),
             max_turns=data.get("max_turns", 5),
             roles=data.get("roles", []),
@@ -1155,18 +1225,21 @@ def api_agents_add():
         )
         return jsonify({"ok": True, "agent": cfg})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "服务器内部错误"}), 500
 
 
 @app.route("/api/agents/<level>/<model>", methods=["PUT"])
 def api_agents_update(level, model):
     """更新 agent 配置 (default 等)。"""
     data = request.get_json(silent=True) or {}
+    # 安全加固：SSRF 防护
+    if data.get("entry") and not _is_safe_api_url(data["entry"]):
+        return jsonify({"error": "不允许的 entry URL（仅支持已知 API 厂商域名）"}), 400
     try:
         cfg = disp_mod.update_agent(level, model, data)
         return jsonify({"ok": True, "agent": cfg})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "服务器内部错误"}), 500
 
 
 @app.route("/api/agents/<level>/<model>", methods=["DELETE"])
@@ -1204,11 +1277,15 @@ def api_store_add():
     data = request.get_json(silent=True)
     if not data or not data.get("id"):
         return jsonify({"error": "缺少 id"}), 400
+    # 安全加固：SSRF 防护
+    base_url = data.get("base_url", "")
+    if base_url and not _is_safe_api_url(base_url):
+        return jsonify({"error": "不允许的 base_url（仅支持已知 API 厂商域名）"}), 400
     try:
         entry = api_store.add(
             api_id=data["id"],
             provider=data.get("provider", data["id"]),
-            base_url=data.get("base_url", ""),
+            base_url=base_url,
             api_key_env=data.get("api_key_env", ""),
             notes=data.get("notes", ""),
         )
@@ -1440,6 +1517,9 @@ def api_create_task():
         return jsonify({"error": "缺少 description"}), 400
 
     desc = data["description"].strip()
+    # 安全加固：长度限制
+    if len(desc) > _MAX_TASK_DESC_LEN:
+        return jsonify({"error": f"description 不能超过 {_MAX_TASK_DESC_LEN} 字符"}), 400
     priority = data.get("priority", 0)
     depends_on = data.get("depends_on", [])
     route_level = data.get("route_level", "")
@@ -1527,6 +1607,9 @@ def api_resolve_conflict(task_id):
 def api_sse_events():
     """SSE 端点: 服务器主动推送调度事件。"""
     import queue
+    # 连接数限制（安全加固：防止资源耗尽）
+    if len(_sse_clients) >= _MAX_SSE_CLIENTS:
+        return jsonify({"error": "SSE 连接数已满，请稍后重试"}), 503
     q = queue.Queue()
     _sse_clients.append(q)
 
@@ -1651,4 +1734,4 @@ def health():
 
 if __name__ == "__main__":
     print("奇点调度面板已启动 → http://127.0.0.1:5050")
-    app.run(debug=False, host="0.0.0.0", port=5050)
+    app.run(debug=False, host="127.0.0.1", port=5050)

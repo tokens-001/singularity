@@ -171,7 +171,12 @@ class ZhipuApiExecutor(BaseExecutor):
             else:
                 failed.append({"file": target_file, "error": "无对应代码块"})
                 continue
-            dest = config.PROJECT_ROOT / target_file
+            # 安全加固：路径穿越检查
+            root = config.PROJECT_ROOT.resolve()
+            dest = (config.PROJECT_ROOT / target_file).resolve()
+            if not str(dest).startswith(str(root)):
+                failed.append({"file": target_file, "error": "路径逃逸被拒绝"})
+                continue
             try:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(block, encoding="utf-8")
