@@ -44,6 +44,11 @@ from ._planner import (
 # 每个元素: {"kind": "tool:start"|"tool:done"|"turn", "msg": ..., "ts": ...}
 _pending_sse_events: list[dict] = []
 
+# ── Goal 循环 ──────────────────────────────────────────────
+from .goal_loop import GoalLoop
+
+_GOAL_RE = _re.compile(r'^\[Goal\]\s*(.+?)\n', _re.ASCII)
+
 from ._token_budget import record_tokens, get_usage_stats
 from ._profiler import record_perf, get_perf_stats
 from .execution_judge import judge, should_retry, build_reflexion_feedback
@@ -348,13 +353,34 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
 
         ctx = RunContext(batch_id=task.id, snapshot_ref=snap.ref, merge_queue=None)
 
-        # D层委员会: 多agent并行出方案，合成最优
-        d_agents = effective_agents.get("D", [])
-        use_committee = route.level == "D" and len(d_agents) >= 2
-        if use_committee:
-            batch = _run_committee(task, ctx, effective_agents, d_agents)
+        # ── Goal 循环检测: [Goal] 前缀 → 多轮迭代直到满足 ──
+        goal_match = _GOAL_RE.match(task.description)
+        if goal_match:
+            goal = goal_match.group(1).strip()
+            _pending_sse_events.append({"kind": "system", "msg": f"Goal循环: {goal[:60]}", "ts": time.time(), "task_id": task.id})
+            loop = GoalLoop(effective_agents)
+            g_result = loop.run(task, goal, max_iter=5)
+            # 构造 BatchOutput 兼容下游
+            from ._types import BatchOutput as _BO
+            from .executors.base import ExecutorResult as _ER
+            batch = _BO(ok=g_result.success, task_id=task.id,
+                        term_reason=f"goal_{'met' if g_result.success else 'exhausted'}_{g_result.iterations}iter",
+                        tool_events=[], turn_count=g_result.iterations,
+                        validation=val_mod.ValidationReport(
+                            verdict="通过" if g_result.success else "阻断",
+                            action="pass" if g_result.success else "abort",
+                            unverified=[f"Goal循环 {g_result.iterations}轮, 满足={g_result.success}"]))
+            batch.dispatch_result = type('obj', (object,), {
+                'executor_result': _ER(success=g_result.success, raw_output=g_result.final_output),
+                'agent_cfg': {}, 'level': route.level})()
         else:
-            batch = _run_with_retry(task, ctx, effective_agents)
+            # D层委员会: 多agent并行出方案，合成最优
+            d_agents = effective_agents.get("D", [])
+            use_committee = route.level == "D" and len(d_agents) >= 2
+            if use_committee:
+                batch = _run_committee(task, ctx, effective_agents, d_agents)
+            else:
+                batch = _run_with_retry(task, ctx, effective_agents)
 
         batch.pre_search_skipped = pre.skipped
         batch.pre_search_reason = pre.reason
