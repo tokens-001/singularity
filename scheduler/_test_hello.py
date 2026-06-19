@@ -1,0 +1,1 @@
+print("judge test ok")
