@@ -1312,6 +1312,10 @@ function connectSSE(){
           feed.insertBefore(row, feed.firstChild);
           while (feed.children.length > 50) feed.removeChild(feed.lastChild);
         }
+        // 数据面板自动刷新（debounce 2s，避免高频抖动）
+        if (d.kind === 'task' || d.kind === 'system' || d.kind === 'workflow' || d.kind === 'memory') {
+          _scheduleRefresh(2000);
+        }
       }
     } catch(_){}
   };
@@ -1333,6 +1337,13 @@ function connectSSE(){
     const ind = document.getElementById('live-indicator');
     if(ind) { ind.style.color = 'var(--green)'; ind.textContent = '◆'; }
   };
+}
+
+// ── Debounce helper for SSE-triggered refresh ──
+let _refreshTimer = null;
+function _scheduleRefresh(delay) {
+  if (_refreshTimer) clearTimeout(_refreshTimer);
+  _refreshTimer = setTimeout(refreshAll, delay);
 }
 
 // ═══════════════════════════════════════════════════════
