@@ -136,10 +136,23 @@ for tid in tids:
     api(f"/api/tasks/{tid}/delete", method="POST")
 check("批量删除10", all(not Path(f".qidian/tasks/{tid}.json").exists() for tid in tids))
 
-# Agent toggle
+# Agent toggle — 保存并恢复
+_saved = api("/api/agents")
+_disabled_saved = _saved.get("_disabled", {})
+_d4_was_disabled = "deepseek-v4-pro" in _disabled_saved.get("D", [])
+_d4_was_active = any(a.get("model") == "deepseek-v4-pro" for a in _saved.get("D", []))
+
 check("禁用agent", api("/api/agents/D/deepseek-v4-pro", method="DELETE").get("ok") == True)
 check("启用agent", api("/api/agents", method="POST",
     body={"level":"D","model":"deepseek-v4-pro"}).get("ok") == True)
+
+# 恢复：重新应用保存的禁用列表
+for _lvl, _models in _disabled_saved.items():
+    for _m in _models:
+        api(f"/api/agents/{_lvl}/{_m}", method="DELETE")
+# 如果之前 deepseek-v4-pro 不在 D 层活跃列表，禁用它
+if not _d4_was_active:
+    api("/api/agents/D/deepseek-v4-pro", method="DELETE")
 
 # Health fields
 h = api("/health")
