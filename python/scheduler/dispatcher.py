@@ -135,6 +135,18 @@ def _find_agent_by_model(agents: dict, model_name: str) -> dict | None:
     return None
 
 
+def _model_cost_tier(model_name: str) -> str:
+    """查模型的价格档位: budget / standard / premium。"""
+    try:
+        from . import model_registry as mr
+        m = mr.get(model_name)
+        if m:
+            return m.cost
+    except Exception:
+        pass
+    return "standard"
+
+
 def pick_agent(agents: dict, level: str, role: str = None,
                project_lineup: dict[str, list[str]] = None) -> dict:
     """选 agent: project_lineup > role > default。
@@ -174,10 +186,13 @@ def pick_agent(agents: dict, level: str, role: str = None,
         if a.get("default") and agent_api_available(a):
             return a
 
-    # 第一个可用的
-    for a in candidates:
-        if agent_api_available(a):
-            return a
+    # 无 default → 按成本从低到高排，最便宜的优先
+    available = [a for a in candidates if agent_api_available(a)]
+    if available:
+        cost_order = {"budget": 0, "standard": 1, "premium": 2}
+        available.sort(key=lambda a: cost_order.get(
+            _model_cost_tier(a.get("model", "")), 2))
+        return available[0]
 
     raise RuntimeError(f"{level} 层所有 agent 的 API 均不可用")
 

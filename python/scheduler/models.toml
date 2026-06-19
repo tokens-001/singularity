@@ -85,3 +85,15 @@ reasoning = false
 max_turns = 5
 strengths = ["架构设计", "编码", "审查", "方案设计"]
 notes = "D 层强力。1M上下文。需要 OPENAI_API_KEY + 代理。"
+
+[[models]]
+id = "gpt-5.5-pro"
+provider = "openai"
+display = "GPT-5.5 Pro"
+tiers = ["D"]
+speed = "fast"
+cost = "premium"
+reasoning = false
+max_turns = 5
+strengths = ["架构设计", "编码", "审查", "复杂推理"]
+notes = "D 层最强。需要 OPENAI_API_KEY + 代理。价格昂贵，谨慎使用。"
