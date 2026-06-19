@@ -296,6 +296,41 @@ pre.agent-out {
 .toast.success { background:#153d1f; color:#4ec97a; border:1px solid #4ec97a; }
 @keyframes toastIn { from{opacity:0;transform:translateX(20px)} to{opacity:1;transform:translateX(0)} }
 
+/* ═══ Event type colors ═══ */
+.ev-tool-start { color: #6cb4ee; }   /* blue — tool starting */
+.ev-tool-done  { color: #4ec97a; }   /* green — tool done */
+.ev-turn       { color: #c29b47; }   /* gold — turn complete */
+.ev-approval   { color: #f44747; }   /* red — needs approval */
+.ev-subagent   { color: #b47cd6; }   /* purple — subagent */
+
+/* ═══ Skills panel ═══ */
+.skills-layout { display: grid; grid-template-columns: 1fr 1.5fr; gap: 10px; min-height: 300px; }
+.skills-list { border: 1px solid var(--grid); padding: 8px; }
+.skills-list h4 { font-size: 10px; margin: 0 0 6px 0; color: var(--fg2); }
+.skill-item { display: flex; justify-content: space-between; align-items: center; padding: 5px 4px;
+  font-size: 9px; font-family: var(--mono); border-bottom: 1px solid var(--grid); }
+.skill-item .name { color: var(--fg); }
+.skill-item .type-tag { font-size: 8px; padding: 1px 5px; border-radius: 2px; color: var(--fg2); border: 1px solid var(--grid); }
+.skill-item .type-tag.tool { color: #6cb4ee; border-color: #6cb4ee; }
+.skill-item .type-tag.prompt { color: #b47cd6; border-color: #b47cd6; }
+.skill-item .btn-del { font-size: 8px; padding: 1px 6px; border: 1px solid #f44747; color: #f44747;
+  background: transparent; cursor: pointer; }
+.skill-item .btn-del:hover { background: #f44747; color: #fff; }
+.skill-agent-matrix { border: 1px solid var(--grid); padding: 8px; overflow-y: auto; }
+.skill-agent-matrix h4 { font-size: 10px; margin: 0 0 6px 0; color: var(--fg2); }
+.matrix-table { width: 100%; border-collapse: collapse; font-size: 9px; font-family: var(--mono); }
+.matrix-table th, .matrix-table td { padding: 4px 6px; border-bottom: 1px solid var(--grid); text-align: center; }
+.matrix-table th { color: var(--fg2); font-weight: normal; }
+.matrix-table td.skill-name { text-align: left; color: var(--fg); }
+.matrix-table input[type=checkbox] { accent-color: #6cb4ee; }
+.btn-add-skill { padding: 4px 12px; font-size: 9px; background: var(--bg3); color: var(--fg); border: 1px solid var(--grid); cursor: pointer; }
+.btn-add-skill:hover { border-color: var(--fg2); }
+.skill-form { display: none; padding: 8px; border: 1px solid #6cb4ee; margin-top: 8px; }
+.skill-form.open { display: block; }
+.skill-form input, .skill-form textarea, .skill-form select { width: 100%; margin-bottom: 6px; padding: 4px 6px;
+  font-size: 9px; font-family: var(--mono); background: var(--bg3); color: var(--fg); border: 1px solid var(--grid); }
+.skill-form textarea { min-height: 100px; resize: vertical; }
+
 @media (max-width: 768px) {
   .cards { flex-direction: column; }
   .detail-grid { grid-template-columns: 1fr; }

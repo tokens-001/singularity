@@ -42,6 +42,8 @@ class BatchOutput:
     pre_search_reason: str = ""
     pre_search_top_decisions: list = field(default_factory=list)
     pre_search_memory: dict = field(default_factory=dict)
+    tool_events: list = field(default_factory=list)   # 工具调用事件 [{tool,status,time,...}]
+    turn_count: int = 0                                # 实际推理轮次
 
 
 class _SnapProxy:

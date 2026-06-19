@@ -169,6 +169,8 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     term_reason = "未执行"
     pending_merge_req = None
     planner_decomposed = False
+    all_tool_events: list[dict] = []  # 收集所有 turn 的工具调用事件
+    final_turn = 0                     # 实际推理轮次
 
     snap = _SnapProxy(ctx.snapshot_ref)
 
@@ -218,6 +220,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                         verdict="阻断", action="abort",
                         unverified=["用户手动取消"],
                     ),
+                    tool_events=all_tool_events, turn_count=0,
                 )
 
             effective_task = task.description
@@ -238,6 +241,10 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 feedback=feedback, baseline_ref=ctx.snapshot_ref, cwd=cwd,
             )
             exec_result = disp_result.executor_result
+
+            # ── 收集工具调用事件 ──
+            if exec_result and getattr(exec_result, 'tool_events', None):
+                all_tool_events.extend(exec_result.tool_events)
 
             if not exec_result.success:
                 # 容灾: 切下一个 agent
@@ -272,6 +279,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                             unverified=[f"planner 分解出 {len(subtasks)} 子任务"],
                         ),
                         planner_decomposed=True,
+                        tool_events=all_tool_events, turn_count=turn,
                     )
             elif wt:
                 if ctx.merge_queue is not None:
@@ -297,6 +305,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                         return BatchOutput(
                             ok=False, task_id=task.id, dispatch_result=disp_result,
                             term_reason=term_reason, validation=last_validation,
+                            tool_events=all_tool_events, turn_count=turn,
                         )
 
             validation = val_mod.validate(
@@ -322,6 +331,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     term_reason=f"pass (level={level}, turn={turn})",
                     validation=validation,
                     merge_request=pending_merge_req,
+                    tool_events=all_tool_events, turn_count=turn,
                 )
 
             if validation.action == "retry":
@@ -338,6 +348,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 ok=False, task_id=task.id, dispatch_result=disp_result,
                 term_reason=f"{validation.action} (level={level}, turn={turn})",
                 validation=validation,
+                tool_events=all_tool_events, turn_count=turn,
             )
 
         _cleanup_wt(wt)
@@ -355,6 +366,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     return BatchOutput(
         ok=False, task_id=task.id, dispatch_result=disp_result,
         term_reason=term_reason, validation=last_validation,
+        tool_events=all_tool_events, turn_count=final_turn,
     )
 
 def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:

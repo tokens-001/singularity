@@ -1335,7 +1335,10 @@ function connectSSE(){
           const feed = document.getElementById('event-feed');
           if (feed) {
             feed.innerHTML = d.events.map(e => {
-              const cls = 'ev-' + (e.kind || 'idle');
+              const kindToCls = {'task':'ev-task','error':'ev-error','system':'ev-system',
+                                  'tool:start':'ev-tool-start','tool:done':'ev-tool-done',
+                                  'turn':'ev-turn','approval':'ev-approval','subagent':'ev-subagent'};
+              const cls = kindToCls[e.kind] || 'ev-' + (e.kind || 'idle');
               const ts = new Date(e.ts * 1000).toLocaleTimeString('zh-CN');
               return '<div class="event-row"><span class="ev-ts">' + ts + '</span><span class="' + cls + '">' + esc(e.msg) + '</span></div>';
             }).join('');
@@ -1345,7 +1348,10 @@ function connectSSE(){
         // 事件推送 → 更新事件流
         const feed = document.getElementById('event-feed');
         if (feed && d.kind && d.msg) {
-          const cls = d.kind==='task'?'ev-task':d.kind==='error'?'ev-error':d.kind==='system'?'ev-system':'ev-idle';
+          const kindToCls = {'task':'ev-task','error':'ev-error','system':'ev-system',
+                              'tool:start':'ev-tool-start','tool:done':'ev-tool-done',
+                              'turn':'ev-turn','approval':'ev-approval','subagent':'ev-subagent'};
+          const cls = kindToCls[d.kind] || 'ev-idle';
           const row = document.createElement('div');
           row.className = 'event-row';
           row.innerHTML = `<span class="ev-ts">${new Date(d.ts*1000).toLocaleTimeString('zh-CN')}</span><span class="${cls}">${esc(d.msg)}</span>`;
@@ -1353,7 +1359,7 @@ function connectSSE(){
           while (feed.children.length > 50) feed.removeChild(feed.lastChild);
         }
         // 数据面板自动刷新（debounce 2s，避免高频抖动）
-        if (d.kind === 'task' || d.kind === 'system' || d.kind === 'workflow' || d.kind === 'memory') {
+        if (d.kind === 'task' || d.kind === 'system' || d.kind === 'workflow' || d.kind === 'memory' || d.kind === 'turn') {
           _scheduleRefresh(2000);
         }
       }
@@ -1463,6 +1469,158 @@ async function refreshPatternProfile(){
 // 每 30 秒刷新一次裁判监控和模式画像（低频，避免不必要的负载）
 setInterval(refreshJudgeMonitor,30000);
 setInterval(refreshPatternProfile,30000);
+
+// ═══════════════════════════════════════════════════════
+// Skills 面板
+// ═══════════════════════════════════════════════════════
+async function renderSkills(){
+  const [skills, agents] = await Promise.all([
+    fetch('/api/skills').then(r=>r.json()).catch(()=>({skills:[]})),
+    fetch('/api/agents').then(r=>r.json()).catch(()=>({}))
+  ]);
+  const skillList = skills.skills || [];
+  // 左侧 skill 列表
+  const listBody = document.getElementById('skills-list-body');
+  if (!listBody) return;
+  if (!skillList.length){ listBody.innerHTML = '<span style="color:var(--text2)">无 Skill</span>'; }
+  else {
+    listBody.innerHTML = skillList.map(s =>
+      `<div class="skill-item">
+        <span><span class="name">${esc(s.name)}</span>
+          <span class="type-tag ${s.type}">${s.type}</span></span>
+        <span>${s.source === 'user' ? '<button class="btn-del" onclick="deleteSkill(\''+esc(s.name)+'\')">×</button>' : ''}</span>
+      </div>`
+    ).join('');
+  }
+  // 右侧 agent × skill 矩阵
+  renderSkillMatrix(skillList, agents);
+}
+
+function renderSkillMatrix(skillList, agents){
+  const body = document.getElementById('skill-matrix-body');
+  if (!body) return;
+  if (!skillList.length){ body.innerHTML = '<span style="color:var(--text2)">无 Skill 可绑定</span>'; return; }
+
+  const levels = ['E', 'E+', 'D'];
+  let rows = [];
+  // header row
+  let hdr = '<tr><th>Agent</th>';
+  skillList.forEach(s => { hdr += `<th>${s.name}</th>`; });
+  hdr += '</tr>';
+  rows.push(hdr);
+
+  levels.forEach(lv => {
+    const agentCfgs = (agents[lv] || []);
+    agentCfgs.forEach(cfg => {
+      const m = cfg.model || '';
+      if (!m) return;
+      let r = `<tr><td>${lv}/${m}</td>`;
+      skillList.forEach(s => {
+        r += `<td><input type="checkbox"
+          data-level="${lv}" data-model="${m}" data-skill="${s.name}"
+          onchange="toggleAgentSkill(this)"></td>`;
+      });
+      r += '</tr>';
+      rows.push(r);
+    });
+  });
+
+  body.innerHTML = `<table class="matrix-table">${rows.join('')}</table>`;
+
+  // 拉取所有 agent 的 skill 绑定，回填 checkbox
+  Promise.all(
+    levels.flatMap(lv =>
+      (agents[lv]||[]).map(cfg =>
+        fetch(`/api/agents/${lv}/${cfg.model}/skills`).then(r=>r.json()).then(d => ({
+          level: lv, model: cfg.model, skills: (d.skills||[]).map(s=>s.name)
+        })).catch(()=>({level:lv,model:cfg.model,skills:[]}))
+      )
+    )
+  ).then(results => {
+    results.forEach(r => {
+      (r.skills||[]).forEach(sname => {
+        const cb = document.querySelector(`input[data-level="${r.level}"][data-model="${r.model}"][data-skill="${sname}"]`);
+        if (cb) cb.checked = true;
+      });
+    });
+  });
+}
+
+async function toggleAgentSkill(cb){
+  const {level, model, skill} = cb.dataset;
+  try{
+    // 读当前绑定
+    const r = await fetch(`/api/agents/${level}/${model}/skills`);
+    const d = await r.json();
+    const current = (d.skills||[]).map(s=>s.name);
+    const updated = cb.checked ? [...current, skill] : current.filter(n=>n!==skill);
+    await fetch(`/api/agents/${level}/${model}/skills`, {
+      method:'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({skills: updated})
+    });
+  }catch(e){ cb.checked = !cb.checked; }
+}
+
+function toggleSkillForm(){
+  const f = document.getElementById('skill-form');
+  if (f) f.classList.toggle('open');
+}
+
+async function createSkill(){
+  const name = document.getElementById('skill-new-name').value.trim();
+  const desc = document.getElementById('skill-new-desc').value.trim();
+  const type = document.getElementById('skill-new-type').value;
+  const args = document.getElementById('skill-new-args').value.trim();
+  const body = document.getElementById('skill-new-body').value;
+  if (!name) return toast('请输入名称', 'error');
+  try{
+    await fetch('/api/skills', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name, description:desc, type, arguments:args, body})
+    });
+    toggleSkillForm();
+    renderSkills();
+  }catch(e){ toast('创建失败: '+e, 'error'); }
+}
+
+async function deleteSkill(name){
+  if (!confirm('删除 Skill: ' + name + '?')) return;
+  try{
+    await fetch('/api/skills/'+encodeURIComponent(name), {method:'DELETE'});
+    renderSkills();
+  }catch(e){ toast('删除失败: '+e, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════
+// Approval 确认
+// ═══════════════════════════════════════════════════════
+let _approvalPending = null; // {task_id, action, resolve}
+function showApproval(task_id, action, detail){
+  const m = document.getElementById('approval-modal');
+  const b = document.getElementById('approval-body');
+  if (!m || !b) return;
+  b.textContent = `任务 ${task_id.slice(0,8)}\n操作: ${action}\n${detail}`;
+  m.style.display = 'flex';
+  return new Promise((resolve) => {
+    _approvalPending = {task_id, action, resolve};
+  });
+}
+function respondApproval(decision){
+  const m = document.getElementById('approval-modal');
+  if (m) m.style.display = 'none';
+  if (_approvalPending) {
+    _approvalPending.resolve(decision);
+    // 通知后端
+    if (_approvalPending.task_id) {
+      fetch(`/api/tasks/${_approvalPending.task_id}/approval`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({decision, action: _approvalPending.action})
+      }).catch(()=>{});
+    }
+    _approvalPending = null;
+  }
+}
+function closeApproval(){ respondApproval('reject'); }
 
 // ═══════════════════════════════════════════════════════
 // Init

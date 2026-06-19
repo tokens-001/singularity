@@ -39,6 +39,11 @@ from ._planner import (
     _run_committee, _run_committee_member,
     _synthesize_plans, _llm_synthesize as _llm_synth,
 )
+
+# ── SSE 事件队列（_exec 写入，主线程 _loop_worker 消费并喷出）──
+# 每个元素: {"kind": "tool:start"|"tool:done"|"turn", "msg": ..., "ts": ...}
+_pending_sse_events: list[dict] = []
+
 from ._token_budget import record_tokens, get_usage_stats
 from ._profiler import record_perf, get_perf_stats
 from .execution_judge import judge, should_retry, build_reflexion_feedback
@@ -326,6 +331,19 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
                     pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
                     pre_search_top_decisions=batch.pre_search_top_decisions,
                     pre_search_memory=batch.pre_search_memory)
+        # ── 推送工具调用事件到 SSE 全局队列 ──
+        tool_events = getattr(batch, 'tool_events', []) or []
+        for te in tool_events:
+            te['task_id'] = task.id
+            _pending_sse_events.append(te)
+        turn = getattr(batch, 'turn_count', 0) or 0
+        if turn > 0:
+            _pending_sse_events.append({
+                "kind": "turn",
+                "msg": f"[{task.id[:8]}] 推理完成，共 {turn} 轮",
+                "ts": time.time(),
+                "task_id": task.id,
+            })
         results.append((task.id, reason, validation))
         # QA Gate: 机械质检每任务产出 (项目上下文增强)
         try:

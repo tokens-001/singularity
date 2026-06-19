@@ -37,6 +37,10 @@ from scheduler.project import Phase
 from scheduler import api_store
 from scheduler.log import info as _log_info, warn as _log_warn
 from scheduler import model_registry
+from skills.skill_loader import (
+    load_skills as _load_skills, list_skills, create_user_skill, delete_user_skill,
+    get_agent_skills, set_agent_skills, get_tool_definitions, get_prompt_additions,
+)
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
@@ -116,6 +120,7 @@ _READONLY_ENDPOINTS = {
     "api_models", "api_models_tier",
     "api_memory_rebuild",
     "api_project_lineup",
+    "api_skills", "api_agent_skills",
 }
 
 
@@ -308,6 +313,14 @@ def _loop_worker():
                 time.sleep(3)
             else:
                 idle_ticks = 0
+                # ── 刷新工具/轮次事件（_exec 推到全局队列）──
+                try:
+                    events_to_flush = list(orchestrator._pending_sse_events)
+                    orchestrator._pending_sse_events.clear()
+                    for evt in events_to_flush:
+                        _push_event(evt.get("kind", "tool"), evt.get("msg", ""), evt.get("ts"))
+                except Exception:
+                    pass
                 for tid, reason, validation in results:
                     t = tracker._read(tid)
                     level = t.route_level if t else "?"
@@ -984,6 +997,16 @@ def api_retry_task(task_id):
         return jsonify({"error": f"当前状态 {task.status.value} 不支持重试"}), 400
     tracker.transition(task_id, TaskStatus.PENDING, error="", retry_count=0)
     return jsonify({"ok": True, "new_status": "pending"})
+
+
+@app.route("/api/tasks/<task_id>/approval", methods=["POST"])
+def api_task_approval(task_id):
+    """用户对审批事件的响应（approve/reject）。"""
+    data = request.get_json(silent=True) or {}
+    decision = data.get("decision", "reject")
+    action = data.get("action", "")
+    _push_event("system", f"[{task_id[:8]}] 用户{decision}了 {action}")
+    return jsonify({"ok": True, "decision": decision})
 
 
 # ═══════════════════════════════════════════════════════════
@@ -2049,6 +2072,111 @@ def api_model_profile_pattern():
             "template_id": template_id,
             "ranking": ranked,
         })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════
+# Skill APIs
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/skills")
+def api_skills():
+    """列出所有可用的 Skill（系统内置 + 用户自定义）。"""
+    try:
+        skills = _load_skills()
+        return jsonify({"skills": list_skills(skills)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/skills", methods=["POST"])
+def api_skills_add():
+    """创建用户自定义 Skill（写入 .qidian/skills/）。"""
+    data = request.get_json(silent=True)
+    if not data or not data.get("name"):
+        return jsonify({"error": "缺少 name"}), 400
+
+    name = data["name"].strip()
+    if not name or len(name) > 100:
+        return jsonify({"error": "name 不能为空且不超过 100 字符"}), 400
+
+    skill_type = data.get("type", "tool")
+    if skill_type not in ("tool", "prompt"):
+        return jsonify({"error": "type 必须是 tool 或 prompt"}), 400
+
+    try:
+        skill = create_user_skill(
+            name=name,
+            description=data.get("description", ""),
+            skill_type=skill_type,
+            arguments=data.get("arguments", ""),
+            body=data.get("body", ""),
+        )
+        _push_event("system", f"Skill 已创建: {name}")
+        return jsonify({
+            "ok": True,
+            "skill": {
+                "name": skill.name,
+                "description": skill.description,
+                "type": skill.type,
+                "arguments": skill.arguments,
+                "source": skill.source,
+                "errors": skill.errors,
+            }
+        })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/skills/<name>", methods=["DELETE"])
+def api_skills_delete(name):
+    """删除用户自定义 Skill。"""
+    try:
+        ok = delete_user_skill(name)
+        if not ok:
+            return jsonify({"error": f"Skill 不存在或无法删除: {name}"}), 404
+        _push_event("system", f"Skill 已删除: {name}")
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/agents/<level>/<model>/skills")
+def api_agent_skills(level, model):
+    """获取指定 Agent 绑定的 Skill 列表。"""
+    try:
+        names = get_agent_skills(level, model)
+        all_skills = _load_skills()
+        result = []
+        for name in names:
+            skill = all_skills.get(name)
+            if skill:
+                result.append({
+                    "name": skill.name,
+                    "description": skill.description,
+                    "type": skill.type,
+                })
+        return jsonify({"agent": f"{level}/{model}", "skills": result})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/agents/<level>/<model>/skills", methods=["PUT"])
+def api_agent_skills_update(level, model):
+    """设置 Agent 绑定的 Skill 列表。"""
+    data = request.get_json(silent=True)
+    if not data or "skills" not in data:
+        return jsonify({"error": "缺少 skills 字段"}), 400
+    skill_names = data["skills"]
+    if not isinstance(skill_names, list):
+        return jsonify({"error": "skills 必须是数组"}), 400
+    try:
+        set_agent_skills(level, model, skill_names)
+        _push_event("system", f"Agent {level}/{model} skill 绑定已更新: {skill_names}")
+        return jsonify({"ok": True, "agent": f"{level}/{model}", "skills": skill_names})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

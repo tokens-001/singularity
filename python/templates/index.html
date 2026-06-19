@@ -292,6 +292,42 @@
   </div>
 
   <div class="section" style="margin-bottom:8px">
+    <div class="section-title">Skills <button class="btn cyan sm" style="margin-left:8px" onclick="renderSkills()">刷新</button>
+      <button class="btn-add-skill" style="margin-left:8px" onclick="toggleSkillForm()">+ 新建</button></div>
+    <div class="section-body" style="font-size:10px">
+      <div class="skills-layout">
+        <div class="skills-list">
+          <h4>可用 Skills</h4>
+          <div id="skills-list-body" style="max-height:200px;overflow-y:auto">
+            <span style="color:var(--text2)">加载中...</span>
+          </div>
+          <!-- Skill 新建表单 -->
+          <div class="skill-form" id="skill-form">
+            <input id="skill-new-name" placeholder="名称 (如 code-review)">
+            <input id="skill-new-desc" placeholder="描述">
+            <select id="skill-new-type" style="width:100%">
+              <option value="tool">tool — 注册为函数调用工具</option>
+              <option value="prompt">prompt — 注入系统提示词</option>
+            </select>
+            <input id="skill-new-args" placeholder="参数 (空格分隔, 仅tool型, 如 file_path focus)">
+            <textarea id="skill-new-body" placeholder="Skill 正文 (Markdown)"></textarea>
+            <div style="display:flex;gap:4px">
+              <button class="btn cyan sm" onclick="createSkill()">创建</button>
+              <button class="btn sm" onclick="toggleSkillForm()">取消</button>
+            </div>
+          </div>
+        </div>
+        <div class="skill-agent-matrix">
+          <h4>Agent × Skill 绑定</h4>
+          <div id="skill-matrix-body" style="max-height:200px;overflow-y:auto">
+            <span style="color:var(--text2)">加载中...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" style="margin-bottom:8px">
     <div class="section-title">队列干预</div>
     <div class="section-body" id="queue-list" style="font-size:10px;max-height:300px;overflow-y:auto">
       <span style="color:var(--text2)">无排队任务</span>
@@ -335,5 +371,19 @@
     </div>
   </div>
 </div>
+<!-- ═══════════════════════════════════════════════════════
+     Approval Modal
+     ═══════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="approval-modal" style="display:none" onclick="if(event.target===this)closeApproval()">
+  <div class="modal-box" style="max-width:420px">
+    <div style="font-size:11px;font-weight:600;margin-bottom:8px;color:#f44747">⚠ 操作确认</div>
+    <div id="approval-body" style="font-size:10px;margin-bottom:12px;font-family:var(--mono);max-height:200px;overflow-y:auto"></div>
+    <div style="display:flex;gap:4px;justify-content:flex-end">
+      <button class="btn sm" onclick="respondApproval('reject')">拒绝</button>
+      <button class="btn cyan sm" id="approval-confirm-btn" onclick="respondApproval('approve')">批准执行</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

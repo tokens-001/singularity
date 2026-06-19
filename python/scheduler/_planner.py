@@ -69,6 +69,12 @@ def _run_committee(task, ctx: RunContext, agents: dict, d_agents: list) -> Batch
         for agent_cfg in d_agents:
             single = dict(agents)
             single["D"] = [agent_cfg]
+            # ── subagent 事件: 启动 ──
+            from .orchestrator import _pending_sse_events as _pe
+            _pe.append({
+                "kind": "subagent", "msg": f"委员会成员启动: {agent_cfg.get('model','?')}",
+                "ts": time.time(), "task_id": task.id,
+            })
             fut = pool.submit(_run_committee_member, task, ctx, single, agent_cfg)
             futures[fut] = agent_cfg
 
@@ -84,8 +90,21 @@ def _run_committee(task, ctx: RunContext, agents: dict, d_agents: list) -> Batch
                         "term": batch.term_reason,
                         "batch": batch,
                     })
+                    _pe.append({
+                        "kind": "subagent", "msg": f"委员会成员完成: {agent_cfg.get('model','?')}",
+                        "ts": time.time(), "task_id": task.id,
+                    })
+                else:
+                    _pe.append({
+                        "kind": "subagent", "msg": f"委员会成员失败: {agent_cfg.get('model','?')}",
+                        "ts": time.time(), "task_id": task.id,
+                    })
             except Exception as e:
                 plans.append({"model": agent_cfg.get("model", "?"), "error": str(e)})
+                _pe.append({
+                    "kind": "subagent", "msg": f"委员会成员异常: {agent_cfg.get('model','?')}",
+                    "ts": time.time(), "task_id": task.id,
+                })
 
     if not plans:
         # 全失败 → 回退普通模式

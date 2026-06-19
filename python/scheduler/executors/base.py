@@ -27,6 +27,7 @@ class ExecutorResult:
     token_count: int = 0                # token 消耗 (0=未获取)
     error: str = ""                     # 失败原因 (超时/限流/格式异常)
     error_kind: str = ""                # timeout | ratelimit | format | exec | ""
+    tool_events: list = field(default_factory=list)   # 工具调用事件 [{tool,status,time,...}]
 
 
 class BaseExecutor:

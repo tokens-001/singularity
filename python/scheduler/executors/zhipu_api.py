@@ -14,6 +14,7 @@ v1 边界:
 """
 
 from __future__ import annotations
+import fnmatch
 import json
 import os
 import re
@@ -24,6 +25,21 @@ import urllib.error
 
 from .base import BaseExecutor, ExecutorResult
 from .. import config
+
+# ── 敏感文件 blocklist（防 LLM 输出注入，与 openai_agent.py 保持一致）──
+_BLOCKED_PATTERNS = [
+    ".env", ".env.*",
+    "*.token", "*.key", "*.pem", "*.p12", "*.pfx",
+    "*.secret", "*.password", "*.credential",
+    ".qidian/", ".qidian/*",
+    ".git/", ".git/*",
+    ".claude/",
+    "venv/", ".venv/",
+    "__pycache__/",
+    "*.pyc",
+    "users.json",
+    "config.toml", "agents.toml",
+]
 
 
 class ZhipuApiExecutor(BaseExecutor):
@@ -145,6 +161,21 @@ class ZhipuApiExecutor(BaseExecutor):
         )
 
     @staticmethod
+    def _is_blocked_path(path: str) -> tuple[bool, str]:
+        """检查路径是否命中敏感文件 blocklist。返回 (blocked, reason)。"""
+        normalized = path.replace("\\", "/")
+        for pattern in _BLOCKED_PATTERNS:
+            if fnmatch.fnmatch(normalized, pattern):
+                return True, f"敏感文件/目录: {pattern}"
+            if fnmatch.fnmatch(normalized, f"*/{pattern}"):
+                return True, f"敏感文件/目录: {pattern}"
+            parts = normalized.split("/")
+            for part in parts:
+                if fnmatch.fnmatch(part, pattern.rstrip("/*")):
+                    return True, f"敏感文件/目录: {pattern}"
+        return False, ""
+
+    @staticmethod
     def apply_patch(task_id: str) -> dict:
         """读取 patch 文件，解析 @files 头，提取代码块写入目标文件。
 
@@ -176,6 +207,11 @@ class ZhipuApiExecutor(BaseExecutor):
             dest = (config.PROJECT_ROOT / target_file).resolve()
             if not str(dest).startswith(str(root)):
                 failed.append({"file": target_file, "error": "路径逃逸被拒绝"})
+                continue
+            # 安全加固：敏感文件 blocklist
+            blocked, reason = ZhipuApiExecutor._is_blocked_path(target_file)
+            if blocked:
+                failed.append({"file": target_file, "error": reason})
                 continue
             try:
                 dest.parent.mkdir(parents=True, exist_ok=True)

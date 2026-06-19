@@ -23,6 +23,16 @@ import httpx
 from .base import BaseExecutor, ExecutorResult
 from .. import config
 
+# ── Skill 系统集成 ──────────────────────────────────────────
+try:
+    from skills.skill_loader import (
+        load_skills, get_tool_definitions, get_prompt_additions,
+        get_agent_skills,
+    )
+    _SKILL_LOADER_AVAILABLE = True
+except ImportError:
+    _SKILL_LOADER_AVAILABLE = False
+
 # ── 敏感文件 blocklist（防 LLM 输出注入）──
 # Agent 不可读写的文件/目录模式
 _BLOCKED_PATTERNS = [
@@ -151,14 +161,57 @@ class OpenAIAgentExecutor(BaseExecutor):
         self._max_turns = cfg.get("max_turns", 10)
         self._cwd = Path(cwd) if cwd else config.PROJECT_ROOT
         self._changed_files: list[str] = []
+        self._tool_events: list[dict] = []   # 工具调用事件收集
+
+        # ── Agent 绑定的 Skill ──
+        self._skills: dict = {}
+        self._skill_tools: list[dict] = []
+        self._skill_prompt: str = ""
+        if _SKILL_LOADER_AVAILABLE:
+            try:
+                agent_model = cfg.get("model", "")
+                # 查找 agent 所属的 level
+                agent_level = self._find_agent_level()
+                if agent_level:
+                    skill_names = get_agent_skills(agent_level, agent_model)
+                    if skill_names:
+                        all_skills = load_skills()
+                        self._skills = {n: all_skills[n] for n in skill_names if n in all_skills}
+                        self._skill_tools = get_tool_definitions(self._skills)
+                        self._skill_prompt = get_prompt_additions(self._skills)
+            except Exception:
+                pass
+
+    def _find_agent_level(self) -> str:
+        """从 dispatcher 查找当前 agent 所属的层级。"""
+        try:
+            from .. import dispatcher as disp_mod
+            model = self.cfg.get("model", "")
+            if not model:
+                return ""
+            agents = disp_mod.load_agents()
+            for level, cfgs in agents.items():
+                for c in cfgs:
+                    if c.get("model", "") == model:
+                        return level
+        except Exception:
+            pass
+        return ""
 
     def run(self) -> ExecutorResult:
         if not self._api_key:
-            return ExecutorResult(success=False, error=f"API key 未设置: {self.cfg.get('api_key_env','')}")
+            return ExecutorResult(success=False, error=f"API key 未设置: {self.cfg.get('api_key_env','')}", tool_events=list(self._tool_events))
 
         start = time.time()
+        # ── 合并 skill tools 和 prompt ──
+        tools = list(TOOLS)
+        tools.extend(self._skill_tools)
+        system_prompt = SYSTEM_PROMPT
+        if self._skill_prompt:
+            system_prompt += "\n" + self._skill_prompt
+
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": self.task},
         ]
         total_tokens = 0
@@ -172,7 +225,7 @@ class OpenAIAgentExecutor(BaseExecutor):
             if self._is_responses_api:
                 # responses API 格式: input 代 messages, tools 结构不同
                 resp_tools = []
-                for t in TOOLS:
+                for t in tools:
                     f = t.get("function", {})
                     resp_tools.append({
                         "type": "function",
@@ -193,7 +246,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                 body = {
                     "model": self._model,
                     "messages": messages,
-                    "tools": TOOLS,
+                    "tools": tools,
                     "tool_choice": "auto",
                 }
                 # GPT-5.5+ 用 max_completion_tokens, 旧模型用 max_tokens
@@ -213,7 +266,8 @@ class OpenAIAgentExecutor(BaseExecutor):
                 continue
             except (_NetworkError, _FormatError) as e:
                 return ExecutorResult(success=False, error=str(e),
-                                      error_kind="exec", elapsed=time.time() - start)
+                                      error_kind="exec", elapsed=time.time() - start,
+                                      tool_events=list(self._tool_events))
 
             if self._is_responses_api:
                 # responses API → chat format
@@ -257,7 +311,30 @@ class OpenAIAgentExecutor(BaseExecutor):
                             args = json.loads(fixed)
                         except Exception:
                             args = {}
+                    # ── 工具事件: 记录开始执行 ──
+                    t_start = time.time()
+                    self._tool_events.append({
+                        "kind": "tool:start",
+                        "tool": name,
+                        "task_id": self.task_id,
+                        "ts": t_start,
+                        "msg": f"🔧 {name}",
+                    })
+                    # ── 执行工具 ──
                     result = self._execute_tool(name, args)
+                    # ── 工具事件: 记录完成 ──
+                    t_done = time.time()
+                    result_preview = result[:120] if len(result) > 120 else result
+                    self._tool_events.append({
+                        "kind": "tool:done",
+                        "tool": name,
+                        "task_id": self.task_id,
+                        "ts": t_done,
+                        "elapsed": round(t_done - t_start, 3),
+                        "result_preview": result_preview,
+                        "result_len": len(result),
+                        "msg": f"✅ {name} ({len(result)}字符, {round(t_done-t_start,2)}s)",
+                    })
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.get("id", ""),
@@ -288,11 +365,13 @@ class OpenAIAgentExecutor(BaseExecutor):
                     success=True, raw_output=content,
                     changed_files=list(self._changed_files),
                     elapsed=elapsed, token_count=total_tokens,
+                    tool_events=list(self._tool_events),
                 )
 
         return ExecutorResult(success=False,
                               error=f"达到最大轮次 {self._max_turns}，任务未完成",
-                              error_kind="exec", elapsed=time.time() - start)
+                              error_kind="exec", elapsed=time.time() - start,
+                              tool_events=list(self._tool_events))
 
     # ── 工具执行 ──
 
@@ -306,6 +385,12 @@ class OpenAIAgentExecutor(BaseExecutor):
                 return self._tool_run(args.get("command", ""))
             elif name == "search_code":
                 return self._tool_search(args.get("pattern", ""), args.get("path", ""))
+            # ── Skill 工具调用 ──
+            skill_name = name.replace("_", "-")  # function name 用 _ 连词，SKILL.md 用 - 连词
+            if skill_name in self._skills:
+                skill = self._skills[skill_name]
+                expanded = skill.expand_body(**args)
+                return f"[Skill: {skill.name}]\n\n{expanded}\n\n请按以上 Skill 指引继续完成任务。"
             return f"未知工具: {name}"
         except Exception as e:
             try:
