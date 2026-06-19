@@ -186,9 +186,10 @@ def _guard_rate_limit():
     # 非 /api/ 路径不限流
     if not request.path.startswith("/api/"):
         return None
-
-    now = time.time()
+    # 本地回环地址不限流（开发/调试）
     ip = request.remote_addr or "127.0.0.1"
+    if ip in ("127.0.0.1", "::1", "localhost"):
+        return None
 
     if ip not in _RATE_BUCKETS:
         _RATE_BUCKETS[ip] = []
