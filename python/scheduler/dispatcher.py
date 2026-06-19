@@ -181,18 +181,24 @@ def pick_agent(agents: dict, level: str, role: str = None,
             if role in (a.get("roles") or []) and agent_api_available(a):
                 return a
 
+    # 用户自定义排序 (最优先)
+    custom_order = (_load_custom_agents().get("_order", {}) or {}).get(level, [])
+    if custom_order:
+        rank = {m: i for i, m in enumerate(custom_order)}
+        available = [a for a in candidates if agent_api_available(a)]
+        available.sort(key=lambda a: rank.get(a.get("model", ""), 999))
+        if available:
+            return available[0]
+
     # default
     for a in candidates:
         if a.get("default") and agent_api_available(a):
             return a
 
-    # 无 default → 按成本从低到高排，最便宜的优先
-    available = [a for a in candidates if agent_api_available(a)]
-    if available:
-        cost_order = {"budget": 0, "standard": 1, "premium": 2}
-        available.sort(key=lambda a: cost_order.get(
-            _model_cost_tier(a.get("model", "")), 2))
-        return available[0]
+    # 第一个可用的
+    for a in candidates:
+        if agent_api_available(a):
+            return a
 
     raise RuntimeError(f"{level} 层所有 agent 的 API 均不可用")
 
