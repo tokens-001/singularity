@@ -79,7 +79,7 @@ document.getElementById('tab-bar').addEventListener('click',e=>{
   document.getElementById('tab-'+activeTab).classList.add('active');
   if(activeTab==='tasks'){ renderTasks(); populateDecisionsPicker(); if(_cachedDcTaskId){ document.getElementById('dc-task-picker').value = _cachedDcTaskId; loadDecisions(); } }
   if(activeTab==='project') loadProjects();
-  if(activeTab==='config'){ renderAPIStore(); renderModels(); renderLayerSwitch(); renderIntervention(); }
+  if(activeTab==='config'){ renderAPIStore(); renderModels(); renderLayerSwitch(); renderIntervention(); renderSkills(); }
 });
 
 // ═══════════════════════════════════════════════════════
