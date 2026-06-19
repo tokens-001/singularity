@@ -40,6 +40,7 @@ from scheduler import model_registry
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024  # 安全加固：拒绝 >2MB 的请求体
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24).hex()
 
 # ── 安全限制 ──────────────────────────────────────────
@@ -47,6 +48,46 @@ _MAX_CONCURRENT = 8          # loop concurrent 上限
 _MAX_SSE_CLIENTS = 20        # SSE 同时连接上限
 _MAX_TASK_DESC_LEN = 8000    # 任务描述最大字符数
 _MAX_PROJECT_NAME_LEN = 200  # 项目名最大字符数
+_MAX_DEPENDS_ON = 50         # depends_on 最大依赖数
+_MAX_CONSTRAINTS = 50        # constraints 最大条数
+_MAX_TURNS = 50              # agent max_turns 上限
+_MIN_BUDGET = 0.01           # 最小项目预算
+_MAX_BUDGET = 100000.0       # 最大项目预算
+
+# ── 枚举校验集 ────────────────────────────────────────
+_VALID_LEVELS = frozenset({"E", "E+", "D"})
+_VALID_AGENT_TYPES = frozenset({"openai-agent", "claude-cli", "zhipu-api"})
+_VALID_SANDBOXES = frozenset({"worktree", "inline", "none"})
+_VALID_ROLES = frozenset({"admin", "operator", "viewer"})
+_VALID_SPEEDS = frozenset({"fast", "medium", "slow"})
+_VALID_COSTS = frozenset({"budget", "standard", "premium"})
+_VALID_TIERS = frozenset({"E", "E+", "D"})
+_VALID_TEMPLATES = frozenset({"product_dev", "bug_fix", "refactor", "agent_dev"})
+_VALID_DECISIONS = frozenset({"approved", "rejected"})
+
+import re as _re_valid
+_TASK_ID_RE = _re_valid.compile(r"^\d{13,20}$")  # task_id 格式：13-20 位数字
+
+def _validate_task_id(task_id: str) -> bool:
+    """校验 task_id 格式，防止路径穿越。"""
+    return bool(_TASK_ID_RE.match(task_id))
+
+
+@app.before_request
+def _guard_task_id():
+    """安全加固：校验 URL 中 task_id 参数格式（防止路径穿越）。"""
+    if request.endpoint in (
+        "api_task_detail", "api_cancel_task", "api_delete_task",
+        "api_retry_task", "api_hold_task", "api_release_task",
+        "api_override_route", "api_rollback",
+        "api_task_trace", "api_task_timeline", "api_apply_patch",
+        "api_supervise", "api_resolve_conflict",
+        "api_memory_chain",
+    ):
+        tid = request.view_args.get("task_id", "") if request.view_args else ""
+        if tid and not _validate_task_id(tid):
+            return jsonify({"error": "非法的 task_id 格式"}), 400
+
 
 # 可选认证: QIDIAN_AUTH=1 时启用
 _AUTH_ENABLED = os.environ.get("QIDIAN_AUTH") == "1"
@@ -428,11 +469,19 @@ def api_token_usage():
 def api_token_budget():
     try:
         from scheduler._token_budget import get_budget
+        import math
         data = request.get_json(force=True) or {}
         daily = float(data.get("daily", 0))
         monthly = float(data.get("monthly", 0))
+        # 安全加固：禁止 NaN/Inf/负数
+        if math.isnan(daily) or math.isinf(daily) or daily < 0:
+            return jsonify({"error": "daily 必须是非负有限数字"}), 400
+        if math.isnan(monthly) or math.isinf(monthly) or monthly < 0:
+            return jsonify({"error": "monthly 必须是非负有限数字"}), 400
         get_budget().set_budget(daily=daily, monthly=monthly)
         return jsonify({"ok": True, "daily": daily, "monthly": monthly})
+    except (TypeError, ValueError) as e:
+        return jsonify({"error": "daily/monthly 必须是数字"}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
@@ -882,13 +931,38 @@ def api_projects():
         # 安全加固：长度限制
         if len(name) > _MAX_PROJECT_NAME_LEN:
             return jsonify({"error": f"项目名不能超过 {_MAX_PROJECT_NAME_LEN} 字符"}), 400
+
+        # 安全加固：二次校验 — 前端不可信
+        template = data.get("template", "product_dev")
+        if template not in _VALID_TEMPLATES:
+            return jsonify({"error": f"template 必须是 {', '.join(sorted(_VALID_TEMPLATES))} 之一"}), 400
+
+        constraints = data.get("constraints", [])
+        if not isinstance(constraints, list):
+            return jsonify({"error": "constraints 必须是数组"}), 400
+        if len(constraints) > _MAX_CONSTRAINTS:
+            return jsonify({"error": f"constraints 不能超过 {_MAX_CONSTRAINTS} 条"}), 400
+        for c in constraints:
+            if not isinstance(c, str):
+                return jsonify({"error": "constraints 中每条必须是字符串"}), 400
+
+        try:
+            budget = float(data.get("budget", 5.0))
+        except (TypeError, ValueError):
+            return jsonify({"error": "budget 必须是数字"}), 400
+        import math
+        if math.isnan(budget) or math.isinf(budget):
+            return jsonify({"error": "budget 不能是 NaN 或 Infinity"}), 400
+        if budget < _MIN_BUDGET or budget > _MAX_BUDGET:
+            return jsonify({"error": f"budget 必须在 {_MIN_BUDGET}-{_MAX_BUDGET} 之间"}), 400
+
         p = proj_mod.create(
             name=name,
-            template=data.get("template", "product_dev"),
+            template=template,
             description=data.get("description", ""),
             scope=data.get("scope", ""),
-            constraints=data.get("constraints", []),
-            budget=float(data.get("budget", 5.0)),
+            constraints=constraints,
+            budget=budget,
         )
         return jsonify({"ok": True, "project": p.to_dict()})
     projects = proj_mod.list_all()
@@ -911,6 +985,9 @@ def api_project_gate(project_id):
     data = request.get_json(silent=True) or {}
     gate_str = data.get("gate", "")
     decision = data.get("decision", "")
+    # 安全加固：二次校验 — 前端不可信
+    if decision not in _VALID_DECISIONS:
+        return jsonify({"error": f"decision 必须是 approved 或 rejected"}), 400
     # 如果前端没传 gate，从项目当前 phase 自动推断
     if not gate_str and p.phase.value.startswith("gate"):
         gate_str = p.phase.value
@@ -1206,20 +1283,46 @@ def api_agents_add():
     data = request.get_json(silent=True)
     if not data or not data.get("model") or not data.get("level"):
         return jsonify({"error": "缺少 model / level"}), 400
+
+    # 安全加固：二次校验 — 前端不可信
+    model = data["model"].strip()
+    if not model or len(model) > 100:
+        return jsonify({"error": "model 不能为空且不超过 100 字符"}), 400
+
+    level = data["level"]
+    if level not in _VALID_LEVELS:
+        return jsonify({"error": f"level 必须是 E/E+/D 之一"}), 400
+
+    agent_type = data.get("type", "openai-agent")
+    if agent_type not in _VALID_AGENT_TYPES:
+        return jsonify({"error": f"type 必须是 {', '.join(sorted(_VALID_AGENT_TYPES))} 之一"}), 400
+
+    sandbox = data.get("sandbox", "worktree")
+    if sandbox not in _VALID_SANDBOXES:
+        return jsonify({"error": f"sandbox 必须是 {', '.join(sorted(_VALID_SANDBOXES))} 之一"}), 400
+
+    try:
+        max_turns = int(data.get("max_turns", 5))
+        if max_turns < 1 or max_turns > _MAX_TURNS:
+            return jsonify({"error": f"max_turns 必须在 1-{_MAX_TURNS} 之间"}), 400
+    except (TypeError, ValueError):
+        return jsonify({"error": "max_turns 必须是整数"}), 400
+
     # 安全加固：SSRF 防护 — 验证 entry URL
     entry_url = data.get("entry", "")
     if entry_url and not _is_safe_api_url(entry_url):
         return jsonify({"error": "不允许的 entry URL（仅支持已知 API 厂商域名）"}), 400
+
     try:
         cfg = disp_mod.add_agent(
-            level=data["level"],
-            model=data["model"],
-            agent_type=data.get("type", "openai-agent"),
+            level=level,
+            model=model,
+            agent_type=agent_type,
             entry=entry_url,
             api_key_env=data.get("api_key_env", ""),
-            max_turns=data.get("max_turns", 5),
+            max_turns=max_turns,
             roles=data.get("roles", []),
-            sandbox=data.get("sandbox", "worktree"),
+            sandbox=sandbox,
             mode=data.get("mode", ""),
             request_template=data.get("request_template"),
         )
@@ -1232,9 +1335,20 @@ def api_agents_add():
 def api_agents_update(level, model):
     """更新 agent 配置 (default 等)。"""
     data = request.get_json(silent=True) or {}
-    # 安全加固：SSRF 防护
+    # 安全加固：二次校验 — 前端不可信
     if data.get("entry") and not _is_safe_api_url(data["entry"]):
         return jsonify({"error": "不允许的 entry URL（仅支持已知 API 厂商域名）"}), 400
+    if "type" in data and data["type"] not in _VALID_AGENT_TYPES:
+        return jsonify({"error": f"type 必须是 {', '.join(sorted(_VALID_AGENT_TYPES))} 之一"}), 400
+    if "sandbox" in data and data["sandbox"] not in _VALID_SANDBOXES:
+        return jsonify({"error": f"sandbox 必须是 {', '.join(sorted(_VALID_SANDBOXES))} 之一"}), 400
+    if "max_turns" in data:
+        try:
+            mt = int(data["max_turns"])
+            if mt < 1 or mt > _MAX_TURNS:
+                return jsonify({"error": f"max_turns 必须在 1-{_MAX_TURNS} 之间"}), 400
+        except (TypeError, ValueError):
+            return jsonify({"error": "max_turns 必须是整数"}), 400
     try:
         cfg = disp_mod.update_agent(level, model, data)
         return jsonify({"ok": True, "agent": cfg})
@@ -1367,6 +1481,9 @@ def api_auth_add_user():
     uid = data.get("id", "").strip()
     name = data.get("name", "").strip()
     role = data.get("role", "viewer")
+    # 安全加固：二次校验 — 前端不可信
+    if role not in _VALID_ROLES:
+        return jsonify({"error": f"role 必须是 {', '.join(sorted(_VALID_ROLES))} 之一"}), 400
     if not uid:
         return jsonify({"error": "需要 id"}), 400
     try:
@@ -1427,9 +1544,37 @@ def api_models_add():
     data = request.get_json(silent=True)
     if not data or not data.get("id"):
         return jsonify({"error": "缺少 id"}), 400
+
+    # 安全加固：二次校验 — 前端不可信
+    model_id = data["id"].strip()
+    if not model_id or len(model_id) > 100:
+        return jsonify({"error": "id 不能为空且不超过 100 字符"}), 400
+
+    tiers = data.get("tiers", ["E"])
+    if not isinstance(tiers, list) or not tiers:
+        return jsonify({"error": "tiers 必须是非空数组"}), 400
+    for t in tiers:
+        if t not in _VALID_TIERS:
+            return jsonify({"error": f"tiers 中每个元素必须是 E/E+/D 之一"}), 400
+
+    speed = data.get("speed", "medium")
+    if speed not in _VALID_SPEEDS:
+        return jsonify({"error": f"speed 必须是 {', '.join(sorted(_VALID_SPEEDS))} 之一"}), 400
+
+    cost = data.get("cost", "standard")
+    if cost not in _VALID_COSTS:
+        return jsonify({"error": f"cost 必须是 {', '.join(sorted(_VALID_COSTS))} 之一"}), 400
+
+    try:
+        max_turns = int(data.get("max_turns", 5))
+        if max_turns < 1 or max_turns > _MAX_TURNS:
+            return jsonify({"error": f"max_turns 必须在 1-{_MAX_TURNS} 之间"}), 400
+    except (TypeError, ValueError):
+        return jsonify({"error": "max_turns 必须是整数"}), 400
+
     try:
         m = model_registry.add_model(
-            model_id=data["id"],
+            model_id=model_id,
             provider=data.get("provider", ""),
             display=data.get("display", ""),
             tiers=data.get("tiers", ["E"]),
@@ -1460,6 +1605,26 @@ def api_models_update(model_id):
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "缺少更新数据"}), 400
+    # 安全加固：二次校验 — 前端不可信
+    if "tiers" in data and data["tiers"] is not None:
+        tiers = data["tiers"]
+        if not isinstance(tiers, list) or not tiers:
+            return jsonify({"error": "tiers 必须是非空数组"}), 400
+        for t in tiers:
+            if t not in _VALID_TIERS:
+                return jsonify({"error": f"tiers 中每个元素必须是 E/E+/D 之一"}), 400
+    if data.get("speed") and data["speed"] not in _VALID_SPEEDS:
+        return jsonify({"error": f"speed 必须是 {', '.join(sorted(_VALID_SPEEDS))} 之一"}), 400
+    if data.get("cost") and data["cost"] not in _VALID_COSTS:
+        return jsonify({"error": f"cost 必须是 {', '.join(sorted(_VALID_COSTS))} 之一"}), 400
+    if "max_turns" in data:
+        try:
+            mt = int(data["max_turns"])
+            if mt < 1 or mt > _MAX_TURNS:
+                return jsonify({"error": f"max_turns 必须在 1-{_MAX_TURNS} 之间"}), 400
+        except (TypeError, ValueError):
+            return jsonify({"error": "max_turns 必须是整数"}), 400
+
     try:
         m = model_registry.add_model(
             model_id=model_id,
@@ -1520,15 +1685,33 @@ def api_create_task():
     # 安全加固：长度限制
     if len(desc) > _MAX_TASK_DESC_LEN:
         return jsonify({"error": f"description 不能超过 {_MAX_TASK_DESC_LEN} 字符"}), 400
-    priority = data.get("priority", 0)
+
+    # 安全加固：二次校验 — 前端不可信
+    try:
+        priority = int(data.get("priority", 0))
+        if priority < 0 or priority > 100:
+            return jsonify({"error": "priority 必须在 0-100 之间"}), 400
+    except (TypeError, ValueError):
+        return jsonify({"error": "priority 必须是整数"}), 400
+
     depends_on = data.get("depends_on", [])
+    if not isinstance(depends_on, list):
+        return jsonify({"error": "depends_on 必须是数组"}), 400
+    if len(depends_on) > _MAX_DEPENDS_ON:
+        return jsonify({"error": f"depends_on 不能超过 {_MAX_DEPENDS_ON} 个依赖"}), 400
+    for dep_id in depends_on:
+        if not isinstance(dep_id, str) or not dep_id.strip():
+            return jsonify({"error": "depends_on 中每个元素必须是非空字符串"}), 400
+
     route_level = data.get("route_level", "")
+    if route_level and route_level not in _VALID_LEVELS:
+        return jsonify({"error": f"route_level 必须是 E/E+/D 之一"}), 400
 
     sched_config.ensure_dirs()
     task = tracker.create(desc, priority=priority, depends_on=depends_on)
 
     # 如果指定了 route_level 且 route_locked，直接设置
-    if route_level and route_level in ("E", "D", "E+"):
+    if route_level:
         tracker.transition(task.id, TaskStatus.PENDING, route_level=route_level, route_locked=True)
 
     return jsonify({
