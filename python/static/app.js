@@ -1480,7 +1480,7 @@ async function renderSkills(){
   ]);
   const skillList = skills.skills || [];
   // 左侧 skill 列表
-  const listBody = document.getElementById('skills-list-body');
+  const listBody = document.getElementById('skill-list-body');
   if (!listBody) return;
   if (!skillList.length){ listBody.innerHTML = '<span style="color:var(--text2)">无 Skill</span>'; }
   else {

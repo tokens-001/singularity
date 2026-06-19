@@ -304,9 +304,9 @@ pre.agent-out {
 .ev-subagent   { color: #b47cd6; }   /* purple — subagent */
 
 /* ═══ Skills panel ═══ */
-.skills-layout { display: grid; grid-template-columns: 1fr 1.5fr; gap: 10px; min-height: 300px; }
-.skills-list { border: 1px solid var(--grid); padding: 8px; }
-.skills-list h4 { font-size: 10px; margin: 0 0 6px 0; color: var(--fg2); }
+.skill-layout { display: grid; grid-template-columns: 1fr 1.5fr; gap: 10px; min-height: 300px; }
+.skill-list { border: 1px solid var(--grid); padding: 8px; }
+.skill-list h4 { font-size: 10px; margin: 0 0 6px 0; color: var(--fg2); }
 .skill-item { display: flex; justify-content: space-between; align-items: center; padding: 5px 4px;
   font-size: 9px; font-family: var(--mono); border-bottom: 1px solid var(--grid); }
 .skill-item .name { color: var(--fg); }
@@ -323,8 +323,6 @@ pre.agent-out {
 .matrix-table th { color: var(--fg2); font-weight: normal; }
 .matrix-table td.skill-name { text-align: left; color: var(--fg); }
 .matrix-table input[type=checkbox] { accent-color: #6cb4ee; }
-.btn-add-skill { padding: 4px 12px; font-size: 9px; background: var(--bg3); color: var(--fg); border: 1px solid var(--grid); cursor: pointer; }
-.btn-add-skill:hover { border-color: var(--fg2); }
 .skill-form { display: none; padding: 8px; border: 1px solid #6cb4ee; margin-top: 8px; }
 .skill-form.open { display: block; }
 .skill-form input, .skill-form textarea, .skill-form select { width: 100%; margin-bottom: 6px; padding: 4px 6px;
