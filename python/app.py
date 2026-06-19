@@ -1107,10 +1107,15 @@ def api_reports_critical():
 def api_agents():
     try:
         raw = disp_mod.load_agents()
+        custom = disp_mod._load_custom_agents()
+        order_map = custom.get("_order", {}) or {}
         result = {}
         for level, cfgs in raw.items():
+            # 按用户自定义排序
+            rank = {m: i for i, m in enumerate(order_map.get(level, []))}
+            sorted_cfgs = sorted(cfgs, key=lambda c: rank.get(c.get("model", ""), 999))
             result[level] = []
-            for c in cfgs:
+            for c in sorted_cfgs:
                 result[level].append({
                     "model": c.get("model", ""),
                     "type": c.get("type", ""),
@@ -1122,6 +1127,7 @@ def api_agents():
                     "mode": c.get("mode", ""),
                     "sandbox": c.get("sandbox", ""),
                 })
+        result["_order"] = order_map
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": f"读取 agents.toml 失败: {e}"}), 500
