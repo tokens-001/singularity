@@ -877,18 +877,23 @@ def api_conflicts():
 
 @app.route("/api/memory")
 def api_memory_query():
-    """MAGMA 完整查询流水线: Stage1→4 (意图分类+R RF锚点+Beam Search遍历+叙事合成)。"""
+    """MAGMA 完整查询流水线 + 金字塔渐进检索。
+
+    max_depth: 1=语义摘要(默认,快), 2=+BeamSearch, 3=+实体图全文(最全)
+    """
     query_text = request.args.get("q", "").strip()
     files_str = request.args.get("files", "")
     beam_width = int(request.args.get("beam", 3))
     max_hops = int(request.args.get("hops", 3))
+    max_depth = int(request.args.get("depth", 1))
 
     try:
         from scheduler import memory as mem_mod
 
         files = [f.strip() for f in files_str.split(",") if f.strip()] if files_str else None
         result = mem_mod.query(query_text or "", files=files,
-                               beam_width=beam_width, max_hops=max_hops)
+                               beam_width=beam_width, max_hops=max_hops,
+                               max_depth=max_depth)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": f"记忆查询失败: {e}"}), 500

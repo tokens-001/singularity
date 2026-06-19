@@ -229,13 +229,87 @@ def format_report(report: DeliveryReport) -> str:
 
 
 def save_trace(report: DeliveryReport, task_id: str) -> Path:
-    """完整 trace 存 json, 供事后审计 (I010: 留证据不留断言)。"""
+    """完整 trace 存 json, 供事后审计 (I010: 留证据不留断言)。
+
+    选择性摄入 (受 Omni-SimpleMem 启发)：
+    如果同类型 + 同 failure_mode 的 trace 已连续出现 ≥3 次，
+    则保存轻量版（裁剪 raw_output，避免冗余膨胀）。
+    """
     trace_path = config_trace_path(task_id)
+    data = report.to_dict()
+
+    # 选择性摄入去重
+    if _is_redundant_failure(data):
+        # 轻量存储：裁剪大字段
+        if "agent_output" in data:
+            data["agent_output"] = data["agent_output"][:200] + (
+                "…[已截断: 同类失败重复]" if len(data["agent_output"]) > 200 else ""
+            )
+        if "changed_files" in data:
+            data["changed_files"] = data["changed_files"][:5]
+        data["_dedup"] = True
+
     trace_path.write_text(
-        json.dumps(report.to_dict(), ensure_ascii=False, indent=2),
+        json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     return trace_path
+
+
+def _is_redundant_failure(data: dict, lookback: int = 3) -> bool:
+    """检查当前 trace 是否是最近 lookback 条中重复出现的同类失败。
+
+    条件：
+    1. 当前 trace 是失败状态
+    2. 最近 lookback 条同 task_type 的 trace 中，
+       有 ≥ lookback 条具有相同的 failure 特征（task_type + validation 一致）
+    """
+    from . import config
+    import os as _os
+
+    trace_dir = config.TRACE_DIR
+    if not trace_dir.exists():
+        return False
+
+    # 提取当前 trace 的判重特征
+    route = data.get("route", {}) or {}
+    task_type = route.get("task_type", "default")
+    validation = data.get("validation", {}) or {}
+    verdict = validation.get("verdict", "")
+    action = validation.get("action", "")
+    # 只对非 pass 的 trace 做去重
+    if action == "pass" and not verdict:
+        return False
+    if verdict == "pass":
+        return False
+
+    sig = (task_type, verdict, action)
+
+    # 收集最近 20 条 trace 的判重特征
+    try:
+        files = sorted(
+            trace_dir.glob("*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )[:20]
+    except OSError:
+        return False
+
+    match_count = 0
+    for f in files[:lookback * 3]:  # 在最近 lookback*3 条中查找
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        rt = d.get("route", {}) or {}
+        vt = d.get("validation", {}) or {}
+        other_sig = (rt.get("task_type", ""), vt.get("verdict", ""), vt.get("action", ""))
+        if other_sig == sig:
+            match_count += 1
+            if match_count >= lookback:
+                return True
+
+    return False
 
 
 def config_trace_path(task_id: str) -> Path:

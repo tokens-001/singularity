@@ -652,27 +652,59 @@ def query(
     files: list[str] | None = None,
     beam_width: int = 3,
     max_hops: int = 3,
+    max_depth: int = 1,
 ) -> dict:
-    """MAGMA 完整查询流水线。
+    """MAGMA 完整查询流水线（金字塔渐进检索 — 受 Omni-SimpleMem 启发）。
 
     Stage 1: 意图分类 → 边权重
     Stage 2: RRF 锚点识别
     Stage 3: Adaptive Beam Search 遍历
     Stage 4: Narrative Synthesis
+
+    max_depth 控制检索深度：
+      1 (默认) = 仅语义摘要搜索（快速，毫秒级，适合 90% 场景）
+      2 = 摘要 + Beam Search 遍历（中等成本）
+      3 = 深度搜索 + 实体图 + 全文（最全但最慢，按需触发）
     """
-    # Stage 1-3
-    results = traverse(description, beam_width=beam_width, max_hops=max_hops)
-
-    # 补充实体图查询 (直查, 不走遍历)
+    stats_data = stats()
+    results: list[dict] = []
     entity_matches: dict[str, list[str]] = {}
-    if files:
-        entity_matches = find_by_files(files)
+    semantic_only: list[dict] = []
 
-    # 补充纯语义查询 (作为对比基线)
+    # ── Depth 1: 语义摘要层（最快） ──
     semantic_only = find_similar(description, top_k=5)
 
-    # Stage 4
-    narrative = synthesize(results, description)
+    if max_depth >= 2:
+        # ── Depth 2: Beam Search 遍历层 ──
+        results = traverse(description, beam_width=beam_width, max_hops=max_hops)
+
+    if max_depth >= 3:
+        # ── Depth 3: 实体图 + 全文匹配层（最全） ──
+        if files:
+            entity_matches = find_by_files(files)
+        # 合成时传入全文上下文
+        narrative = synthesize(results, description) if results else {
+            "summary": "无深度遍历结果",
+            "nodes": [],
+            "synthesis_model": "none",
+        }
+    elif max_depth == 2:
+        narrative = synthesize(results, description) if results else {
+            "summary": "无遍历结果",
+            "nodes": [],
+            "synthesis_model": "none",
+        }
+    else:
+        # Depth 1: 纯语义摘要，不做 traversal synthesis
+        narrative = {
+            "summary": f"语义检索命中 {len(semantic_only)} 条记录",
+            "nodes": [
+                {"task_id": s["task_id"], "description": s["description"][:120],
+                 "similarity": s["similarity"]}
+                for s in semantic_only[:3]
+            ],
+            "synthesis_model": "semantic_only",
+        }
 
     return {
         "traversal": narrative,
@@ -682,7 +714,8 @@ def query(
              "description": s["description"][:80]}
             for s in semantic_only
         ],
-        "stats": stats(),
+        "stats": stats_data,
+        "depth_used": max_depth,
     }
 
 
