@@ -110,6 +110,20 @@ def _get_profile() -> _ProfileStore:
         _profile_store.load()
     return _profile_store
 
+
+# ── Judge Monitor 单例 ──
+_judge_monitor = None  # lazy import
+
+def _get_judge_monitor():
+    """返回 JudgeMonitorStore 单例（lazy import 避免循环依赖）。"""
+    global _judge_monitor
+    if _judge_monitor is None:
+        from . import judge_monitor as jm
+        _judge_monitor = jm.JudgeMonitorStore(config.QIDIAN_DIR / "judge_monitor.json")
+        _judge_monitor.load()
+    return _judge_monitor
+
+
 def _reorder_agents_by_rank(agents_list: list, ranked_models: list[str]) -> list:
     """按画像排名重排 agent 列表：排名靠前的模型优先。"""
     rank_map = {m: i for i, m in enumerate(ranked_models)}
@@ -134,12 +148,22 @@ def _judge_and_profile(task, batch: BatchOutput) -> None:
     # 2. 裁判判分
     verdict = judge(task.description, output, task_type)
 
+    model = agent_cfg.get("model", "unknown")
+
+    # 2b. Judge Monitor: 记录裁判自身表现
+    try:
+        _jm = _get_judge_monitor()
+        _jm.record(task_type=task_type, model=model, verdict=verdict,
+                   template_id=task_type)
+    except Exception:
+        pass
+
     # 3. 更新画像
     store = _get_profile()
-    model = agent_cfg.get("model", "unknown")
     elapsed = getattr(disp.executor_result, "elapsed", 0) or 0
     tokens = getattr(disp.executor_result, "tokens", 0) or 0
-    store.record(model, task_type, verdict.pass_, elapsed, tokens, verdict.failure_mode)
+    store.record(model, task_type, verdict.pass_, elapsed, tokens, verdict.failure_mode,
+                 template_id=task_type)
 
     # 4. 失败 + 可重试 → Reflexion 注入（写到 batch，让上层重试）
     if not verdict.pass_ and should_retry(verdict, getattr(task, "retry_count", 0)):
@@ -159,6 +183,12 @@ def _judge_and_profile(task, batch: BatchOutput) -> None:
     # 5. 持久化画像
     try:
         store.save()
+    except Exception:
+        pass
+    # 5b. 持久化 judge monitor
+    try:
+        _jm = _get_judge_monitor()
+        _jm.save()
     except Exception:
         pass
 
@@ -202,8 +232,20 @@ def _run_queue_v2(agents: dict) -> list[tuple]:
         pre_mod.apply_escalation(route, pre)
 
         # ── 画像路由: 给 dispatch 提供模型偏好 ──
+        # 提取项目阶段（相位感知路由）
+        project_phase = None
+        try:
+            pid = getattr(task, "project_id", "")
+            if pid:
+                from . import project as proj_mod
+                proj = proj_mod.load(pid)
+                if proj:
+                    project_phase = proj.phase.value
+        except Exception:
+            pass
+
         ranked_models = router_mod.rank_models_for_task(
-            task.description, route.task_type,
+            task.description, route.task_type, phase=project_phase,
         )
         effective_agents = agents
         if ranked_models:

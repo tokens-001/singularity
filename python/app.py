@@ -1572,6 +1572,62 @@ def api_sse_events():
 
 
 # ═══════════════════════════════════════════════════════════
+# Judge Monitor API — 裁判监控
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/judge-monitor")
+def api_judge_monitor():
+    """裁判监控统计：通过率、模型偏差、异常检测。"""
+    try:
+        from scheduler.orchestrator import _get_judge_monitor
+        jm = _get_judge_monitor()
+        return jsonify(jm.get_stats())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════
+# Model Profile API — 模型画像
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/model-profile")
+def api_model_profile():
+    """模型画像全量数据。"""
+    try:
+        from scheduler.model_profile import ProfileStore
+        from scheduler import config as sched_config
+        store = ProfileStore(sched_config.QIDIAN_DIR / "model_profile.json")
+        store.load()
+        stats = {}
+        for (model, tt), s in store._stats.items():
+            key = f"{model}/{tt}"
+            stats[key] = s.to_dict()
+        return jsonify({"profiles": stats})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/model-profile/pattern")
+def api_model_profile_pattern():
+    """模式画像：按 (task_type, template_id) 的模型排名。"""
+    task_type = request.args.get("task_type", "default")
+    template_id = request.args.get("template_id", "default")
+    try:
+        from scheduler.model_profile import ProfileStore
+        from scheduler import config as sched_config
+        store = ProfileStore(sched_config.QIDIAN_DIR / "model_profile.json")
+        store.load()
+        ranked = store.rank_by_pattern(task_type, template_id)
+        return jsonify({
+            "task_type": task_type,
+            "template_id": template_id,
+            "ranking": ranked,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════
 # 健康检查
 # ═══════════════════════════════════════════════════════════
 

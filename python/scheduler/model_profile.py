@@ -35,6 +35,8 @@ class ModelStats:
     failure_modes: dict = field(default_factory=dict)  # {mode: count}
     elo: float = 1500.0  # 初始 Elo = 1500
     last_updated: float = 0.0
+    # 模式画像：按 (task_type, template_id) 追踪
+    template_stats: dict = field(default_factory=dict)  # {template_id: {attempts, successes, total_tokens}}
 
     @property
     def success_rate(self) -> float:
@@ -65,6 +67,7 @@ class ModelStats:
             "total_tokens": self.total_tokens,
             "elo": round(self.elo, 1),
             "failure_modes": self.failure_modes,
+            "template_stats": dict(self.template_stats),
         }
 
 
@@ -130,7 +133,8 @@ class ProfileStore:
     # ── 记录 ──
     def record(self, model: str, task_type: str, success: bool,
                elapsed: float = 0.0, tokens: int = 0,
-               failure_mode: str = "") -> None:
+               failure_mode: str = "",
+               template_id: str = "", max_turns: int = 0) -> None:
         key = (model, task_type)
         if key not in self._stats:
             self._stats[key] = ModelStats(model=model, task_type=task_type)
@@ -139,6 +143,16 @@ class ProfileStore:
         s.total_elapsed += elapsed
         s.total_tokens += tokens
         s.last_updated = time.time()
+
+        # 模式画像：按 template_id 追踪
+        if template_id:
+            ts = s.template_stats
+            if template_id not in ts:
+                ts[template_id] = {"attempts": 0, "successes": 0, "total_tokens": 0}
+            ts[template_id]["attempts"] += 1
+            ts[template_id]["total_tokens"] += tokens
+            if success:
+                ts[template_id]["successes"] += 1
 
         if success:
             s.successes += 1
@@ -187,6 +201,53 @@ class ProfileStore:
         candidates.sort(key=lambda s: (s.success_rate, s.elo), reverse=True)
         return candidates
 
+    def rank_by_pattern(self, task_type: str, template_id: str,
+                        exclude_models: list[str] = None) -> list[dict]:
+        """返回按 (task_type, template_id) 模式画像排序的模型列表。
+
+        优先按 pattern-specific 成功率排序，
+        如果某个模型在该 pattern 下样本数不足 3，回退到 task_type 整体成功率。
+
+        Returns list of {model, success_rate, attempts, avg_tokens}.
+        """
+        MIN_PATTERN_SAMPLES = 3
+        exclude = set(exclude_models or [])
+        prior = 2  # 贝叶斯平滑伪计数
+
+        results = []
+        for (model, tt), s in self._stats.items():
+            if tt != task_type:
+                continue
+            if model in exclude:
+                continue
+            breaker = self._breakers.get(model)
+            if breaker and breaker.is_open and not breaker.check_cooldown():
+                continue
+
+            # 尝试从 pattern 统计计算成功率
+            pat = s.template_stats.get(template_id)
+            if pat and pat["attempts"] >= MIN_PATTERN_SAMPLES:
+                rate = (pat["successes"] + prior) / (pat["attempts"] + 2 * prior)
+                attempts = pat["attempts"]
+                avg_tokens = pat["total_tokens"] / max(pat["attempts"], 1)
+            else:
+                # 回退到 task_type 整体成功率
+                rate = s.success_rate
+                attempts = s.total_attempts
+                avg_tokens = s.total_tokens / max(s.total_attempts, 1)
+
+            results.append({
+                "model": model,
+                "success_rate": round(rate, 3),
+                "attempts": attempts,
+                "avg_tokens": round(avg_tokens, 1),
+                "elo": round(s.elo, 1),
+                "from_pattern": bool(pat and pat["attempts"] >= MIN_PATTERN_SAMPLES),
+            })
+
+        results.sort(key=lambda r: (r["success_rate"], r["elo"]), reverse=True)
+        return results
+
     def get(self, model: str, task_type: str) -> ModelStats:
         key = (model, task_type)
         if key not in self._stats:
@@ -233,6 +294,7 @@ class ProfileStore:
                     total_tokens=sd.get("total_tokens", 0),
                     elo=sd.get("elo", 1500.0),
                     failure_modes=sd.get("failure_modes", {}),
+                    template_stats=sd.get("template_stats", {}),
                 )
                 self._stats[key] = s
             for bd in data.get("breakers", []):

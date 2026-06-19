@@ -1336,8 +1336,88 @@ function connectSSE(){
 }
 
 // ═══════════════════════════════════════════════════════
+// Judge Monitor & Pattern Profile
+// ═══════════════════════════════════════════════════════
+async function refreshJudgeMonitor(){
+  try{
+    const r=await fetch('/api/judge-monitor');
+    const d=await r.json();
+    if(d.error) return;
+    const body=document.getElementById('judge-monitor-body');
+    const flag=document.getElementById('jm-anomaly-flag');
+    if(!body) return;
+    let html='';
+
+    // 通过率
+    if(d.pass_rates_by_type){
+      html+='<div style="color:var(--cyan);margin-bottom:4px">通过率</div>';
+      for(const [type,stats] of Object.entries(d.pass_rates_by_type)){
+        const color=stats.rate>0.9?'var(--orange)':stats.rate<0.1?'var(--red)':'var(--green)';
+        html+=`<div>${type}: <span style="color:${color}">${(stats.rate*100).toFixed(0)}%</span> (${stats.passes}/${stats.total})</div>`;
+      }
+    }
+
+    // 模型偏差
+    if(d.model_correlations&&Object.keys(d.model_correlations).length){
+      html+='<div style="color:var(--cyan);margin-top:6px">模型偏差</div>';
+      for(const [m,c] of Object.entries(d.model_correlations)){
+        if(c.bias_flag||c.total_judged>=5){
+          const color2=c.bias_flag?'var(--orange)':c.avg_score<0.5?'var(--yellow)':'';
+          html+=`<div>${m}: ${(c.avg_score*100).toFixed(0)}分 (${c.total_judged}次)${c.bias_flag?' ⚠':''}</div>`;
+        }
+      }
+    }
+
+    // 异常
+    if(d.anomalies&&d.anomalies.length>0){
+      if(flag) flag.style.display='inline';
+      html+='<div style="color:var(--orange);margin-top:6px">异常</div>';
+      for(const a of d.anomalies) html+=`<div style="color:var(--orange)">• ${esc(a.detail)}</div>`;
+    }else if(flag) flag.style.display='none';
+
+    body.innerHTML=html||'<span style="color:var(--text3)">暂无数据</span>';
+  }catch(e){}
+}
+
+async function refreshPatternProfile(){
+  try{
+    const r=await fetch('/api/model-profile');
+    const d=await r.json();
+    if(d.error) return;
+    const body=document.getElementById('pattern-profile-body');
+    if(!body) return;
+    let html='';
+
+    const byType={};
+    for(const [key,stats] of Object.entries(d.profiles||{})){
+      const parts=key.split('/');
+      const model=parts.slice(0,-1).join('/');
+      const type=parts[parts.length-1];
+      if(!byType[type]) byType[type]=[];
+      byType[type].push({model,...stats});
+    }
+
+    for(const [type,models] of Object.entries(byType)){
+      models.sort((a,b)=>b.success_rate-a.success_rate);
+      html+=`<div style="color:var(--cyan);margin-top:4px">${type}</div>`;
+      for(const m of models.slice(0,3)){
+        html+=`<div>${m.model}: ${(m.success_rate*100).toFixed(0)}% (${m.total}次)</div>`;
+      }
+    }
+
+    body.innerHTML=html||'<span style="color:var(--text3)">暂无数据</span>';
+  }catch(e){}
+}
+
+// 每 30 秒刷新一次裁判监控和模式画像（低频，避免不必要的负载）
+setInterval(refreshJudgeMonitor,30000);
+setInterval(refreshPatternProfile,30000);
+
+// ═══════════════════════════════════════════════════════
 // Init
 // ═══════════════════════════════════════════════════════
 refreshAll();
+refreshJudgeMonitor();
+refreshPatternProfile();
 connectSSE();
 checkSetup();

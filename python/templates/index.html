@@ -64,9 +64,21 @@
       <div class="section-title">奏报</div>
       <div class="section-body" id="reports-body" style="font-size:9px;max-height:200px;overflow-y:auto;font-family:var(--mono)"></div>
     </div>
+    <div class="section" id="judge-monitor-section" style="flex:1;min-width:200px">
+      <div class="section-title">裁判监控 <span id="jm-anomaly-flag" style="color:var(--orange);display:none">⚠</span></div>
+      <div class="section-body" id="judge-monitor-body" style="font-size:9px;max-height:200px;overflow-y:auto;font-family:var(--mono)">
+        <span style="color:var(--text3)">等待数据...</span>
+      </div>
+    </div>
   </div>
 
   <div style="display:flex;gap:1px;flex-wrap:wrap;margin-bottom:8px">
+    <div class="section" id="pattern-profile-section" style="flex:1;min-width:200px">
+      <div class="section-title">模式画像</div>
+      <div class="section-body" id="pattern-profile-body" style="font-size:9px;max-height:180px;overflow-y:auto;font-family:var(--mono)">
+        <span style="color:var(--text3)">等待数据...</span>
+      </div>
+    </div>
     <div class="section" style="flex:1;min-width:200px">
       <div class="section-title">扣留待处理</div>
       <div class="section-body" id="held-list" style="font-size:10px"><span style="color:var(--text3)">无</span></div>

@@ -135,10 +135,14 @@ def _scan_task_type(task: str, result: RouteResult) -> None:
 
 
 def rank_models_for_task(task_desc: str, task_type: str = "",
-                         exclude: list[str] = None) -> list[str]:
+                         exclude: list[str] = None,
+                         phase: str = None) -> list[str]:
     """根据画像返回该任务类型的模型排名（最佳→最差），排除熔断模型。
 
     冷启动（画像不足 5 条记录）时返回空列表，调用方自己兜底。
+
+    phase 参数：当提供项目阶段时，应用相位感知偏好（受 HyperAgents 启发）。
+    不提供时行为不变（backward compatible）。
     """
     from .model_profile import ProfileStore
     from . import config
@@ -148,10 +152,124 @@ def rank_models_for_task(task_desc: str, task_type: str = "",
     store = ProfileStore(config.QIDIAN_DIR / "model_profile.json")
     store.load()
 
+    # 尝试模式画像（如果 phase 提供且 pattern 数据充足）
+    if phase:
+        template_id = guess_template(task_desc)
+        pattern_ranked = store.rank_by_pattern(ttype, template_id, exclude_models=exclude)
+        if pattern_ranked and any(r["from_pattern"] for r in pattern_ranked):
+            return _apply_phase_boost(pattern_ranked, phase, ttype)
+
+    # 回退：标准任务类型画像
     ranked = store.rank(ttype, exclude_models=exclude)
-    # 至少需要 5 条记录才启用画像路由（避免冷启动随机性）
     total_records = sum(s.total_attempts for s in ranked)
     if total_records < 5:
         return []
 
-    return [s.model for s in ranked]
+    result = [s.model for s in ranked]
+    # 有 phase 时也应用 boost（即使 pattern 数据不足）
+    if phase:
+        # 转换为 dict 格式以复用 _apply_phase_boost
+        dict_ranked = [
+            {"model": s.model, "success_rate": s.success_rate,
+             "attempts": s.total_attempts, "avg_tokens": 0.0, "elo": s.elo}
+            for s in ranked
+        ]
+        return _apply_phase_boost(dict_ranked, phase, ttype)
+
+    return result
+
+
+# ═══════════════════════════════════════════════════
+# 相位感知偏好（受 HyperAgents 理论启发）
+# ═══════════════════════════════════════════════════
+
+_PHASE_PREFERENCE = {
+    "template": "budget",        # 模板阶段：便宜模型快速试
+    "researching": "budget",     # 调研阶段：便宜模型探索
+    "gate1": "reasoning",        # 研究审查：需要强推理
+    "planning": "reasoning",     # 架构规划：需要强推理
+    "gate2": "reasoning",        # 架构审查：需要强推理
+    "executing": "reliable",     # 执行阶段：可靠中模型，高 turns
+    "gate3": "accurate",         # 执行审查：准确模型
+    "reviewing": "accurate",     # 评审阶段：准确模型
+    "fixing": "accurate",        # 修复阶段：准确模型，中 turns
+    "gate4": "accurate",         # 最终审查
+    "done": "default",           # 已完成
+}
+
+
+def _apply_phase_boost(ranked: list[dict], phase: str,
+                       task_type: str = "default") -> list[str]:
+    """根据项目阶段对模型排名应用偏好加成。
+
+    Preference strategies:
+    - budget: 低成本模型 ×1.2
+    - reasoning: D 层推理模型 ×1.3
+    - reliable: 高成功率 + 高 turns 模型 ×1.15
+    - accurate: 高 Elo 模型 ×1.1
+    - default: 不修改
+
+    加成后按调整分重排，返回模型名列表。
+    """
+    strategy = _PHASE_PREFERENCE.get(phase, "default")
+
+    # 尝试加载 model_registry 获取模型层级/成本信息
+    try:
+        from . import model_registry as mr
+    except ImportError:
+        mr = None
+
+    for r in ranked:
+        model = r["model"]
+        base = r["success_rate"]
+
+        if strategy == "budget":
+            # 低成本模型加分
+            cost_tier = "standard"
+            if mr:
+                try:
+                    info = mr.get(model)
+                    cost_tier = getattr(info, "cost", "standard")
+                except Exception:
+                    pass
+            if cost_tier == "budget":
+                r["_score"] = base * 1.2
+            else:
+                r["_score"] = base
+
+        elif strategy == "reasoning":
+            # D 层推理模型加分
+            tier = ""
+            if mr:
+                try:
+                    info = mr.get(model)
+                    tier = getattr(info, "tier", "")
+                except Exception:
+                    pass
+            if tier == "D":
+                r["_score"] = base * 1.3
+            else:
+                r["_score"] = base
+
+        elif strategy == "reliable":
+            # 高成功率 + 高 Elo 加分
+            elo = r.get("elo", 1500.0)
+            if elo > 1550.0:
+                r["_score"] = base * 1.15
+            else:
+                r["_score"] = base
+
+        elif strategy == "accurate":
+            # 高 Elo 模型加分
+            elo = r.get("elo", 1500.0)
+            if elo > 1550.0:
+                r["_score"] = base * 1.1
+            else:
+                r["_score"] = base
+
+        else:  # default
+            r["_score"] = base
+
+    # 按加成后分数重排
+    ranked.sort(key=lambda r: r["_score"], reverse=True)
+    return [r["model"] for r in ranked]
