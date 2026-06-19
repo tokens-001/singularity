@@ -122,6 +122,24 @@ def _build_project_context(task) -> str:
                     if acceptance:
                         parts.append(f"验收标准: {acceptance}")
                     break
+        # 上游 Agent 交接记录 (最近 3 条)
+        handoffs = getattr(proj, 'handoffs', []) or []
+        if handoffs:
+            recent = handoffs[-3:]
+            parts.append("[上游交接]")
+            for h in recent:
+                agent = h.get("agent_model", "unknown")
+                phase = h.get("phase", "")
+                conclusion = h.get("conclusion", "")[:120]
+                deliverable = h.get("deliverable", "")[:120]
+                next_agent = h.get("next_agent", "")
+                parts.append(
+                    f"  [{phase}] {agent}: {conclusion}"
+                )
+                if deliverable:
+                    parts.append(f"    产出: {deliverable}")
+                if next_agent:
+                    parts.append(f"    建议下一Agent: {next_agent}")
         return "\n".join(parts) if len(parts) > 1 else ""
     except Exception:
         return ""

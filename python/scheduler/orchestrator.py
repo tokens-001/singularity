@@ -474,6 +474,9 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                         "graph_coverage": pre.memory.graph_coverage,
                     }
 
+                    # ── 执行裁判钩子（v3 路径也需要）──
+                    _judge_and_profile(t, batch)
+
                     if batch.planner_decomposed:
                         _materialize_in_main(batch, t)
                         _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,

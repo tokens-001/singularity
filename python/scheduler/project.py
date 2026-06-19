@@ -95,6 +95,7 @@ class ProjectState:
             "constraints_checklist": self.constraints_checklist,
             "task_ids": self.task_ids, "issues": self.issues,
             "supervision_log": self.supervision_log, "lineage": self.lineage,
+            "handoffs": self.handoffs,
             "auto_mode": self.auto_mode,
             "token_budget_total": self.token_budget_total,
             "token_spent": self.token_spent,
@@ -118,6 +119,7 @@ class ProjectState:
         d.setdefault("issues", [])
         d.setdefault("supervision_log", [])
         d.setdefault("lineage", [])
+        d.setdefault("handoffs", [])
         d.setdefault("auto_mode", False)
         d.setdefault("token_budget_total", 5.0)
         d.setdefault("token_spent", 0.0)
