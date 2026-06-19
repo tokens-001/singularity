@@ -1086,15 +1086,17 @@ async function updateModel(id, field, value){
 }
 async function editModel(id){
   event.stopPropagation();
+  const old = document.getElementById('model-edit-'+id);
+  if (old) { old.remove(); renderModels(); return; }
   const models = await api('/api/models');
   const m = Object.values(models).find(x => x.id === id);
   if (!m) return;
   const tiers = m.tiers||[];
-  const html = '<div style="padding:8px"><b>'+esc(m.display)+'</b> <span style="color:var(--text3);font-size:9px">'+esc(m.id)+'</span><br><br>层级：<br>'+['E','E+','D'].map(t=>{
+  const html = '<div id="model-edit-'+esc(m.id)+'" style="margin:4px 0;padding:8px;border:1px solid var(--cyan);background:var(--bg2)">层级：'+['E','E+','D'].map(t=>{
     const checked = tiers.includes(t);
-    return '<label style="display:inline-block;margin-right:12px;cursor:pointer;font-size:11px"><input type="checkbox" id="em-tier-'+t+'" '+(checked?'checked':'')+' onchange="event.stopPropagation()"> '+t+'</label>';
-  }).join('')+'<br><br><button class="btn sm" onclick="saveModelEdit(\''+esc(m.id)+'\')" style="margin-right:6px">保存</button><button class="btn sm" style="color:var(--text3)" onclick="renderModels()">取消</button></div>';
-  document.getElementById('models-body').innerHTML = html;
+    return '<label style="display:inline-block;margin-right:12px;cursor:pointer;font-size:11px"><input type="checkbox" id="em-tier-'+t+'" '+(checked?'checked':'')+'> '+t+'</label>';
+  }).join('')+' <button class="btn sm" onclick="saveModelEdit(\''+esc(m.id)+'\')" style="margin-left:8px;margin-right:4px">保存</button><button class="btn sm" style="color:var(--text3)" onclick="editModel(\''+esc(m.id)+'\')">取消</button></div>';
+  document.getElementById('models-body').insertAdjacentHTML('afterbegin', html);
 }
 async function saveModelEdit(id){
   const tiers = ['E','E+','D'].filter(t => document.getElementById('em-tier-'+t)?.checked);
