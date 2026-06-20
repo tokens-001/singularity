@@ -164,8 +164,8 @@ def _judge_and_profile(task, batch: BatchOutput) -> None:
         _jm = _get_judge_monitor()
         _jm.record(task_type=task_type, model=model, verdict=verdict,
                    template_id=task_type)
-    except Exception:
-        pass
+    except Exception as e:
+        witness.heartbeat('orch', f'warn:{e}')
 
     # 3. 更新画像
     store = _get_profile()
@@ -192,14 +192,14 @@ def _judge_and_profile(task, batch: BatchOutput) -> None:
     # 5. 持久化画像
     try:
         store.save()
-    except Exception:
-        pass
+    except Exception as e:
+        witness.heartbeat('orch', f'warn:{e}')
     # 5b. 持久化 judge monitor
     try:
         _jm = _get_judge_monitor()
         _jm.save()
-    except Exception:
-        pass
+    except Exception as e:
+        witness.heartbeat('orch', f'warn:{e}')
 
     # 6. 交接记录
     try:
@@ -207,8 +207,8 @@ def _judge_and_profile(task, batch: BatchOutput) -> None:
         h = _hf.create_handoff(task, batch)
         if h and getattr(task, "project_id", ""):
             _hf.append_to_project(task.project_id, h)
-    except Exception:
-        pass
+    except Exception as e:
+        witness.heartbeat('orch', f'warn:{e}')
 
 
 def _execute_one_task(task, agents: dict):
@@ -232,8 +232,8 @@ def _execute_one_task(task, agents: dict):
             proj = proj_mod.load(pid)
             if proj:
                 project_phase = proj.phase.value
-    except Exception:
-        pass
+    except Exception as e:
+        witness.heartbeat('orch', f'warn:{e}')
     ranked_models = router_mod.rank_models_for_task(task.description, route.task_type, phase=project_phase, route_level=route.level)
     effective_agents = dict(agents)
     if ranked_models:
@@ -337,8 +337,8 @@ def _finalize_result(task, batch, route, snap, results: list) -> str:
                                 acc = tdef.get("acceptance", "")
                                 if acc:
                                     checklist.append(acc)
-            except Exception:
-                pass
+            except Exception as e:
+                witness.heartbeat('orch', f'warn:{e}')
         sv = supervise(task.description, changed, constraints, checklist,
                       getattr(disp_result.executor_result, 'raw_output', '') if disp_result else '', task.id)
         if sv.verdict == "fail":
@@ -348,8 +348,8 @@ def _finalize_result(task, batch, route, snap, results: list) -> str:
         elif sv.verdict != "pass":
             tracker.transition(task.id, task.status, error=f"QA:{sv.verdict}: " + "; ".join(sv.issues[:2]))
             reason += f"; QA:{sv.verdict}"
-    except Exception:
-        pass
+    except Exception as e:
+        witness.heartbeat('orch', f'warn:{e}')
     # Chancellor
     try:
         changed = disp_result.executor_result.changed_files if disp_result else []
@@ -357,8 +357,8 @@ def _finalize_result(task, batch, route, snap, results: list) -> str:
         if report.severity in ("alert", "critical"):
             report.task_ids = [task.id]
             chan_mod.save_report(report)
-    except Exception:
-        pass
+    except Exception as e:
+        witness.heartbeat('orch', f'warn:{e}')
     results.append((task.id, reason, validation))
     return reason
 
@@ -411,13 +411,13 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
         except Exception as e:
             try:
                 tracker.transition(t.id, TaskStatus.FAILED, error=f"worker 异常: {e}")
-            except Exception:
-                pass
+            except Exception as e:
+                witness.heartbeat('orch', f'warn:{e}')
             results.append((t.id, f"worker_error: {e}", None))
             try:
                 _save_trace(t, route, snap, None, None, False)
-            except Exception:
-                pass
+            except Exception as e:
+                witness.heartbeat('orch', f'warn:{e}')
             continue
         if batch.merge_request is not None:
             mq.submit(batch.merge_request)
@@ -433,13 +433,13 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
             running_futures.pop(fut)
             try:
                 tracker.transition(t.id, TaskStatus.FAILED, error=f"执行超时(>{deadline}s)")
-            except Exception:
-                pass
+            except Exception as e:
+                witness.heartbeat('orch', f'warn:{e}')
             results.append((t.id, "timeout", None))
             try:
                 _save_trace(t, route, snap, None, None, False)
-            except Exception:
-                pass
+            except Exception as e:
+                witness.heartbeat('orch', f'warn:{e}')
             fut.cancel()
             reaped = True
     # 如果无事可收但还有 running future, 短暂 block 等下一个完成
@@ -521,6 +521,13 @@ def consolidate_memory() -> int:
     global _consolidate_calls
     _consolidate_calls += 1
 
+    # ponytail: 速率控制 — 最小间隔 5min, 每次最多判 5 对
+    now = time.time()
+    if _consolidate_calls > 1 and now - getattr(consolidate_memory, '_last_run', 0) < 300:
+        return 0
+    consolidate_memory._last_run = now
+    _MAX_LLM_CANDIDATES = 5
+
     # 每10次运行一次记忆生命周期维护 + System2 模式提取
     if _consolidate_calls % 10 == 0:
         try:
@@ -530,8 +537,8 @@ def consolidate_memory() -> int:
                     "kind": "memory", "msg": f"记忆清理: {lc['pruned']} 过期事件",
                     "ts": time.time(),
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            witness.heartbeat('orch', f'warn:{e}')
         # DCPM System2: 夜间异步模式提取
         try:
             s2 = mem_mod.system2_extract()
@@ -541,11 +548,18 @@ def consolidate_memory() -> int:
                         "kind": "insight", "msg": ins.get("summary", ""),
                         "ts": time.time(),
                     })
-        except Exception:
-            pass
+        except Exception as e:
+            witness.heartbeat('orch', f'warn:{e}')
     try:
         candidates = mem_mod.find_candidate_latent_edges()
         added = 0
+
+        # ponytail: Tier 3 LLM 精判上限 — 只判 sim 最高的前 N 对
+        tier3_capped = set()
+        tier3_all = [c for c in candidates if 0.55 <= c.get("semantic_sim", 0) < 0.85]
+        if len(tier3_all) > _MAX_LLM_CANDIDATES:
+            tier3_all.sort(key=lambda x: -x["semantic_sim"])
+            tier3_capped = {id(c) for c in tier3_all[_MAX_LLM_CANDIDATES:]}
 
         for c in candidates:
             sim = c["semantic_sim"]
@@ -567,7 +581,9 @@ def consolidate_memory() -> int:
             if sim < 0.55:
                 continue
 
-            # Tier 3: LLM 精判 (0.55 ≤ sim < 0.85)
+            # Tier 3: LLM 精判, 超上限的跳过
+            if id(c) in tier3_capped:
+                continue
             src, dst = _resolve_direction(c)
             if not src:
                 continue
@@ -661,6 +677,6 @@ def _llm_judge_causal(c: dict, src: str, dst: str) -> dict:
         try:
             import logging
             logging.getLogger("qidian").warning("llm_judge_causal: %s", e)
-        except Exception:
-            pass
+        except Exception as e:
+            witness.heartbeat('orch', f'warn:{e}')
         return {"is_causal": False, "reason": f"llm_error:{e}"}

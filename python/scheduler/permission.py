@@ -105,8 +105,8 @@ class PermissionStore:
                     if p.name not in BUILTIN_PROFILES:
                         self._profiles[p.name] = p
                 self._agent_bindings = data.get("bindings", {})
-            except Exception:
-                pass
+            except Exception as e:
+                witness.heartbeat('permission', f'warn:{e}')
 
     def _save(self):
         config.QIDIAN_DIR.mkdir(parents=True, exist_ok=True)

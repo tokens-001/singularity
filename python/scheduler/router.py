@@ -279,8 +279,8 @@ def _apply_phase_boost(ranked: list[dict], phase: str,
                 try:
                     info = mr.get(model)
                     cost_tier = getattr(info, "cost", "standard")
-                except Exception:
-                    pass
+                except Exception as e:
+                    witness.heartbeat('router', f'warn:{e}')
             if cost_tier == "budget":
                 r["_score"] = base * 1.2
             else:
@@ -293,8 +293,8 @@ def _apply_phase_boost(ranked: list[dict], phase: str,
                 try:
                     info = mr.get(model)
                     tier = getattr(info, "tier", "")
-                except Exception:
-                    pass
+                except Exception as e:
+                    witness.heartbeat('router', f'warn:{e}')
             if tier == "D":
                 r["_score"] = base * 1.3
             else:

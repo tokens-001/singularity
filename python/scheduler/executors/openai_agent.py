@@ -44,10 +44,15 @@ _BLOCKED_COMMANDS = [
     "rm -rf /", "rm -rf ~", "rm -rf .",
     "curl", "wget",
     "chmod 777", "chmod -R",
-    "sudo", "su ",
+    "sudo ", "su ",
     "mkfs.", "dd if=",
     ":(){ :|:& };:",  # fork bomb
     "> /dev/sda",
+    "shutdown", "reboot", "halt", "poweroff",
+    "iptables", "nc -l", "nc -e",
+    "python -c", "perl -e", "ruby -e", "bash -c",
+    "eval ", "exec ",
+    "chown -R", "chattr",
 ]
 
 # ── Tool 定义 (OpenAI function calling 格式) ──
@@ -415,9 +420,12 @@ class OpenAIAgentExecutor(BaseExecutor):
 
     def _is_dangerous_command(self, command: str) -> tuple[bool, str]:
         """检查 shell 命令是否危险。返回 (dangerous, reason)。"""
-        cmd_lower = command.lower().strip()
+        # ponytail: strip 防空格绕过, 白名单前缀 + 子串双保险
+        cmd = command.strip()
+        cmd_lower = cmd.lower()
         for blocked in _BLOCKED_COMMANDS:
-            if cmd_lower.startswith(blocked.lower()) or blocked.lower() in cmd_lower:
+            bl = blocked.lower()
+            if cmd_lower.startswith(bl) or bl in cmd_lower:
                 return True, f"危险命令被拦截: {blocked}"
         return False, ""
 

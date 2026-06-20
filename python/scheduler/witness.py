@@ -121,9 +121,6 @@ def status(agents: dict | None = None) -> str:
     loads = _heartbeat_task_levels()  # 含清理逻辑，必须先于 running 计算
     running = sum(loads.values())
 
-    loads = _heartbeat_task_levels()  # 含清理逻辑，必须先于 running 计算
-    running = sum(loads.values())
-
     pending_waits, done_durations = _timing_stats()
     avg_wait = _fmt_avg(pending_waits)
     avg_done = _fmt_avg(done_durations)

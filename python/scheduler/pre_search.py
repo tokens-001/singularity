@@ -99,8 +99,8 @@ def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True) ->
             res.reason = f"超时 {config.PRE_SEARCH_TIMEOUT}s"
             try:
                 proc.kill()
-            except Exception:
-                pass
+            except Exception as e:
+                witness.heartbeat('pre_search', f'warn:{e}')
         except (json.JSONDecodeError, KeyError) as e:
             res.skipped = True
             res.reason = f"解析失败: {e}"
@@ -125,8 +125,8 @@ def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True) ->
         try:
             from . import witness
             witness.heartbeat("pre_search", f"warn:magma:{e}"[:80])
-        except Exception:
-            pass
+        except Exception as e:
+            witness.heartbeat('pre_search', f'warn:{e}')
         pass  # 记忆挂了不阻塞
 
     return res

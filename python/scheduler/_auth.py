@@ -60,6 +60,7 @@ class User:
 
 
 def _hash_token(token: str) -> str:
+    # ponytail: 128-bit secrets.token_hex(16) 抗彩虹表, 不加盐不增加实际风险
     return hashlib.sha256(token.encode()).hexdigest()
 
 
@@ -83,8 +84,8 @@ class AuthStore:
                 # 旧格式迁移: 明文 token → 哈希存储
                 if needs_migrate:
                     self._save()
-            except Exception:
-                pass
+            except Exception as e:
+                witness.heartbeat('_auth', f'warn:{e}')
 
     def _save(self):
         config.QIDIAN_DIR.mkdir(parents=True, exist_ok=True)

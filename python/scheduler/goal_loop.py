@@ -105,12 +105,12 @@ class GoalLoop:
         try:
             e_agents = self._agents.get("E", [])
             if not e_agents:
-                return {"met": True, "reason": "no_judge_agent"}
+                return {"met": False, "reason": "no_judge_agent: 无 E 层 agent 可判定 goal"}
             e_cfg = e_agents[0]
             import os
             api_key = os.environ.get(e_cfg.get("api_key_env", ""), "")
             if not api_key:
-                return {"met": True, "reason": "no_api_key"}
+                return {"met": False, "reason": "no_api_key: 未配置 E 层 API key"}
             base_url = e_cfg.get("entry", e_cfg.get("base_url", "https://api.deepseek.com/v1"))
             model = e_cfg.get("request_template", {}).get("model", e_cfg.get("model", "deepseek-chat"))
 
@@ -128,8 +128,8 @@ class GoalLoop:
             if m:
                 return json.loads(m.group())
             return {"met": "true" in content.lower(), "reason": content[:100]}
-        except Exception:
-            return {"met": True, "reason": "judge_unavailable"}
+        except Exception as e:
+            return {"met": False, "reason": f"judge_unavailable: {e}"}
 
     def _extract_feedback(self, output: str, goal: str) -> str:
         """从上一轮产出提取改进反馈 (规则版本，不调LLM)。"""

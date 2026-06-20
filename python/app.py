@@ -11,6 +11,8 @@ import threading
 from collections import deque
 from pathlib import Path
 
+from urllib.parse import urlparse
+
 from flask import Flask, Response, render_template, request, jsonify
 
 # ── 加载 .env ──────────────────────────────────────────────
@@ -434,15 +436,24 @@ def stop_loop():
         return True
 
 
+def _is_local_origin(origin: str) -> bool:
+    """精确检查 origin 是否为本地地址 (防 startswith 绕过)。"""
+    try:
+        hostname = urlparse(origin).hostname
+        if not hostname:
+            return False
+        return hostname in ("localhost", "127.0.0.1", "0.0.0.0", "[::1]")
+    except Exception:
+        return False
+
+
 @app.after_request
 def add_cors_headers(response):
     # 仅允许本地来源（安全加固：不再使用 *）
     origin = request.headers.get("Origin", "")
     allowed = (
         not origin
-        or origin.startswith("http://localhost")
-        or origin.startswith("http://127.0.0.1")
-        or origin.startswith("http://0.0.0.0")
+        or _is_local_origin(origin)
     )
     if allowed and origin:
         response.headers["Access-Control-Allow-Origin"] = origin

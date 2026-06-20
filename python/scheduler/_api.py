@@ -40,8 +40,8 @@ def _list_all_tasks() -> list[dict]:
             data = json.loads(f.read_text(encoding="utf-8"))
             data["_filename"] = f.stem
             result.append(data)
-        except Exception:
-            pass
+        except Exception as e:
+            witness.heartbeat('_api', f'warn:{e}')
     return result
 
 
@@ -227,8 +227,8 @@ def task_timeline(task_id: str) -> tuple[dict, int]:
                     "pre_search_escalated": trace.get("pre_search", {}).get("escalated"),
                 },
             })
-        except Exception:
-            pass
+        except Exception as e:
+            witness.heartbeat('_api', f'warn:{e}')
     return {"task_id": task_id, "current_status": status, "timeline": timeline}, 200
 
 
@@ -294,8 +294,8 @@ def task_delete(task_id: str) -> tuple[dict, int]:
             if p.exists():
                 p.unlink()
                 deleted += 1
-        except Exception:
-            pass
+        except Exception as e:
+            witness.heartbeat('_api', f'warn:{e}')
     if deleted:
         return {"ok": True, "message": f"已删除 {deleted} 个文件"}, 200
     return {"error": "任务文件不存在"}, 404
@@ -712,8 +712,8 @@ def api_store_add(api_id: str, provider: str = "", base_url: str = "",
         for m in models:
             api_store.save_custom_model(m["id"], m["provider"], m.get("display", m["id"]))
             scanned.append(m["id"])
-    except Exception:
-        pass
+    except Exception as e:
+        witness.heartbeat('_api', f'warn:{e}')
     return {"ok": True, "entry": entry.to_dict(), "scanned_models": scanned}, 200
 
 
@@ -960,8 +960,8 @@ def status_overview() -> tuple[dict, int]:
         raw_agents = disp_mod.load_agents()
         for level, cfgs in raw_agents.items():
             agents[level] = [{"model": c.get("model", ""), "roles": c.get("roles", [])} for c in cfgs]
-    except Exception:
-        pass
+    except Exception as e:
+        witness.heartbeat('_api', f'warn:{e}')
     return {
         "counts": counts, "heartbeat_levels": loads,
         "running_total": sum(loads.values()),

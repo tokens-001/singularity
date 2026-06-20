@@ -63,8 +63,8 @@ def _maybe_create_worktree(task_id: str, level: str, agent_cfg: dict, snapshot_r
             from . import witness
             witness.heartbeat(task_id, f"worktree_limit:{count}>={_MAX_WORKTREES}")
             return None
-    except Exception:
-        pass
+    except Exception as e:
+        witness.heartbeat('_worktree', f'warn:{e}')
     try:
         return wt_create(task_id, level, base_ref=snapshot_ref)  # 修复 #8
     except Exception:  # noqa: BLE001
@@ -77,8 +77,8 @@ def _cleanup_wt(wt) -> None:
     _unlock_wt(wt)
     try:
         wt_cleanup(wt)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:
+        witness.heartbeat('_worktree', f'warn:{e}')
 
 
 def _lock_wt(wt: Worktree) -> None:

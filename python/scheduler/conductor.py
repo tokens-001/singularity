@@ -243,8 +243,8 @@ def start_autopilot(project_id: str) -> dict:
         agents = {}
         try:
             agents = _dispatch.load_agents()
-        except Exception:
-            pass
+        except Exception as e:
+            witness.heartbeat('conductor', f'warn:{e}')
 
         max_steps = 30  # 最多 30 步（防止死循环）
 

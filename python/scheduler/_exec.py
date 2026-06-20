@@ -208,8 +208,8 @@ def _summarize_events(events: list) -> str:
             body = resp.json()
             summary = body["choices"][0]["message"]["content"].strip()
             return f"[摘要] {summary}（更早 {len(events)} 条已省略）"
-    except Exception:
-        pass
+    except Exception as e:
+        witness.heartbeat('exec', f'warn:{e}')
     return f"更早 {len(events)} 条已省略"
 
 
@@ -787,8 +787,8 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
             try:
                 snap = snap_mod.Snapshot(id=ctx.batch_id, method="git", ref=ctx.snapshot_ref, created_at=0.0)
                 snap_mod.rollback(snap)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as e:
+                witness.heartbeat('exec', f'warn:{e}')
         # v3: 不碰 PROJECT_ROOT —— 主仓库未动, worktree 已由 run() 内部 _cleanup_wt 清理
         # retry_count 由主线程在回收时按需写; worker 不写
 
@@ -826,8 +826,8 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
             pre_search_memory=pre_search_memory,
         )
         nj_mod.save_trace(report, task.id)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:
+        witness.heartbeat('exec', f'warn:{e}')
 
     # ── MAGMA 多图记忆索引 + 状态更新 ──
     try:
@@ -846,8 +846,8 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
             route_level=route.level if route else "",
             route_type=route.task_type if route else "",
         )
-    except Exception:
-        pass
+    except Exception as e:
+        witness.heartbeat('exec', f'warn:{e}')
 
 
 def decompose(planner_raw_output: str) -> list[dict]:

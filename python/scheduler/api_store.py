@@ -93,8 +93,8 @@ def _seed() -> dict[str, APIEntry]:
         try:
             from . import witness
             witness.heartbeat("api_store", f"warn:discovery:{e}"[:80])
-        except Exception:
-            pass
+        except Exception as e:
+            witness.heartbeat('api_store', f'warn:{e}')
         pass
 
     # 补充已知但 agents.toml 里没配的 (如 Anthropic via Claude CLI)

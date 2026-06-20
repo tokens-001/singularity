@@ -206,12 +206,14 @@ def _check_artifact(changed_files: list[str], root: Path) -> CheckResult:
         fp = root / f
         if fp.exists():
             try:
-                subprocess.run(
+                proc = subprocess.run(
                     ["python3", "-m", "py_compile", str(fp)],
                     capture_output=True, text=True, timeout=5,
                 )
+                if proc.returncode != 0:
+                    lint_errors.append(f"{f}: {proc.stderr[:120] if proc.stderr else 'compile error'}")
             except Exception:
-                lint_errors.append(f)
+                lint_errors.append(f"{f}: timeout/exception")
 
     if lint_errors:
         return CheckResult(

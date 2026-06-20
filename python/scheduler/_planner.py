@@ -281,8 +281,8 @@ def _llm_synthesize(task_desc: str, summary_text: str, models: list) -> str | No
         try:
             import logging
             logging.getLogger("qidian").warning("llm_synthesize: %s", e)
-        except Exception:
-            pass
+        except Exception as e:
+            witness.heartbeat('_planner', f'warn:{e}')
         return None
 
 

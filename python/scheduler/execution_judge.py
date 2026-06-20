@@ -403,8 +403,8 @@ def _call_single_model(prompt: str, model: str) -> str:
             )
             if r.status_code == 200:
                 return r.json()["choices"][0]["message"]["content"]
-    except Exception:
-        pass
+    except Exception as e:
+        witness.heartbeat('execution_judge', f'warn:{e}')
     return ""
 
 # ═══════════════════════════════════════════════
@@ -499,8 +499,8 @@ def run_parallel_models(task_desc: str, level: str = "E", tier: str = "budget") 
                         api_key = os.environ.get(api_entry.api_key_env, "")
                         base_url = api_entry.base_url
                         break
-            except Exception:
-                pass
+            except Exception as e:
+                witness.heartbeat('execution_judge', f'warn:{e}')
             if not api_key or not base_url:
                 return ""
 
@@ -526,8 +526,8 @@ def run_parallel_models(task_desc: str, level: str = "E", tier: str = "budget") 
                     )
                     if r.status_code == 200:
                         return r.json()["choices"][0]["message"]["content"]
-            except Exception:
-                pass
+            except Exception as e:
+                witness.heartbeat('execution_judge', f'warn:{e}')
             return ""
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as pool:

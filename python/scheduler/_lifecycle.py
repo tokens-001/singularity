@@ -78,8 +78,8 @@ def auto_maintain(load_events, load_edges, save_events, save_edges,
     try:
         pruned = prune_expired(load_events, load_edges, save_events, save_edges,
                                read_json, write_json, entity_idx_path)
-    except Exception:
-        pass
+    except Exception as e:
+        witness.heartbeat('_lifecycle', f'warn:{e}')
     stats = lifecycle_stats(load_events, events_path)
     stats["pruned"] = pruned
     return stats

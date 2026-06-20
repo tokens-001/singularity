@@ -54,7 +54,7 @@ def _write_json(path: Path, data: dict | list) -> None:
     _ensure_dir()
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    os.replace(str(tmp), str(path))  # ponytail: 对齐 tracker._write, POSIX 原子 rename
 
 
 # ═══════════════════════════════════════════════════════════

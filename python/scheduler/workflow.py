@@ -269,8 +269,8 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
             raw2 = disp_result2.executor_result.raw_output if disp_result2 else ""
             if raw2:
                 arch = try_parse_json(raw2, try_repair=True)
-        except Exception:
-            pass
+        except Exception as e:
+            witness.heartbeat('workflow', f'warn:{e}')
 
     project.architecture = arch
     # 校验架构完整性 — 阻塞级错误不许过
@@ -388,8 +388,8 @@ def _run_review(project: ProjectState, agents: dict) -> str:
                 try:
                     from . import witness
                     witness.heartbeat("workflow", f"warn:trace_read:{e}"[:80])
-                except Exception:
-                    pass
+                except Exception as e:
+                    witness.heartbeat('workflow', f'warn:{e}')
     # 无改动文件 → 跳过审查, 不调LLM
     if not changed_files:
         project.issues = []

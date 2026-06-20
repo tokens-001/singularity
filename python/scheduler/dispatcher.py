@@ -315,8 +315,8 @@ def _load_skills_for_agent(level: str, model: str, task_desc: str = "") -> tuple
             with _CACHE_LOCK:
                 _SKILL_CACHE[key] = result
             return result
-    except Exception:
-        pass
+    except Exception as e:
+        witness.heartbeat('dispatcher', f'warn:{e}')
     return [], "", {}
 
 
@@ -337,8 +337,8 @@ def _load_mcp_for_agent() -> tuple[list, object]:
         with _CACHE_LOCK:
             _MCP_CACHE = result
         return result
-    except Exception:
-        pass
+    except Exception as e:
+        witness.heartbeat('dispatcher', f'warn:{e}')
     return [], None
 
 
@@ -385,8 +385,8 @@ def _make_permission_checker() -> callable:
                     from .orchestrator import _pending_sse_events as _pe
                     _pe.append({"kind": "approval", "msg": f"[{task_id[:8]}] {tool_name} 需审批",
                                  "ts": time.time(), "task_id": task_id})
-                except Exception:
-                    pass
+                except Exception as e:
+                    witness.heartbeat('dispatcher', f'warn:{e}')
             return True, ""
         return _check
     except Exception:

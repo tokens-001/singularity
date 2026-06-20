@@ -106,13 +106,18 @@ def _forcibly_remove_tree(p: "Path") -> None:
     """chmod -R u+rwx 再 rmtree, 处理 agent 产出目录权限问题 (修复 #13)。
 
     不用 os.walk 因为缺 execute 位的目录 os.scandir 进不去。
+    失败后 chmod 0700 防敏感文件残留 0777 被同机用户读取。
     """
     import shutil, subprocess as _sp
     _sp.run(["chmod", "-R", "u+rwx", str(p)], capture_output=True)
     try:
         shutil.rmtree(str(p), ignore_errors=False)
     except Exception:
-        shutil.rmtree(str(p), ignore_errors=True)
+        try:
+            shutil.rmtree(str(p), ignore_errors=True)
+        finally:
+            # ponytail: rmtree 失败后收回权限, 防 0777 残留
+            _sp.run(["chmod", "-R", "go-rwx", str(p)], capture_output=True)
 
 
 def _wt_head(wt: Worktree) -> str:

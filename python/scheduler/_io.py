@@ -171,4 +171,3 @@ def _repair_truncated_json(raw: str) -> dict | None:
         return None
 
 
-# try_parse_json_list 已移除 — 无调用方, 保留空壳。

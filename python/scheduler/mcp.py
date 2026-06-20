@@ -11,6 +11,7 @@ MCP 允许 Agent 发现和调用外部工具服务器提供的工具。
 from __future__ import annotations
 import json
 import os
+import select
 import shlex
 import subprocess
 import time
@@ -146,14 +147,14 @@ class MCPClient:
             except Exception:
                 try:
                     self._proc.kill()
-                except Exception:
-                    pass
+                except Exception as e:
+                    witness.heartbeat('mcp', f'warn:{e}')
             self._proc = None
         if self._http_client:
             try:
                 self._http_client.close()
-            except Exception:
-                pass
+            except Exception as e:
+                witness.heartbeat('mcp', f'warn:{e}')
             self._http_client = None
         self._initialized = False
 
@@ -235,10 +236,14 @@ class MCPClient:
         except BrokenPipeError:
             pass
 
-    def _recv_stdio(self) -> Optional[dict]:
+    def _recv_stdio(self, timeout: float = 30.0) -> Optional[dict]:
         if not self._proc or not self._proc.stdout:
             return None
         try:
+            # ponytail: select 防永久阻塞, 30s 超时保护
+            ready, _, _ = select.select([self._proc.stdout], [], [], timeout)
+            if not ready:
+                return None
             line = self._proc.stdout.readline()
             if not line:
                 return None
@@ -277,8 +282,8 @@ class MCPClient:
                 headers={**self.cfg.headers, "Content-Type": "application/json"},
                 timeout=10.0,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            witness.heartbeat('mcp', f'warn:{e}')
 
 
 # ── MCP 注册表 ─────────────────────────────────────────────────────
