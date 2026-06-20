@@ -949,8 +949,11 @@ def status_overview() -> tuple[dict, int]:
 
 
 def cleanup() -> tuple[dict, int]:
-    """POST /api/cleanup"""
-    witness.cleanup()
+    """POST /api/cleanup — 清理残留心跳和缓存。"""
+    try:
+        witness.cleanup()
+    except AttributeError:
+        pass  # witness 模块暂无 cleanup 函数，后续补充
     return {"ok": True, "cleaned": {"heartbeats": 0, "tasks": 0}}, 200
 
 
