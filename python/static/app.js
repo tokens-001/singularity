@@ -147,15 +147,18 @@ function fmtTime(v){ if(!v||v==='—')return'—'; const m=/^([\d.]+)s?$/.exec(S
 async function renderStatusCards(){
   const grid=document.getElementById('db-grid');
   if(!grid) return;
+  // 健康数据来自 /health（非 /api/status）
+  let health={status:'?',disk_free_mb:0,sse_clients:0,loop_running:false,projects:0};
+  try{ health=await(await fetch('/health')).json(); }catch(e){}
   const s=statusData, c=s.counts||{}, total=Object.values(c).reduce((a,b)=>a+b,0)||0;
-  const loopOn=_loop_running, ok=s.status==='ok', diskGB=Math.round((s.disk_free_mb||0)/1024);
+  const loopOn=health.loop_running, ok=health.status==='ok', diskGB=Math.round((health.disk_free_mb||0)/1024);
 
   // 1. 健康
   const healthHTML=`<div class="db-card">
     <div class="db-head"><span class="db-icon" style="color:${ok?'var(--green)':'var(--red)'}">◉</span><span class="db-title">健康</span></div>
     <div class="db-body">
       <div class="db-big" style="color:${ok?'var(--green)':'var(--red)'}">${ok?'在线':'异常'}</div>
-      <div class="db-sub">磁盘 ${diskGB} GB  ·  调度${loopOn?'运行中':'已停止'}  ·  SSE ${s.sse_clients||0} 客户端</div>
+      <div class="db-sub">磁盘 ${diskGB} GB  ·  调度${loopOn?'运行中':'已停止'}  ·  SSE ${health.sse_clients||0} 客户端</div>
     </div></div>`;
 
   // 2. 任务
