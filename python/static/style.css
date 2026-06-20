@@ -364,6 +364,8 @@ pre.agent-out {
 .db-bar-done     { background:var(--text3); }
 .db-bar-failed   { background:var(--red); }
 .db-dot { display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:5px; vertical-align:middle; flex-shrink:0; }
+.db-model { font-size:9px; color:var(--text3); margin-left:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:90px; }
+.db-icon { flex-shrink:0; width:16px; text-align:center; }
 .db-dot-green  { background:var(--green); }
 .db-dot-red    { background:var(--red); }
 .db-dot-yellow { background:var(--yellow); }

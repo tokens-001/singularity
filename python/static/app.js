@@ -147,42 +147,37 @@ function fmtTime(v){ if(!v||v==='—')return'—'; const m=/^([\d.]+)s?$/.exec(S
 async function renderStatusCards(){
   const grid=document.getElementById('db-grid');
   if(!grid) return;
+  const s=statusData, c=s.counts||{}, total=Object.values(c).reduce((a,b)=>a+b,0)||0;
+  const loopOn=_loop_running, ok=s.status==='ok', diskGB=Math.round((s.disk_free_mb||0)/1024);
 
-  const s=statusData, c=s.counts||{};
-  const total=Object.values(c).reduce((a,b)=>a+b,0)||0;
-  const loopOn=_loop_running;
-
-  // 健康
-  const diskGB=Math.round((s.disk_free_mb||0)/1024);
-  const h=`<div class="db-card">
-    <div class="db-head"><span class="db-icon">●</span><span class="db-title">健康</span></div>
+  // 1. 健康
+  const healthHTML=`<div class="db-card">
+    <div class="db-head"><span class="db-icon" style="color:${ok?'var(--green)':'var(--red)'}">◉</span><span class="db-title">健康</span></div>
     <div class="db-body">
-      <div class="db-big" style="color:${s.status==='ok'?'var(--green)':'var(--red)'}">${s.status==='ok'?'正常':'异常'}</div>
-      <div class="db-sub">磁盘 ${diskGB}GB · 调度${loopOn?'运行中':'已停'} · SSE×${s.sse_clients||0}</div>
-    </div>
-  </div>`;
+      <div class="db-big" style="color:${ok?'var(--green)':'var(--red)'}">${ok?'在线':'异常'}</div>
+      <div class="db-sub">磁盘 ${diskGB} GB  ·  调度${loopOn?'运行中':'已停止'}  ·  SSE ${s.sse_clients||0} 客户端</div>
+    </div></div>`;
 
-  // 任务 — 大数字 + 分段条
-  const pendingPct=total?Math.round(c.pending/total*100):0;
-  const runningPct=total?Math.round(c.running/total*100):0;
-  const donePct=total?Math.round(c.done/total*100):0;
-  const failedPct=total?Math.round(c.failed/total*100):0;
-  const t=`<div class="db-card">
+  // 2. 任务
+  const pendingPct=total?Math.max(Math.round(c.pending/total*100),1):0,
+        runningPct=total?Math.max(Math.round(c.running/total*100),1):0,
+        donePct=total?Math.max(Math.round(c.done/total*100),1):0,
+        failedPct=total?Math.max(Math.round(c.failed/total*100),1):0;
+  const tasksHTML=`<div class="db-card">
     <div class="db-head"><span class="db-icon">☰</span><span class="db-title">任务</span></div>
     <div class="db-body">
       <div class="db-big">${total}</div>
-      <div class="db-sub">共 ${total} 个</div>
-      <div class="db-bar-wrap">${total?`<span class="db-bar-seg db-bar-pending" style="width:${pendingPct}%"></span><span class="db-bar-seg db-bar-running" style="width:${runningPct}%"></span><span class="db-bar-seg db-bar-done" style="width:${donePct}%"></span><span class="db-bar-seg db-bar-failed" style="width:${failedPct}%"></span>`:'<span class="db-bar-seg" style="width:100%;background:var(--bg3)"></span>'}</div>
+      <div class="db-sub">共 ${total} 个任务</div>
+      ${total?`<div class="db-bar-wrap"><span class="db-bar-seg db-bar-pending" style="width:${pendingPct}%"></span><span class="db-bar-seg db-bar-running" style="width:${runningPct}%"></span><span class="db-bar-seg db-bar-done" style="width:${donePct}%"></span><span class="db-bar-seg db-bar-failed" style="width:${failedPct}%"></span></div>`:''}
       <div class="db-row"><span class="db-l"><span class="db-dot db-dot-yellow"></span>待处理</span><span class="db-v">${c.pending||0}</span></div>
       <div class="db-row"><span class="db-l"><span class="db-dot db-dot-green"></span>运行中</span><span class="db-v">${c.running||0}</span></div>
       <div class="db-row"><span class="db-l">已完成</span><span class="db-v">${c.done||0}</span></div>
       <div class="db-row"><span class="db-l"><span class="db-dot db-dot-red"></span>失败</span><span class="db-v">${c.failed||0}</span></div>
-    </div>
-  </div>`;
+    </div></div>`;
 
-  // Token
+  // 3. Token
   const tt=s.token_totals||{}, tTotal=Object.values(tt).reduce((a,b)=>a+b,0)||0;
-  const tk=`<div class="db-card">
+  const tokenHTML=`<div class="db-card">
     <div class="db-head"><span class="db-icon">◇</span><span class="db-title">Token</span></div>
     <div class="db-body">
       <div class="db-big">${fmt(tTotal)}</div>
@@ -191,64 +186,52 @@ async function renderStatusCards(){
       <div class="db-row"><span class="db-l"><span class="db-tag db-tag-e">E</span></span><span class="db-v">${fmt(tt.E||0)}</span></div>
       <div class="db-row"><span class="db-l"><span class="db-tag db-tag-ep">E+</span></span><span class="db-v">${fmt(tt['E+']||0)}</span></div>
       <div class="db-row"><span class="db-l"><span class="db-tag db-tag-d">D</span></span><span class="db-v">${fmt(tt.D||0)}</span></div>
-    </div>
-  </div>`;
+    </div></div>`;
 
-  // Agent
+  // 4. Agent
   const ag=s.agents||{}, ac={}; Object.entries(ag).forEach(([l,v])=>{ac[l]=(v||[]).length;});
   const aTotal=Object.values(ac).reduce((a,b)=>a+b,0);
-  const names={}; Object.entries(ag).forEach(([l,v])=>{names[l]=(v||[]).map(a=>a.model).join(', ');});
-  const agHTML=`<div class="db-card">
+  const tierHTML=(l,tag,cls)=>{const n=ac[l]||0,ns=(ag[l]||[]).map(a=>a.model).join(', ');return`<div class="db-row"><span class="db-l"><span class="db-tag ${cls}">${tag}</span></span><span class="db-v">${n}</span><span class="db-model">${ns||'—'}</span></div>`;};
+  const agentHTML=`<div class="db-card">
     <div class="db-head"><span class="db-icon">◎</span><span class="db-title">Agent</span></div>
     <div class="db-body">
       <div class="db-big">${aTotal}</div>
-      <div class="db-sub">${aTotal} 模型就绪</div>
+      <div class="db-sub">${aTotal} 个模型就绪</div>
       <div class="db-sep"></div>
-      <div class="db-row"><span class="db-l"><span class="db-tag db-tag-e">E</span></span><span class="db-v">${ac.E||0}</span><span style="font-size:9px;color:var(--text3);margin-left:4px;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${names.E||''}</span></div>
-      <div class="db-row"><span class="db-l"><span class="db-tag db-tag-ep">E+</span></span><span class="db-v">${ac['E+']||0}</span><span style="font-size:9px;color:var(--text3);margin-left:4px;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${names['E+']||''}</span></div>
-      <div class="db-row"><span class="db-l"><span class="db-tag db-tag-d">D</span></span><span class="db-v">${ac.D||0}</span><span style="font-size:9px;color:var(--text3);margin-left:4px;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${names.D||''}</span></div>
-    </div>
-  </div>`;
+      ${tierHTML('E','E','db-tag-e')}${tierHTML('E+','E+','db-tag-ep')}${tierHTML('D','D','db-tag-d')}
+    </div></div>`;
 
-  // 耗时
+  // 5. 耗时
   const stalled=s.stalled||[];
-  const pf=`<div class="db-card">
+  const perfHTML=`<div class="db-card">
     <div class="db-head"><span class="db-icon">⏱</span><span class="db-title">耗时</span></div>
     <div class="db-body">
       <div class="db-row"><span class="db-l">平均等待</span><span class="db-v">${fmtTime(s.avg_wait)}</span></div>
       <div class="db-row"><span class="db-l">平均完成</span><span class="db-v">${fmtTime(s.avg_done)}</span></div>
       <div class="db-sep"></div>
       <div class="db-row"><span class="db-l">卡住</span><span class="db-v" style="color:${stalled.length?'var(--red)':'var(--text2)'}">${stalled.length}</span></div>
-    </div>
-  </div>`;
+    </div></div>`;
 
-  // 项目 — 异步
-  let pj=`<div class="db-card"><div class="db-head"><span class="db-icon">▣</span><span class="db-title">项目</span></div><div class="db-body"><div class="db-big">—</div><div class="db-sub">加载中…</div></div></div>`;
-  grid.innerHTML = h + t + tk + agHTML + pf + pj;
+  // 6. 项目（异步）
+  let projHTML=`<div class="db-card"><div class="db-head"><span class="db-icon">▣</span><span class="db-title">项目</span></div><div class="db-body"><div class="db-big">—</div><div class="db-sub">加载中…</div></div></div>`;
+  grid.innerHTML=healthHTML+tasksHTML+tokenHTML+agentHTML+perfHTML+projHTML;
   try{
-    const pRes=await (await fetch('/api/projects')).json();
-    const ps=pRes.projects||[];
+    const ps=(await(await fetch('/api/projects')).json()).projects||[];
     const active=ps.filter(p=>!['done','archived'].includes(p.phase)).length;
     const done=ps.filter(p=>p.phase==='done').length;
-    pj=`<div class="db-card">
-      <div class="db-head"><span class="db-icon">▣</span><span class="db-title">项目</span></div>
-      <div class="db-body">
-        <div class="db-big">${ps.length}</div>
-        <div class="db-sub">${active} 进行中 · ${done} 已完成</div>
-        <div class="db-sep"></div>
-        <div class="db-row"><span class="db-l">活跃</span><span class="db-v">${active}</span></div>
-        <div class="db-row"><span class="db-l">完成</span><span class="db-v">${done}</span></div>
-      </div>
-    </div>`;
-    grid.innerHTML = h + t + tk + agHTML + pf + pj;
+    projHTML=`<div class="db-card"><div class="db-head"><span class="db-icon">▣</span><span class="db-title">项目</span></div><div class="db-body">
+      <div class="db-big">${ps.length}</div><div class="db-sub">${active} 进行中  ·  ${done} 已完成</div>
+      <div class="db-sep"></div>
+      <div class="db-row"><span class="db-l">活跃</span><span class="db-v">${active}</span></div>
+      <div class="db-row"><span class="db-l">完成</span><span class="db-v">${done}</span></div>
+    </div></div>`;
+    grid.innerHTML=healthHTML+tasksHTML+tokenHTML+agentHTML+perfHTML+projHTML;
   }catch(e){}
 
-  // 空状态
   const totalTasks=Object.values(c).reduce((a,b)=>a+b,0);
   const ob=document.getElementById('onboarding');
   if(ob) ob.style.display=(totalTasks===0&&!_loop_running)?'block':'none';
 
-  // filter dropdown
   const sel=document.getElementById('filter-status');
   if(sel&&sel.options.length<=1){
     [...new Set(tasks.map(t=>t.status))].sort().forEach(s=>{
