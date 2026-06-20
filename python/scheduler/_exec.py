@@ -177,24 +177,63 @@ def _build_project_context(task) -> str:
 
 _CONSTRUCT_WINDOW = 5  # Microsoft ConstructContext: 保留最近 N 对工具调用
 
-def _construct_context(all_tool_events: list, turn: int) -> str:
-    """ConstructContext 算法 (Microsoft 2026): 保留最近 N 条工具事件, 更早的压缩为一行计数。
+def _summarize_events(events: list) -> str:
+    """用 cheap-model 生成工具事件摘要 (ConstructContext C4 方案)。
 
-    论文数据: 最近5次+摘要 完成率从 71%→91.6%, token 从 1.48M→553K (省 63%)。
-    ponytail: 不做 LLM 摘要, 一行计数已足够。需要时加 cheap-model 摘要。
+    ponytail: 调 deepseek-chat 生成一行摘要。失败回退到纯计数。
+    """
+    if not events:
+        return ""
+    # 构建简短的事件列表
+    event_lines = []
+    for ev in events[:20]:  # 最多20条，够了
+        tool = ev.get("tool", ev.get("name", "?"))
+        status = ev.get("status", "?")
+        event_lines.append(f"{tool}:{status}")
+    brief = ", ".join(event_lines)
+    prompt = f"将以下工具调用历史总结为一句话（中文，不超过50字），说明做了什么操作和结果：\n{brief}"
+
+    try:
+        import os, json
+        api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+        if not api_key:
+            return f"更早 {len(events)} 条已省略"
+        import httpx
+        resp = httpx.Client(timeout=httpx.Timeout(10.0)).post(
+            "https://api.deepseek.com/v1/chat/completions",
+            json={"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}],
+                  "max_tokens": 80, "temperature": 0.1},
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        )
+        if resp.status_code == 200:
+            body = resp.json()
+            summary = body["choices"][0]["message"]["content"].strip()
+            return f"[摘要] {summary}（更早 {len(events)} 条已省略）"
+    except Exception:
+        pass
+    return f"更早 {len(events)} 条已省略"
+
+
+def _construct_context(all_tool_events: list, turn: int) -> str:
+    """ConstructContext 算法 (Microsoft 2026): 保留最近 N 条工具事件，更早的 LLM 摘要。
+
+    论文数据: 最近5次+摘要(C4) 完成率 91.6% vs 全量(C2) 71%，token 省 63%。
     """
     if not all_tool_events or turn <= 1:
         return ""
     total = len(all_tool_events)
     if total <= _CONSTRUCT_WINDOW:
         recent = all_tool_events
+        omitted = []
         old_count = 0
     else:
         recent = all_tool_events[-_CONSTRUCT_WINDOW:]
-        old_count = total - _CONSTRUCT_WINDOW
+        omitted = all_tool_events[:-_CONSTRUCT_WINDOW]
+        old_count = len(omitted)
     lines = ["[历史工具调用]"]
     if old_count > 0:
-        lines.append(f"（更早 {old_count} 条已省略，仅保留最近 {_CONSTRUCT_WINDOW} 条）")
+        summary = _summarize_events(omitted)
+        lines.append(summary)
     for ev in recent:
         tool = ev.get("tool", ev.get("name", "?"))
         status = ev.get("status", "")
