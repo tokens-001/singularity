@@ -671,8 +671,11 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
     return results
 
 
+_consolidate_calls = 0
+
 def consolidate_memory() -> int:
     """慢通道整合: embedding粗筛 + LLM精判 → 发现隐含因果边。
+    每10次调用自动触发记忆生命周期维护。
 
     三档逻辑:
       - sim ≥ 0.85 + 时间<4h + 共享文件 → 高置信，直接加边（不调LLM）
@@ -681,6 +684,20 @@ def consolidate_memory() -> int:
 
     返回添加的隐含边数。
     """
+    global _consolidate_calls
+    _consolidate_calls += 1
+
+    # 每10次运行一次记忆生命周期维护
+    if _consolidate_calls % 10 == 0:
+        try:
+            lc = mem_mod.auto_maintain()
+            if lc.get("pruned", 0) > 0:
+                _pending_sse_events.append({
+                    "kind": "memory", "msg": f"记忆清理: {lc['pruned']} 过期事件",
+                    "ts": time.time(),
+                })
+        except Exception:
+            pass
     try:
         candidates = mem_mod.find_candidate_latent_edges()
         added = 0

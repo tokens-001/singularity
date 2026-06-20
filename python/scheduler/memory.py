@@ -923,3 +923,85 @@ def rebuild_from_traces() -> int:
         count += 1
 
     return count
+
+
+# ── 记忆生命周期 (hot → warm → cold) ──────────────────────
+
+_HOT_WINDOW = 86400        # 24h: 热——全量加载
+_WARM_WINDOW = 604800      # 7d: 温——保留索引，embedding可懒加载
+_COLD_MAX = 2592000        # 30d: 冷——过期自动清理
+
+
+def _get_age_tier(timestamp: float) -> str:
+    age = time.time() - timestamp
+    if age < _HOT_WINDOW:
+        return "hot"
+    elif age < _WARM_WINDOW:
+        return "warm"
+    elif age < _COLD_MAX:
+        return "cold"
+    return "expired"
+
+
+def lifecycle_stats() -> dict:
+    """记忆生命周期统计: 热/温/冷/过期 各多少事件。"""
+    events = _load_events()
+    tiers = {"hot": 0, "warm": 0, "cold": 0, "expired": 0}
+    for tid, node in events.items():
+        tiers[_get_age_tier(node.timestamp)] += 1
+    total = len(events)
+    return {
+        "total": total,
+        **tiers,
+        "hot_window_h": _HOT_WINDOW // 3600,
+        "warm_window_d": _WARM_WINDOW // 86400,
+        "cold_max_d": _COLD_MAX // 86400,
+        "disk_bytes": _EVENTS_PATH.stat().st_size if _EVENTS_PATH.exists() else 0,
+    }
+
+
+def prune_expired() -> int:
+    """清理过期 (>30天) 的事件和关联边。返回清理数。"""
+    events = _load_events()
+    edges = _load_edges()
+    now = time.time()
+    expired_ids = {tid for tid, node in events.items()
+                   if now - node.timestamp > _COLD_MAX}
+
+    if not expired_ids:
+        return 0
+
+    # 移除过期事件
+    for tid in list(events.keys()):
+        if tid in expired_ids:
+            del events[tid]
+
+    # 移除过期事件的边
+    for edge_type in list(edges.keys()):
+        edges[edge_type] = [(s, d, src) for s, d, src in edges[edge_type]
+                           if s not in expired_ids and d not in expired_ids]
+
+    _save_events(events)
+    _save_edges(edges)
+
+    # 清理 entity index
+    entity_idx = _read_json(_ENTITY_IDX_PATH) or {}
+    for fp in list(entity_idx.keys()):
+        entity_idx[fp] = [tid for tid in entity_idx[fp] if tid not in expired_ids]
+        if not entity_idx[fp]:
+            del entity_idx[fp]
+    _write_json(_ENTITY_IDX_PATH, entity_idx)
+
+    return len(expired_ids)
+
+
+def auto_maintain() -> dict:
+    """自动维护: 每小时调一次，清理过期事件 + 统计。"""
+    pruned = 0
+    try:
+        pruned = prune_expired()
+    except Exception:
+        pass
+    stats = lifecycle_stats()
+    stats["pruned"] = pruned
+    return stats
