@@ -267,6 +267,30 @@
     </div>
   </div>
 
+
+  <div class="section" style="margin-bottom:8px">
+    <div class="section-title">权限管理 <button class="btn cyan sm" style="margin-left:8px" onclick="renderPermissions()">刷新</button></div>
+    <div class="section-body" style="font-size:10px">
+      <div style="display:flex;gap:8px">
+        <div style="flex:1">
+          <h4 style="font-size:10px;margin:0 0 4px 0;color:var(--fg2)">Profiles</h4>
+          <div id="perm-profiles-body" style="max-height:120px;overflow-y:auto;font-family:var(--mono);font-size:9px">
+            <span style="color:var(--text2)">加载中...</span>
+          </div>
+        </div>
+        <div style="flex:1.5">
+          <h4 style="font-size:10px;margin:0 0 4px 0;color:var(--fg2)">Agent 绑定</h4>
+          <div style="display:flex;gap:4px;margin-bottom:4px">
+            <select id="perm-level" style="font-size:9px;padding:2px"><option value="E">E</option><option value="E+">E+</option><option value="D">D</option></select>
+            <select id="perm-model" style="font-size:9px;padding:2px;flex:1" onchange="showPermBinding()"></select>
+            <select id="perm-profile-select" style="font-size:9px;padding:2px;flex:1"></select>
+            <button class="btn cyan sm" onclick="bindPerm()">绑定</button>
+          </div>
+          <div id="perm-binding-info" style="font-size:9px;color:var(--text2)"></div>
+        </div>
+      </div>
+    </div>
+  </div>
   <div class="section" style="margin-bottom:8px">
     <div class="section-title">项目编组 <button class="btn cyan sm" style="margin-left:8px" onclick="populateLineupProjects()">刷新</button></div>
     <div class="section-body" style="font-size:10px">

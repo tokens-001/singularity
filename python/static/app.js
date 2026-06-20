@@ -79,7 +79,7 @@ document.getElementById('tab-bar').addEventListener('click',e=>{
   document.getElementById('tab-'+activeTab).classList.add('active');
   if(activeTab==='tasks'){ renderTasks(); populateDecisionsPicker(); if(_cachedDcTaskId){ document.getElementById('dc-task-picker').value = _cachedDcTaskId; loadDecisions(); } }
   if(activeTab==='project') loadProjects();
-  if(activeTab==='config'){ renderAPIStore(); renderModels(); renderLayerSwitch(); renderIntervention(); renderSkills(); }
+  if(activeTab==='config'){ renderAPIStore(); renderModels(); renderLayerSwitch(); renderIntervention(); renderSkills(); renderPermissions(); }
 });
 
 // ═══════════════════════════════════════════════════════
@@ -1589,6 +1589,62 @@ async function deleteSkill(name){
     await fetch('/api/skills/'+encodeURIComponent(name), {method:'DELETE'});
     renderSkills();
   }catch(e){ toast('删除失败: '+e, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════
+// Permission 面板
+// ═══════════════════════════════════════════════════════
+async function renderPermissions(){
+  try{
+    const r = await fetch('/api/permissions/profiles');
+    const d = await r.json();
+    const profiles = d.profiles || [];
+    const bindings = d.bindings || {};
+    // Profiles list
+    const pb = document.getElementById('perm-profiles-body');
+    if(pb) pb.innerHTML = profiles.map(p =>
+      `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid var(--grid)">
+        <span>${p.builtin?'🔒 ':''}${esc(p.name)} <span style="color:var(--text3)">${esc(p.description)}</span></span>
+        <span style="color:var(--text2)">${p.allowed_tools_count?p.allowed_tools_count+'工具':'全部'}</span>
+      </div>`
+    ).join('');
+    // Profile select
+    const ps = document.getElementById('perm-profile-select');
+    if(ps) ps.innerHTML = profiles.map(p => `<option value="${p.name}">${p.name}${p.builtin?' (内置)':''}</option>`).join('');
+    // Model select
+    const ms = document.getElementById('perm-model');
+    if(ms){
+      const ag = await fetch('/api/agents').then(r=>r.json()).catch(()=>({}));
+      const lv = document.getElementById('perm-level')?.value || 'E';
+      const models = (ag[lv]||[]).map(a=>a.model).filter(Boolean);
+      ms.innerHTML = models.map(m=>`<option value="${m}">${m}</option>`).join('');
+      if(models.length) showPermBinding();
+    }
+    // Store bindings
+    window._permBindings = bindings;
+  }catch(e){}
+}
+
+async function showPermBinding(){
+  const lv = document.getElementById('perm-level')?.value || 'E';
+  const m = document.getElementById('perm-model')?.value || '';
+  const info = document.getElementById('perm-binding-info');
+  if(!info || !m) return;
+  const key = `${lv}/${m}`;
+  const profile = (window._permBindings||{})[key] || 'full-access';
+  info.textContent = `${key} → ${profile}`;
+}
+
+async function bindPerm(){
+  const lv = document.getElementById('perm-level')?.value || 'E';
+  const m = document.getElementById('perm-model')?.value;
+  const p = document.getElementById('perm-profile-select')?.value;
+  if(!m||!p) return;
+  try{
+    await fetch('/api/permissions/bindings', {method:'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({level:lv, model:m, profile:p})});
+    renderPermissions();
+  }catch(e){ toast('绑定失败: '+e, 'error'); }
 }
 
 // ═══════════════════════════════════════════════════════
