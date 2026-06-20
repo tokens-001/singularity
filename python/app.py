@@ -85,6 +85,22 @@ def _guard_task_id():
             return jsonify({"error": "非法的 task_id 格式"}), 400
 
 
+_PROJECT_ID_RE = _re_valid.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+def _validate_project_id(project_id: str) -> bool:
+    """校验 project_id 格式，防止路径穿越。"""
+    return bool(_PROJECT_ID_RE.match(project_id))
+
+
+@app.before_request
+def _guard_project_id():
+    """安全加固：校验 URL 中 project_id 参数格式（防止路径穿越）。"""
+    if request.view_args:
+        pid = request.view_args.get("project_id", "")
+        if pid and not _validate_project_id(pid):
+            return jsonify({"error": "非法的 project_id 格式"}), 400
+
+
 # 可选认证: QIDIAN_AUTH=1 时启用
 _AUTH_ENABLED = os.environ.get("QIDIAN_AUTH") == "1"
 if _AUTH_ENABLED:
@@ -157,6 +173,7 @@ _RATE_LIMIT_READ = 60   # GET 每窗口最大请求数
 _RATE_LIMIT_WRITE = 30  # POST/PUT/DELETE 每窗口最大请求数
 _RATE_BUCKETS: dict[str, list[float]] = {}  # ip → [timestamps]
 _MAX_BUCKETS = 10000  # 防止内存无限增长
+_RATE_LOCK = threading.Lock()  # 保护 _RATE_BUCKETS 的并发读写
 
 
 def _cleanup_rate_buckets():
@@ -190,32 +207,36 @@ def _guard_rate_limit():
 
     now = time.time()
 
-    if ip not in _RATE_BUCKETS:
-        _RATE_BUCKETS[ip] = []
+    with _RATE_LOCK:
+        if ip not in _RATE_BUCKETS:
+            _RATE_BUCKETS[ip] = []
 
-    # 清理窗口外旧记录
-    window_start = now - _RATE_WINDOW
-    _RATE_BUCKETS[ip] = [t for t in _RATE_BUCKETS[ip] if t > window_start]
+        # 清理窗口外旧记录
+        window_start = now - _RATE_WINDOW
+        _RATE_BUCKETS[ip] = [t for t in _RATE_BUCKETS[ip] if t > window_start]
 
-    # 选择限制阈值
-    if request.method in ("POST", "PUT", "DELETE", "PATCH"):
-        limit = _RATE_LIMIT_WRITE
-    else:
-        limit = _RATE_LIMIT_READ
+        # 选择限制阈值
+        if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+            limit = _RATE_LIMIT_WRITE
+        else:
+            limit = _RATE_LIMIT_READ
 
-    if len(_RATE_BUCKETS[ip]) >= limit:
-        return jsonify({
-            "error": "请求过于频繁",
-            "retry_after": _RATE_WINDOW,
-            "limit": limit,
-            "window": f"{_RATE_WINDOW}s",
-        }), 429
+        if len(_RATE_BUCKETS[ip]) >= limit:
+            return jsonify({
+                "error": "请求过于频繁",
+                "retry_after": _RATE_WINDOW,
+                "limit": limit,
+                "window": f"{_RATE_WINDOW}s",
+            }), 429
 
-    _RATE_BUCKETS[ip].append(now)
+        _RATE_BUCKETS[ip].append(now)
 
-    # 定期清理（每 100 请求触发一次）
-    if sum(len(v) for v in _RATE_BUCKETS.values()) % 100 == 0:
-        _cleanup_rate_buckets()
+        # 定期清理（每 100 请求触发一次）
+        trigger_cleanup = sum(len(v) for v in _RATE_BUCKETS.values()) % 100 == 0
+
+    if trigger_cleanup:
+        with _RATE_LOCK:
+            _cleanup_rate_buckets()
 
     return None
 
@@ -428,9 +449,23 @@ def add_cors_headers(response):
         response.headers["Access-Control-Allow-Origin"] = "http://localhost:5050"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    # Rate limit headers
+    # 安全响应头
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    # CSP: 仅允许本站资源 (localhost 工具)
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "connect-src 'self' http://127.0.0.1:* http://localhost:*; "
+        "img-src 'self' data:; "
+        "font-src 'self'"
+    )
+    # Rate limit headers (读 _RATE_BUCKETS 加锁防并发竞态)
     ip = request.remote_addr or "127.0.0.1"
-    bucket = _RATE_BUCKETS.get(ip, [])
+    with _RATE_LOCK:
+        bucket = list(_RATE_BUCKETS.get(ip, []))
     now = time.time()
     active = len([t for t in bucket if now - t < _RATE_WINDOW])
     limit = _RATE_LIMIT_WRITE if request.method in ("POST", "PUT", "DELETE", "PATCH") else _RATE_LIMIT_READ
@@ -650,9 +685,12 @@ def api_resolve_conflict(task_id):
 def api_memory_query():
     q = request.args.get("q", "").strip()
     files_str = request.args.get("files", "")
-    beam = int(request.args.get("beam", 3))
-    hops = int(request.args.get("hops", 3))
-    depth = int(request.args.get("depth", 1))
+    try:
+        beam = int(request.args.get("beam", 3))
+        hops = int(request.args.get("hops", 3))
+        depth = int(request.args.get("depth", 1))
+    except (ValueError, TypeError):
+        return jsonify({"error": "beam/hops/depth 必须为整数"}), 400
     data, code = _api_handler.memory_query(q, files_str, beam, hops, depth)
     return jsonify(data), code
 
