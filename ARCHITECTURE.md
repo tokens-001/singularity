@@ -1,6 +1,6 @@
 # 奇点调度平台 — 全量审计 + 架构文档
 
-> 2026-06-20，23 commits，43 文件，+2815/-1167 行，88/88 测试绿。
+> 2026-06-20，30 commits，43 文件，88 测试绿 (smoke 38 + exec 22 + unit 24 = 84)。
 > 基于 Opus 审计报告 + 全量 48 文件扫描 + 两轮修复 + P0-P2+D1+F1+F2 全落地+前端Fusion面板。
 
 ---
@@ -36,7 +36,7 @@
 | 问题 | 位置 | 修复 |
 |------|------|------|
 | tracker 双线程写 lost-update | tracker.py | `_LOCK(RLock)` 封 read-modify-write |
-| worktree.py 放错包，7处分层违规 | executors/→scheduler/ | 上移为 `_git_worktree.py` |
+| worktree 分层违规 | executors/→scheduler/ | 拆为 `_worktree.py`(生命周期) + `_git_worktree.py`(git操作) |
 | 安全响应头缺失 | app.py | CSP+X-Content-Type+X-Frame+Referrer |
 | _RATE_BUCKETS 无线程锁 | app.py | `_RATE_LOCK` 保护读写 |
 | _embed 在 SKIP_EMBED 下崩溃 | memory.py | None 守卫 |
