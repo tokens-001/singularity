@@ -394,10 +394,12 @@ function renderTasks(){
     const lvl=t.route_level||'';
     const lvls=lvl==='E'?'level-e':lvl==='D'?'level-d':lvl==='E+'?'level-ep':'';
     const heldMark=t.held?' ◈':'';
-    return `<tr data-action="toggle-detail" data-task-id="${t.id}" id="row-${t.id}">
+    const dotColor={'pending':'var(--yellow)','routed':'var(--text2)','dispatched':'var(--accent)','running':'var(--accent)','validating':'var(--purple)','done':'var(--green)','failed':'var(--red)','rolled_back':'var(--red)','decomposed':'var(--yellow)','blocked':'var(--purple)','conflict_held':'var(--purple)'};
+    const dc=dotColor[t.status]||'var(--text3)';
+    return `<tr data-action="toggle-detail" data-task-id="${t.id}" id="row-${t.id}" style="border-left:3px solid ${dc}">
       <td style="font-family:'SF Mono',monospace;font-size:10px;color:var(--text2)">${idShort}${heldMark}</td>
       <td>${esc(desc)}</td>
-      <td><span class="badge ${t.status}">${status}</span></td>
+      <td><span class="badge ${t.status}" style="display:inline-flex;align-items:center;gap:4px"><span style="width:6px;height:6px;border-radius:50%;flex-shrink:0;background:${dc}"></span>${status}</span></td>
       <td>${lvl?`<span class="level-tag ${lvls}">${lvl}</span>`:'--'}</td>
       <td style="font-size:11px;color:var(--text2)">${t.priority||0}</td>
       <td>${['pending','routed'].includes(t.status)?`<button class="btn red sm" style="font-size:8px;padding:1px 4px" data-action="cancel" data-task-id="${t.id}">取消</button>`:""}${["pending","routed","failed","rolled_back","done","decomposed"].includes(t.status)?`<button class="btn orange sm" style="font-size:8px;padding:1px 4px;margin-left:2px" data-action="delete" data-task-id="${t.id}">删除</button>`:''}</td>
