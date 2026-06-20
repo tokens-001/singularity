@@ -941,11 +941,13 @@ async function refreshMCPTools(){
 const FUSION_MODEL_LABELS = {
   'deepseek-chat': 'DeepSeek Chat', 'glm-5-turbo': 'GLM-5 Turbo',
   'kimi-k2.7-code': 'Kimi K2.7', 'deepseek-v4-pro': 'DeepSeek V4 Pro',
+  'claude-opus-4-8': 'Claude Opus 4.8', 'gpt-5.5': 'GPT-5.5',
+  'gpt-5.5-pro': 'GPT-5.5 Pro', 'glm-5.2': 'GLM-5.2',
 };
 const FUSION_DEFAULTS = {
   dual:   {models:['deepseek-chat','glm-5-turbo'], judge:'deepseek-chat', call:'deepseek-chat'},
   triple: {models:['deepseek-chat','glm-5-turbo','kimi-k2.7-code'], judge:'deepseek-chat', call:'deepseek-chat'},
-  super:  {models:['deepseek-v4-pro','kimi-k2.7-code','glm-5-turbo'], judge:'deepseek-v4-pro', call:'deepseek-v4-pro'},
+  super:  {models:['claude-opus-4-8','gpt-5.5','deepseek-v4-pro'], judge:'claude-opus-4-8', call:'claude-opus-4-8'},
 };
 let _fusionConfig = {};  // {dual:{}, triple:{}, super:{}}
 
@@ -962,11 +964,13 @@ async function loadFusionConfig() {
 }
 
 async function buildFusionCheckboxes() {
-  let availModels = ['deepseek-chat','glm-5-turbo','kimi-k2.7-code','deepseek-v4-pro'];
+  let availModels = ['deepseek-chat','glm-5-turbo','kimi-k2.7-code','deepseek-v4-pro',
+                      'claude-opus-4-8','gpt-5.5','gpt-5.5-pro','glm-5.2'];
   try {
     const r = await fetch('/api/models');
     const d = await r.json();
-    if (d.models) availModels = d.models.map(m => m.id || m.model);
+    // API 返回 {model_id: {display,...}} 格式
+    if (d && typeof d === 'object') availModels = Object.keys(d);
   } catch(e) {}
   // 存储全局
   window._fusionAvailModels = availModels;

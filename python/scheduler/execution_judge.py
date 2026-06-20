@@ -380,9 +380,13 @@ def _call_single_model(prompt: str, model: str) -> str:
     import os
     api_map = {
         "deepseek-chat": ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/chat/completions"),
-        "glm-5-turbo": ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4/chat/completions"),
-        "kimi-k2.7-code": ("KIMI_API_KEY", "https://api.moonshot.cn/v1/chat/completions"),
         "deepseek-v4-pro": ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/chat/completions"),
+        "glm-5-turbo": ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4/chat/completions"),
+        "glm-5.2": ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4/chat/completions"),
+        "kimi-k2.7-code": ("KIMI_API_KEY", "https://api.moonshot.cn/v1/chat/completions"),
+        "gpt-5.5": ("OPENAI_API_KEY", "https://api.openai.com/v1/chat/completions"),
+        "gpt-5.5-pro": ("OPENAI_API_KEY", "https://api.openai.com/v1/chat/completions"),
+        "claude-opus-4-8": ("ANTHROPIC_API_KEY", "https://api.anthropic.com/v1/messages"),
     }
     env_var, base_url = api_map.get(model, ("", ""))
     api_key = os.environ.get(env_var, "")

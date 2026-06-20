@@ -26,11 +26,12 @@ temperature = 0.7
 timeout_sec = 60
 
 [super]
-# 超级协作: N模型 × 多视角 × 对抗验证 × 迭代熔合
-models = ["deepseek-v4-pro", "kimi-k2.7-code", "glm-5-turbo"]
+# 超级协作: 顶级模型 × 多视角 × 对抗验证 × 迭代熔合
+# Claude Opus 4.8 + GPT-5.5 + DeepSeek V4 Pro 三顶级并行
+models = ["claude-opus-4-8", "gpt-5.5", "deepseek-v4-pro"]
 roles = ["builder", "skeptic", "analyst"]
-judge_model = "deepseek-v4-pro"
-call_model = "deepseek-v4-pro"
+judge_model = "claude-opus-4-8"
+call_model = "claude-opus-4-8"
 perspectives = ["architecture", "security", "performance", "maintainability"]
 red_team_count = 2
 max_iterations = 3
