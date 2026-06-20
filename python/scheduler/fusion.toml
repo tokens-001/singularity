@@ -1,25 +1,25 @@
 [dual]
-models = ["deepseek-chat", "glm-5-turbo"]
+models = ["qwen3-coder-next", "kimi-k2.7-code-highspeed"]
 roles = ["builder", "skeptic"]
-judge_model = "deepseek-chat"
-call_model = "deepseek-chat"
+judge_model = "qwen3-coder-next"
+call_model = "qwen3-coder-next"
 max_tokens = 2000
 temperature = 0.7
 timeout_sec = 60
 
 [triple]
-models = ["deepseek-chat", "glm-5-turbo", "claude-opus-4-8"]
+models = ["qwen3-coder-plus", "kimi-k2.6", "gpt-5.5"]
 roles = ["builder", "skeptic", "analyst"]
-judge_model = "gpt-5.5"
-call_model = "claude-opus-4-8"
+judge_model = "qwen3-coder-plus"
+call_model = "kimi-k2.6"
 max_tokens = 2000
 temperature = 0.7
 timeout_sec = 60
 
 [super]
-models = ["claude-opus-4-8", "gpt-5.5", "deepseek-v4-pro"]
+models = ["qwen3.7-max", "claude-opus-4-8", "gpt-5.5-pro"]
 roles = ["builder", "skeptic", "analyst"]
-judge_model = "claude-opus-4-8"
+judge_model = "gpt-5.5-pro"
 call_model = "claude-opus-4-8"
 max_tokens = 4000
 temperature = 0.7

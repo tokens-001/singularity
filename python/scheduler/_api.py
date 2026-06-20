@@ -295,16 +295,21 @@ def auth_remove_user(user_id: str) -> tuple[dict, int]:
 # ═══════════════════════════════════════════════════════════════
 
 def model_list() -> tuple[dict, int]:
-    """GET /api/models"""
+    """GET /api/models — 同步 agents_custom._disabled 的层级禁用状态。"""
     from . import model_registry
     from . import api_store
+    from . import dispatcher
     models = model_registry.load_models()
+    # 收集各层禁用的模型
+    custom = dispatcher._load_custom_agents()
+    disabled_by_tier = custom.get("_disabled", {})
     return {mid: {
         "id": m.id, "provider": m.provider, "display": m.display,
         "tiers": m.tiers, "speed": m.speed, "cost": m.cost,
         "reasoning": m.reasoning, "max_turns": m.max_turns,
         "strengths": m.strengths, "notes": m.notes,
         "api_available": api_store.is_available(m.provider),
+        "disabled_in": [t for t in m.tiers if mid in disabled_by_tier.get(t, [])],
     } for mid, m in models.items()}, 200
 
 

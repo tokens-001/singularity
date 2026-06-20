@@ -267,7 +267,7 @@ async function renderModels(){
     }
     const costMark = {budget:'_',standard:'=',premium:'≡'};
     // 按 provider 分组
-    const providerNames = {deepseek:'DeepSeek',zhipu:'智谱 GLM',kimi:'Moonshot Kimi',openai:'OpenAI',anthropic:'Anthropic'};
+    const providerNames = {deepseek:'DeepSeek',zhipu:'智谱 GLM',kimi:'Moonshot Kimi',openai:'OpenAI',anthropic:'Anthropic',qwen:'阿里云 千问'};
     const groups = {};
     for (const m of models) {
       m._isDefault = defaults[m.id] || {};
@@ -314,7 +314,7 @@ async function renderModels(){
       return html;
     }
     let html = '';
-    const order = ['deepseek','zhipu','kimi','openai','anthropic','other'];
+    const order = ['deepseek','zhipu','kimi','qwen','openai','anthropic','other'];
     for (const p of order) {
       if (!groups[p] || !groups[p].length) continue;
       html += '<div style="margin-bottom:8px">';
@@ -943,11 +943,16 @@ const FUSION_MODEL_LABELS = {
   'kimi-k2.7-code': 'Kimi K2.7', 'deepseek-v4-pro': 'DeepSeek V4 Pro',
   'claude-opus-4-8': 'Claude Opus 4.8', 'gpt-5.5': 'GPT-5.5',
   'gpt-5.5-pro': 'GPT-5.5 Pro', 'glm-5.2': 'GLM-5.2',
+  'kimi-k2.5': 'Kimi K2.5', 'kimi-k2.6': 'Kimi K2.6',
+  'kimi-k2.7-code-highspeed': 'Kimi K2.7 HS',
+  'qwen3.7-max': 'Qwen3.7 Max', 'qwen3.7-plus': 'Qwen3.7 Plus',
+  'qwen3-coder-plus': 'Qwen3 Coder+', 'qwen3-coder-next': 'Qwen3 Coder Next',
+  'qwen3-flash': 'Qwen3 Flash',
 };
 const FUSION_DEFAULTS = {
-  dual:   {models:['deepseek-chat','glm-5-turbo'], judge:'deepseek-chat', call:'deepseek-chat'},
-  triple: {models:['deepseek-chat','glm-5-turbo','kimi-k2.7-code'], judge:'deepseek-chat', call:'deepseek-chat'},
-  super:  {models:['claude-opus-4-8','gpt-5.5','deepseek-v4-pro'], judge:'claude-opus-4-8', call:'claude-opus-4-8'},
+  dual:   {models:[], judge:'', call:''},
+  triple: {models:[], judge:'', call:''},
+  super:  {models:[], judge:'', call:''},
 };
 let _fusionConfig = {};  // {dual:{}, triple:{}, super:{}}
 
@@ -964,15 +969,17 @@ async function loadFusionConfig() {
 }
 
 async function buildFusionCheckboxes() {
-  let availModels = ['deepseek-chat','glm-5-turbo','kimi-k2.7-code','deepseek-v4-pro',
-                      'claude-opus-4-8','gpt-5.5','gpt-5.5-pro','glm-5.2'];
+  // ponytail: Fusion 只跑 D 层，只列 D 层可用模型（排除 disabled_in 含 D 的）
+  let availModels = [];
   try {
     const r = await fetch('/api/models');
     const d = await r.json();
-    // API 返回 {model_id: {display,...}} 格式
-    if (d && typeof d === 'object') availModels = Object.keys(d);
+    if (d && typeof d === 'object') {
+      availModels = Object.entries(d)
+        .filter(([_,m]) => (m.tiers||[]).includes('D') && !(m.disabled_in||[]).includes('D'))
+        .map(([id,_]) => id);
+    }
   } catch(e) {}
-  // 存储全局
   window._fusionAvailModels = availModels;
 
   const tier = document.getElementById('fusion-tier').value;
@@ -992,8 +999,9 @@ async function buildFusionCheckboxes() {
     const sel = document.getElementById(id); if(!sel) return;
     sel.innerHTML = availModels.map(m => `<option value="${m}">${FUSION_MODEL_LABELS[m]||m}</option>`).join('');
   });
-  document.getElementById('fusion-judge').value = cfg.judge_model || 'deepseek-chat';
-  document.getElementById('fusion-call').value = cfg.call_model || 'deepseek-chat';
+  const fallbackModel = availModels[0] || '';
+  document.getElementById('fusion-judge').value = cfg.judge_model || fallbackModel;
+  document.getElementById('fusion-call').value = cfg.call_model || fallbackModel;
 }
 
 function onFusionModelChange() {

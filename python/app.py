@@ -1265,7 +1265,7 @@ if __name__ == "__main__":
     # ── 启动自检 ──
     print("奇点调度面板 → http://127.0.0.1:5050")
     try:
-        from .scheduler import model_registry, api_store
+        from scheduler import model_registry, api_store
         models = model_registry.load_models()
         available = sum(1 for m in models.values() if api_store.is_available(m.provider))
         print(f"[startup] 模型: {len(models)} 注册, {available} 可用")
