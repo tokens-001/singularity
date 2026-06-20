@@ -6,18 +6,70 @@
 
 你是 Opus 4.8，执行奇点后端架构审计 Phase 2。
 
-## 工作目录
+## 工作目录 & 文件清单
 
-所有文件在 `/Users/jingzhe/奇点/`，代码在 `python/scheduler/`。
+根目录：`/Users/jingzhe/奇点/`
 
-你先读以下文件再开始：
-1. `PHASE2_OPUS.md` — 任务书（含 GPT 两轮 34 项审计报告 + 5 项任务指令 + 输出模板）
-2. `python/scheduler/AUDIT_SPEC.md` — 审计规则（7 维 31 项）
-3. `python/scheduler/ARCHITECTURE.md` — 架构约束 + 分层图
-4. `python/scheduler/` 下全部 .py 文件（按需读）
-5. `python/scheduler/executors/` 下全部 .py 文件（按需读）
-6. `python/skills/` 下全部 .py 文件（按需读）
-7. `python/app.py`
+### 先读（5 个文档）
+- `PHASE2_OPUS.md` — 任务书（含 GPT 两轮 34 项审计报告 + 5 项任务指令 + 输出模板）
+- `python/scheduler/AUDIT_SPEC.md` — 审计规则（7 维 31 项）
+- `python/scheduler/ARCHITECTURE.md` — 架构约束 + 分层图
+- `python/scheduler/personas.toml` — 角色数据
+- `python/scheduler/roles.toml` — 职能数据
+
+### 核心深审（6 个，逐函数读）
+- `python/app.py`
+- `python/scheduler/orchestrator.py`
+- `python/scheduler/_exec.py`
+- `python/scheduler/tracker.py`
+- `python/scheduler/dispatcher.py`
+- `python/scheduler/executors/openai_agent.py`
+- `python/scheduler/memory.py`
+
+### 补充扫描（42 个，按需读）
+- `python/scheduler/_api.py`
+- `python/scheduler/_auth.py`
+- `python/scheduler/_cache.py`
+- `python/scheduler/_lifecycle.py`
+- `python/scheduler/_planner.py`
+- `python/scheduler/_profiler.py`
+- `python/scheduler/_token_budget.py`
+- `python/scheduler/_types.py`
+- `python/scheduler/_worktree.py`
+- `python/scheduler/api_store.py`
+- `python/scheduler/chancellor.py`
+- `python/scheduler/codegraph.py`
+- `python/scheduler/conductor.py`
+- `python/scheduler/config.py`
+- `python/scheduler/execution_judge.py`
+- `python/scheduler/goal_loop.py`
+- `python/scheduler/handoff.py`
+- `python/scheduler/judge_monitor.py`
+- `python/scheduler/log.py`
+- `python/scheduler/__main__.py`
+- `python/scheduler/mcp.py`
+- `python/scheduler/merge.py`
+- `python/scheduler/model_profile.py`
+- `python/scheduler/model_registry.py`
+- `python/scheduler/neijinglu.py`
+- `python/scheduler/permission.py`
+- `python/scheduler/pre_search.py`
+- `python/scheduler/project.py`
+- `python/scheduler/roles.py`
+- `python/scheduler/router.py`
+- `python/scheduler/snapshot.py`
+- `python/scheduler/supervisor.py`
+- `python/scheduler/task_templates.py`
+- `python/scheduler/validator.py`
+- `python/scheduler/witness.py`
+- `python/scheduler/workflow.py`
+- `python/scheduler/executors/__init__.py`
+- `python/scheduler/executors/base.py`
+- `python/scheduler/executors/claude_cli.py`
+- `python/scheduler/executors/worktree.py`
+- `python/scheduler/executors/zhipu_api.py`
+- `python/skills/__init__.py`
+- `python/skills/skill_loader.py`
 
 **不要等我传文件，自己读。**
 
