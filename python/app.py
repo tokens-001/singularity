@@ -1244,7 +1244,37 @@ def api_mcp_refresh():
 # ═══════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    print("奇点调度面板已启动 → http://127.0.0.1:5050")
+    import signal as _signal
+
+    def _graceful_shutdown(signum, frame):
+        print("\n[shutdown] 收到信号, 优雅关闭中...")
+        orchestrator.stop_loop()
+        import scheduler.mcp as _mcp
+        try:
+            reg = _mcp.get_registry()
+            for name in list(reg._clients.keys()):
+                reg._clients[name].disconnect()
+        except Exception:
+            pass
+        print("[shutdown] 完成")
+        sys.exit(0)
+
+    _signal.signal(_signal.SIGTERM, _graceful_shutdown)
+    _signal.signal(_signal.SIGINT, _graceful_shutdown)
+
+    # ── 启动自检 ──
+    print("奇点调度面板 → http://127.0.0.1:5050")
+    try:
+        from .scheduler import model_registry, api_store
+        models = model_registry.load_models()
+        available = sum(1 for m in models.values() if api_store.is_available(m.provider))
+        print(f"[startup] 模型: {len(models)} 注册, {available} 可用")
+    except Exception as e:
+        print(f"[startup] 模型检查失败: {e}")
+    try:
+        _ = tracker.ready_tasks()  # 预热缓存
+    except Exception:
+        pass
     # ── 初始化 MCP 连接 ──
     try:
         mcp_configs = mcp_mod.load_mcp_configs()

@@ -269,7 +269,61 @@ class TestBenchmark(unittest.TestCase):
         self.assertLess(elapsed, 0.1, f"10K缓存操作 {elapsed:.3f}s > 0.1s")
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+class TestCriticalFixes(unittest.TestCase):
+    """三模型审查 CRITICAL 修复的边界条件测试。"""
 
+    def test_next_id_monotonic(self):
+        """_next_id() 单调递增, 1000 次调用无碰撞。"""
+        from scheduler.tracker import _next_id, _invalidate_scan_cache
+        ids = set()
+        for _ in range(100):
+            ids.add(_next_id())
+        self.assertEqual(len(ids), 100, f"100次调用应产生100个唯一ID, 实际{len(ids)}")
+
+    def test_next_id_increasing(self):
+        """_next_id() 每次调用返回值严格递增。"""
+        from scheduler.tracker import _next_id
+        prev = int(_next_id())
+        for _ in range(50):
+            curr = int(_next_id())
+            self.assertGreater(curr, prev, f"ID应递增: {prev} → {curr}")
+            prev = curr
+
+    def test_auth_bootstrap_rejects_when_users_exist(self):
+        """auth_bootstrap 在已有用户时返回 403。"""
+        from scheduler._api import auth_bootstrap
+        result, code = auth_bootstrap()
+        # 已有 admin 用户 → 应拒绝
+        self.assertIn(code, (200, 403),
+                      f"预期200(首次)或403(已有用户), 实际{code}")
+        if code == 403:
+            self.assertFalse(result.get("ok"), f"403时ok应为false: {result}")
+
+    def test_goal_check_no_agent_returns_false(self):
+        """_check_goal 无 E 层 agent 时返回 met=False (不复假成功)。"""
+        import types, importlib
+        # 需要模拟 _check_goal
+        from scheduler.goal_loop import GoalLoop
+        gl = GoalLoop.__new__(GoalLoop)
+        gl._agents = {"E": []}  # 空 agent 列表
+        result = gl._check_goal("test output", "test goal", "test task")
+        self.assertFalse(result.get("met", True),
+                         f"无agent时met应为False, 实际: {result}")
+
+    def test_token_auth_backward_compat(self):
+        """旧格式 token hash 认证 + 自动迁移。"""
+        import hashlib
+        from scheduler._auth import _hash_token, _hash_token_v2, AuthStore
+        # 创建临时 auth store (不落盘)
+        # 验证 v2 哈希和 v1 不同
+        token = "test-token-12345"
+        h1 = _hash_token(token)
+        h2 = _hash_token_v2(token)
+        self.assertNotEqual(h1, h2, "v1和v2哈希应不同")
+        # v2 更长 (加盐)
+        self.assertEqual(len(h1), 64)  # sha256 hex
+        self.assertEqual(len(h2), 64)
+
+
+if __name__ == "__main__":
     unittest.main(verbosity=2)

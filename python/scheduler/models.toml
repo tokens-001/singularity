@@ -133,3 +133,63 @@ reasoning = false
 max_turns = 5
 strengths = ["架构设计", "编码", "审查", "复杂推理"]
 notes = "D 层最强。需要 OPENAI_API_KEY + 代理。价格昂贵，谨慎使用。"
+
+[[models]]
+id = "qwen3.7-max"
+provider = "qwen"
+display = "Qwen3.7 Max"
+tiers = ["D", "E+"]
+speed = "medium"
+cost = "premium"
+reasoning = false
+max_turns = 5
+strengths = ["推理", "编码", "长上下文", "架构设计"]
+notes = "Qwen 顶级旗舰。1M 上下文。DashScope API (OpenAI 兼容)。性价比远超 Claude/GPT。"
+
+[[models]]
+id = "qwen3.7-plus"
+provider = "qwen"
+display = "Qwen3.7 Plus"
+tiers = ["E+", "D"]
+speed = "medium"
+cost = "standard"
+reasoning = false
+max_turns = 5
+strengths = ["编码", "多模态", "长上下文"]
+notes = "Qwen 多模态主力。1M 上下文。图+视频理解。适合复杂任务。"
+
+[[models]]
+id = "qwen3-coder-plus"
+provider = "qwen"
+display = "Qwen3 Coder Plus"
+tiers = ["E+", "D"]
+speed = "medium"
+cost = "standard"
+reasoning = false
+max_turns = 8
+strengths = ["编码", "重构", "调试", "代码审查"]
+notes = "480B MoE 编程专用。Agentic coding 能力对标 Claude Sonnet。1M 上下文。"
+
+[[models]]
+id = "qwen3-coder-next"
+provider = "qwen"
+display = "Qwen3 Coder Next"
+tiers = ["E", "E+"]
+speed = "fast"
+cost = "budget"
+reasoning = false
+max_turns = 8
+strengths = ["快速编码", "lint", "重构", "批量任务"]
+notes = "极便宜 ($0.07/$0.30 per 1M)。专项编程模型，适合 E 层批量任务。"
+
+[[models]]
+id = "qwen3-flash"
+provider = "qwen"
+display = "Qwen3 Flash"
+tiers = ["E"]
+speed = "fast"
+cost = "budget"
+reasoning = false
+max_turns = 10
+strengths = ["分类", "路由", "简单任务", "高吞吐"]
+notes = "最便宜 ($0.03/$0.13 per 1M)。1M 上下文。适合高吞吐简单任务。"
