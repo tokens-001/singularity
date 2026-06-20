@@ -1,0 +1,51 @@
+# HermesFusion 配置格式 — 模型无关，换模型不改代码
+# 借鉴 HermesFusion: YAML→TOML，纯配置驱动
+
+[modes]
+# plan: 不改文件，只出方案（Self-Fusion）
+# file: worktree隔离并行改文件 + 合成裁判
+default = "plan"
+
+[plan]
+models = ["deepseek-chat", "glm-5-turbo"]
+roles = ["builder", "skeptic"]
+max_tokens = 2000
+temperature = 0.7
+timeout_sec = 60
+
+[plan.synthesis]
+model = "deepseek-chat"           # 合成裁判用最便宜的
+max_tokens = 1500
+temperature = 0.1
+items = [
+    "两个角色的共识点",
+    "Builder 独有的可实施方案",
+    "Skeptic 独有的风险发现",
+    "两者冲突的地方及你的判断",
+    "补充两者都遗漏的重要点（Analyst 视角）",
+    "最终合成方案",
+]
+
+[file]
+models = ["deepseek-chat", "glm-5-turbo"]
+roles = ["builder", "skeptic"]
+max_turns = 3
+timeout_sec = 600
+# worktree 隔离: 每个模型独立 worktree，冲突时合成裁决
+
+[file.synthesis]
+model = "deepseek-chat"
+max_tokens = 1500
+temperature = 0.1
+
+[auto]
+# 自动触发 Fusion 的任务类型
+trigger_types = ["fusion", "refactor"]
+min_priority = 50                  # priority >= 50 才自动走 Fusion
+min_task_length = 30               # 任务描述 >= 30 字
+
+[roles]
+# 角色定义 — 借鉴 model-fusion 角色多样性
+builder = "你是 Builder（建设者）。关注可实现性、具体步骤、代码结构、模块划分。给出可落地的方案。"
+skeptic = "你是 Skeptic（质疑者）。主动找方案的漏洞：边界条件、并发安全、异常路径、向后兼容。指出所有可能出错的地方。"
+analyst = "你是 Analyst（分析者）。关注架构合理性、技术选型权衡、长期维护成本。从更高维度评估方案。"

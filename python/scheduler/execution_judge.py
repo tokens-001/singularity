@@ -204,29 +204,44 @@ def build_reflexion_feedback(verdict: JudgeVerdict) -> str:
 # Self-Fusion — 多模型并行 + 合成裁判 (model-fusion 论文)
 # ═══════════════════════════════════════════════
 
-_FUSION_SYNTHESIS_PROMPT = """你是多模型输出合成器。以下是两个模型以不同角色对同一任务的独立产出。
+def _load_fusion_config() -> dict:
+    """加载 fusion.toml 配置。HermesFusion: 模型无关，换模型只改配置不改代码。"""
+    try:
+        from ._io import load_toml
+        from . import config
+        path = config.SCHEDULER_DIR / "fusion.toml"
+        return load_toml(path)
+    except Exception:
+        return {}
+
+def _build_fusion_prompt(cfg: dict) -> str:
+    """从配置构建合成 prompt。"""
+    items = cfg.get("plan", {}).get("synthesis", {}).get("items", [])
+    roles_cfg = cfg.get("roles", {})
+    if not items:
+        items = ["共识点", "独有观点A", "独有观点B", "冲突判断", "遗漏补充", "最终方案"]
+    item_lines = "\n".join(f"{i+1}. {item}" for i, item in enumerate(items))
+    return f"""你是多模型输出合成器。以下是两个模型以不同角色对同一任务的独立产出。
 
 模型 A 角色: Builder（建设者）— 关注可实现性、具体步骤、代码结构
 模型 B 角色: Skeptic（质疑者）— 关注边界条件、潜在风险、遗漏场景
 
 【任务】
-{task}
+{{task}}
 
 【Builder 产出】
-{output_a}
+{{output_a}}
 
 【Skeptic 产出】
-{output_b}
+{{output_b}}
 
-请按以下 6 项提纲合成一份最终方案:
-1. 两个角色的共识点
-2. Builder 独有的可实施方案
-3. Skeptic 独有的风险发现
-4. 两者冲突的地方及你的判断
-5. 补充两者都遗漏的重要点（Analyst 视角）
-6. 最终合成方案
+请按以下提纲合成一份最终方案:
+{item_lines}
 
 只输出合成后的内容，不输出元讨论。"""
+
+# 默认值 — 运行时被 fusion.toml 覆盖
+_FUSION_SYNTHESIS_PROMPT = _build_fusion_prompt({})
 
 # 角色定义 — 借鉴 model-fusion 角色多样性 (skeptic/builder/analyst)
 _FUSION_ROLES = {
@@ -240,12 +255,12 @@ def fuse_outputs(task_desc: str, output_a: str, output_b: str) -> str:
     """Self-Fusion 合成裁判: 用 cheap model 融合两个模型的独立产出。
 
     论文: model-fusion Self-Fusion 模式 — 2 cheap-models 并行 + 1 合成器。
-    效果: 用 2×便宜模型 ≈ 1×贵模型质量，成本 ~1/3。
-    ponytail: 6项提纲 prompt，不搞多轮迭代。
+    配置: fusion.toml → plan.synthesis (HermesFusion 模型无关格式)。
     """
     if not output_a or not output_b:
         return output_a or output_b or ""
-    prompt = _FUSION_SYNTHESIS_PROMPT.format(
+    cfg = _load_fusion_config()
+    prompt = _build_fusion_prompt(cfg).format(
         task=task_desc,
         output_a=output_a[:2000],
         output_b=output_b[:2000],
@@ -258,26 +273,43 @@ def run_parallel_models(task_desc: str, level: str = "E") -> list[str]:
     """并行调用 2 个 cheap model 产出独立方案。返回 [output_a, output_b]。
 
     角色多样性: model A=Builder, model B=Skeptic。
-    ponytail: 固定 2 路。需要时扩展到 N 路 (加 Analyst)。
+    配置: fusion.toml → plan.models/roles/max_tokens/temperature (HermesFusion格式)。
+    ponytail: 固定 2 路。需要时扩展到 N 路。
     """
     import os
     import concurrent.futures
+    from .model_registry import provider_for_model
 
-    api_configs = [
-        ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/chat/completions", "deepseek-chat", "builder"),
-        ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-5-turbo", "skeptic"),
-    ]
+    cfg = _load_fusion_config()
+    plan_cfg = cfg.get("plan", {})
+    models = plan_cfg.get("models", ["deepseek-chat", "glm-5-turbo"])
+    roles_list = plan_cfg.get("roles", ["builder", "skeptic"])
+    max_tokens = plan_cfg.get("max_tokens", 2000)
+    temperature = plan_cfg.get("temperature", 0.7)
+    timeout = plan_cfg.get("timeout_sec", 60)
 
-    def _call_one(env_var, base_url, model, role):
-        api_key = os.environ.get(env_var, "")
-        if not api_key:
+    def _call_one(model, role):
+        # 从 api_store 查 API 配置 (HermesFusion: 模型无关)
+        api_key = ""
+        base_url = ""
+        try:
+            from .api_store import available_apis
+            provider = provider_for_model(model)
+            for api_entry in available_apis():
+                if api_entry.id == provider or api_entry.provider == provider:
+                    api_key = os.environ.get(api_entry.api_key_env, "")
+                    base_url = api_entry.base_url
+                    break
+        except Exception:
+            pass
+        if not api_key or not base_url:
             return ""
-        system_prompt = _FUSION_ROLES.get(role, "你是代码专家。请针对以下任务给出分析和方案。")
+        system_prompt = _FUSION_ROLES.get(role, "你是代码专家。")
         try:
             import httpx
-            with httpx.Client(timeout=httpx.Timeout(60)) as client:
+            with httpx.Client(timeout=httpx.Timeout(timeout)) as client:
                 r = client.post(
-                    base_url,
+                    f"{base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                     json={
                         "model": model,
@@ -285,8 +317,8 @@ def run_parallel_models(task_desc: str, level: str = "E") -> list[str]:
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": task_desc},
                         ],
-                        "max_tokens": 2000,
-                        "temperature": 0.7,
+                        "max_tokens": max_tokens,
+                        "temperature": temperature,
                     },
                 )
                 if r.status_code == 200:
@@ -295,8 +327,9 @@ def run_parallel_models(task_desc: str, level: str = "E") -> list[str]:
             pass
         return ""
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(_call_one, *cfg) for cfg in api_configs]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as pool:
+        futures = [pool.submit(_call_one, models[i], roles_list[i] if i < len(roles_list) else "builder")
+                   for i in range(len(models))]
         results = [f.result() for f in futures]
 
     return [r for r in results if r]
