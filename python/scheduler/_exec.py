@@ -55,10 +55,11 @@ depends_on_local_id 用从 0 开始的索引指代同数组内的子任务。
 ---
 """
 
-def _inject_memory(description: str, pyramid_level: int = 1) -> str:
-    """MAGMA 记忆注入: 查相关历史，金字塔分层展开 (Omni-SimpleMem)。
+def _inject_memory(description: str, pyramid_level: int = 1, token_budget: int = 80) -> str:
+    """MAGMA 记忆注入: 金字塔分层展开 (Omni-SimpleMem 原文三级机制)。
 
-    pyramid_level: 1=紧凑摘要 2=完整展开(含文件列表/改动细节)
+    pyramid_level: 1=摘要(~10tokens) 2=完整描述(需sim≥0.3门控) 3=原始文件(需sim≥0.5,受token_budget限制)
+    token_budget: Level 2/3 总计最大 token 数 (按 ~1.3 chars/token 估算)
     """
     try:
         mem_mod._ensure_dir()
@@ -71,26 +72,42 @@ def _inject_memory(description: str, pyramid_level: int = 1) -> str:
             return ""
         lines = ["[相关历史]"]
         count = 0
+        char_used = 0
+        budget_chars = token_budget * 1.3  # ~1.3 chars/token
+        sim_threshold_l2 = 0.3   # Level 2 门控: 相似度低于此值只给摘要
+        sim_threshold_l3 = 0.5   # Level 3 门控: 需更高相似度才展开原始文件
+
         for item in items[:3]:
             score = item.get("score", 0)
             if score < 0.01:
                 continue
-            if pyramid_level >= 2:
-                # 完整展开: 描述+文件+改动细节
-                desc = item.get("description", "")[:120]
-                files = item.get("files", []) or item.get("attrs", {}).get("files", [])
-                if files:
-                    desc += f" | 涉及: {', '.join(files[:3])}"
+            # Level 1: 始终给紧凑摘要 (原文 ~10 tokens/条)
+            desc = item.get("description", "")[:30]
+            lines.append(f"- {desc}")
+            count += 1
+
+            # Level 2: 相似度 ≥0.3 时展开完整描述
+            if pyramid_level >= 2 and score >= sim_threshold_l2:
                 similarity = item.get("similarity", "")
                 tag = f" [相似度 {similarity}]" if similarity else ""
-                lines.append(f"- {desc}{tag}")
-            else:
-                # 紧凑摘要: 只给一行
-                desc = item.get("description", "")[:50]
-                similarity = item.get("similarity", "")
-                tag = f" ({similarity})" if similarity else ""
-                lines.append(f"- {desc}{tag}")
-            count += 1
+                full_desc = item.get("description", "")[:120]
+                files = item.get("files", []) or item.get("attrs", {}).get("files", [])
+                if files:
+                    full_desc += f" | 涉及: {', '.join(files[:3])}"
+                extra = f"  详情: {full_desc}{tag}"
+                if char_used + len(extra) < budget_chars:
+                    lines.append(extra)
+                    char_used += len(extra)
+
+            # Level 3: 相似度 ≥0.5 且预算充裕时展开原始文件
+            if pyramid_level >= 3 and score >= sim_threshold_l3:
+                files = item.get("files", []) or item.get("attrs", {}).get("files", [])
+                for fp in files[:3]:
+                    file_line = f"    └─ {fp}"
+                    if char_used + len(file_line) < budget_chars:
+                        lines.append(file_line)
+                        char_used += len(file_line)
+
         if count == 0:
             return ""
         lines.append("参考以上历史任务的改动方案。\n")

@@ -261,15 +261,17 @@ def index_task(
 
     _ensure_dir()
 
-    # ── 选择性摄入 (Omni-SimpleMem): Jaccard 轻量去重 ──
+    # ── 选择性摄入 (Omni-SimpleMem): Jaccard 对比最近摘要 ──
     events = _load_events()
+    # 只看最近 20 条事件 (O(1), 原文用 "recent summaries")
+    recent = sorted(events.items(), key=lambda x: -x[1].timestamp)[:20]
     desc_words = set(description.lower().split())
-    for existing_id, existing_node in events.items():
+    for existing_id, existing_node in recent:
         existing_words = set(existing_node.content.lower().split())
         if desc_words and existing_words:
             jaccard = len(desc_words & existing_words) / len(desc_words | existing_words)
-            if jaccard > 0.75:  # 高度重复，跳过 index
-                return
+            if jaccard > 0.75:
+                return  # 高度重复，跳过 index
 
     # ── EventNode ──
     tokens = _embed(description)
