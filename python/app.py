@@ -2182,6 +2182,75 @@ def api_agent_skills_update(level, model):
 
 
 # ═══════════════════════════════════════════════════════════
+# Permission APIs
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/permissions/profiles")
+def api_perm_profiles():
+    """列出所有权限 profile。"""
+    from scheduler.permission import get_store
+    try:
+        store = get_store()
+        return jsonify({"profiles": store.list_profiles(), "bindings": store._agent_bindings})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/permissions/profiles", methods=["POST"])
+def api_perm_profiles_add():
+    """创建自定义权限 profile。"""
+    from scheduler.permission import get_store, PermissionProfile
+    data = request.get_json(silent=True)
+    if not data or not data.get("name"):
+        return jsonify({"error": "缺少 name"}), 400
+    try:
+        profile = PermissionProfile(
+            name=data["name"].strip(),
+            description=data.get("description", ""),
+            allowed_tools=data.get("allowed_tools", []),
+            allowed_paths=data.get("allowed_paths", []),
+            blocked_paths=data.get("blocked_paths", []),
+            require_approval=data.get("require_approval", []),
+            blocked_commands=data.get("blocked_commands", []),
+        )
+        get_store().save_profile(profile)
+        return jsonify({"ok": True, "profile": profile.to_dict()})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/permissions/profiles/<name>", methods=["DELETE"])
+def api_perm_profiles_delete(name):
+    """删除自定义权限 profile。"""
+    from scheduler.permission import get_store
+    if not get_store().delete_profile(name):
+        return jsonify({"error": f"无法删除: {name}"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/permissions/bindings", methods=["PUT"])
+def api_perm_bind():
+    """绑定 agent → permission profile。"""
+    from scheduler.permission import get_store
+    data = request.get_json(silent=True)
+    if not data or not all(k in data for k in ("level", "model", "profile")):
+        return jsonify({"error": "缺少 level/model/profile"}), 400
+    try:
+        get_store().bind_agent(data["level"], data["model"], data["profile"])
+        return jsonify({"ok": True})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/permissions/bindings/<level>/<model>", methods=["DELETE"])
+def api_perm_unbind(level, model):
+    """解除 agent 的权限绑定（恢复 full-access）。"""
+    from scheduler.permission import get_store
+    get_store().unbind_agent(level, model)
+    return jsonify({"ok": True})
+
+
+# ═══════════════════════════════════════════════════════════
 # 健康检查
 # ═══════════════════════════════════════════════════════════
 

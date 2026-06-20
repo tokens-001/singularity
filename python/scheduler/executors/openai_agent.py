@@ -375,8 +375,42 @@ class OpenAIAgentExecutor(BaseExecutor):
 
     # ── 工具执行 ──
 
+    def _check_permission(self, tool_name: str, args: dict) -> tuple[bool, str]:
+        """Permission 引擎检查。返回 (allowed, reason)。"""
+        try:
+            from scheduler.permission import check_tool, check_path, check_command, needs_approval
+            agent_model = self.cfg.get("model", "")
+            agent_level = self._find_agent_level()
+            # 工具白名单检查
+            ok, reason = check_tool(agent_level, agent_model, tool_name)
+            if not ok:
+                return False, reason
+            # 路径检查 (read_file/write_file)
+            if tool_name in ("read_file", "write_file") and args.get("path"):
+                ok, reason = check_path(agent_level, agent_model, args["path"])
+                if not ok:
+                    return False, reason
+            # 命令检查 (run_command)
+            if tool_name == "run_command" and args.get("command"):
+                ok, reason = check_command(agent_level, agent_model, args["command"])
+                if not ok:
+                    return False, reason
+            # 审批检查 (记录事件，当前不阻塞)
+            if needs_approval(agent_level, agent_model, tool_name):
+                from scheduler.orchestrator import _pending_sse_events as _pe
+                _pe.append({"kind": "approval", "msg": f"[{self.task_id[:8]}] {tool_name} 需审批",
+                             "ts": time.time(), "task_id": self.task_id})
+        except Exception:
+            pass
+        return True, ""
+
     def _execute_tool(self, name: str, args: dict) -> str:
         try:
+            # ── Permission 检查 ──
+            allowed, reason = self._check_permission(name, args)
+            if not allowed:
+                return f"操作被拒绝: {reason}"
+
             if name == "read_file":
                 return self._tool_read(args.get("path", ""))
             elif name == "write_file":
