@@ -9,10 +9,11 @@
 """
 
 import json
-import re as _re
 import logging
 from dataclasses import dataclass, field
 from typing import Optional
+
+from ._io import try_parse_json
 
 _log = logging.getLogger(__name__)
 
@@ -118,26 +119,16 @@ def _parse_verdict(raw: str) -> JudgeVerdict:
         return JudgeVerdict(pass_=True, score=0.5, reason="裁判未返回结果，默认放行",
                             failure_mode="unknown", uncertain=True)
 
-    # 提取 JSON
-    candidates = []
-    for m in _re.finditer(r"```(?:json)?\s*\n?(.*?)```", raw, _re.DOTALL):
-        candidates.append(m.group(1).strip())
-    for m in _re.finditer(r"\{[^{}]*\}", raw):
-        candidates.append(m.group(0).strip())
-    candidates.append(raw.strip())
-
-    for c in candidates:
-        try:
-            obj = json.loads(c)
-            return JudgeVerdict(
-                pass_=bool(obj.get("pass", True)),
-                score=float(obj.get("score", 0.5)),
-                reason=str(obj.get("reason", "")),
-                failure_mode=str(obj.get("failure_mode", "unknown")),
-                uncertain=bool(obj.get("uncertain", False)),
-            )
-        except (json.JSONDecodeError, TypeError, ValueError):
-            continue
+    # 用 _io.try_parse_json 统一提取 JSON
+    result = try_parse_json(raw)
+    if not result.get("parse_error"):
+        return JudgeVerdict(
+            pass_=bool(result.get("pass", True)),
+            score=float(result.get("score", 0.5)),
+            reason=str(result.get("reason", "")),
+            failure_mode=str(result.get("failure_mode", "unknown")),
+            uncertain=bool(result.get("uncertain", False)),
+        )
 
     return JudgeVerdict(pass_=True, score=0.5, reason="裁判结果解析失败，默认放行",
                         failure_mode="unknown", uncertain=True)

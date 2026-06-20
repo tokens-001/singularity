@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 
-import json, re as _re, time, threading, logging
+import time, threading, logging
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,7 @@ from . import project as _proj
 from .project import Phase
 from . import dispatcher as _dispatch
 from . import workflow as _wf
+from ._io import try_parse_json
 
 _log = logging.getLogger(__name__)
 
@@ -211,34 +212,10 @@ def _parse_judge_result(raw: str) -> bool:
     if not raw:
         return True  # 无法判断时默认放行（避免卡住）
 
-    # 尝试多种 JSON 提取方式
-    candidates = []
-
-    # 1. ```json ... ``` 块
-    for m in _re.finditer(r"```(?:json)?\s*\n?(.*?)```", raw, _re.DOTALL):
-        candidates.append(m.group(1).strip())
-
-    # 2. 裸 {...} 块
-    for m in _re.finditer(r"\{[^{}]*\}", raw):
-        candidates.append(m.group(0).strip())
-
-    # 3. 整体当做 JSON
-    candidates.append(raw.strip())
-
-    for c in candidates:
-        try:
-            obj = json.loads(c)
-            return bool(obj.get("pass", True))
-        except (json.JSONDecodeError, TypeError):
-            # JSON 修复：去掉尾部逗号重试
-            try:
-                fixed = _re.sub(r",\s*}", "}", c)
-                fixed = _re.sub(r",\s*]", "]", fixed)
-                obj = json.loads(fixed)
-                return bool(obj.get("pass", True))
-            except (json.JSONDecodeError, TypeError):
-                continue
-
+    # 用 _io.try_parse_json 统一提取 JSON
+    result = try_parse_json(raw)
+    if not result.get("parse_error"):
+        return bool(result.get("pass", True))
     return True  # 全部解析失败，默认放行
 
 
