@@ -102,6 +102,12 @@ async function api(path,opts){
 }
 
 // ═══════════════════════════════════════════════════════
+// 竞态防护：generation counter，丢弃过期响应
+// ═══════════════════════════════════════════════════════
+let _refreshGen = 0;
+let _activeTabAtRefresh = 'dashboard';
+
+// ═══════════════════════════════════════════════════════
 // Interaction states (loading / empty / error)
 // ═══════════════════════════════════════════════════════
 function showSkeleton(el, rows=5){ el.innerHTML=Array.from({length:rows},()=>`<div class="skeleton w${80-Math.floor(Math.random()*50)}"></div>`).join(''); }
@@ -112,17 +118,24 @@ function showError(el, msg, retryFn){ el.innerHTML=`<div class="error-inline" on
 // Refresh
 // ═══════════════════════════════════════════════════════
 async function refreshAll(){
+  const myGen = ++_refreshGen;
+  _activeTabAtRefresh = activeTab;
+
   const ind=document.getElementById('live-indicator');
   ind.className='live'; ind.textContent='◆';
 
   const [s,t,c,r]=await Promise.all([
     api('/api/status'),api('/api/tasks'),api('/api/conflicts'),api('/api/reports/critical')
   ]);
+  // 竞态防护：新 refresh 已启动，丢弃过期响应
+  if (myGen !== _refreshGen) return;
+  // Tab 已切换，不更新非活跃 Tab 的 DOM
+  const tabOk = (activeTab === _activeTabAtRefresh);
+
   if(r&&r.length){renderReports(r);}
   statusData=s; conflicts=c.conflicts||[];
   const newTasks=t.tasks||[];
 
-  // 数据没变就跳过 DOM 重绘
   const tasksHash=JSON.stringify(newTasks);
   const flowHash=JSON.stringify(s.counts||{});
   const tasksChanged=tasksHash!==_lastTasksHash;
@@ -132,8 +145,7 @@ async function refreshAll(){
   renderStatusCards(); renderAgentRow();
 
   if(tasksChanged){ renderTasks(); }
-  // 卡片网格已包含 token/耗时/冲突/干预信息
-  if(activeTab==='tasks'){ renderTasks(); if(flowChanged){ _lastFlowHash=flowHash; renderFlowDiagram(); } }
+  if(tabOk && activeTab==='tasks'){ renderTasks(); if(flowChanged){ _lastFlowHash=flowHash; renderFlowDiagram(); } }
 
   ind.className='live on'; ind.textContent='●';
 }
