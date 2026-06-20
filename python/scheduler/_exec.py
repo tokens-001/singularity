@@ -55,8 +55,11 @@ depends_on_local_id 用从 0 开始的索引指代同数组内的子任务。
 ---
 """
 
-def _inject_memory(description: str) -> str:
-    """MAGMA 记忆注入: 查询相关历史，生成简短上下文前缀。"""
+def _inject_memory(description: str, pyramid_level: int = 1) -> str:
+    """MAGMA 记忆注入: 查相关历史，金字塔分层展开 (Omni-SimpleMem)。
+
+    pyramid_level: 1=紧凑摘要 2=完整展开(含文件列表/改动细节)
+    """
     try:
         mem_mod._ensure_dir()
         events = mem_mod._load_events()
@@ -69,13 +72,24 @@ def _inject_memory(description: str) -> str:
         lines = ["[相关历史]"]
         count = 0
         for item in items[:3]:
-            desc = item.get("description", "")[:60]
             score = item.get("score", 0)
             if score < 0.01:
                 continue
-            similarity = item.get("similarity", "")
-            tag = f"(相似度 {similarity})" if similarity else ""
-            lines.append(f"- {desc} {tag}")
+            if pyramid_level >= 2:
+                # 完整展开: 描述+文件+改动细节
+                desc = item.get("description", "")[:120]
+                files = item.get("files", []) or item.get("attrs", {}).get("files", [])
+                if files:
+                    desc += f" | 涉及: {', '.join(files[:3])}"
+                similarity = item.get("similarity", "")
+                tag = f" [相似度 {similarity}]" if similarity else ""
+                lines.append(f"- {desc}{tag}")
+            else:
+                # 紧凑摘要: 只给一行
+                desc = item.get("description", "")[:50]
+                similarity = item.get("similarity", "")
+                tag = f" ({similarity})" if similarity else ""
+                lines.append(f"- {desc}{tag}")
             count += 1
         if count == 0:
             return ""

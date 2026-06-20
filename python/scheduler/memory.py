@@ -261,8 +261,17 @@ def index_task(
 
     _ensure_dir()
 
-    # ── EventNode ──
+    # ── 选择性摄入 (Omni-SimpleMem): Jaccard 轻量去重 ──
     events = _load_events()
+    desc_words = set(description.lower().split())
+    for existing_id, existing_node in events.items():
+        existing_words = set(existing_node.content.lower().split())
+        if desc_words and existing_words:
+            jaccard = len(desc_words & existing_words) / len(desc_words | existing_words)
+            if jaccard > 0.75:  # 高度重复，跳过 index
+                return
+
+    # ── EventNode ──
     tokens = _embed(description)
     node = EventNode(
         task_id=task_id,
@@ -352,7 +361,6 @@ def _rrf_anchors(
     Signal 3 — Temporal:  时间衰减 1/(1 + hours_ago)
     """
     now = time.time()
-    rrf: dict[str, float] = {}
     signals: list[tuple[str, dict[str, float]]] = []
 
     # Signal 1: Semantic
@@ -396,13 +404,18 @@ def _rrf_anchors(
         temp_scores[tid] = 1.0 / (1.0 + hours_ago)
     signals.append(("temporal", temp_scores))
 
-    # RRF fusion
+    # 集合并 (Omni-SimpleMem): 三信号 top-k 取并集，优于 RRF 加权融合
+    anchors: set[str] = set()
     for _sig_name, scores in signals:
-        ranked = sorted(scores.items(), key=lambda x: -x[1])
-        for rank, (tid, _) in enumerate(ranked):
-            rrf[tid] = rrf.get(tid, 0.0) + 1.0 / (k + rank + 1)
+        ranked = sorted(scores.items(), key=lambda x: -x[1])[:top_n]
+        anchors.update(tid for tid, _ in ranked)
 
-    return sorted(rrf.items(), key=lambda x: -x[1])[:top_n]
+    # 重新按语义分排序 (保留最高分作为 tiebreaker)
+    anchor_scores: list[tuple[str, float]] = []
+    for tid in anchors:
+        best = max(sem_scores.get(tid, 0.0), lex_scores.get(tid, 0.0), temp_scores.get(tid, 0.0))
+        anchor_scores.append((tid, best))
+    return sorted(anchor_scores, key=lambda x: -x[1])[:top_n]
 
 
 # ═══════════════════════════════════════════════════════════
