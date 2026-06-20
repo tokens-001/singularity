@@ -168,7 +168,7 @@ async function renderStatusCards(){
   const taskRows=(bar+'<div class="db-sep"></div>'+
     `<div class="db-row"><span class="db-l"><span class="db-dot db-dot-yellow"></span>待处理</span><span class="db-v">${c.pending||0}</span></div>`+
     `<div class="db-row"><span class="db-l"><span class="db-dot db-dot-green"></span>运行中</span><span class="db-v">${c.running||0}</span></div>`+
-    `<div class="db-row"><span class="db-l">已完成</span><span class="db-v">${c.done||0}</span></div>`+
+    `<div class="db-row"><span class="db-l"><span class="db-dot" style="background:var(--text3)"></span>已完成</span><span class="db-v">${c.done||0}</span></div>`+
     `<div class="db-row"><span class="db-l"><span class="db-dot db-dot-red"></span>失败</span><span class="db-v">${c.failed||0}</span></div>`);
   const tasks=card('☰','任务',total,'var(--text)',`共 ${total} 个任务`,taskRows);
 
