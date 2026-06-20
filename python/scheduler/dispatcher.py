@@ -294,6 +294,7 @@ def dispatch(
 
     executor: BaseExecutor = executor_cls(
         agent_cfg, full_task, task_id, baseline_ref=baseline_ref, cwd=cwd,
+        agent_level=level,
     )
     result = executor.run()
 

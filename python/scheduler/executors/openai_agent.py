@@ -149,7 +149,8 @@ class OpenAIAgentExecutor(BaseExecutor):
     """通用 Agent Executor — 给任何 OpenAI 兼容模型装上工具。"""
 
     def __init__(self, cfg: dict, task: str, task_id: str,
-                 baseline_ref: str = "", cwd: str = ""):
+                 baseline_ref: str = "", cwd: str = "",
+                 agent_level: str = ""):
         super().__init__(cfg, task, task_id, baseline_ref=baseline_ref, cwd=cwd)
         self._api_key = os.environ.get(cfg.get("api_key_env", ""), "")
         # 从 agent cfg env 设置代理等环境变量
@@ -162,27 +163,25 @@ class OpenAIAgentExecutor(BaseExecutor):
         self._cwd = Path(cwd) if cwd else config.PROJECT_ROOT
         self._changed_files: list[str] = []
         self._tool_events: list[dict] = []   # 工具调用事件收集
+        self._agent_level = agent_level or cfg.get("_level", "")  # 由调用方注入
 
-        # ── Agent 绑定的 Skill ──
+        # ── Agent 绑定的 Skill (延迟加载, 可选) ──
         self._skills: dict = {}
         self._skill_tools: list[dict] = []
         self._skill_prompt: str = ""
-        if _SKILL_LOADER_AVAILABLE:
+        if _SKILL_LOADER_AVAILABLE and self._agent_level:
             try:
                 agent_model = cfg.get("model", "")
-                # 查找 agent 所属的 level
-                agent_level = self._find_agent_level()
-                if agent_level:
-                    skill_names = get_agent_skills(agent_level, agent_model)
-                    if skill_names:
-                        all_skills = load_skills()
-                        self._skills = {n: all_skills[n] for n in skill_names if n in all_skills}
-                        self._skill_tools = get_tool_definitions(self._skills)
-                        self._skill_prompt = get_prompt_additions(self._skills)
+                skill_names = get_agent_skills(self._agent_level, agent_model)
+                if skill_names:
+                    all_skills = load_skills()
+                    self._skills = {n: all_skills[n] for n in skill_names if n in all_skills}
+                    self._skill_tools = get_tool_definitions(self._skills)
+                    self._skill_prompt = get_prompt_additions(self._skills)
             except Exception:
                 pass
 
-        # ── MCP 工具 ──
+        # ── MCP 工具 (延迟加载, 可选) ──
         self._mcp_tools: list[dict] = []
         self._mcp_enabled = cfg.get("mcp_enabled", True)
         if self._mcp_enabled:
@@ -191,22 +190,6 @@ class OpenAIAgentExecutor(BaseExecutor):
                 self._mcp_tools = get_registry().get_openai_tools()
             except Exception:
                 pass
-
-    def _find_agent_level(self) -> str:
-        """从 dispatcher 查找当前 agent 所属的层级。"""
-        try:
-            from .. import dispatcher as disp_mod
-            model = self.cfg.get("model", "")
-            if not model:
-                return ""
-            agents = disp_mod.load_agents()
-            for level, cfgs in agents.items():
-                for c in cfgs:
-                    if c.get("model", "") == model:
-                        return level
-        except Exception:
-            pass
-        return ""
 
     def run(self) -> ExecutorResult:
         if not self._api_key:
@@ -391,26 +374,25 @@ class OpenAIAgentExecutor(BaseExecutor):
         try:
             from scheduler.permission import check_tool, check_path, check_command, needs_approval
             agent_model = self.cfg.get("model", "")
-            agent_level = self._find_agent_level()
-            # 工具白名单检查
+            agent_level = self._agent_level  # 由调用方注入，不再反向查 dispatcher
             ok, reason = check_tool(agent_level, agent_model, tool_name)
             if not ok:
                 return False, reason
-            # 路径检查 (read_file/write_file)
             if tool_name in ("read_file", "write_file") and args.get("path"):
                 ok, reason = check_path(agent_level, agent_model, args["path"])
                 if not ok:
                     return False, reason
-            # 命令检查 (run_command)
             if tool_name == "run_command" and args.get("command"):
                 ok, reason = check_command(agent_level, agent_model, args["command"])
                 if not ok:
                     return False, reason
-            # 审批检查 (记录事件，当前不阻塞)
             if needs_approval(agent_level, agent_model, tool_name):
-                from scheduler.orchestrator import _pending_sse_events as _pe
-                _pe.append({"kind": "approval", "msg": f"[{self.task_id[:8]}] {tool_name} 需审批",
-                             "ts": time.time(), "task_id": self.task_id})
+                try:
+                    from scheduler.orchestrator import _pending_sse_events as _pe
+                    _pe.append({"kind": "approval", "msg": f"[{self.task_id[:8]}] {tool_name} 需审批",
+                                 "ts": time.time(), "task_id": self.task_id})
+                except Exception:
+                    pass
         except Exception:
             pass
         return True, ""
@@ -445,11 +427,6 @@ class OpenAIAgentExecutor(BaseExecutor):
                     return f"MCP 工具执行错误: {e}"
             return f"未知工具: {name}"
         except Exception as e:
-            try:
-                from .. import witness
-                witness.heartbeat("openai_agent", f"warn:tool_exec:{e}"[:80])
-            except Exception:
-                pass
             return f"工具执行错误: {e}"
 
     def _safe_path(self, path: str) -> Path:
@@ -541,20 +518,10 @@ class OpenAIAgentExecutor(BaseExecutor):
                             results.append(f"{f.relative_to(self._cwd)}:{i}: {line.strip()[:120]}")
                             if len(results) > 20:
                                 return "\n".join(results) + "\n... (截断)"
-                except Exception as e:
-                    try:
-                        from .. import witness
-                        witness.heartbeat("openai_agent", f"warn:search_file:{e}"[:80])
-                    except Exception:
-                        pass
+                except Exception:
                     pass
             return "\n".join(results) if results else f"未找到匹配 '{pattern}' 的行"
         except Exception as e:
-            try:
-                from .. import witness
-                witness.heartbeat("openai_agent", f"warn:search:{e}"[:80])
-            except Exception:
-                pass
             return f"搜索错误: {e}"
 
     def _track_changed_files(self):
@@ -568,12 +535,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                 for f in r.stdout.strip().splitlines():
                     if f and f not in self._changed_files:
                         self._changed_files.append(f)
-        except Exception as e:
-            try:
-                from .. import witness
-                witness.heartbeat("openai_agent", f"warn:git_diff:{e}"[:80])
-            except Exception:
-                pass
+        except Exception:
             pass
 
     # ── API 调用 ──

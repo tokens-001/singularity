@@ -34,13 +34,14 @@ class BaseExecutor:
     """所有 executor 的基类。子类实现 run()。"""
 
     def __init__(self, agent_cfg: dict, task: str, task_id: str,
-                 baseline_ref: str = "", cwd: str = ""):
+                 baseline_ref: str = "", cwd: str = "",
+                 agent_level: str = ""):
         self.cfg = agent_cfg
         self.task = task
         self.task_id = task_id
-        self.baseline_ref = baseline_ref  # snapshot ref, 用于算 changed_files 基线
-        # cwd: 有 worktree 沙箱时传 wt.path, 否则空 (子类默认 PROJECT_ROOT)
+        self.baseline_ref = baseline_ref
         self.cwd = cwd
+        self.agent_level = agent_level  # 由 dispatcher 注入, 避免 executor 反向查
 
     def run(self) -> ExecutorResult:
         raise NotImplementedError
