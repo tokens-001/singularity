@@ -247,6 +247,85 @@ N 个模型各自产出
 - 每个维度独立请求裁判（减少单次复杂度），或用一个精心测试过的合并 prompt
 - 先用 DeepSeek Chat 小任务跑通，再上复杂场景
 
+### 开源项目深度借鉴
+
+#### 1. HermesFusion — 模型无关的 Fusion 运行器
+
+**核心设计**：每个面板成员就是一个配置好的命令行。完全不关心模型提供商——`hermes` CLI、`ollama run`、`openai chat`、`curl`，什么都能接。
+
+**可借鉴的配置格式**：
+```yaml
+providers:
+  fast:
+    command: ["hermes", "-z", "{prompt}", "--provider", "openai", "--model", "gpt-4o-mini"]
+    role: "Quick analyst."
+    timeout_seconds: 60
+modes:
+  lite:
+    max_participants: 2      # 硬上限，防配置错误炸配额
+    max_calls_per_run: 4
+    participants: [fast, strong]
+    judge: strong
+    synthesizer: strong
+```
+
+**安全设计可直接抄**：
+- 文件锁（flock）防并发跑两次
+- `--prompt-file` 路径沙箱化，拒绝符号链接
+- 子进程设 `HERMESFUSION_CHILD=1` 环境变量，防止递归调用炸配额
+- `disabled` 映射：关掉某个 provider 不用删配置，标一行 `"out of credits"` 即可
+
+#### 2. model-fusion (0xLeathery) — Self-Fusion + 角色多样性
+
+**核心发现**：75% 的提升来自合成步骤本身，只有 25% 来自模型多样性。基于这个发现，直接用**同一模型 + 不同角色**实现 Self-Fusion。
+
+**三个角色（Persona）**：
+| 角色 | 职责 |
+|------|------|
+| `fusion-skeptic` | 假设显而易见的答案是错的，找反例 |
+| `fusion-builder` | 最完整、最具体、最可执行的方案 |
+| `fusion-analyst` | 深挖最关键的单一维度 |
+
+**合成提纲（6 项，可抄）**：
+1. Claim ledger — 列出所有主张
+2. Correlated-error check — 多个模型犯同类错误 → 可能是 prompt 歧义
+3. Evidence-based contradiction resolution — 矛盾不靠投票，靠证据
+4. Coverage union — 取所有模型的覆盖面并集
+5. Calibration — 标注每个结论的置信度
+6. Anti-majority guard — 少数派意见如果证据充分，保留不丢弃
+
+**选择性路由**：不调模型，纯启发式判断 prompt 是否值得 Fusion：
+- prompt 长度 >320 字符
+- 包含 ≥2 个问号
+- 包含分析性关键词（analyse/compare/design/architecture/trade-off/evaluate/root cause/prove/why）
+
+`FUSION_MODE` 三档：`off`（不触发）/ `selective`（启发式）/ `always`（全触发）
+
+#### 3. Doubt-Driven Development — 对抗审查 Skill
+
+**五步反证法**（可直接做成奇点 Skill）：
+
+```
+CLAIM → EXTRACT → DOUBT → RECONCILE → STOP
+```
+
+关键设计：
+- **审查者永远看不到 CLAIM**——只给 ARTIFACT（产出）+ CONTRACT（契约/需求），防止审查者被原结论带偏
+- 审查者的任务不是验证，是**找问题**："Assume the author is overconfident."
+- 跨模型升级强制提示："单模型审查完毕。要跨模型第二意见吗？（Gemini CLI / Codex CLI / 手动 / 跳过）"
+- 3 轮上限，防止死循环
+- 4 类发现分类：Contract misread（误读需求）/ Valid+Actionable（有效可操作）/ Valid Trade-off（有效但可接受）/ Noise（噪音）
+
+#### 可直接落地的优先级
+
+| 优先级 | 借鉴内容 | 落地方式 |
+|--------|---------|---------|
+| P0 | Doubt-Driven Development | 做成 `type: prompt` Skill，现在就加 |
+| P1 | model-fusion 选择性路由 | `router.py` 加启发式难度判断 |
+| P1 | model-fusion 合成提纲 | `execution_judge.py` 的 `fuse_outputs()` 用 6 项提纲 |
+| P2 | HermesFusion 配置格式 | 奇点 Fusion 面板配置 YAML 格式 |
+| P2 | 角色多样性（skeptic/builder/analyst） | Self-Fusion 的 prompt 模板 |
+
 ---
 
 ## 四、架构
