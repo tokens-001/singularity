@@ -268,6 +268,63 @@ def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
     return result
 
 
+def _load_skills_for_agent(level: str, model: str) -> tuple[list, str, dict]:
+    """为 agent 加载绑定的 Skill。返回 (tools, prompt, skills_dict)。"""
+    try:
+        from skills.skill_loader import (
+            load_skills, get_tool_definitions, get_prompt_additions, get_agent_skills,
+        )
+        skill_names = get_agent_skills(level, model)
+        if skill_names:
+            all_skills = load_skills()
+            skills = {n: all_skills[n] for n in skill_names if n in all_skills}
+            return get_tool_definitions(skills), get_prompt_additions(skills), skills
+    except Exception:
+        pass
+    return [], "", {}
+
+
+def _load_mcp_for_agent() -> tuple[list, callable]:
+    """加载 MCP 工具。返回 (tools, executor_callable)。"""
+    try:
+        from .mcp import get_registry
+        reg = get_registry()
+        tools = reg.get_openai_tools()
+        return tools, reg.execute_tool
+    except Exception:
+        pass
+    return [], None
+
+
+def _make_permission_checker() -> callable:
+    """创建权限检查回调。"""
+    try:
+        from .permission import check_tool, check_path, check_command, needs_approval
+        def _check(tool_name, args, agent_level, agent_model, task_id):
+            ok, reason = check_tool(agent_level, agent_model, tool_name)
+            if not ok:
+                return False, reason
+            if tool_name in ("read_file", "write_file") and args.get("path"):
+                ok, reason = check_path(agent_level, agent_model, args["path"])
+                if not ok:
+                    return False, reason
+            if tool_name == "run_command" and args.get("command"):
+                ok, reason = check_command(agent_level, agent_model, args["command"])
+                if not ok:
+                    return False, reason
+            if needs_approval(agent_level, agent_model, tool_name):
+                try:
+                    from .orchestrator import _pending_sse_events as _pe
+                    _pe.append({"kind": "approval", "msg": f"[{task_id[:8]}] {tool_name} 需审批",
+                                 "ts": time.time(), "task_id": task_id})
+                except Exception:
+                    pass
+            return True, ""
+        return _check
+    except Exception:
+        return None
+
+
 def dispatch(
     task: str,
     level: str,
@@ -292,9 +349,17 @@ def dispatch(
             f"---\n[上一轮校验反馈, 请据此修正]\n{feedback}"
         )
 
+    # ── 依赖注入: 为 executor 准备 skill/MCP/permission ──
+    skill_tools, skill_prompt, skills = _load_skills_for_agent(level, agent_cfg.get("model", ""))
+    mcp_tools, mcp_executor = _load_mcp_for_agent()
+    perm_checker = _make_permission_checker()
+
     executor: BaseExecutor = executor_cls(
         agent_cfg, full_task, task_id, baseline_ref=baseline_ref, cwd=cwd,
         agent_level=level,
+        skills=skills, skill_tools=skill_tools, skill_prompt=skill_prompt,
+        mcp_tools=mcp_tools, mcp_executor=mcp_executor,
+        permission_checker=perm_checker,
     )
     result = executor.run()
 

@@ -23,16 +23,6 @@ import httpx
 from .base import BaseExecutor, ExecutorResult
 from .. import config
 
-# ── Skill 系统集成 ──────────────────────────────────────────
-try:
-    from skills.skill_loader import (
-        load_skills, get_tool_definitions, get_prompt_additions,
-        get_agent_skills,
-    )
-    _SKILL_LOADER_AVAILABLE = True
-except ImportError:
-    _SKILL_LOADER_AVAILABLE = False
-
 # ── 敏感文件 blocklist（防 LLM 输出注入）──
 # Agent 不可读写的文件/目录模式
 _BLOCKED_PATTERNS = [
@@ -150,10 +140,16 @@ class OpenAIAgentExecutor(BaseExecutor):
 
     def __init__(self, cfg: dict, task: str, task_id: str,
                  baseline_ref: str = "", cwd: str = "",
-                 agent_level: str = ""):
+                 agent_level: str = "",
+                 # ── 依赖注入 (由 dispatcher 提供, 消除反向导入) ──
+                 skills: dict = None,
+                 skill_tools: list = None,
+                 skill_prompt: str = "",
+                 mcp_tools: list = None,
+                 mcp_executor: callable = None,
+                 permission_checker: callable = None):
         super().__init__(cfg, task, task_id, baseline_ref=baseline_ref, cwd=cwd)
         self._api_key = os.environ.get(cfg.get("api_key_env", ""), "")
-        # 从 agent cfg env 设置代理等环境变量
         for k, v in cfg.get("env", {}).items():
             os.environ[k] = v
         self._url = cfg.get("entry", "")
@@ -162,34 +158,16 @@ class OpenAIAgentExecutor(BaseExecutor):
         self._max_turns = cfg.get("max_turns", 10)
         self._cwd = Path(cwd) if cwd else config.PROJECT_ROOT
         self._changed_files: list[str] = []
-        self._tool_events: list[dict] = []   # 工具调用事件收集
-        self._agent_level = agent_level or cfg.get("_level", "")  # 由调用方注入
+        self._tool_events: list[dict] = []
+        self._agent_level = agent_level or cfg.get("_level", "")
 
-        # ── Agent 绑定的 Skill (延迟加载, 可选) ──
-        self._skills: dict = {}
-        self._skill_tools: list[dict] = []
-        self._skill_prompt: str = ""
-        if _SKILL_LOADER_AVAILABLE and self._agent_level:
-            try:
-                agent_model = cfg.get("model", "")
-                skill_names = get_agent_skills(self._agent_level, agent_model)
-                if skill_names:
-                    all_skills = load_skills()
-                    self._skills = {n: all_skills[n] for n in skill_names if n in all_skills}
-                    self._skill_tools = get_tool_definitions(self._skills)
-                    self._skill_prompt = get_prompt_additions(self._skills)
-            except Exception:
-                pass
-
-        # ── MCP 工具 (延迟加载, 可选) ──
-        self._mcp_tools: list[dict] = []
-        self._mcp_enabled = cfg.get("mcp_enabled", True)
-        if self._mcp_enabled:
-            try:
-                from ..mcp import get_registry
-                self._mcp_tools = get_registry().get_openai_tools()
-            except Exception:
-                pass
+        # ── 注入的依赖 ──
+        self._skills = skills or {}
+        self._skill_tools = skill_tools or []
+        self._skill_prompt = skill_prompt or ""
+        self._mcp_tools = mcp_tools or []
+        self._mcp_executor = mcp_executor
+        self._permission_checker = permission_checker
 
     def run(self) -> ExecutorResult:
         if not self._api_key:
@@ -370,31 +348,12 @@ class OpenAIAgentExecutor(BaseExecutor):
     # ── 工具执行 ──
 
     def _check_permission(self, tool_name: str, args: dict) -> tuple[bool, str]:
-        """Permission 引擎检查。返回 (allowed, reason)。"""
-        try:
-            from scheduler.permission import check_tool, check_path, check_command, needs_approval
-            agent_model = self.cfg.get("model", "")
-            agent_level = self._agent_level  # 由调用方注入，不再反向查 dispatcher
-            ok, reason = check_tool(agent_level, agent_model, tool_name)
-            if not ok:
-                return False, reason
-            if tool_name in ("read_file", "write_file") and args.get("path"):
-                ok, reason = check_path(agent_level, agent_model, args["path"])
-                if not ok:
-                    return False, reason
-            if tool_name == "run_command" and args.get("command"):
-                ok, reason = check_command(agent_level, agent_model, args["command"])
-                if not ok:
-                    return False, reason
-            if needs_approval(agent_level, agent_model, tool_name):
-                try:
-                    from scheduler.orchestrator import _pending_sse_events as _pe
-                    _pe.append({"kind": "approval", "msg": f"[{self.task_id[:8]}] {tool_name} 需审批",
-                                 "ts": time.time(), "task_id": self.task_id})
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        """Permission 检查。如注入 checker 则调用，否则默认允许。"""
+        if self._permission_checker:
+            try:
+                return self._permission_checker(tool_name, args, self._agent_level, self.cfg.get("model", ""), self.task_id)
+            except Exception:
+                pass
         return True, ""
 
     def _execute_tool(self, name: str, args: dict) -> str:
@@ -418,11 +377,10 @@ class OpenAIAgentExecutor(BaseExecutor):
                 skill = self._skills[skill_name]
                 expanded = skill.expand_body(**args)
                 return f"[Skill: {skill.name}]\n\n{expanded}\n\n请按以上 Skill 指引继续完成任务。"
-            # ── MCP 工具调用 ──
-            if name.startswith("mcp__"):
+            # ── MCP 工具调用 (由调用方注入) ──
+            if name.startswith("mcp__") and self._mcp_executor:
                 try:
-                    from ..mcp import get_registry
-                    return get_registry().execute_tool(name, args)
+                    return self._mcp_executor(name, args)
                 except Exception as e:
                     return f"MCP 工具执行错误: {e}"
             return f"未知工具: {name}"
