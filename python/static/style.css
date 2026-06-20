@@ -14,6 +14,12 @@
   --st-fail:   #f0616d;
   --st-hold:   #c08cff;
   --st-pending:#d8a236;
+  /* 语义别名 */
+  --green:     var(--st-done);
+  --red:       var(--st-fail);
+  --yellow:    var(--st-pending);
+  --purple:    var(--st-hold);
+  --cyan:      var(--accent);
   --font: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'PingFang SC', sans-serif;
   --mono: 'SF Mono', 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', monospace;
   --radius: 6px;
@@ -97,30 +103,30 @@ body {
   /* gap:1px 技巧: 子元素的 border 用背景色间隙代替 */
 }
 .section-title {
-  font-size: 11px; font-weight: 500; padding: 6px 12px;
+  font-size: 11px; font-weight: 500; padding: 8px 14px;
   background: var(--surface-2);
   display: flex; justify-content: space-between; align-items: center;
   text-transform: uppercase; letter-spacing: .06em; color: var(--text2);
   font-family: var(--mono);
   border-bottom: 1px solid var(--grid);
 }
-.section-body { padding: 12px 14px; }
+.section-body { padding: 10px 14px; }
 
 /* ═══ Table ═══ */
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table { width: 100%; border-collapse: collapse; font-size: 11px; }
 thead { border-bottom: 1px solid var(--grid); }
-th { text-align: left; padding: 5px 8px; background: var(--surface-2); color: var(--text2);
-     font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
-td { padding: 4px 8px; font-size: 13px; }
+th { text-align: left; padding: 6px 10px; background: var(--surface-2); color: var(--text2);
+     font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+td { padding: 5px 10px; font-size: 11px; }
 tr { border-bottom: 1px solid var(--surface-2); }
-tr:hover td { background: rgba(255,255,255,.015); }
+tr:hover td { background: rgba(255,255,255,.02); }
 tr.expanded td { background: rgba(77,141,255,.04); }
 
 /* ═══ Badges ═══ */
 .badge {
   display: inline-block; padding: 2px 6px;
-  font-size: 11px; font-weight: 500;
-  text-transform: uppercase;
+  font-size: 10px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: .03em;
 }
 .badge.pending     { color: var(--text3); }
 .badge.routed      { color: var(--text2); }
@@ -163,12 +169,12 @@ tr.expanded td { background: rgba(77,141,255,.04); }
 
 /* ═══ Form ═══ */
 .form-row { display: flex; gap: 8px; }
-textarea, input, select {
+textarea, input[type=text], input:not([type]), select {
   background: var(--bg); border: 1px solid var(--grid); border-radius: var(--radius-sm);
-  padding: 6px 8px; color: var(--text); font-size: 13px; width: 100%;
-  transition: border-color .15s;
+  padding: 5px 8px; color: var(--text); font-size: 11px; width: 100%;
+  transition: border-color .15s; font-family: var(--font);
 }
-textarea:focus, input:focus, select:focus { outline: none; border-bottom-color: var(--accent); }
+textarea:focus, input:focus, select:focus { outline: none; border-color: var(--accent); }
 textarea { resize: vertical; min-height: 40px; }
 .filter-bar { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
 .filter-bar select { width: auto; }
@@ -269,7 +275,7 @@ pre.agent-out {
 /* ═══ Intervention ═══ */
 .check-col { width: 2em; }
 .intervention-row { display: flex; justify-content: space-between; align-items: center;
-  padding: 6px 0; border-bottom: 1px solid var(--grid); font-size: 13px; }
+  padding: 6px 0; border-bottom: 1px solid var(--grid); font-size: 11px; }
 .intervention-row:last-child { border-bottom: none; }
 .held-tag { font-size: 11px; color: var(--st-hold); font-weight: 500; margin-left: 6px; text-transform: uppercase; }
 
@@ -288,7 +294,7 @@ pre.agent-out {
 
 /* ═══ Toast ═══ */
 .toast-container { position:fixed; top:40px; right:12px; z-index:999; display:flex; flex-direction:column; gap:4px; }
-.toast { padding:10px 16px; border-radius:var(--radius-sm); font-size:13px; max-width:340px;
+.toast { padding:10px 16px; border-radius:var(--radius-sm); font-size:11px; max-width:340px;
   animation: toastIn .2s ease; cursor:pointer; }
 .toast.error { background:rgba(240,97,109,.12); color:var(--st-fail); border:1px solid var(--st-fail); }
 .toast.success { background:rgba(62,207,142,.1); color:var(--st-done); border:1px solid var(--st-done); }
@@ -307,7 +313,7 @@ pre.agent-out {
 .skill-list h4 { font-size: 13px; margin: 0 0 8px 0; color: var(--text2); }
 .skill-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 4px;
   font-size: 12px; border-bottom: 1px solid var(--grid); }
-.skill-item .name { color: var(--fg); }
+.skill-item .name { color: var(--text); }
 .skill-item .type-tag { font-size: 11px; padding: 2px 6px; border-radius: var(--radius-sm); color: var(--text2); border: 1px solid var(--grid); }
 .skill-item .type-tag.tool { color: var(--accent); border-color: var(--accent); }
 .skill-item .type-tag.prompt { color: var(--st-hold); border-color: var(--st-hold); }
@@ -316,10 +322,10 @@ pre.agent-out {
 .skill-item .btn-del:hover { background: var(--st-fail); color: #fff; }
 .skill-agent-matrix { border: 1px solid var(--grid); padding: 8px; overflow-y: auto; }
 .skill-agent-matrix h4 { font-size: 13px; margin: 0 0 8px 0; color: var(--text2); }
-.matrix-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.matrix-table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .matrix-table th, .matrix-table td { padding: 4px 6px; border-bottom: 1px solid var(--grid); text-align: center; }
-.matrix-table th { color: var(--fg2); font-weight: normal; }
-.matrix-table td.skill-name { text-align: left; color: var(--fg); }
+.matrix-table th { color: var(--text2); font-weight: 500; font-size: 10px; }
+.matrix-table td.skill-name { text-align: left; color: var(--text); }
 .matrix-table input[type=checkbox] { accent-color: var(--accent); }
 .skill-form { display: none; padding: 8px; border: 1px solid var(--accent); margin-top: 8px; }
 .skill-form.open { display: block; }
@@ -347,7 +353,7 @@ pre.agent-out {
 /* ═══ Dashboard 卡片 ═══ */
 .db-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:10px; margin-bottom:6px; }
 
-.db-card { background:var(--bg2); border:1px solid var(--grid); border-radius:8px; padding:16px; display:flex; flex-direction:column; }
+.db-card { background:var(--surface); border:1px solid var(--grid); border-radius:var(--radius); padding:16px; display:flex; flex-direction:column; }
 
 .db-card .db-head { display:flex; align-items:center; gap:7px; margin-bottom:8px; }
 .db-card .db-head .db-icon { font-size:11px; line-height:1; width:14px; text-align:center; flex-shrink:0; }
