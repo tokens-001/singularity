@@ -3,7 +3,7 @@
 设计契约 (修复 #7): 只有主线程写 tracker。
   - worker 线程 (v3 ThreadPool) 里的 run() 只做纯执行 (dispatch + validate),
     返回 BatchOutput, 不调任何 tracker.transition/cas/create。
-  - 主线程的调度循环 (_run_queue_v2 / _run_queue_v3) 负责所有 tracker 写入。
+  - 主线程的 _run_queue_v3 负责所有 tracker 写入。
   这样"单线程 tracker 写入"不变量真正成立, 不需要锁。
 
 实现已拆分到 4 个内部模块:
@@ -80,8 +80,7 @@ except ImportError:
     MergeRequest = None  # type: ignore
 
 def run_queue(agents: dict, max_concurrent: int = 1) -> list[tuple]:
-    if max_concurrent <= 1:
-        return _run_queue_v2(agents)
+    """统一的调度循环入口。v3 支持 1..N 并发, 替代了 v2。"""
     return _run_queue_v3(agents, max_concurrent)
 
 
@@ -256,263 +255,155 @@ def _process_batch(task, batch, route, snap, agents: dict, results: list) -> str
     return reason
 
 
-def _run_queue_v2(agents: dict) -> list[tuple]:
-    """v2 拓扑自适应: 根据 DAG 结构选 τP(并行)/τS(顺序)。"""
-    results: list[tuple] = []
-
-    while True:
-        stalled = witness.check_stalled()
-        if stalled: pass
-
-        ready = tracker.list_pending()
-        if not ready: break
-        ready = schedule_policy(ready)
-
-        # ── 拓扑路由: τP 并行 (ω≥3) → 多任务并发 ──
-        try:
-            topo = router_mod.select_topology()
-        except Exception:
-            topo = {"topology": "τS", "omega": 1}
-        if topo.get("topology") == "τP" and len(ready) >= 2:
-            batch_size = min(topo.get("omega", 3), len(ready), 6)
-            batch = ready[:batch_size]
-            _pending_sse_events.append({"kind": "system", "msg": f"τP: {batch_size} 并行", "ts": time.time()})
-            # 路由+快照
-            setups = []
-            for t in batch:
-                if not t.route_locked:
-                    r = router_mod.route(t.description)
-                    t.route_level = r.level; t.route_gate = r.gate_required; t.route_type = r.task_type
-                tracker.transition(t.id, TaskStatus.ROUTED, route_level=t.route_level,
-                                   route_gate=t.route_gate, route_type=t.route_type)
-                snap = snap_mod.take(t.id)
-                tracker.transition(t.id, TaskStatus.RUNNING, snapshot_id=snap.id)
-                setups.append((t, snap))
-            # 并行执行
-            futures = {}
-            with ThreadPoolExecutor(max_workers=batch_size) as pool:
-                for t, snap in setups:
-                    ctx = RunContext(batch_id=t.id, snapshot_ref=snap.ref, merge_queue=None)
-                    futures[pool.submit(_run_with_retry, t, ctx, agents)] = (t, snap)
-                for fut in as_completed(futures):
-                    t, snap = futures[fut]
-                    try:
-                        b_result = fut.result(timeout=600)
-                        route = router_mod.RouteResult(level=t.route_level, gate_required=t.route_gate, task_type=t.route_type)
-                        _process_batch(t, b_result, route, snap, agents, results)
-                    except Exception as e:
-                        results.append((t.id, f"τP_error:{e}", None))
-            continue
-
-        task = ready[0]
-
-        # 尊重 planner 建议层级, 不重新路由 (建议 #6)
-        if task.route_locked:
-            route = router_mod.RouteResult(
-                level=task.route_level, gate_required=task.route_gate,
-                task_type=task.route_type,
-            )
+def _execute_one_task(task, agents: dict):
+    """执行单个任务: 路由→预检→Goal/委员会/普通→返回(batch, route, snap)。"""
+    # 路由
+    if task.route_locked:
+        route = router_mod.RouteResult(
+            level=task.route_level, gate_required=task.route_gate,
+            task_type=task.route_type)
+    else:
+        route = router_mod.route(task.description)
+    # 预检
+    pre = pre_mod.pre_search(task.description, route)
+    pre_mod.apply_escalation(route, pre)
+    # 模型排名
+    project_phase = None
+    try:
+        pid = getattr(task, "project_id", "")
+        if pid:
+            from . import project as proj_mod
+            proj = proj_mod.load(pid)
+            if proj:
+                project_phase = proj.phase.value
+    except Exception:
+        pass
+    ranked_models = router_mod.rank_models_for_task(task.description, route.task_type, phase=project_phase)
+    effective_agents = dict(agents)
+    if ranked_models:
+        effective_agents[route.level] = _reorder_agents_by_rank(
+            agents.get(route.level, []), ranked_models)
+    # 快照
+    snap = snap_mod.take(task.id)
+    ctx = RunContext(batch_id=task.id, snapshot_ref=snap.ref, merge_queue=None)
+    # 执行分叉: Goal循环 / D层委员会 / 普通
+    goal_match = _GOAL_RE.match(task.description)
+    if goal_match:
+        goal = goal_match.group(1).strip()
+        _pending_sse_events.append({"kind": "system", "msg": f"Goal循环: {goal[:60]}", "ts": time.time(), "task_id": task.id})
+        loop = GoalLoop(effective_agents)
+        g_result = loop.run(task, goal, max_iter=5)
+        from ._types import BatchOutput as _BO
+        from .executors.base import ExecutorResult as _ER
+        batch = _BO(ok=g_result.success, task_id=task.id,
+                    term_reason=f"goal_{'met' if g_result.success else 'exhausted'}_{g_result.iterations}iter",
+                    tool_events=[], turn_count=g_result.iterations,
+                    validation=val_mod.ValidationReport(
+                        verdict="通过" if g_result.success else "阻断",
+                        action="pass" if g_result.success else "abort",
+                        unverified=[f"Goal循环 {g_result.iterations}轮, 满足={g_result.success}"]))
+        batch.dispatch_result = type('obj', (object,), {
+            'executor_result': _ER(success=g_result.success, raw_output=g_result.final_output),
+            'agent_cfg': {}, 'level': route.level})()
+    else:
+        d_agents = effective_agents.get("D", [])
+        use_committee = route.level == "D" and len(d_agents) >= 2
+        if use_committee:
+            batch = _run_committee(task, ctx, effective_agents, d_agents)
         else:
-            route = router_mod.route(task.description)
+            batch = _run_with_retry(task, ctx, effective_agents)
+    batch.pre_search_skipped = pre.skipped
+    batch.pre_search_reason = pre.reason
+    batch.pre_search_top_decisions = pre.top_decisions
+    batch.pre_search_memory = {"intent": pre.memory.intent, "narrative": pre.memory.narrative,
+                               "entity_matches": pre.memory.entity_matches, "graph_coverage": pre.memory.graph_coverage}
+    return batch, route, snap
 
-        # ── I 层预检 (知识库 + MAGMA 记忆) ──
-        pre = pre_mod.pre_search(task.description, route)
-        pre_mod.apply_escalation(route, pre)
 
-        # ── 画像路由: 给 dispatch 提供模型偏好 ──
-        # 提取项目阶段（相位感知路由）
-        project_phase = None
-        try:
-            pid = getattr(task, "project_id", "")
-            if pid:
-                from . import project as proj_mod
-                proj = proj_mod.load(pid)
+def _finalize_result(task, batch, route, snap, results: list) -> str:
+    """后处理: 裁判/写终态/trace/QA gate/Chancellor/escalation。返回 reason。"""
+    _judge_and_profile(task, batch)
+    validation = batch.validation
+    term_reason = batch.term_reason
+    disp_result = batch.dispatch_result
+    if batch.planner_decomposed:
+        _materialize_in_main(batch, task)
+        reason = f"decomposed: {term_reason}"
+    elif validation.action == "pass":
+        tracker.transition(task.id, TaskStatus.DONE)
+        _maybe_complete_parents(task.id)
+        reason = f"pass: {term_reason}"
+    elif validation.action == "rollback":
+        snap_mod.rollback(snap)
+        tracker.transition(task.id, TaskStatus.ROLLED_BACK, error=f"{validation.verdict}: {term_reason}")
+        reason = f"rolled_back: {term_reason}"
+    else:
+        d_plan = _read_planner_patch(task.id)
+        if d_plan and "escalation_exhausted" in term_reason:
+            fix_task = tracker.create(f"[D方案执行] {task.description[:80]}", depends_on=[task.id], depth=task.depth)
+            tracker.transition(fix_task.id, TaskStatus.PENDING, route_level="E+", route_locked=True)
+            tracker.transition(task.id, TaskStatus.FAILED, error=f"已生成E+修复任务 {fix_task.id[:8]}: {term_reason}")
+            reason = f"escalated_to_E+: {fix_task.id[:8]}"
+        else:
+            tracker.transition(task.id, TaskStatus.FAILED, error=f"{validation.verdict}: {term_reason}")
+            reason = f"failed: {term_reason}"
+    _save_trace(task, route, snap, disp_result, validation, validation.action == "rollback",
+                pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
+                pre_search_top_decisions=batch.pre_search_top_decisions, pre_search_memory=batch.pre_search_memory)
+    # 工具事件
+    tool_events = getattr(batch, 'tool_events', []) or []
+    for te in tool_events:
+        te['task_id'] = task.id
+        _pending_sse_events.append(te)
+    turn = getattr(batch, 'turn_count', 0) or 0
+    if turn > 0:
+        _pending_sse_events.append({"kind": "turn", "msg": f"[{task.id[:8]}] 推理完成，共 {turn} 轮", "ts": time.time(), "task_id": task.id})
+    # QA gate
+    try:
+        from .supervisor import supervise
+        changed = disp_result.executor_result.changed_files if disp_result else []
+        constraints, checklist = [], []
+        pid = getattr(task, 'project_id', '')
+        if pid:
+            try:
+                from .project import load as _load_proj
+                proj = _load_proj(pid)
                 if proj:
-                    project_phase = proj.phase.value
-        except Exception:
-            pass
-
-        ranked_models = router_mod.rank_models_for_task(
-            task.description, route.task_type, phase=project_phase,
-        )
-        effective_agents = agents
-        if ranked_models:
-            # 构造临时 lineup: 画像排名靠前的优先
-            effective_agents = dict(agents)  # 浅拷贝
-            effective_agents[route.level] = _reorder_agents_by_rank(
-                agents.get(route.level, []), ranked_models,
-            )
-
-        tracker.transition(
-            task.id, TaskStatus.ROUTED,
-            route_level=route.level, route_gate=route.gate_required,
-            route_type=route.task_type,
-        )
-        snap = snap_mod.take(task.id)
-        tracker.transition(task.id, TaskStatus.RUNNING, snapshot_id=snap.id)
-
-        ctx = RunContext(batch_id=task.id, snapshot_ref=snap.ref, merge_queue=None)
-
-        # ── Goal 循环检测: [Goal] 前缀 → 多轮迭代直到满足 ──
-        goal_match = _GOAL_RE.match(task.description)
-        if goal_match:
-            goal = goal_match.group(1).strip()
-            _pending_sse_events.append({"kind": "system", "msg": f"Goal循环: {goal[:60]}", "ts": time.time(), "task_id": task.id})
-            loop = GoalLoop(effective_agents)
-            g_result = loop.run(task, goal, max_iter=5)
-            # 构造 BatchOutput 兼容下游
-            from ._types import BatchOutput as _BO
-            from .executors.base import ExecutorResult as _ER
-            batch = _BO(ok=g_result.success, task_id=task.id,
-                        term_reason=f"goal_{'met' if g_result.success else 'exhausted'}_{g_result.iterations}iter",
-                        tool_events=[], turn_count=g_result.iterations,
-                        validation=val_mod.ValidationReport(
-                            verdict="通过" if g_result.success else "阻断",
-                            action="pass" if g_result.success else "abort",
-                            unverified=[f"Goal循环 {g_result.iterations}轮, 满足={g_result.success}"]))
-            batch.dispatch_result = type('obj', (object,), {
-                'executor_result': _ER(success=g_result.success, raw_output=g_result.final_output),
-                'agent_cfg': {}, 'level': route.level})()
-        else:
-            # D层委员会: 多agent并行出方案，合成最优
-            d_agents = effective_agents.get("D", [])
-            use_committee = route.level == "D" and len(d_agents) >= 2
-            if use_committee:
-                batch = _run_committee(task, ctx, effective_agents, d_agents)
-            else:
-                batch = _run_with_retry(task, ctx, effective_agents)
-
-        batch.pre_search_skipped = pre.skipped
-        batch.pre_search_reason = pre.reason
-        batch.pre_search_top_decisions = pre.top_decisions
-        batch.pre_search_memory = {
-            "intent": pre.memory.intent,
-            "narrative": pre.memory.narrative,
-            "entity_matches": pre.memory.entity_matches,
-            "graph_coverage": pre.memory.graph_coverage,
-        }
-
-        # ── 执行裁判钩子 ──
-        _judge_and_profile(task, batch)
-
-        # 主线程写终态 (修复 #3: 无 merge_request → 直接 DONE)
-        validation = batch.validation
-        term_reason = batch.term_reason
-        disp_result = batch.dispatch_result
-
-        if batch.planner_decomposed:
-            # planner 分解了 → parent 转 DECOMPOSED, materialize 在这做 (主线程)
-            _materialize_in_main(batch, task)
-            reason = f"decomposed: {term_reason}"
-        elif validation.action == "pass":
-            # 修复 #3: 无 merge_request → 直接 DONE
-            tracker.transition(task.id, TaskStatus.DONE)
-            _maybe_complete_parents(task.id)
-            reason = f"pass: {term_reason}"
-        elif validation.action == "rollback":
-            snap_mod.rollback(snap)
-            tracker.transition(task.id, TaskStatus.ROLLED_BACK, error=f"{validation.verdict}: {term_reason}")
-            reason = f"rolled_back: {term_reason}"
-        else:
-            # D 层分析完有方案 → 建新任务给 E+ 执行
-            d_plan = _read_planner_patch(task.id)
-            if d_plan and "escalation_exhausted" in term_reason:
-                fix_task = tracker.create(
-                    f"[D方案执行] {task.description[:80]}",
-                    depends_on=[task.id],
-                    depth=task.depth,
-                )
-                tracker.transition(fix_task.id, TaskStatus.PENDING,
-                                   route_level="E+", route_locked=True)
-                tracker.transition(task.id, TaskStatus.FAILED,
-                                   error=f"已生成E+修复任务 {fix_task.id[:8]}: {term_reason}")
-                reason = f"escalated_to_E+: {fix_task.id[:8]}"
-            else:
-                tracker.transition(task.id, TaskStatus.FAILED, error=f"{validation.verdict}: {term_reason}")
-                reason = f"failed: {term_reason}"
-
-        _save_trace(task, route, snap, disp_result, validation, validation.action == "rollback",
-                    pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
-                    pre_search_top_decisions=batch.pre_search_top_decisions,
-                    pre_search_memory=batch.pre_search_memory)
-        # ── 推送工具调用事件到 SSE 全局队列 ──
-        tool_events = getattr(batch, 'tool_events', []) or []
-        for te in tool_events:
-            te['task_id'] = task.id
-            _pending_sse_events.append(te)
-        turn = getattr(batch, 'turn_count', 0) or 0
-        if turn > 0:
-            _pending_sse_events.append({
-                "kind": "turn",
-                "msg": f"[{task.id[:8]}] 推理完成，共 {turn} 轮",
-                "ts": time.time(),
-                "task_id": task.id,
-            })
-        results.append((task.id, reason, validation))
-        # QA Gate: 机械质检每任务产出 (项目上下文增强)
-        try:
-            from .supervisor import supervise
-            changed = disp_result.executor_result.changed_files if disp_result else []
-            constraints = []
-            checklist = []
-            pid = getattr(task, 'project_id', '')
-            if pid:
-                try:
-                    from .project import load as _load_proj
-                    proj = _load_proj(pid)
-                    if proj:
-                        constraints = proj.constraints_checklist
-                        if proj.architecture:
-                            for tdef in proj.architecture.get("tasks", []):
-                                if tdef.get("title", "") in task.description or tdef.get("id", "") in task.description:
-                                    acc = tdef.get("acceptance", "")
-                                    if acc:
-                                        checklist.append(acc)
-                except Exception:
-                    pass
-            sv = supervise(task.description, changed, constraints, checklist,
-                          getattr(disp_result.executor_result, 'raw_output', '') if disp_result else '',
-                          task.id)
-            if sv.verdict != "pass":
-                reason += f"; QA:{sv.verdict}"
-                # 硬证据失败 → 阻止标 DONE, 标 FAILED
-                if sv.verdict == "fail":
-                    tracker.transition(t.id, TaskStatus.FAILED, error=f"QA:fail: " + "; ".join(sv.issues[:2]))
-                    results.append((t.id, reason + " (QA拒绝)", validation))
-                    continue  # 跳过 DONE 标记
-                else:
-                    tracker.transition(task.id, task.status, error=f"QA:{sv.verdict}: " + "; ".join(sv.issues[:2]))
-        except Exception as e:
-            try:
-                from . import log as log_mod
-                log_mod.warn("qa_gate", f"task={task.id}: {e}")
+                    constraints = proj.constraints_checklist
+                    if proj.architecture:
+                        for tdef in proj.architecture.get("tasks", []):
+                            if tdef.get("title", "") in task.description or tdef.get("id", "") in task.description:
+                                acc = tdef.get("acceptance", "")
+                                if acc:
+                                    checklist.append(acc)
             except Exception:
                 pass
-            try: witness.heartbeat(task_id=task.id, status="error", detail=f"qa_gate:{e}")
-            except: pass
-        # 奇点: 评估是否需要奏报
-        try:
-            changed = disp_result.executor_result.changed_files if disp_result else []
-            report = chan_mod.assess(task.description, term_reason, changed)
-            if report.severity in ("alert", "critical"):
-                report.task_ids = [task.id]
-                chan_mod.save_report(report)
-        except Exception as e:
-            try:
-                from . import log as log_mod
-                log_mod.warn("chancellor", f"task={task.id}: {e}")
-            except Exception:
-                pass
-            try: witness.heartbeat(task_id=task.id, status="error", detail=f"chancellor:{e}")
-            except: pass
-
-    return results
+        sv = supervise(task.description, changed, constraints, checklist,
+                      getattr(disp_result.executor_result, 'raw_output', '') if disp_result else '', task.id)
+        if sv.verdict == "fail":
+            tracker.transition(task.id, TaskStatus.FAILED, error=f"QA:fail: " + "; ".join(sv.issues[:2]))
+            results.append((task.id, reason + " (QA拒绝)", validation))
+            return reason + "; QA:fail"
+        elif sv.verdict != "pass":
+            tracker.transition(task.id, task.status, error=f"QA:{sv.verdict}: " + "; ".join(sv.issues[:2]))
+            reason += f"; QA:{sv.verdict}"
+    except Exception:
+        pass
+    # Chancellor
+    try:
+        changed = disp_result.executor_result.changed_files if disp_result else []
+        report = chan_mod.assess(task.description, term_reason, changed)
+        if report.severity in ("alert", "critical"):
+            report.task_ids = [task.id]
+            chan_mod.save_report(report)
+    except Exception:
+        pass
+    results.append((task.id, reason, validation))
+    return reason
 
 
 def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
-    """v3 并行: worker 跑 run() 纯执行, 主线程回收后写 tracker + drain merge。"""
-    if MergeQueue is None:
-        return _run_queue_v2(agents)
+    """v3 统一调度循环: _execute_one_task + _finalize_result, 支持 1..N 并发。"""
 
     results: list[tuple] = []
     mq = MergeQueue()
@@ -557,7 +448,7 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                     snap = snap_mod.take(t.id)
                     tracker.transition(t.id, TaskStatus.RUNNING, snapshot_id=snap.id)
                     dispatched.add(t.id)
-                    fut = pool.submit(_run_with_retry, t, ctx, agents)
+                    fut = pool.submit(_execute_one_task, t, agents)
                     running_futures[fut] = (t, route, snap, pre)
 
             if not running_futures and not pending_batches:
@@ -585,61 +476,14 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                     fut.cancel()
                 for fut in done:
                     t, route, snap, pre = running_futures.pop(fut)
-                    batch = fut.result()
-                    batch.pre_search_skipped = pre.skipped
-                    batch.pre_search_reason = pre.reason
-                    batch.pre_search_top_decisions = pre.top_decisions
-                    batch.pre_search_memory = {
-                        "intent": pre.memory.intent,
-                        "narrative": pre.memory.narrative,
-                        "entity_matches": pre.memory.entity_matches,
-                        "graph_coverage": pre.memory.graph_coverage,
-                    }
-
-                    # ── 执行裁判钩子（v3 路径也需要）──
-                    _judge_and_profile(t, batch)
-
-                    if batch.planner_decomposed:
-                        _materialize_in_main(batch, t)
-                        _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
-                                    pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
-                                    pre_search_top_decisions=batch.pre_search_top_decisions,
-                                    pre_search_memory=batch.pre_search_memory)
-                        results.append((t.id, f"decomposed: {batch.term_reason}", batch.validation))
-                        continue
-
-                    validation = batch.validation
-                    if validation.action == "pass":
-                        if batch.merge_request is not None:
-                            # 修复 #3: 有 merge_request → submit, 等 drain 合成功才 DONE
-                            mq.submit(batch.merge_request)
-                            pending_batches[t.id] = (t, route, snap, batch)
-                        else:
-                            # 无 merge_request (planner/无wt) → 直接 DONE
-                            tracker.transition(t.id, TaskStatus.DONE)
-                            _maybe_complete_parents(t.id)
-                            _save_trace(t, route, snap, batch.dispatch_result, validation, False,
-                                        pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
-                                        pre_search_top_decisions=batch.pre_search_top_decisions,
-                                        pre_search_memory=batch.pre_search_memory)
-                            results.append((t.id, f"pass: {batch.term_reason}", validation))
-                    elif validation.action == "rollback":
-                        snap_mod.rollback(batch_snap)
-                        tracker.transition(t.id, TaskStatus.ROLLED_BACK, error=f"{validation.verdict}: {batch.term_reason}")
-                        _release_ref(t.id)
-                        _save_trace(t, route, snap, batch.dispatch_result, validation, True,
-                                    pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
-                                    pre_search_top_decisions=batch.pre_search_top_decisions,
-                                    pre_search_memory=batch.pre_search_memory)
-                        results.append((t.id, f"rolled_back: {batch.term_reason}", validation))
+                    batch, t_route, t_snap = fut.result()
+                    # ── 使用 _finalize_result 做后处理 ──
+                    if batch.merge_request is not None:
+                        # 有 merge_request → 提交到 merge queue, 等 drain 后定终态
+                        mq.submit(batch.merge_request)
+                        pending_batches[t.id] = (t, t_route, t_snap, batch)
                     else:
-                        tracker.transition(t.id, TaskStatus.FAILED, error=f"{validation.verdict}: {batch.term_reason}")
-                        _release_ref(t.id)
-                        _save_trace(t, route, snap, batch.dispatch_result, validation, False,
-                                    pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
-                                    pre_search_top_decisions=batch.pre_search_top_decisions,
-                                    pre_search_memory=batch.pre_search_memory)
-                        results.append((t.id, f"failed: {batch.term_reason}", validation))
+                        _finalize_result(t, batch, t_route, t_snap, results)
 
             # ⑥ drain (主线程), 合成功的 task 标 DONE (修复 #9: drain 后才定终态)
             if pending_batches:
@@ -653,19 +497,16 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                             _release_ref(t.id)
                             _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
                                         pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
-                                        pre_search_top_decisions=batch.pre_search_top_decisions,
-                                        pre_search_memory=batch.pre_search_memory)
+                                        pre_search_top_decisions=batch.pre_search_top_decisions, pre_search_memory=batch.pre_search_memory)
                             results.append((t.id, f"merged: {mr.new_head[:8]}", batch.validation))
                         elif mr.status == "conflict":
-                            # CONFLICT_HELD 已在 mq._park 标过, 保留 ref 等人; 非终态不存 trace
                             results.append((t.id, f"conflict: {mr.conflict_files}", batch.validation))
                         else:
                             tracker.transition(t.id, TaskStatus.FAILED, error=f"merge {mr.status}")
                             _release_ref(t.id)
                             _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
                                         pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
-                                        pre_search_top_decisions=batch.pre_search_top_decisions,
-                                        pre_search_memory=batch.pre_search_memory)
+                                        pre_search_top_decisions=batch.pre_search_top_decisions, pre_search_memory=batch.pre_search_memory)
                             results.append((t.id, f"merge_failed", batch.validation))
 
     return results
