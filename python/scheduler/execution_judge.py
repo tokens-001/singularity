@@ -198,3 +198,93 @@ def build_reflexion_feedback(verdict: JudgeVerdict) -> str:
         f"失败模式: {verdict.failure_mode}\n"
         f"请修正后重新输出。"
     )
+
+
+# ═══════════════════════════════════════════════
+# Self-Fusion — 多模型并行 + 合成裁判 (model-fusion 论文)
+# ═══════════════════════════════════════════════
+
+_FUSION_SYNTHESIS_PROMPT = """你是多模型输出合成器。以下是两个模型对同一任务的独立产出。
+
+【任务】
+{task}
+
+【模型 A 产出】
+{output_a}
+
+【模型 B 产出】
+{output_b}
+
+请按以下 6 项提纲合成一份最终方案:
+1. 两个模型的共识点
+2. 模型 A 独有的有价值观点
+3. 模型 B 独有的有价值观点
+4. 两者冲突的地方及你的判断
+5. 补充两者都遗漏的重要点
+6. 最终合成方案
+
+只输出合成后的内容，不输出元讨论。"""
+
+
+def fuse_outputs(task_desc: str, output_a: str, output_b: str) -> str:
+    """Self-Fusion 合成裁判: 用 cheap model 融合两个模型的独立产出。
+
+    论文: model-fusion Self-Fusion 模式 — 2 cheap-models 并行 + 1 合成器。
+    效果: 用 2×便宜模型 ≈ 1×贵模型质量，成本 ~1/3。
+    ponytail: 6项提纲 prompt，不搞多轮迭代。
+    """
+    if not output_a or not output_b:
+        return output_a or output_b or ""
+    prompt = _FUSION_SYNTHESIS_PROMPT.format(
+        task=task_desc,
+        output_a=output_a[:2000],
+        output_b=output_b[:2000],
+    )
+    fused = _call_e_layer(prompt)
+    return fused if fused else f"{output_a}\n\n---\n{output_b}"
+
+
+def run_parallel_models(task_desc: str, level: str = "E") -> list[str]:
+    """并行调用 2 个 cheap model 产出独立方案。返回 [output_a, output_b]。
+
+    ponytail: 固定 2 路。需要时扩展到 N 路。
+    """
+    import os
+    import concurrent.futures
+
+    api_configs = [
+        ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/chat/completions", "deepseek-chat"),
+        ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-5-turbo"),
+    ]
+
+    def _call_one(env_var, base_url, model):
+        api_key = os.environ.get(env_var, "")
+        if not api_key:
+            return ""
+        try:
+            import httpx
+            with httpx.Client(timeout=httpx.Timeout(60)) as client:
+                r = client.post(
+                    base_url,
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": "你是代码专家。请针对以下任务给出分析和方案，不要修改文件。"},
+                            {"role": "user", "content": task_desc},
+                        ],
+                        "max_tokens": 2000,
+                        "temperature": 0.7,
+                    },
+                )
+                if r.status_code == 200:
+                    return r.json()["choices"][0]["message"]["content"]
+        except Exception:
+            pass
+        return ""
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(_call_one, *cfg) for cfg in api_configs]
+        results = [f.result() for f in futures]
+
+    return [r for r in results if r]

@@ -47,6 +47,7 @@ _TYPE_PATTERNS = [
     ("feature",  re.compile(r"加|新增|实现|功能|模块")),
     ("refactor", re.compile(r"重构|重写|改架构|拆分|合并")),
     ("docs",     re.compile(r"文档|README|注释|changelog|配置|\.yaml|\.yml")),
+    ("fusion",   re.compile(r"架构设计|系统设计|安全审计|架构方案|技术方案|多模块|跨模块|从零开始")),
 ]
 
 # 开头动词消歧 (审计 2.2): 短查询里查询类动词在句首 → 查询意图, 强制 E

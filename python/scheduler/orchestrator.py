@@ -264,8 +264,12 @@ def _execute_one_task(task, agents: dict):
     else:
         d_agents = effective_agents.get("D", [])
         use_committee = route.level == "D" and len(d_agents) >= 2
+        use_fusion = route.task_type == "fusion"
         if use_committee:
             batch = _run_committee(task, ctx, effective_agents, d_agents)
+        elif use_fusion:
+            from ._exec import _run_fusion
+            batch = _run_fusion(task, route.level, effective_agents)
         else:
             batch = _run_with_retry(task, ctx, effective_agents)
     batch.pre_search_skipped = pre.skipped

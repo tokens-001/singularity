@@ -382,6 +382,58 @@ def _decide_cascade(task, level, turn, validation, disp_result, all_tool_events,
     ))
 
 
+def _run_fusion(task, level: str, agents: dict) -> BatchOutput:
+    """Self-Fusion: 2 cheap-model 并行产出方案 + 合成裁判融合。
+
+    不改文件，只出方案。适用于 route_type=fusion 的复杂架构/设计任务。
+    论文: model-fusion Self-Fusion 模式 — 2×便宜 ≈ 1×贵，成本 ~1/3。
+    """
+    from .execution_judge import run_parallel_models, fuse_outputs
+    from . import validator as val_mod
+    all_tool_events = []
+    try:
+        outputs = run_parallel_models(task.description, level)
+        if len(outputs) < 2:
+            return BatchOutput(
+                ok=False, task_id=task.id,
+                term_reason="fusion_insufficient_models",
+                validation=val_mod.ValidationReport(
+                    verdict="阻断", action="abort",
+                    unverified=[f"并行模型不足: {len(outputs)}/2"],
+                ),
+                tool_events=all_tool_events, turn_count=0,
+            )
+        fused = fuse_outputs(task.description, outputs[0], outputs[1])
+        return BatchOutput(
+            ok=True, task_id=task.id,
+            term_reason="fusion_complete",
+            validation=val_mod.ValidationReport(
+                verdict="通过", action="pass",
+                unverified=[f"Self-Fusion: 2模型并行+合成"],
+            ),
+            dispatch_result=disp_mod.DispatchResult(
+                level=level, agent_cfg={},
+                executor_result=type('obj', (object,), {
+                    'success': True, 'raw_output': fused,
+                    'changed_files': [], 'tool_events': [],
+                    'elapsed': 0, 'token_count': 0, 'error': '',
+                })(),
+                attempts=1,
+            ),
+            tool_events=all_tool_events, turn_count=1,
+        )
+    except Exception as e:
+        return BatchOutput(
+            ok=False, task_id=task.id,
+            term_reason=f"fusion_error: {e}",
+            validation=val_mod.ValidationReport(
+                verdict="阻断", action="abort",
+                unverified=[f"Fusion 执行异常: {e}"],
+            ),
+            tool_events=all_tool_events, turn_count=0,
+        )
+
+
 def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     """纯执行: dispatch + validate, 返回 BatchOutput。
 
