@@ -67,7 +67,7 @@ from . import witness
 from . import memory as mem_mod
 from . import pre_search as pre_mod
 from . import chancellor as chan_mod
-from .executors.worktree import (
+from ._git_worktree import (
     Worktree, create as wt_create, cleanup as wt_cleanup,
     merge_back as wt_merge_back, commit_wt, changed_files_between,
 )
@@ -209,50 +209,6 @@ def _judge_and_profile(task, batch: BatchOutput) -> None:
             _hf.append_to_project(task.project_id, h)
     except Exception:
         pass
-
-
-def _process_batch(task, batch, route, snap, agents: dict, results: list) -> str:
-    """处理 BatchOutput: 状态转换 + trace + 事件 + QA Gate。返回 reason。"""
-    _judge_and_profile(task, batch)
-    validation = batch.validation
-    term_reason = batch.term_reason
-    disp_result = batch.dispatch_result
-
-    if batch.planner_decomposed:
-        _materialize_in_main(batch, task)
-        reason = f"decomposed: {term_reason}"
-    elif validation and validation.action == "pass":
-        tracker.transition(task.id, TaskStatus.DONE)
-        _maybe_complete_parents(task.id)
-        reason = f"pass: {term_reason}"
-    elif validation and validation.action == "rollback":
-        snap_mod.rollback(snap)
-        tracker.transition(task.id, TaskStatus.ROLLED_BACK, error=f"{validation.verdict}: {term_reason}")
-        reason = f"rolled_back: {term_reason}"
-    else:
-        d_plan = _read_planner_patch(task.id)
-        if d_plan and "escalation_exhausted" in term_reason:
-            fix_task = tracker.create(f"[D方案执行] {task.description[:80]}", depends_on=[task.id], depth=task.depth)
-            tracker.transition(fix_task.id, TaskStatus.PENDING, route_level="E+", route_locked=True)
-            tracker.transition(task.id, TaskStatus.FAILED, error=f"E+修复任务 {fix_task.id[:8]}: {term_reason}")
-            reason = f"escalated: {fix_task.id[:8]}"
-        else:
-            verdict = getattr(validation, 'verdict', '未知') if validation else '未知'
-            tracker.transition(task.id, TaskStatus.FAILED, error=f"{verdict}: {term_reason}")
-            reason = f"failed: {term_reason}"
-
-    _save_trace(task, route, snap, disp_result, validation,
-                validation.action == "rollback" if validation else False,
-                pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
-                pre_search_top_decisions=batch.pre_search_top_decisions, pre_search_memory=batch.pre_search_memory)
-    # SSE events
-    for te in (getattr(batch, 'tool_events', []) or []):
-        te['task_id'] = task.id; _pending_sse_events.append(te)
-    turn = getattr(batch, 'turn_count', 0) or 0
-    if turn > 0:
-        _pending_sse_events.append({"kind": "turn", "msg": f"[{task.id[:8]}] {turn} 轮", "ts": time.time(), "task_id": task.id})
-    results.append((task.id, reason, validation))
-    return reason
 
 
 def _execute_one_task(task, agents: dict):
@@ -476,7 +432,21 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                     fut.cancel()
                 for fut in done:
                     t, route, snap, pre = running_futures.pop(fut)
-                    batch, t_route, t_snap = fut.result()
+                    # 修复 P1-1: worker 抛异常 (如 pick_agent 无可用 agent → RuntimeError)
+                    # 不能炸掉整批循环。单任务标 FAILED, 其余任务正常回收。
+                    try:
+                        batch, t_route, t_snap = fut.result()
+                    except Exception as e:
+                        try:
+                            tracker.transition(t.id, TaskStatus.FAILED, error=f"worker 异常: {e}")
+                        except Exception:
+                            pass
+                        results.append((t.id, f"worker_error: {e}", None))
+                        try:
+                            _save_trace(t, route, snap, None, None, False)
+                        except Exception:
+                            pass
+                        continue
                     # ── 使用 _finalize_result 做后处理 ──
                     if batch.merge_request is not None:
                         # 有 merge_request → 提交到 merge queue, 等 drain 后定终态
@@ -578,7 +548,7 @@ def consolidate_memory() -> int:
         return added
     except Exception as e:
         try: witness.heartbeat("memory", f"warn:consolidate:{e}")
-        except: pass
+        except Exception: pass
         return 0
 
 

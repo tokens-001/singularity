@@ -9,7 +9,7 @@ import os
 import stat
 import subprocess as _sp
 from . import config
-from .executors.worktree import (
+from ._git_worktree import (
     Worktree, create as wt_create, cleanup as wt_cleanup,
     merge_back as wt_merge_back, commit_wt, changed_files_between,
 )
@@ -56,7 +56,7 @@ def _maybe_create_worktree(task_id: str, level: str, agent_cfg: dict, snapshot_r
         return None
     # worktree 数量上限检查
     try:
-        from .executors.worktree import _worktrees_dir
+        from ._git_worktree import _worktrees_dir
         wtd = _worktrees_dir()
         count = len(list(wtd.iterdir())) if wtd.exists() else 0
         if count >= _MAX_WORKTREES:

@@ -27,7 +27,7 @@ from . import witness
 from . import memory as mem_mod
 from . import pre_search as pre_mod
 from . import chancellor as chan_mod
-from .executors.worktree import (
+from ._git_worktree import (
     Worktree, create as wt_create, cleanup as wt_cleanup,
     merge_back as wt_merge_back, commit_wt, changed_files_between,
 )
@@ -83,7 +83,7 @@ def _inject_memory(description: str) -> str:
         return "\n".join(lines)
     except Exception as e:
         try: witness.heartbeat("memory", f"warn:inject_memory:{e}")
-        except: pass
+        except Exception: pass
         return ""
 
 def _build_project_context(task) -> str:
@@ -144,6 +144,137 @@ def _build_project_context(task) -> str:
     except Exception:
         return ""
 
+def _build_effective_task(task, turn: int, feedback: str, is_planner: bool) -> str:
+    """拼接最终 prompt: 记忆注入 + planner preamble + 项目上下文。
+
+    顺序 (与原 run() 内一致):
+      turn==1 且无 feedback → 前置 MAGMA 记忆
+      is_planner → 前置 planner preamble
+      末尾前置 项目上下文 (proj_ctx + 分隔线)
+    """
+    effective_task = task.description
+    # ── MAGMA 记忆注入 (仅首轮、无打回反馈时) ──
+    if turn == 1 and feedback == "":
+        mem_ctx = _inject_memory(task.description)
+        if mem_ctx:
+            effective_task = mem_ctx + "\n\n" + effective_task
+    if is_planner:
+        effective_task = _PLANNER_PREAMBLE + effective_task
+    # ── 项目上下文注入 ──
+    proj_ctx = _build_project_context(task)
+    if proj_ctx:
+        effective_task = proj_ctx + "\n\n---\n" + effective_task
+    return effective_task
+
+
+def _check_cancelled(task, all_tool_events: list) -> "BatchOutput | None":
+    """检查人工取消标记。返回 BatchOutput 表示已取消; None 表示继续。"""
+    cancel_path = config.CANCEL_DIR / f"{task.id}.json"
+    if cancel_path.exists():
+        cancel_path.unlink()
+        return BatchOutput(
+            ok=False, task_id=task.id,
+            term_reason="cancelled_by_user",
+            validation=val_mod.ValidationReport(
+                verdict="阻断", action="abort",
+                unverified=["用户手动取消"],
+            ),
+            tool_events=all_tool_events, turn_count=0,
+        )
+    return None
+
+
+def _process_planner_or_merge(task, ctx, turn, level, is_planner, wt,
+                              exec_result, disp_result, all_tool_events,
+                              pending_merge_req_holder: list):
+    """处理 executor 成功后的 planner 分解 / v3-v2 merge 分支。
+
+    返回信号:
+      None  → 继续 validate
+      BatchOutput → 直接返回此结果 (planner 分解成功 / v2 merge 冲突)
+
+    pending_merge_req_holder 是单元素 list, 用于 v3 路径回填 merge_request (保持引用语义)。
+    """
+    if is_planner:
+        _save_planner_patch(task.id, exec_result.raw_output)
+        subtasks = decompose(exec_result.raw_output)
+        if subtasks:
+            return BatchOutput(
+                ok=True, task_id=task.id, dispatch_result=disp_result,
+                term_reason=f"decomposed (level={level}, turn={turn})",
+                validation=val_mod.ValidationReport(
+                    verdict="通过", action="pass",
+                    unverified=[f"planner 分解出 {len(subtasks)} 子任务"],
+                ),
+                planner_decomposed=True,
+                tool_events=all_tool_events, turn_count=turn,
+            )
+    elif wt:
+        if ctx.merge_queue is not None:
+            # v3: commit_wt 拿含改动的 commit (修复 #2), 不直接 merge
+            branch_ref = commit_wt(wt)
+            if branch_ref:
+                _anchor_ref(task.id, branch_ref)  # 防 gc 回收 (重要 #3)
+                pending_merge_req_holder[0] = _build_merge_request(
+                    task, branch_ref, ctx.snapshot_ref,
+                )
+        else:
+            # v2: 直接 merge_back
+            mr = wt_merge_back(wt)
+            if not mr.ok:
+                reason = mr.reason or f"冲突文件: {mr.conflicts}"
+                return ("merge_conflict", level, turn, disp_result, all_tool_events, reason)
+    return None
+
+
+def _decide_cascade(task, level, turn, validation, disp_result, all_tool_events,
+                    pending_merge_req, fallback_chain, tried_models, quality):
+    """cascade routing 决策。
+
+    返回 (action, payload):
+      ("return", BatchOutput)  → 直接返回 (pass / cascade_accept / 非 retry 终态)
+      ("break", None)          → 跳出 turn loop, 升级或换 agent (finally 清 wt)
+      ("continue", feedback)   → 中置信 retry, 复用同一 wt
+    """
+    if validation.action == "pass":
+        return ("return", BatchOutput(
+            ok=True, task_id=task.id, dispatch_result=disp_result,
+            term_reason=f"pass (level={level}, turn={turn})",
+            validation=validation,
+            merge_request=pending_merge_req,
+            tool_events=all_tool_events, turn_count=turn,
+        ))
+
+    if validation.action == "retry":
+        conf = validation.confidence
+        # 高置信 → 跳过升级，接受当前结果 (省钱)
+        if conf >= 0.75:
+            return ("return", BatchOutput(
+                ok=True, task_id=task.id, dispatch_result=disp_result,
+                term_reason=f"cascade_accept (level={level}, conf={conf:.2f})",
+                validation=validation, merge_request=pending_merge_req,
+                tool_events=all_tool_events, turn_count=turn,
+            ))
+        # 低置信 + 还有更高级模型 → 立即升级，不浪费重试
+        if conf < 0.35 and len(fallback_chain) > 1:
+            return ("break", None)
+        # 中置信 → 正常重试（给同一个模型改进机会, 复用同一 wt）
+        fb_parts = [json.dumps(validation.evidence, ensure_ascii=False, indent=2)]
+        if quality.get("warnings"):
+            fb_parts.append("质量警告:\n" + "\n".join(f"- {w}" for w in quality["warnings"]))
+        if quality.get("failure_kind") and quality["failure_kind"] != "ok":
+            fb_parts.append(f"失败类型: {quality['failure_kind']}, 置信度: {quality['confidence']:.2f}")
+        return ("continue", "\n\n".join(fb_parts))
+
+    # rollback / abort 等非 retry 终态
+    return ("return", BatchOutput(
+        ok=False, task_id=task.id, dispatch_result=disp_result,
+        term_reason=f"{validation.action} (level={level}, turn={turn})",
+        validation=validation,
+        tool_events=all_tool_events, turn_count=turn,
+    ))
+
+
 def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     """纯执行: dispatch + validate, 返回 BatchOutput。
 
@@ -202,186 +333,120 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
         wt = _maybe_create_worktree(task.id, level, agent_cfg, ctx.snapshot_ref)
         cwd = str(wt.path) if wt else ""
 
-        if is_planner and wt:
-            _lock_wt(wt)
+        # 修复 P1-1: worktree 生命周期对称。
+        # try/finally 套在 while 迭代体内（非函数级）——fallback 切 agent 会重建 wt,
+        # 每个 wt 必须在本迭代结束（return/break/异常）时清理；
+        # 只有 retry 的 continue 复用同一 wt（不退出 try，不触发 finally）。
+        try:
+            if is_planner and wt:
+                _lock_wt(wt)
 
-        for turn in range(1, level_max + 1):
-            witness.heartbeat(task.id, level)
+            for turn in range(1, level_max + 1):
+                final_turn = turn          # P3 修复: 失败兜底不再恒报 0 轮
+                witness.heartbeat(task.id, level)
 
-            # 检查人工取消标记
-            cancel_path = config.CANCEL_DIR / f"{task.id}.json"
-            if cancel_path.exists():
-                cancel_path.unlink()
-                wt and _cleanup_wt(wt)
-                return BatchOutput(
-                    ok=False, task_id=task.id,
-                    term_reason="cancelled_by_user",
-                    validation=val_mod.ValidationReport(
-                        verdict="阻断", action="abort",
-                        unverified=["用户手动取消"],
-                    ),
-                    tool_events=all_tool_events, turn_count=0,
+                # 检查人工取消标记
+                cancelled = _check_cancelled(task, all_tool_events)
+                if cancelled is not None:
+                    return cancelled
+
+                effective_task = _build_effective_task(task, turn, feedback, is_planner)
+
+                disp_result = disp_mod.dispatch(
+                    effective_task, level, task.id, agents,
+                    feedback=feedback, baseline_ref=ctx.snapshot_ref, cwd=cwd,
                 )
+                exec_result = disp_result.executor_result
 
-            effective_task = task.description
-            # ── MAGMA 记忆注入 ──
-            if turn == 1 and feedback == "":
-                mem_ctx = _inject_memory(task.description)
-                if mem_ctx:
-                    effective_task = mem_ctx + "\n\n" + effective_task
-            if is_planner:
-                effective_task = _PLANNER_PREAMBLE + effective_task
-            # ── 项目上下文注入 ──
-            proj_ctx = _build_project_context(task)
-            if proj_ctx:
-                effective_task = proj_ctx + "\n\n---\n" + effective_task
+                # ── 收集工具调用事件 ──
+                if exec_result and getattr(exec_result, 'tool_events', None):
+                    all_tool_events.extend(exec_result.tool_events)
 
-            disp_result = disp_mod.dispatch(
-                effective_task, level, task.id, agents,
-                feedback=feedback, baseline_ref=ctx.snapshot_ref, cwd=cwd,
-            )
-            exec_result = disp_result.executor_result
-
-            # ── 收集工具调用事件 ──
-            if exec_result and getattr(exec_result, 'tool_events', None):
-                all_tool_events.extend(exec_result.tool_events)
-
-            if not exec_result.success:
-                # 容灾: 切下一个 agent
-                tried_models.add(agent_cfg.get("model", ""))
-                fallback_chain = [a for a in fallback_chain if a.get("model", "") not in tried_models]
-                _cleanup_wt(wt)
-                if fallback_chain:
-                    witness.heartbeat(task.id, f"fallback: {agent_cfg.get('model','')}→{fallback_chain[0].get('model','')}")
-                    break  # 跳出 turn loop, 用新 agent
-                last_validation = val_mod.ValidationReport(
-                    verdict="未知",
-                    action="abort",
-                    unverified=[f"executor 失败 (已试 {len(tried_models)} agent): {exec_result.error_kind}: {exec_result.error}"],
-                    turns_used=turn,
-                )
-                break
-
-            # planner: 存 patch + 尝试分解 (先建后定: decompose 非空才 materialize)
-            if is_planner:
-                _save_planner_patch(task.id, exec_result.raw_output)
-                subtasks = decompose(exec_result.raw_output)
-                if subtasks:
-                    # 分解成功 → 主线程 materialize (worker 不写 tracker)
-                    # 这里标记让主线程处理, BatchOutput 带回 subtasks 信息
-                    planner_decomposed = True
-                    _cleanup_wt(wt)
-                    return BatchOutput(
-                        ok=True, task_id=task.id, dispatch_result=disp_result,
-                        term_reason=f"decomposed (level={level}, turn={turn})",
-                        validation=val_mod.ValidationReport(
-                            verdict="通过", action="pass",
-                            unverified=[f"planner 分解出 {len(subtasks)} 子任务"],
-                        ),
-                        planner_decomposed=True,
-                        tool_events=all_tool_events, turn_count=turn,
-                    )
-            elif wt:
-                if ctx.merge_queue is not None:
-                    # v3: commit_wt 拿含改动的 commit (修复 #2), 不直接 merge
-                    branch_ref = commit_wt(wt)
-                    if branch_ref:
-                        _anchor_ref(task.id, branch_ref)  # 防 gc 回收 (重要 #3)
-                        pending_merge_req = _build_merge_request(
-                            task, branch_ref, ctx.snapshot_ref,
-                        )
-                else:
-                    # v2: 直接 merge_back
-                    mr = wt_merge_back(wt)
-                    if not mr.ok:
-                        reason = mr.reason or f"冲突文件: {mr.conflicts}"
-                        last_validation = val_mod.ValidationReport(
-                            verdict="阻断", action="abort",
-                            unverified=[f"worktree merge 失败: {reason}"],
-                            turns_used=turn,
-                        )
-                        term_reason = f"merge_conflict (level={level}, turn={turn})"
-                        _cleanup_wt(wt)
-                        return BatchOutput(
-                            ok=False, task_id=task.id, dispatch_result=disp_result,
-                            term_reason=term_reason, validation=last_validation,
-                            tool_events=all_tool_events, turn_count=turn,
-                        )
-
-            validation = val_mod.validate(
-                candidate=exec_result.raw_output,
-                gate_required=route_gate,
-                task_type=route_type,
-                changed_files=exec_result.changed_files,
-                snap=snap, turn=turn, max_turns=level_max,
-            )
-            # 补充质量信号
-            try:
-                quality = val_mod.post_execution_hook(exec_result, snap)
-                validation.confidence = quality.get("confidence", 0.5)
-                validation.quality_signals = quality.get("quality_signals", {})
-            except Exception:
-                pass
-            last_validation = validation
-
-            if validation.action == "pass":
-                _cleanup_wt(wt)
-                return BatchOutput(
-                    ok=True, task_id=task.id, dispatch_result=disp_result,
-                    term_reason=f"pass (level={level}, turn={turn})",
-                    validation=validation,
-                    merge_request=pending_merge_req,
-                    tool_events=all_tool_events, turn_count=turn,
-                )
-
-            if validation.action == "retry":
-                # ── Cascade Routing: 置信度驱动的升级决策 ──
-                conf = validation.confidence
-                # 高置信 → 跳过升级，接受当前结果 (省钱)
-                if conf >= 0.75:
-                    _cleanup_wt(wt)
-                    return BatchOutput(
-                        ok=True, task_id=task.id, dispatch_result=disp_result,
-                        term_reason=f"cascade_accept (level={level}, conf={conf:.2f})",
-                        validation=validation, merge_request=pending_merge_req,
-                        tool_events=all_tool_events, turn_count=turn,
-                    )
-                # 低置信 + 还有更高级模型 → 立即升级，不浪费重试
-                if conf < 0.35 and len(fallback_chain) > 1:
+                if not exec_result.success:
+                    # 容灾: 切下一个 agent
                     tried_models.add(agent_cfg.get("model", ""))
                     fallback_chain = [a for a in fallback_chain if a.get("model", "") not in tried_models]
-                    _cleanup_wt(wt)
                     if fallback_chain:
-                        witness.heartbeat(task.id, f"cascade_skip:{agent_cfg.get('model','')}→{fallback_chain[0].get('model','')} conf={conf:.2f}")
-                        break  # 跳出 turn loop，用更好的模型
-                # 中置信 → 正常重试（给同一个模型改进机会）
-                fb = [json.dumps(validation.evidence, ensure_ascii=False, indent=2)]
-                if quality.get("warnings"):
-                    fb.append("质量警告:\n" + "\n".join(f"- {w}" for w in quality["warnings"]))
-                if quality.get("failure_kind") and quality["failure_kind"] != "ok":
-                    fb.append(f"失败类型: {quality['failure_kind']}, 置信度: {quality['confidence']:.2f}")
-                feedback = "\n\n".join(fb)
+                        witness.heartbeat(task.id, f"fallback: {agent_cfg.get('model','')}→{fallback_chain[0].get('model','')}")
+                        break  # 跳出 turn loop, 用新 agent (finally 清理本 wt)
+                    last_validation = val_mod.ValidationReport(
+                        verdict="未知",
+                        action="abort",
+                        unverified=[f"executor 失败 (已试 {len(tried_models)} agent): {exec_result.error_kind}: {exec_result.error}"],
+                        turns_used=turn,
+                    )
+                    break
+
+                # planner 分解 / v3-v2 merge 处理
+                # pending_merge_req_holder: 单元素 list, 让子函数能回填 v3 的 merge_request
+                pending_merge_req_holder = [pending_merge_req]
+                pm_signal = _process_planner_or_merge(
+                    task, ctx, turn, level, is_planner, wt,
+                    exec_result, disp_result, all_tool_events,
+                    pending_merge_req_holder,
+                )
+                pending_merge_req = pending_merge_req_holder[0]
+                if pm_signal is not None:
+                    if isinstance(pm_signal, BatchOutput):
+                        return pm_signal  # planner 分解成功
+                    # v2 merge 冲突信号: ("merge_conflict", level, turn, disp_result, all_tool_events, reason)
+                    _, level, turn, disp_result, all_tool_events, reason = pm_signal
+                    last_validation = val_mod.ValidationReport(
+                        verdict="阻断", action="abort",
+                        unverified=[f"worktree merge 失败: {reason}"],
+                        turns_used=turn,
+                    )
+                    term_reason = f"merge_conflict (level={level}, turn={turn})"
+                    return BatchOutput(
+                        ok=False, task_id=task.id, dispatch_result=disp_result,
+                        term_reason=term_reason, validation=last_validation,
+                        tool_events=all_tool_events, turn_count=turn,
+                    )
+
+                validation = val_mod.validate(
+                    candidate=exec_result.raw_output,
+                    gate_required=route_gate,
+                    task_type=route_type,
+                    changed_files=exec_result.changed_files,
+                    snap=snap, turn=turn, max_turns=level_max,
+                )
+                # 补充质量信号
+                try:
+                    quality = val_mod.post_execution_hook(exec_result, snap)
+                    validation.confidence = quality.get("confidence", 0.5)
+                    validation.quality_signals = quality.get("quality_signals", {})
+                except Exception:
+                    quality = {"warnings": [], "failure_kind": "ok", "confidence": 0.5}
+                last_validation = validation
+
+                cascade_action, payload = _decide_cascade(
+                    task, level, turn, validation, disp_result, all_tool_events,
+                    pending_merge_req, fallback_chain, tried_models, quality,
+                )
+                if cascade_action == "return":
+                    return payload
+                if cascade_action == "break":
+                    # 低置信 cascade_skip: 标记 tried 后 break 升级
+                    tried_models.add(agent_cfg.get("model", ""))
+                    fallback_chain = [a for a in fallback_chain if a.get("model", "") not in tried_models]
+                    if fallback_chain:
+                        witness.heartbeat(task.id, f"cascade_skip:{agent_cfg.get('model','')}→{fallback_chain[0].get('model','')} conf={validation.confidence:.2f}")
+                    break  # 跳出 turn loop，用更好的模型 (finally 清理本 wt)
+                # cascade_action == "continue": 中置信 retry
+                feedback = payload
                 continue
 
+            next_level = disp_mod.escalate(level)
+            if next_level is None:
+                term_reason = f"escalation_exhausted (level={level})"
+                break
+            level = next_level
+            # 升级后重建 fallback 链 (新层级的新 agent 列表)
+            fallback_chain = disp_mod.pick_agent_fallback_chain(agents, level)
+            tried_models = set()
+            feedback = ""
+        finally:
             _cleanup_wt(wt)
-            return BatchOutput(
-                ok=False, task_id=task.id, dispatch_result=disp_result,
-                term_reason=f"{validation.action} (level={level}, turn={turn})",
-                validation=validation,
-                tool_events=all_tool_events, turn_count=turn,
-            )
-
-        _cleanup_wt(wt)
-        next_level = disp_mod.escalate(level)
-        if next_level is None:
-            term_reason = f"escalation_exhausted (level={level})"
-            break
-        level = next_level
-        # 升级后重建 fallback 链 (新层级的新 agent 列表)
-        fallback_chain = disp_mod.pick_agent_fallback_chain(agents, level)
-        tried_models = set()
-        feedback = ""
-        feedback = ""
 
     return BatchOutput(
         ok=False, task_id=task.id, dispatch_result=disp_result,
@@ -409,7 +474,7 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     batch.term_reason += f"; post_hook: {', '.join(post_warnings)}"
         except Exception as e:
             try: witness.heartbeat(task_id=task.id, status="error", detail=f"post_hook:{e}")
-            except: pass
+            except Exception: pass
 
         if batch.validation.action == "pass" or batch.planner_decomposed:
             return batch
