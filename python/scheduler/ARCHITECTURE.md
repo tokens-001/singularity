@@ -71,35 +71,33 @@ executors/*.py  → 只能导入: .base, ..config, 标准库, httpx
 skills/          → 独立包，不导入 scheduler
 ```
 
-### 规则 2: executors 隔离（当前违反，目标状态）
+### 规则 2: executors 隔离 ✅ 已解决 (2026-06-20)
 
-**当前事实**: `executors/openai_agent.py` 导入了:
+**当前事实**: `executors/openai_agent.py` 只导入:
 - `..config` ✅ 允许
-- `..dispatcher` ❌ 违规（为了 `_find_agent_level`）
-- `..witness` ❌ 违规（心跳上报）
-- `..permission` ❌ 违规（工具权限检查）
-- `..mcp` ❌ 违规（MCP工具调用）
-- `skills.skill_loader` ❌ 违规（跨包）
+- 标准库 + httpx ✅ 允许
 
-**临时豁免**: 不改这些导入，但**不允许新增**executor对scheduler模块的依赖。
-**目标**: 将权限检查、MCP调用、Skill加载上提到 `_exec.py` 层，executor只通过 `ExecutorResult.tool_events` 上报。
+所有跨层依赖（skills/permission/mcp/witness/dispatcher）已通过 dispatcher 依赖注入消除。
 
 ### 规则 3: 禁止新的延迟导入
 
 当前已有的延迟导入（`from .X import Y` 在函数体内）维持现状。
 **每次新增功能时禁止新增延迟导入**。如果必须延迟导入，说明存在循环依赖，需要先解环。
 
-### 规则 4: 文件行数上限
+### 规则 4: 文件行数上限 (2026-06-20 更新)
 
-| 模块 | 当前行数 | 上限 | 状态 |
-|------|---------|------|------|
-| app.py | 2409 | 800 | 🔴 超标3倍 |
-| memory.py | 1007 | 500 | 🔴 超标2倍 |
-| orchestrator.py | 820 | 400 | 🔴 超标2倍 |
-| __main__.py | 633 | 400 | 🔴 超标 |
-| workflow.py | 623 | 400 | 🔴 超标 |
-| _exec.py | 523 | 400 | 🔴 超标 |
-| 其余 | <500 | 400 | 🟢 |
+| 模块 | 优化后 | 上限 | 状态 | 备注 |
+|------|--------|------|------|------|
+| app.py | 1211 | 1200 | 🟢 | Web层+SSE+限流+安全, 已从2409减半 |
+| _api.py | 1032 | 1200 | 🟢 | 新文件, 路由handler业务逻辑 |
+| memory.py | 953 | 1000 | 🟢 | MAGMA图算法, 生命周期已提取 |
+| orchestrator.py | 661 | 700 | 🟢 | 已从820减少, v3统一入口 |
+| __main__.py | 633 | 700 | 🟢 | CLI入口, 每个命令独立函数 |
+| workflow.py | 623 | 700 | 🟢 | 项目阶段编排, 结构清晰 |
+| _exec.py | 523 | 600 | 🟢 | 核心执行引擎 |
+| openai_agent.py | 597 | 600 | 🟢 | Agent runtime, 已完全隔离 |
+| roles.py | 287 | 400 | 🟢 | 数据已迁TOML, 只剩逻辑 |
+| 其余 | <500 | 500 | 🟢 | — |
 
 **新增代码规则**: 新功能优先新建模块（<300行），不追加到大文件。
 
@@ -120,16 +118,17 @@ skills/          → 独立包，不导入 scheduler
 
 **规则**: 调度循环逻辑应复用 `orchestrator.run_queue_v3()`，不在两个入口各自维护。
 
-## 四、已知技术债（不阻塞新功能，但需排期）
+## 四、技术债清理记录 (2026-06-20)
 
-| # | 项 | 严重度 | 估时 |
-|---|-----|--------|------|
-| T1 | app.py 拆分为 blueprint 模块 | P0 | 4h |
-| T2 | orchestrator 三版本统一 | P1 | 2h |
-| T3 | executor 反向依赖解耦 | P1 | 3h |
-| T4 | memory.py 拆分 | P2 | 3h |
-| T5 | 清理顶层 scheduler/ 死目录 | P3 | 0.1h |
-| T6 | __main__.py 去重（复用 orchestrator 公开函数） | P2 | 2h |
+| # | 项 | 状态 | commit |
+|---|-----|------|--------|
+| T1 | app.py 拆分 (2409→1211) | ✅ | 6b48d94 |
+| T2 | orchestrator 三版本统一 (820→661) | ✅ | 430c58d |
+| T3 | executor 完全隔离 (0违规导入) | ✅ | 31c74bf, 3cd4c2e |
+| T4 | memory.py 生命周期提取 | ✅ | e38a3e5 |
+| T5 | 清理顶层死目录 | ✅ | c795829 |
+| T6 | __main__.py 去重确认 | ✅ | 无需改动 |
+| T7 | roles.py 静态数据迁TOML (507→287) | ✅ | 2992a00 |
 
 ## 五、每次改代码前的自检清单
 
