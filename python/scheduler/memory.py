@@ -138,10 +138,13 @@ def _get_embed_model():
     return _EMBED_MODEL if _EMBED_MODEL is not False else None
 
 def _embed(text: str) -> list[float]:
-    """384维归一化向量。空文本返回空列表。"""
+    """384维归一化向量。空文本或无模型时返回空列表。"""
     if not text or not text.strip():
         return []
-    return _get_embed_model().encode(text.strip(), normalize_embeddings=True).tolist()
+    model = _get_embed_model()
+    if model is None:
+        return []
+    return model.encode(text.strip(), normalize_embeddings=True).tolist()
 
 
 # ═══════════════════════════════════════════════════════════
@@ -335,7 +338,7 @@ def update_attrs(task_id: str, **kwargs) -> None:
 # ═══════════════════════════════════════════════════════════
 
 def _rrf_anchors(
-    query_tokens: set[str],
+    query_tokens: list[float],
     query_text: str,
     events: dict[str, EventNode],
     edges: dict,

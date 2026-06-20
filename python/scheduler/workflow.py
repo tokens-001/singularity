@@ -18,97 +18,7 @@ from . import dispatcher as disp_mod
 from .project import ProjectState, Phase, save, load
 from .tracker import TaskStatus
 
-
-def _try_parse_json(raw: str, try_repair: bool = False) -> dict:
-    """从 agent 原始输出中提取 JSON。统一处理 ```json 块/裸{}/截断修复。
-
-    返回 dict, 如果解析失败则含 parse_error 标记。
-    """
-    import re as _re
-    if not raw:
-        return {"raw_output": "", "parse_error": True}
-    candidates = []
-    # 方式1: ```json ... ``` 代码块
-    for m in _re.finditer(r"```(?:json)?\s*\n(.*?)```", raw, _re.DOTALL):
-        candidates.append(m.group(1).strip())
-    # 方式2: 裸 {...} 块
-    if not candidates:
-        m = _re.search(r"\{[\s\S]*\}", raw)
-        if m:
-            candidates.append(m.group().strip())
-    for c in candidates:
-        try:
-            return json.loads(c)
-        except json.JSONDecodeError:
-            # 修复常见 JSON 错误
-            try:
-                fixed = _re.sub(r',\s*}', '}', c)
-                fixed = _re.sub(r',\s*]', ']', fixed)
-                return json.loads(fixed)
-            except Exception:
-                continue
-    # 尝试截断修复
-    if try_repair:
-        repaired = _repair_truncated_json(raw)
-        if repaired is not None:
-            return repaired
-    return {"raw_output": raw[:5000], "parse_error": True}
-
-
-def _repair_truncated_json(raw: str) -> dict | None:
-    """尝试修复被截断的 JSON —— 补全未闭合的括号和引号。"""
-    if not raw:
-        return None
-    import re as _re
-    # 提取 JSON 块
-    body = raw
-    m = _re.search(r"```(?:json)?\s*\n(.*)", raw, _re.DOTALL)
-    if m:
-        body = m.group(1).strip()
-    # 找到第一个 {
-    start = body.find("{")
-    if start == -1:
-        return None
-    body = body[start:]
-    # 数括号，补充未闭合的
-    depth = 0
-    in_string = False
-    escaped = False
-    for ch in body:
-        if escaped:
-            escaped = False
-            continue
-        if ch == "\\":
-            escaped = True
-            continue
-        if ch == '"':
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
-        if ch in "{[":
-            depth += 1
-        elif ch in "}]":
-            depth -= 1
-    # 补全
-    if in_string:
-        body += '"'
-    while depth > 0:
-        # 找到最后一个完整结构来决定补 ] 还是 }
-        stripped = body.rstrip()
-        if stripped.endswith("]"):
-            body += "}"
-            depth -= 1
-        elif stripped.endswith("}") or stripped.endswith('"'):
-            body += "}"
-            depth -= 1
-        else:
-            body += "]}"
-            depth -= 2
-    try:
-        return json.loads(body)
-    except (json.JSONDecodeError, Exception):
-        return None
+from ._io import try_parse_json
 
 
 # ═══════════════════════════════════════════════════════════
@@ -300,7 +210,7 @@ def _run_research(project: ProjectState, agents: dict) -> str:
         raw = ""
 
     # 4. 解析 JSON 产出
-    report = _try_parse_json(raw)
+    report = try_parse_json(raw)
 
     project.research_report = report
     project.add_lineage({"action": "research_complete",
@@ -347,7 +257,7 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
         raw = ""
 
     # 3. 解析 JSON 产出
-    arch = _try_parse_json(raw, try_repair=True)
+    arch = try_parse_json(raw, try_repair=True)
     if arch.get("parse_error"):
         # 重试一次: 附加格式指令
         retry_prompt = prompt + "\n\n[格式错误] 上一次输出不是合法JSON。请用 ```json ... ``` 包裹输出。"
@@ -358,7 +268,7 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
             )
             raw2 = disp_result2.executor_result.raw_output if disp_result2 else ""
             if raw2:
-                arch = _try_parse_json(raw2, try_repair=True)
+                arch = try_parse_json(raw2, try_repair=True)
         except Exception:
             pass
 
@@ -515,7 +425,7 @@ def _run_review(project: ProjectState, agents: dict) -> str:
         raw = ""
 
     # 4. 解析 JSON 产出
-    review = _try_parse_json(raw)
+    review = try_parse_json(raw)
     issues = review.get("issues", [])
     project.issues = issues
     project.add_lineage({"action": "review_complete",

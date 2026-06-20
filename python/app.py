@@ -188,6 +188,8 @@ def _guard_rate_limit():
     if ip in ("127.0.0.1", "::1", "localhost"):
         return None
 
+    now = time.time()
+
     if ip not in _RATE_BUCKETS:
         _RATE_BUCKETS[ip] = []
 
@@ -1116,83 +1118,47 @@ def health():
     return jsonify(data), code
 
 # ═══════════════════════════════════════════════════════════
-# MCP 路由 (处理逻辑轻量，保留在 app.py)
+# MCP 路由 (业务逻辑已下沉 _api.py，路由仅做参数转发)
 # ═══════════════════════════════════════════════════════════
 
 @app.route("/api/mcp/servers")
 def api_mcp_servers():
-    configs = mcp_mod.load_mcp_configs()
-    registry = mcp_mod.get_registry()
-    servers = []
-    for c in configs:
-        connected = c.name in registry._clients
-        tool_count = len(registry._clients[c.name]._tools) if connected else 0
-        servers.append({"name": c.name, "transport": c.transport, "command": c.command,
-                        "url": c.url, "enabled": c.enabled, "timeout": c.timeout,
-                        "connected": connected, "tool_count": tool_count})
-    return jsonify({"servers": servers})
+    data, code = _api_handler.mcp_server_list()
+    return jsonify(data), code
 
 @app.route("/api/mcp/servers", methods=["POST"])
 def api_mcp_add_server():
-    data = request.get_json(force=True)
-    if not data or not data.get("name"):
-        return jsonify({"error": "缺少 name"}), 400
-    configs = mcp_mod.load_mcp_configs()
-    found = False
-    for c in configs:
-        if c.name == data["name"]:
-            c.transport = data.get("transport", c.transport)
-            c.command = data.get("command", c.command)
-            c.url = data.get("url", c.url)
-            c.enabled = data.get("enabled", c.enabled)
-            c.timeout = data.get("timeout", c.timeout)
-            c.env = data.get("env", c.env)
-            found = True
-            break
-    if not found:
-        configs.append(mcp_mod.MCPServerConfig(name=data["name"], transport=data.get("transport", "stdio"),
-            command=data.get("command", ""), url=data.get("url", ""),
-            enabled=data.get("enabled", True), timeout=data.get("timeout", 30.0),
-            env=data.get("env", {})))
-    mcp_mod.save_mcp_configs(configs)
-    return jsonify({"ok": True})
+    data, code = _api_handler.mcp_server_add(request.get_json(force=True))
+    if code == 200:
+        disp_mod.invalidate_mcp_cache()
+    return jsonify(data), code
 
 @app.route("/api/mcp/servers/<name>", methods=["DELETE"])
 def api_mcp_delete_server(name):
-    configs = mcp_mod.load_mcp_configs()
-    configs = [c for c in configs if c.name != name]
-    mcp_mod.save_mcp_configs(configs)
-    return jsonify({"ok": True})
+    data, code = _api_handler.mcp_server_delete(name)
+    if code == 200:
+        disp_mod.invalidate_mcp_cache()
+    return jsonify(data), code
 
 @app.route("/api/mcp/servers/<name>/reconnect", methods=["POST"])
 def api_mcp_reconnect_server(name):
-    configs = mcp_mod.load_mcp_configs()
-    registry = mcp_mod.get_registry()
-    for c in configs:
-        if c.name == name:
-            if name in registry._clients:
-                registry._clients[name].disconnect()
-                del registry._clients[name]
-                registry._tools = [t for t in registry._tools if t.server_name != name]
-                registry._tool_index = {k: v for k, v in registry._tool_index.items() if v.cfg.name != name}
-            registry.load_configs([c])
-            return jsonify({"ok": True, "tool_count": len(registry._tools)})
-    return jsonify({"error": f"服务器 {name} 不存在"}), 404
+    data, code = _api_handler.mcp_server_reconnect(name)
+    if code == 200:
+        disp_mod.invalidate_mcp_cache()
+    return jsonify(data), code
 
 @app.route("/api/mcp/tools")
 def api_mcp_tools():
-    registry = mcp_mod.get_registry()
-    tools = [{"name": f"mcp__{t.server_name}__{t.name}", "server": t.server_name,
-              "tool": t.name, "description": t.description, "inputSchema": t.inputSchema}
-             for t in registry.get_all_tools()]
-    return jsonify({"tools": tools})
+    data, code = _api_handler.mcp_tool_list()
+    return jsonify(data), code
 
 @app.route("/api/mcp/refresh", methods=["POST"])
 def api_mcp_refresh():
-    configs = mcp_mod.load_mcp_configs()
-    mcp_mod.get_registry().load_configs(configs)
-    return jsonify({"ok": True, "servers": mcp_mod.get_registry().server_count,
-                    "tools": mcp_mod.get_registry().tool_count})
+    data, code = _api_handler.mcp_refresh()
+    if code == 200:
+        disp_mod.invalidate_mcp_cache()
+    return jsonify(data), code
+
 
 # ═══════════════════════════════════════════════════════════
 # 启动
