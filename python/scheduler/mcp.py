@@ -11,6 +11,7 @@ MCP 允许 Agent 发现和调用外部工具服务器提供的工具。
 from __future__ import annotations
 import json
 import os
+import shlex
 import subprocess
 import time
 import uuid
@@ -86,9 +87,10 @@ class MCPClient:
         env = os.environ.copy()
         env.update(self.cfg.env)
         try:
+            argv = shlex.split(self.cfg.command)
             self._proc = subprocess.Popen(
-                self.cfg.command,
-                shell=True,
+                argv,
+                shell=False,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

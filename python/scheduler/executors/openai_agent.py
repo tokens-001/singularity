@@ -391,7 +391,8 @@ class OpenAIAgentExecutor(BaseExecutor):
         """安全检查: 解析路径，禁止逃出项目目录。"""
         p = (self._cwd / path).resolve()
         root = self._cwd.resolve()
-        if not str(p).startswith(str(root)):
+        # 加 os.sep 防止前缀绕过: /a/b 不匹配 /a/bb/foo
+        if not (str(p) + os.sep).startswith(str(root) + os.sep) and str(p) != str(root):
             raise ValueError(f"路径逃逸被拒绝: {path} → {p}")
         return p
 

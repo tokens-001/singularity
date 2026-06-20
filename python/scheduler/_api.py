@@ -1021,15 +1021,8 @@ def conflict_resolve(task_id: str, resolution: dict, push_event=None) -> tuple[d
     return {"ok": True, "result": result}, 200
 
 
-def rollback_all(data: dict) -> tuple[dict, int]:
-    """回滚多个任务 (batch)"""
-    from . import rollback as rb_mod
-    task_ids = data.get("task_ids", [])
-    results = {}
-    for tid in task_ids:
-        ok, msg = rb_mod.rollback(tid)
-        results[tid] = {"ok": ok, "message": msg}
-    return {"results": results}, 200
+# rollback_all 已移除 — rollback 模块不存在, 此函数无调用方且缺 ImportError 守卫。
+# task_rollback (L334) 保留, 有 ImportError 守卫降级返回 500。
 
 
 # ═══════════════════════════════════════════════════════════════
