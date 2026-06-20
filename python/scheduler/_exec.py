@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import time
-import subprocess as _sp
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED, as_completed
 from pathlib import Path
 
