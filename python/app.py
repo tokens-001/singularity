@@ -526,48 +526,21 @@ def api_loop_status():
 
 @app.route("/api/fusion/config", methods=["GET", "PUT"])
 def api_fusion_config():
-    import json as _json
     fusion_path = sched_config.SCHEDULER_DIR / "fusion.toml"
+    from scheduler._io import load_toml, save_toml
     if request.method == "GET":
         try:
-            from scheduler._io import load_toml
             return jsonify(load_toml(fusion_path))
         except Exception:
             return jsonify({})
     # PUT: 更新指定 tier 配置 (dual/triple/super/custom)
     data = request.get_json(silent=True) or {}
     try:
-        from scheduler._io import load_toml
         cfg = load_toml(fusion_path)
         for tier in ["dual", "triple", "super", "custom"]:
             if tier in data:
                 cfg[tier] = {**cfg.get(tier, {}), **data[tier]}
-        # 写回toml
-        lines = []
-        done_sections = set()
-        for tier in ["dual", "triple", "super"]:
-            tc = cfg.get(tier, {})
-            lines.append(f"\n[{tier}]")
-            lines.append(f"models = {_json.dumps(tc.get('models',[]), ensure_ascii=False)}")
-            lines.append(f"roles = {_json.dumps(tc.get('roles',['builder','skeptic']), ensure_ascii=False)}")
-            lines.append(f'judge_model = "{tc.get("judge_model","deepseek-chat")}"')
-            lines.append(f'call_model = "{tc.get("call_model","deepseek-chat")}"')
-            lines.append(f"max_tokens = {tc.get('max_tokens',2000)}")
-            lines.append(f"temperature = {tc.get('temperature',0.7)}")
-            lines.append(f"timeout_sec = {tc.get('timeout_sec',60)}")
-            done_sections.add(tier)
-        if "super" in cfg:
-            lines.append(f"\n[super.detail]")
-            lines.append(f'description = "N模型 × 多视角 × 对抗验证 × 迭代熔合 × 人工卡点"')
-        # 保留 custom + roles + auto + execution 等不变
-        existing = fusion_path.read_text()
-        for section in ["custom", "roles", "auto", "tier_routing", "execution"]:
-            import re
-            m = re.search(rf'\[{section}\].*?(\n\[|\Z)', existing, re.DOTALL)
-            if m:
-                lines.append("\n" + m.group(0).rstrip())
-        lines.append("")
-        fusion_path.write_text("\n".join(lines))
+        save_toml(fusion_path, cfg)
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

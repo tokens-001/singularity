@@ -24,6 +24,59 @@ def load_toml(path: Path) -> dict:
         return tomllib.load(f)
 
 
+def save_toml(path: Path, data: dict) -> None:
+    """保存 dict 到 .toml 文件。支持嵌套表、数组、字符串、数字、布尔。
+
+    ponytail: 手动序列化，不引入 toml 依赖。
+    """
+    import json as _json
+    lines = []
+    def _write_section(d: dict, prefix: str):
+        for k, v in d.items():
+            full_key = f"{prefix}.{k}" if prefix else k
+            if isinstance(v, dict) and not any(isinstance(vv, (list, dict)) for vv in v.values()):
+                # 简单字典 → [section]
+                lines.append(f"\n[{full_key}]")
+                for sk, sv in v.items():
+                    lines.append(_format_kv(sk, sv))
+            elif isinstance(v, dict):
+                lines.append(f"\n[{full_key}]")
+                for sk, sv in v.items():
+                    if isinstance(sv, dict):
+                        lines.append(f"\n[{full_key}.{sk}]")
+                        for ssk, ssv in sv.items():
+                            lines.append(_format_kv(ssk, ssv))
+                    else:
+                        lines.append(_format_kv(sk, sv))
+            else:
+                lines.append(_format_kv(k, v))
+    # 顶级键直接处理
+    sections = {}
+    for k, v in data.items():
+        if isinstance(v, dict):
+            sections[k] = v
+        else:
+            lines.append(_format_kv(k, v))
+    for k, v in sections.items():
+        _write_section({k: v}, "")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines).lstrip() + "\n", encoding="utf-8")
+
+def _format_kv(k: str, v) -> str:
+    import json as _json
+    if isinstance(v, list):
+        return f"{k} = {_json.dumps(v, ensure_ascii=False)}"
+    elif isinstance(v, bool):
+        return f"{k} = {str(v).lower()}"
+    elif isinstance(v, (int, float)):
+        return f"{k} = {v}"
+    elif isinstance(v, str):
+        # 含特殊字符用引号
+        return f'{k} = "{v}"'
+    else:
+        return f'{k} = "{v}"'
+
+
 # ═══════════════════════════════════════════════════════════════
 # JSON 提取 (从 agent 原始输出)
 # ═══════════════════════════════════════════════════════════════
