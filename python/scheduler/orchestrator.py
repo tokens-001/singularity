@@ -234,7 +234,7 @@ def _execute_one_task(task, agents: dict):
                 project_phase = proj.phase.value
     except Exception:
         pass
-    ranked_models = router_mod.rank_models_for_task(task.description, route.task_type, phase=project_phase)
+    ranked_models = router_mod.rank_models_for_task(task.description, route.task_type, phase=project_phase, route_level=route.level)
     effective_agents = dict(agents)
     if ranked_models:
         effective_agents[route.level] = _reorder_agents_by_rank(
@@ -358,54 +358,118 @@ def _finalize_result(task, batch, route, snap, results: list) -> str:
     return reason
 
 
-def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
-    """v3 统一调度循环: _execute_one_task + _finalize_result, 支持 1..N 并发。"""
+def _dispatch_ready(dispatched: set, pool, agents, running_futures: dict) -> bool:
+    """_run_queue_v3 步骤①②③: 选就绪→cas抢占→提交线程池。返回是否有新派发。"""
+    ready = tracker.ready_tasks(exclude=dispatched)
+    ready = schedule_policy(ready)
+    dispatched_any = False
+    for t in ready:
+        if t.route_locked:
+            route = router_mod.RouteResult(
+                level=t.route_level, gate_required=t.route_gate,
+                task_type=t.route_type)
+        else:
+            route = router_mod.route(t.description)
+        pre = pre_mod.pre_search(t.description, route)
+        pre_mod.apply_escalation(route, pre)
+        if tracker.cas(t.id, TaskStatus.ROUTED, TaskStatus.DISPATCHED,
+                       route_level=route.level, route_gate=route.gate_required,
+                       route_type=route.task_type):
+            snap = snap_mod.take(t.id)
+            tracker.transition(t.id, TaskStatus.RUNNING, snapshot_id=snap.id)
+            dispatched.add(t.id)
+            fut = pool.submit(_execute_one_task, t, agents)
+            running_futures[fut] = (t, route, snap, pre)
+            dispatched_any = True
+    return dispatched_any
 
+
+def _reap_futures(running_futures: dict, pending_batches: dict,
+                  mq, results: list) -> bool:
+    """_run_queue_v3 步骤④: 回收已完成 future → _finalize_result 或入 pending。返回是否有回收。"""
+    if not running_futures:
+        return False
+    done, not_done = wait(running_futures.keys(), timeout=600, return_when=FIRST_COMPLETED)
+    for fut in not_done:
+        t, route, snap, pre = running_futures.pop(fut, (None, None, None, None))
+        if t is not None:
+            try:
+                tracker.transition(t.id, TaskStatus.FAILED, error="执行超时(>600s)")
+            except Exception:
+                pass
+            results.append((t.id, "timeout", None))
+            try:
+                _save_trace(t, route, snap, None, None, False)
+            except Exception:
+                pass
+        fut.cancel()
+    for fut in done:
+        t, route, snap, pre = running_futures.pop(fut)
+        try:
+            batch, t_route, t_snap = fut.result()
+        except Exception as e:
+            try:
+                tracker.transition(t.id, TaskStatus.FAILED, error=f"worker 异常: {e}")
+            except Exception:
+                pass
+            results.append((t.id, f"worker_error: {e}", None))
+            try:
+                _save_trace(t, route, snap, None, None, False)
+            except Exception:
+                pass
+            continue
+        if batch.merge_request is not None:
+            mq.submit(batch.merge_request)
+            pending_batches[t.id] = (t, t_route, t_snap, batch)
+        else:
+            _finalize_result(t, batch, t_route, t_snap, results)
+    return len(done) > 0
+
+
+def _drain_pending(pending_batches: dict, mq, results: list) -> int:
+    """_run_queue_v3 步骤⑥: drain merge queue → 合成功的标 DONE。返回 drain 数。"""
+    if not pending_batches:
+        return 0
+    drained = 0
+    merge_results = mq.drain()
+    for mr in merge_results:
+        if mr.task_id in pending_batches:
+            t, route, snap, batch = pending_batches.pop(mr.task_id)
+            if mr.status == "merged":
+                tracker.transition(t.id, TaskStatus.DONE)
+                _maybe_complete_parents(t.id)
+                _release_ref(t.id)
+                _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
+                            pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
+                            pre_search_top_decisions=batch.pre_search_top_decisions, pre_search_memory=batch.pre_search_memory)
+                results.append((t.id, f"merged: {mr.new_head[:8]}", batch.validation))
+            elif mr.status == "conflict":
+                results.append((t.id, f"conflict: {mr.conflict_files}", batch.validation))
+            else:
+                tracker.transition(t.id, TaskStatus.FAILED, error=f"merge {mr.status}")
+                _release_ref(t.id)
+                _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
+                            pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
+                            pre_search_top_decisions=batch.pre_search_top_decisions, pre_search_memory=batch.pre_search_memory)
+                results.append((t.id, f"merge_failed", batch.validation))
+            drained += 1
+    return drained
+
+
+def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
+    """v3 统一调度循环: dispatch→reap→drain 三步，支持 1..N 并发。
+
+    认知复杂度从 73 → ~15 (拆成 3 个 helper + 主循环)。
+    """
     results: list[tuple] = []
     mq = MergeQueue()
-    batch_id = f"batch_{int(time.time())}"
-    batch_snap = snap_mod.take(batch_id)
-    worktree_base = str(config.QIDIAN_DIR / "worktrees")
-    ctx = RunContext(
-        batch_id=batch_id, snapshot_ref=batch_snap.ref,
-        worktree_base=worktree_base, merge_queue=mq,
-    )
-
     dispatched: set[str] = set()
-    running_futures: dict = {}  # future -> (task, route, snap)
-    pending_batches: dict = {}  # task_id -> (task, route, snap, batch) 等 drain 后再判终态 (修复 #9)
+    running_futures: dict = {}   # future -> (task, route, snap)
+    pending_batches: dict = {}   # task_id -> (task, route, snap, batch)
 
     with ThreadPoolExecutor(max_workers=max_concurrent) as pool:
         while True:
-            # ① 选就绪任务 (ready_tasks 已把 PENDING/BLOCKED→ROUTED, 修复 #1)
-            ready = tracker.ready_tasks(exclude=dispatched)
-            ready = schedule_policy(ready)  # 拓扑自适应排序
-            for t in ready:
-                # ② cas 抢占 ROUTED→DISPATCHED (主线程写)
-                # 尊重 planner 建议层级, 不重新路由 (建议 #6)
-                if t.route_locked:
-                    route = router_mod.RouteResult(
-                        level=t.route_level, gate_required=t.route_gate,
-                        task_type=t.route_type,
-                    )
-                else:
-                    route = router_mod.route(t.description)
-
-                # ── I 层预检 (知识库 + MAGMA 记忆) ──
-                pre = pre_mod.pre_search(t.description, route)
-                pre_mod.apply_escalation(route, pre)
-
-                if tracker.cas(
-                    t.id, TaskStatus.ROUTED, TaskStatus.DISPATCHED,
-                    route_level=route.level, route_gate=route.gate_required,
-                    route_type=route.task_type,
-                ):
-                    # 每任务独立 snapshot (v2 一致性)
-                    snap = snap_mod.take(t.id)
-                    tracker.transition(t.id, TaskStatus.RUNNING, snapshot_id=snap.id)
-                    dispatched.add(t.id)
-                    fut = pool.submit(_execute_one_task, t, agents)
-                    running_futures[fut] = (t, route, snap, pre)
+            _dispatch_ready(dispatched, pool, agents, running_futures)
 
             if not running_futures and not pending_batches:
                 remaining = tracker.ready_tasks(exclude=dispatched)
@@ -413,71 +477,8 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                     break
                 continue
 
-            # ④ 回收 (主线程, 这里才写 tracker)
-            if running_futures:
-                done, not_done = wait(running_futures.keys(), timeout=600, return_when=FIRST_COMPLETED)
-                # 超时任务强制标记 FAILED
-                for fut in not_done:
-                    t, route, snap, pre = running_futures.pop(fut, (None, None, None, None))
-                    if t is not None:
-                        try:
-                            tracker.transition(t.id, TaskStatus.FAILED, error="执行超时(>600s)")
-                        except Exception:
-                            pass
-                        results.append((t.id, "timeout", None))
-                        try:
-                            _save_trace(t, route, snap, None, None, False)
-                        except Exception:
-                            pass
-                    fut.cancel()
-                for fut in done:
-                    t, route, snap, pre = running_futures.pop(fut)
-                    # 修复 P1-1: worker 抛异常 (如 pick_agent 无可用 agent → RuntimeError)
-                    # 不能炸掉整批循环。单任务标 FAILED, 其余任务正常回收。
-                    try:
-                        batch, t_route, t_snap = fut.result()
-                    except Exception as e:
-                        try:
-                            tracker.transition(t.id, TaskStatus.FAILED, error=f"worker 异常: {e}")
-                        except Exception:
-                            pass
-                        results.append((t.id, f"worker_error: {e}", None))
-                        try:
-                            _save_trace(t, route, snap, None, None, False)
-                        except Exception:
-                            pass
-                        continue
-                    # ── 使用 _finalize_result 做后处理 ──
-                    if batch.merge_request is not None:
-                        # 有 merge_request → 提交到 merge queue, 等 drain 后定终态
-                        mq.submit(batch.merge_request)
-                        pending_batches[t.id] = (t, t_route, t_snap, batch)
-                    else:
-                        _finalize_result(t, batch, t_route, t_snap, results)
-
-            # ⑥ drain (主线程), 合成功的 task 标 DONE (修复 #9: drain 后才定终态)
-            if pending_batches:
-                merge_results = mq.drain()
-                for mr in merge_results:
-                    if mr.task_id in pending_batches:
-                        t, route, snap, batch = pending_batches.pop(mr.task_id)
-                        if mr.status == "merged":
-                            tracker.transition(t.id, TaskStatus.DONE)
-                            _maybe_complete_parents(t.id)
-                            _release_ref(t.id)
-                            _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
-                                        pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
-                                        pre_search_top_decisions=batch.pre_search_top_decisions, pre_search_memory=batch.pre_search_memory)
-                            results.append((t.id, f"merged: {mr.new_head[:8]}", batch.validation))
-                        elif mr.status == "conflict":
-                            results.append((t.id, f"conflict: {mr.conflict_files}", batch.validation))
-                        else:
-                            tracker.transition(t.id, TaskStatus.FAILED, error=f"merge {mr.status}")
-                            _release_ref(t.id)
-                            _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
-                                        pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
-                                        pre_search_top_decisions=batch.pre_search_top_decisions, pre_search_memory=batch.pre_search_memory)
-                            results.append((t.id, f"merge_failed", batch.validation))
+            _reap_futures(running_futures, pending_batches, mq, results)
+            _drain_pending(pending_batches, mq, results)
 
     return results
 

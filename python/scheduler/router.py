@@ -134,15 +134,65 @@ def _scan_task_type(task: str, result: RouteResult) -> None:
     result.task_type = "default"
 
 
+def _hydra_score(task_desc: str, task_type: str, route_level: str,
+                 model_rankings: list[dict]) -> list[dict]:
+    """HyDRA 多维路由: 综合 5 维信号加权重排模型。
+
+    维度:
+      1. 任务复杂度 (task_type + route_level) — 权重 0.30
+      2. 任务长度 (context sensitivity) — 权重 0.15
+      3. 历史成功率 (profile) — 权重 0.35
+      4. 成本敏感度 — 权重 0.10
+      5. Elo 分 — 权重 0.10
+
+    ponytail: 5 维线性加权。需要时上 learning-to-rank。
+    """
+    task_len = len(task_desc)
+    # 维度1: 复杂度偏好 — 简单任务偏好快速模型，复杂任务偏好强推理模型
+    complexity_bonus = {"D": 0.3, "E+": 0.2, "E": 0.0}.get(route_level, 0)
+    # 维度2: 上下文敏感度 — 短任务无所谓，长任务偏好大上下文模型
+    context_factor = min(task_len / 500.0, 1.0) * 0.15
+
+    scored = []
+    for r in model_rankings:
+        model = r.get("model", "")
+        success = r.get("success_rate", 0.5)
+        elo = r.get("elo", 1500.0)
+        attempts = r.get("attempts", 0)
+
+        # 1. 复杂度: 对 D/E+ 层级的模型加分 (simplified — 模型名含 glm/opus/deepseek-v4 算高能力)
+        high_cap = any(t in model.lower() for t in ("glm", "opus", "deepseek-v4", "kimi"))
+        complexity_score = complexity_bonus if high_cap else 0.0
+
+        # 2. 上下文: 长任务偏好大上下文模型
+        long_ctx = any(t in model.lower() for t in ("glm", "kimi", "opus", "deepseek-v4"))
+        context_score = context_factor if long_ctx else 0.0
+
+        # 3. 历史成功率 (主信号)
+        history_score = success * 0.35
+
+        # 4. 成本: 简单任务偏好便宜模型
+        cheap = any(t in model.lower() for t in ("deepseek-chat", "glm-5-turbo"))
+        cost_score = 0.10 if (cheap and route_level == "E") else 0.0
+
+        # 5. Elo
+        elo_score = min(elo / 2000.0, 1.0) * 0.10
+
+        total = complexity_score + context_score + history_score + cost_score + elo_score
+        r["_hydra"] = round(total, 3)
+        scored.append(r)
+
+    scored.sort(key=lambda x: x["_hydra"], reverse=True)
+    return scored
+
+
 def rank_models_for_task(task_desc: str, task_type: str = "",
                          exclude: list[str] = None,
-                         phase: str = None) -> list[str]:
-    """根据画像返回该任务类型的模型排名（最佳→最差），排除熔断模型。
+                         phase: str = None,
+                         route_level: str = "E") -> list[str]:
+    """HyDRA 多维路由: 画像排名 + 5维加权 → 返回模型名列表。
 
     冷启动（画像不足 5 条记录）时返回空列表，调用方自己兜底。
-
-    phase 参数：当提供项目阶段时，应用相位感知偏好（受 HyperAgents 启发）。
-    不提供时行为不变（backward compatible）。
     """
     from .model_profile import ProfileStore
     from . import config
@@ -152,12 +202,13 @@ def rank_models_for_task(task_desc: str, task_type: str = "",
     store = ProfileStore(config.QIDIAN_DIR / "model_profile.json")
     store.load()
 
-    # 尝试模式画像（如果 phase 提供且 pattern 数据充足）
+    # 尝试模式画像
     if phase:
         template_id = guess_template(task_desc)
         pattern_ranked = store.rank_by_pattern(ttype, template_id, exclude_models=exclude)
         if pattern_ranked and any(r["from_pattern"] for r in pattern_ranked):
-            return _apply_phase_boost(pattern_ranked, phase, ttype)
+            scored = _hydra_score(task_desc, ttype, route_level, pattern_ranked)
+            return _apply_phase_boost(scored, phase, ttype)
 
     # 回退：标准任务类型画像
     ranked = store.rank(ttype, exclude_models=exclude)
@@ -165,18 +216,15 @@ def rank_models_for_task(task_desc: str, task_type: str = "",
     if total_records < 5:
         return []
 
-    result = [s.model for s in ranked]
-    # 有 phase 时也应用 boost（即使 pattern 数据不足）
+    dict_ranked = [
+        {"model": s.model, "success_rate": s.success_rate,
+         "attempts": s.total_attempts, "avg_tokens": 0.0, "elo": s.elo}
+        for s in ranked
+    ]
+    scored = _hydra_score(task_desc, ttype, route_level, dict_ranked)
     if phase:
-        # 转换为 dict 格式以复用 _apply_phase_boost
-        dict_ranked = [
-            {"model": s.model, "success_rate": s.success_rate,
-             "attempts": s.total_attempts, "avg_tokens": 0.0, "elo": s.elo}
-            for s in ranked
-        ]
-        return _apply_phase_boost(dict_ranked, phase, ttype)
-
-    return result
+        return _apply_phase_boost(scored, phase, ttype)
+    return [r["model"] for r in scored]
 
 
 # ═══════════════════════════════════════════════════

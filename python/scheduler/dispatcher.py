@@ -265,16 +265,42 @@ def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
     return result
 
 
-def _load_skills_for_agent(level: str, model: str) -> tuple[list, str, dict]:
+def _ntilc_filter(task_desc: str, skills: dict) -> dict:
+    """NTILC 神经工具检索: 关键词重叠过滤无关 skill，省 ~95% 上下文。
+
+    论文: NTILC (2026.06) — 不相关工具造成 semantic blur，嵌入匹配降 O(N)→O(log N)。
+    ponytail: 不做嵌入模型，关键词重叠已够。需要时加 sentence-transformers。
+    """
+    if not skills or len(skills) <= 3:
+        return dict(skills)
+    task_words = set(task_desc.lower().split())
+    scored = []
+    for name, skill in skills.items():
+        desc_words = set(f"{skill.description} {skill.name}".lower().split())
+        overlap = len(task_words & desc_words)
+        scored.append((overlap, name, skill))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    relevant = [(n, s) for (o, n, s) in scored if o > 0]
+    if len(relevant) < 2:
+        relevant = [(n, s) for (o, n, s) in scored[:2]]
+    return dict(relevant)
+
+
+def _load_skills_for_agent(level: str, model: str, task_desc: str = "") -> tuple[list, str, dict]:
     """为 agent 加载绑定的 Skill。返回 (tools, prompt, skills_dict)。
 
     P2-4: 结果按 (level, model) 缓存。失效见 invalidate_skill_cache。
+    NTILC: task_desc 非空时按相关性过滤，省无关 skill 上下文。
     """
     key = (level, model)
     with _CACHE_LOCK:
         if key in _SKILL_CACHE:
-            return _SKILL_CACHE[key]
-    # 加载在锁外做 (可能慢, 不阻塞其他缓存读)
+            tools, prompt, skills = _SKILL_CACHE[key]
+            if task_desc and skills:
+                skills = _ntilc_filter(task_desc, skills)
+                tools = [s.function_def for s in skills.values() if s.type == "tool" and s.function_def]
+                prompt = "\n".join(s.body for s in skills.values() if s.type == "prompt" and s.body)
+            return tools, prompt, skills
     try:
         from skills.skill_loader import (
             load_skills, get_tool_definitions, get_prompt_additions, get_agent_skills,
@@ -283,6 +309,8 @@ def _load_skills_for_agent(level: str, model: str) -> tuple[list, str, dict]:
         if skill_names:
             all_skills = load_skills()
             skills = {n: all_skills[n] for n in skill_names if n in all_skills}
+            if task_desc:
+                skills = _ntilc_filter(task_desc, skills)
             result = (get_tool_definitions(skills), get_prompt_additions(skills), skills)
             with _CACHE_LOCK:
                 _SKILL_CACHE[key] = result
@@ -390,7 +418,7 @@ def dispatch(
         )
 
     # ── 依赖注入: 为 executor 准备 skill/MCP/permission ──
-    skill_tools, skill_prompt, skills = _load_skills_for_agent(level, agent_cfg.get("model", ""))
+    skill_tools, skill_prompt, skills = _load_skills_for_agent(level, agent_cfg.get("model", ""), task_desc=task)
     mcp_tools, mcp_executor = _load_mcp_for_agent()
     perm_checker = _make_permission_checker()
 
