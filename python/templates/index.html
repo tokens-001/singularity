@@ -42,7 +42,7 @@
     <button class="btn sm" style="color:var(--text3);font-size:9px;margin-left:4px" onclick="cleanupStale()" title="清理残留心跳和缓存">扫除</button>
   </div>
 
-  <div id="onboarding" style="display:none;padding:12px 16px;margin-bottom:8px;background:var(--bg2);border-left:2px solid var(--cyan);font-size:10px;color:var(--text2);line-height:1.8">
+  <div id="onboarding" style="display:none;padding:12px 16px;margin-bottom:8px;background:var(--surface);border-left:2px solid var(--cyan);font-size:10px;color:var(--text2);line-height:1.8">
     1. <strong style="color:var(--text)">配置</strong> → 检查 API Key · 2. <strong style="color:var(--text)">任务</strong> → 提交任务 · 3. 点击 <strong style="color:var(--cyan)">启动</strong> 开始调度
   </div>
 
@@ -97,7 +97,7 @@
     <label style="font-size:9px;display:flex;align-items:center;gap:2px;margin-left:6px">
       <input type="checkbox" id="f-held" onchange="renderTasks()"> 仅扣留
     </label>
-    <input id="filter-search" placeholder="搜索关键词..." oninput="renderTasks()" style="width:120px;font-size:9px;padding:2px 4px;background:var(--bg2);border:1px solid var(--grid);color:var(--text);margin-left:4px">
+    <input id="filter-search" placeholder="搜索关键词..." oninput="renderTasks()" style="width:120px;font-size:9px;padding:2px 4px;background:var(--surface);border:1px solid var(--grid);color:var(--text);margin-left:4px">
     <span style="flex:1"></span>
     <span style="font-size:9px;color:var(--text3);font-family:var(--mono)" id="task-count"></span>
   </div>
@@ -219,13 +219,13 @@
     <div class="section-body" style="font-size:10px">
       <div style="display:flex;gap:8px">
         <div style="flex:1">
-          <h4 style="font-size:10px;margin:0 0 4px 0;color:var(--fg2)">Profiles</h4>
+          <h4 style="font-size:10px;margin:0 0 4px 0;color:var(--text2)">Profiles</h4>
           <div id="perm-profiles-body" style="max-height:120px;overflow-y:auto;font-family:var(--mono);font-size:9px">
             <span style="color:var(--text2)">加载中...</span>
           </div>
         </div>
         <div style="flex:1.5">
-          <h4 style="font-size:10px;margin:0 0 4px 0;color:var(--fg2)">Agent 绑定</h4>
+          <h4 style="font-size:10px;margin:0 0 4px 0;color:var(--text2)">Agent 绑定</h4>
           <div style="display:flex;gap:4px;margin-bottom:4px">
             <select id="perm-level" style="font-size:9px;padding:2px"><option value="E">E</option><option value="E+">E+</option><option value="D">D</option></select>
             <select id="perm-model" style="font-size:9px;padding:2px;flex:1" onchange="showPermBinding()"></select>
