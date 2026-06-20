@@ -938,6 +938,30 @@ async function refreshMCPTools(){
 // Fusion 多模型融合
 // ═══════════════════════════════════════════════════════
 
+const FUSION_MODELS = {
+  budget: ['deepseek-chat', 'glm-5-turbo', 'kimi-k2.7-code'],
+  self: ['deepseek-chat', 'deepseek-chat'],
+  standard: ['deepseek-v4-pro', 'kimi-k2.7-code'],
+};
+const FUSION_MODEL_LABELS = {
+  'deepseek-chat': 'DeepSeek Chat',
+  'glm-5-turbo': 'GLM-5 Turbo',
+  'kimi-k2.7-code': 'Kimi K2.7',
+  'deepseek-v4-pro': 'DeepSeek V4 Pro',
+};
+
+function updateFusionModels() {
+  const tier = document.getElementById('fusion-tier').value;
+  const models = FUSION_MODELS[tier] || FUSION_MODELS.budget;
+  const list = document.getElementById('fusion-models-list');
+  if (list) {
+    const names = models.map(m => FUSION_MODEL_LABELS[m] || m);
+    const uniq = [...new Set(names)];
+    const desc = tier === 'self' ? `${uniq[0]} ×2 (不同温度)` : uniq.join(' + ');
+    list.innerHTML = `<span>模型: ${desc}</span>`;
+  }
+}
+
 function updateFusionStatus() {
   const auto = document.getElementById('fusion-auto');
   const hint = document.getElementById('fusion-auto-hint');
@@ -949,24 +973,25 @@ function updateFusionStatus() {
 }
 
 async function testFusion() {
-  const ma = document.getElementById('fusion-model-a').value;
-  const mb = document.getElementById('fusion-model-b').value;
+  const tier = document.getElementById('fusion-tier').value;
+  const models = FUSION_MODELS[tier] || FUSION_MODELS.budget;
   const status = document.getElementById('fusion-status');
-  status.textContent = '提交中...';
+  status.textContent = `提交中 (${tier})...`;
   status.style.color = 'var(--text2)';
   try {
     const r = await api('/api/tasks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        description: '分析奇点调度平台的架构优缺点，给出改进建议（Fusion 测试，不修改文件）',
+        description: '分析奇点调度平台的架构优缺点，给出改进建议（Fusion测试，不修改文件）',
         priority: 80,
         route_level: 'E',
         route_type: 'fusion',
       }),
     });
     if (r.ok) {
-      status.textContent = `✅ 任务 ${r.task_id.slice(-8)} 已提交 (${ma}+${mb})`;
+      const names = [...new Set(models.map(m => FUSION_MODEL_LABELS[m]||m))];
+      status.textContent = `✅ ${r.task_id.slice(-8)} ${tier}: ${names.join('+')}`;
       status.style.color = '#57d9a3';
       refreshAll();
     } else {
@@ -978,6 +1003,8 @@ async function testFusion() {
     status.style.color = '#f44747';
   }
 }
+
+updateFusionModels();  // 初始化显示
 
 // ═══════════════════════════════════════════════════════
 // Init (removed — see app.js)
