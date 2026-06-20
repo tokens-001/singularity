@@ -79,7 +79,7 @@ document.getElementById('tab-bar').addEventListener('click',e=>{
   document.getElementById('tab-'+activeTab).classList.add('active');
   if(activeTab==='tasks'){ renderTasks(); populateDecisionsPicker(); if(_cachedDcTaskId){ document.getElementById('dc-task-picker').value = _cachedDcTaskId; loadDecisions(); } }
   if(activeTab==='project') loadProjects();
-  if(activeTab==='config'){ renderAPIStore(); renderModels(); renderLayerSwitch(); renderIntervention(); renderSkills(); renderPermissions(); }
+  if(activeTab==='config'){ renderAPIStore(); renderModels(); renderLayerSwitch(); renderIntervention(); renderSkills(); renderPermissions(); renderMCPServers(); }
 });
 
 // ═══════════════════════════════════════════════════════
@@ -1677,6 +1677,123 @@ function respondApproval(decision){
   }
 }
 function closeApproval(){ respondApproval('reject'); }
+
+// ═══════════════════════════════════════════════════════
+// MCP 服务器管理
+// ═══════════════════════════════════════════════════════
+
+async function renderMCPServers(){
+  const body = document.getElementById('mcp-servers-body');
+  const count = document.getElementById('mcp-tool-count');
+  try {
+    const r = await fetch('/api/mcp/servers');
+    const data = await r.json();
+    if (!data.servers || !data.servers.length) {
+      body.innerHTML = '<span style="color:var(--text2)">无 MCP 服务器。点击"+ 添加"配置。</span>';
+      if (count) count.textContent = '';
+      return;
+    }
+    let html = '<table style="width:100%;border-collapse:collapse;font-size:9px">';
+    html += '<tr style="color:var(--text2)"><th style="text-align:left;padding:2px 4px">名称</th><th style="text-align:left;padding:2px 4px">传输</th><th style="text-align:left;padding:2px 4px">命令/URL</th><th style="text-align:center;padding:2px 4px">工具数</th><th style="text-align:center;padding:2px 4px">操作</th></tr>';
+    for (const s of data.servers) {
+      const connected = s.connected ? '🟢' : '🔴';
+      const addr = s.transport === 'stdio' ? (s.command || '').substring(0, 60) : (s.url || '').substring(0, 60);
+      html += `<tr style="border-top:1px solid var(--grid)">
+        <td style="padding:2px 4px">${connected} ${escHtml(s.name)}</td>
+        <td style="padding:2px 4px;color:var(--text2)">${escHtml(s.transport)}</td>
+        <td style="padding:2px 4px;font-size:8px;color:var(--text2)">${escHtml(addr)}</td>
+        <td style="padding:2px 4px;text-align:center;color:var(--fg2)">${s.tool_count}</td>
+        <td style="padding:2px 4px;text-align:center">
+          <button class="btn cyan sm" style="font-size:8px;padding:1px 4px" onclick="reconnectMCPServer('${escHtml(s.name)}')">重连</button>
+          <button class="btn sm" style="font-size:8px;padding:1px 4px;color:#f44747" onclick="deleteMCPServer('${escHtml(s.name)}')">删</button>
+        </td></tr>`;
+    }
+    html += '</table>';
+    body.innerHTML = html;
+    // 工具总数
+    try {
+      const tr = await fetch('/api/mcp/tools');
+      const td = await tr.json();
+      if (count) count.textContent = `共 ${(td.tools||[]).length} 个工具`;
+    } catch(e) {}
+  } catch(e) {
+    body.innerHTML = `<span style="color:#f44747">加载失败: ${escHtml(e.message)}</span>`;
+  }
+}
+
+function toggleMCPForm(){
+  const form = document.getElementById('mcp-form');
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+  if (form.style.display !== 'none') onMCPTransportChange();
+}
+
+function onMCPTransportChange(){
+  const transport = document.getElementById('mcp-new-transport').value;
+  document.getElementById('mcp-new-command').style.display = transport === 'stdio' ? '' : 'none';
+  document.getElementById('mcp-new-url').style.display = transport === 'http' ? '' : 'none';
+}
+
+async function addMCPServer(){
+  const name = document.getElementById('mcp-new-name').value.trim();
+  if (!name) { alert('请输入名称'); return; }
+  const transport = document.getElementById('mcp-new-transport').value;
+  const command = document.getElementById('mcp-new-command').value.trim();
+  const url = document.getElementById('mcp-new-url').value.trim();
+  const timeout = parseFloat(document.getElementById('mcp-new-timeout').value) || 30;
+  const enabled = document.getElementById('mcp-new-enabled').checked;
+  const body = {name, transport, timeout, enabled};
+  if (transport === 'stdio') body.command = command;
+  else body.url = url;
+  try {
+    const r = await fetch('/api/mcp/servers', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    if (r.ok) {
+      toggleMCPForm();
+      renderMCPServers();
+    } else {
+      const e = await r.json();
+      alert(`保存失败: ${e.error||r.status}`);
+    }
+  } catch(e) {
+    alert(`请求失败: ${e.message}`);
+  }
+}
+
+async function deleteMCPServer(name){
+  if (!confirm(`删除 MCP 服务器 "${name}"?`)) return;
+  try {
+    await fetch(`/api/mcp/servers/${encodeURIComponent(name)}`, {method:'DELETE'});
+    renderMCPServers();
+  } catch(e) {
+    alert(`删除失败: ${e.message}`);
+  }
+}
+
+async function reconnectMCPServer(name){
+  try {
+    const r = await fetch(`/api/mcp/servers/${encodeURIComponent(name)}/reconnect`, {method:'POST'});
+    const data = await r.json();
+    if (data.ok) {
+      renderMCPServers();
+    } else {
+      alert(`重连失败: ${data.error}`);
+    }
+  } catch(e) {
+    alert(`重连失败: ${e.message}`);
+  }
+}
+
+async function refreshMCPTools(){
+  try {
+    const r = await fetch('/api/mcp/refresh', {method:'POST'});
+    const data = await r.json();
+    renderMCPServers();
+  } catch(e) {
+    alert(`刷新失败: ${e.message}`);
+  }
+}
 
 // ═══════════════════════════════════════════════════════
 // Init

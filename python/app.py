@@ -37,6 +37,7 @@ from scheduler.project import Phase
 from scheduler import api_store
 from scheduler.log import info as _log_info, warn as _log_warn
 from scheduler import model_registry
+from scheduler import mcp as mcp_mod
 from skills.skill_loader import (
     load_skills as _load_skills, list_skills, create_user_skill, delete_user_skill,
     get_agent_skills, set_agent_skills, get_tool_definitions, get_prompt_additions,
@@ -2251,6 +2252,119 @@ def api_perm_unbind(level, model):
 
 
 # ═══════════════════════════════════════════════════════════
+# MCP 服务器管理
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/mcp/servers")
+def api_mcp_servers():
+    """列出所有 MCP 服务器配置及连接状态。"""
+    configs = mcp_mod.load_mcp_configs()
+    registry = mcp_mod.get_registry()
+    servers = []
+    for c in configs:
+        connected = c.name in registry._clients
+        tool_count = len(registry._clients[c.name]._tools) if connected else 0
+        servers.append({
+            "name": c.name,
+            "transport": c.transport,
+            "command": c.command,
+            "url": c.url,
+            "enabled": c.enabled,
+            "timeout": c.timeout,
+            "connected": connected,
+            "tool_count": tool_count,
+        })
+    return jsonify({"servers": servers})
+
+
+@app.route("/api/mcp/servers", methods=["POST"])
+def api_mcp_add_server():
+    """添加或更新 MCP 服务器。"""
+    data = request.get_json(force=True)
+    if not data or not data.get("name"):
+        return jsonify({"error": "缺少 name"}), 400
+    configs = mcp_mod.load_mcp_configs()
+    # 查找是否已存在
+    found = False
+    for c in configs:
+        if c.name == data["name"]:
+            c.transport = data.get("transport", c.transport)
+            c.command = data.get("command", c.command)
+            c.url = data.get("url", c.url)
+            c.enabled = data.get("enabled", c.enabled)
+            c.timeout = data.get("timeout", c.timeout)
+            c.env = data.get("env", c.env)
+            found = True
+            break
+    if not found:
+        configs.append(mcp_mod.MCPServerConfig(
+            name=data["name"],
+            transport=data.get("transport", "stdio"),
+            command=data.get("command", ""),
+            url=data.get("url", ""),
+            enabled=data.get("enabled", True),
+            timeout=data.get("timeout", 30.0),
+            env=data.get("env", {}),
+        ))
+    mcp_mod.save_mcp_configs(configs)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/mcp/servers/<name>", methods=["DELETE"])
+def api_mcp_delete_server(name):
+    """删除 MCP 服务器配置。"""
+    configs = mcp_mod.load_mcp_configs()
+    configs = [c for c in configs if c.name != name]
+    mcp_mod.save_mcp_configs(configs)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/mcp/servers/<name>/reconnect", methods=["POST"])
+def api_mcp_reconnect_server(name):
+    """重新连接 MCP 服务器并刷新工具列表。"""
+    configs = mcp_mod.load_mcp_configs()
+    registry = mcp_mod.get_registry()
+    for c in configs:
+        if c.name == name:
+            # 断开旧连接
+            if name in registry._clients:
+                registry._clients[name].disconnect()
+                del registry._clients[name]
+                # 清理旧工具索引
+                registry._tools = [t for t in registry._tools if t.server_name != name]
+                registry._tool_index = {k: v for k, v in registry._tool_index.items() if v.cfg.name != name}
+            # 重新连接
+            registry.load_configs([c])
+            return jsonify({"ok": True, "tool_count": len(registry._tools)})
+    return jsonify({"error": f"服务器 {name} 不存在"}), 404
+
+
+@app.route("/api/mcp/tools")
+def api_mcp_tools():
+    """列出所有已发现的 MCP 工具。"""
+    registry = mcp_mod.get_registry()
+    tools = []
+    for t in registry.get_all_tools():
+        tools.append({
+            "name": f"mcp__{t.server_name}__{t.name}",
+            "server": t.server_name,
+            "tool": t.name,
+            "description": t.description,
+            "inputSchema": t.inputSchema,
+        })
+    return jsonify({"tools": tools})
+
+
+@app.route("/api/mcp/refresh", methods=["POST"])
+def api_mcp_refresh():
+    """刷新所有 MCP 服务器连接和工具列表。"""
+    configs = mcp_mod.load_mcp_configs()
+    mcp_mod.get_registry().load_configs(configs)
+    return jsonify({"ok": True, "servers": mcp_mod.get_registry().server_count,
+                    "tools": mcp_mod.get_registry().tool_count})
+
+
+# ═══════════════════════════════════════════════════════════
 # 健康检查
 # ═══════════════════════════════════════════════════════════
 
@@ -2284,4 +2398,12 @@ def health():
 
 if __name__ == "__main__":
     print("奇点调度面板已启动 → http://127.0.0.1:5050")
+    # ── 初始化 MCP 连接 ──
+    try:
+        mcp_configs = mcp_mod.load_mcp_configs()
+        if mcp_configs:
+            mcp_mod.get_registry().load_configs(mcp_configs)
+            print(f"MCP: {mcp_mod.get_registry().server_count} 服务器, {mcp_mod.get_registry().tool_count} 工具")
+    except Exception as e:
+        print(f"MCP 初始化失败 (非致命): {e}")
     app.run(debug=False, host="127.0.0.1", port=5050)

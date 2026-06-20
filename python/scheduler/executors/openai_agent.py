@@ -182,6 +182,16 @@ class OpenAIAgentExecutor(BaseExecutor):
             except Exception:
                 pass
 
+        # ── MCP 工具 ──
+        self._mcp_tools: list[dict] = []
+        self._mcp_enabled = cfg.get("mcp_enabled", True)
+        if self._mcp_enabled:
+            try:
+                from ..mcp import get_registry
+                self._mcp_tools = get_registry().get_openai_tools()
+            except Exception:
+                pass
+
     def _find_agent_level(self) -> str:
         """从 dispatcher 查找当前 agent 所属的层级。"""
         try:
@@ -206,6 +216,7 @@ class OpenAIAgentExecutor(BaseExecutor):
         # ── 合并 skill tools 和 prompt ──
         tools = list(TOOLS)
         tools.extend(self._skill_tools)
+        tools.extend(self._mcp_tools)
         system_prompt = SYSTEM_PROMPT
         if self._skill_prompt:
             system_prompt += "\n" + self._skill_prompt
@@ -425,6 +436,13 @@ class OpenAIAgentExecutor(BaseExecutor):
                 skill = self._skills[skill_name]
                 expanded = skill.expand_body(**args)
                 return f"[Skill: {skill.name}]\n\n{expanded}\n\n请按以上 Skill 指引继续完成任务。"
+            # ── MCP 工具调用 ──
+            if name.startswith("mcp__"):
+                try:
+                    from ..mcp import get_registry
+                    return get_registry().execute_tool(name, args)
+                except Exception as e:
+                    return f"MCP 工具执行错误: {e}"
             return f"未知工具: {name}"
         except Exception as e:
             try:

@@ -316,6 +316,35 @@
   </div>
 
   <div class="section" style="margin-bottom:8px">
+    <div class="section-title">MCP 服务器 <button class="btn cyan sm" style="margin-left:8px" onclick="renderMCPServers()">刷新</button>
+      <button class="btn cyan sm" style="margin-left:8px" onclick="toggleMCPForm()">+ 添加</button></div>
+    <div class="section-body" style="font-size:10px">
+      <div id="mcp-servers-body" style="max-height:200px;overflow-y:auto;font-family:var(--mono);font-size:9px">
+        <span style="color:var(--text2)">加载中...</span>
+      </div>
+      <div id="mcp-form" style="display:none;padding:8px;border-top:1px solid var(--grid)">
+        <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+          <input id="mcp-new-name" placeholder="名称 (如 filesystem)" style="width:120px;font-size:9px">
+          <select id="mcp-new-transport" style="font-size:9px;padding:2px;width:70px" onchange="onMCPTransportChange()">
+            <option value="stdio">stdio</option>
+            <option value="http">http</option>
+          </select>
+          <input id="mcp-new-command" placeholder="启动命令 (如 npx -y @anthropic/mcp-server-filesystem /tmp)" style="width:280px;font-size:9px">
+          <input id="mcp-new-url" placeholder="HTTP URL (http传输时填写)" style="width:220px;font-size:9px;display:none">
+          <input id="mcp-new-timeout" placeholder="超时秒" value="30" style="width:50px;font-size:9px">
+          <label style="font-size:9px;display:flex;align-items:center;gap:2px"><input type="checkbox" id="mcp-new-enabled" checked>启用</label>
+          <button class="btn cyan sm" onclick="addMCPServer()">保存</button>
+          <button class="btn sm" onclick="toggleMCPForm()">取消</button>
+        </div>
+      </div>
+      <div style="padding:4px 10px;border-top:1px solid var(--grid);display:flex;gap:4px">
+        <button class="btn cyan sm" onclick="refreshMCPTools()" style="font-size:9px">刷新全部工具</button>
+        <span style="font-size:9px;color:var(--text2)" id="mcp-tool-count"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" style="margin-bottom:8px">
     <div class="section-title">Skill 管理 <button class="btn cyan sm" style="margin-left:8px" onclick="renderSkills()">刷新</button>
       <button class="btn cyan sm" style="margin-left:8px" onclick="toggleSkillForm()">+ 新建</button></div>
     <div class="section-body" style="font-size:10px">
