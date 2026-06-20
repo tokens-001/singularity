@@ -15,7 +15,7 @@ def api(path):
         r = subprocess.run(["curl", "-s", "-m", "5", f"http://127.0.0.1:5050{path}"],
                           capture_output=True, text=True, timeout=10)
         return json.loads(r.stdout) if r.returncode == 0 else {}
-    except: return {}
+    except Exception: return {}
 
 def bar(value, max_val=20, width=20):
     filled = min(int(value / max_val * width), width)

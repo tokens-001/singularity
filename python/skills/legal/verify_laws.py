@@ -55,7 +55,7 @@ def _解析法条元数据(文件路径):
                 键, 值 = 行.split(":", 1)
                 元数据[键.strip()] = 值.strip()
         return 元数据
-    except:
+    except Exception:
         return {}
 
 
@@ -113,7 +113,7 @@ def search_law_database(法条库目录, *分析列表):
                                 "施行日期": 元数据.get("施行日期", ""),
                                 "取代": 元数据.get("取代", ""),
                             })
-                except:
+                except Exception:
                     pass
 
     # 记录缺失法条到 missing_laws.txt
@@ -132,7 +132,7 @@ def search_law_database(法条库目录, *分析列表):
                 with open(缺失日志, "a") as f:
                     for r in 新增:
                         f.write(f"{date.today()}\t{r}\n")
-        except:
+        except Exception:
             pass
 
     return 结果列表
@@ -186,7 +186,7 @@ def verify_law_version(案发日期, 法条条目):
         施行 = date.fromisoformat(施行日期)
         if 案发 < 施行:
             return f"⚠️ 案发时间({案发日期})早于本法条施行日期({施行日期})，可能适用旧法"
-    except:
+    except Exception:
         pass
     if 状态 == "已废止":
         return f"⚠️ 本法条已废止，请核实是否仍可援引"
@@ -231,7 +231,7 @@ def find_adjacent_laws(法条库目录, 法条对照):
                             "内容": 全文[位置:结束].strip().replace("\n", " ")[:100] + "……",
                             "关系": "前条" if 偏移 < 0 else "后条"
                         })
-            except:
+            except Exception:
                 pass
     # 去重
     已见 = set()
