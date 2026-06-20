@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 import json
-import tomllib
+from ._io import load_toml
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -77,8 +77,7 @@ def load_models() -> dict[str, ModelEntry]:
     # 1. 内置 TOML
     path = _models_toml_path()
     if path.exists():
-        with open(path, "rb") as f:
-            raw = tomllib.load(f)
+        raw = load_toml(path)
         items = raw.get("models", [])
         if isinstance(items, list):
             for data in items:

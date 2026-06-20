@@ -275,7 +275,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                     name = func.get("name", "")
                     try:
                         args = json.loads(func.get("arguments", "{}"))
-                    except (json.JSONDecodeError, Exception):
+                    except Exception:
                         # 模型吐的 JSON 可能有单引号/中文标点 → 尝试修复
                         raw_args = func.get("arguments", "{}")
                         try:
@@ -452,7 +452,7 @@ class OpenAIAgentExecutor(BaseExecutor):
             return f"命令解析失败: {e}"
         if not argv:
             return "空命令"
-        safe_env = {k:v for k,v in os.environ.items() if not any(p in k.upper() for p in ("API_KEY","TOKEN","SECRET","PASSWORD"))}
+        safe_env = {k:v for k,v in os.environ.items() if not any(p in k.upper() for p in ("API_KEY","TOKEN","SECRET","PASSWORD","AUTH","CREDENTIAL","CERT"))}
         try:
             r = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=30, cwd=str(self._cwd), env=safe_env)
             out = r.stdout[-4000:] if r.stdout else ""

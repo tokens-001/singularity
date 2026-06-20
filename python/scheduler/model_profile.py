@@ -309,6 +309,42 @@ class ProfileStore:
         return self
 
 
+    # ── API 查询 ──
+    def summary(self) -> dict[str, dict]:
+        """返回所有模型画像摘要，格式: {model/task_type: {success_rate, total, ...}}。"""
+        result = {}
+        for (model, tt), s in self._stats.items():
+            key = f"{model}/{tt}"
+            result[key] = {
+                "model": model,
+                "task_type": tt,
+                "success_rate": round(s.success_rate, 3),
+                "total": s.total_attempts,
+                "successes": s.successes,
+                "elo": round(s.elo, 1),
+                "avg_elapsed": round(s.total_elapsed / max(s.total_attempts, 1), 2),
+                "total_tokens": s.total_tokens,
+                "failure_modes": dict(s.failure_modes),
+            }
+        return result
+
+    def pattern_summary(self) -> list[dict]:
+        """返回所有模型在所有模式下的排名摘要。"""
+        result = []
+        task_types = {tt for (_, tt) in self._stats}
+        for tt in sorted(task_types):
+            ranked = self.rank(tt)
+            for s in ranked[:5]:
+                result.append({
+                    "model": s.model,
+                    "task_type": tt,
+                    "success_rate": round(s.success_rate, 3),
+                    "total": s.total_attempts,
+                    "elo": round(s.elo, 1),
+                })
+        return result
+
+
 # ═══════════════════════════════════════════════
 # 时间衰减
 # ═══════════════════════════════════════════════

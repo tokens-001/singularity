@@ -5,6 +5,7 @@ project_lineup 支持项目级自定义编组。
 """
 
 from __future__ import annotations
+import threading
 import time
 from dataclasses import dataclass
 
@@ -20,6 +21,13 @@ _EXECUTOR_BY_TYPE = {
     "zhipu-api": ZhipuApiExecutor,
     "openai-agent": OpenAIAgentExecutor,
 }
+
+# ── Skill/MCP 缓存 (P2-4) ──────────────────────────────────
+# dispatch() 在 worker 线程读, invalidate_* 从 Flask 请求线程调。
+# 用一把 Lock 串行化 读/写/失效, 防并发 lost-update (同 tracker._LOCK 模式)。
+_CACHE_LOCK = threading.Lock()
+_SKILL_CACHE: dict[tuple[str, str], tuple[list, str, dict]] = {}  # (level,model) → (tools,prompt,skills)
+_MCP_CACHE: tuple[list, object] | None = None  # (tools, executor_callable), None=未加载/已失效
 
 
 @dataclass
@@ -37,9 +45,8 @@ def load_agents() -> dict:
       - 每层追加的 agent 配置 (add)
       - _disabled: [model_name, ...] — 从 toml 中禁用的模型
     """
-    import tomllib
-    with open(config.AGENTS_TOML, "rb") as f:
-        data = tomllib.load(f)
+    from ._io import load_toml
+    data = load_toml(config.AGENTS_TOML)
     raw = data.get("agents", {})
     agents = {}
     for k, v in raw.items():
@@ -269,7 +276,15 @@ def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
 
 
 def _load_skills_for_agent(level: str, model: str) -> tuple[list, str, dict]:
-    """为 agent 加载绑定的 Skill。返回 (tools, prompt, skills_dict)。"""
+    """为 agent 加载绑定的 Skill。返回 (tools, prompt, skills_dict)。
+
+    P2-4: 结果按 (level, model) 缓存。失效见 invalidate_skill_cache。
+    """
+    key = (level, model)
+    with _CACHE_LOCK:
+        if key in _SKILL_CACHE:
+            return _SKILL_CACHE[key]
+    # 加载在锁外做 (可能慢, 不阻塞其他缓存读)
     try:
         from skills.skill_loader import (
             load_skills, get_tool_definitions, get_prompt_additions, get_agent_skills,
@@ -278,22 +293,55 @@ def _load_skills_for_agent(level: str, model: str) -> tuple[list, str, dict]:
         if skill_names:
             all_skills = load_skills()
             skills = {n: all_skills[n] for n in skill_names if n in all_skills}
-            return get_tool_definitions(skills), get_prompt_additions(skills), skills
+            result = (get_tool_definitions(skills), get_prompt_additions(skills), skills)
+            with _CACHE_LOCK:
+                _SKILL_CACHE[key] = result
+            return result
     except Exception:
         pass
     return [], "", {}
 
 
-def _load_mcp_for_agent() -> tuple[list, callable]:
-    """加载 MCP 工具。返回 (tools, executor_callable)。"""
+def _load_mcp_for_agent() -> tuple[list, object]:
+    """加载 MCP 工具。返回 (tools, executor_callable)。
+
+    P2-4: 全局单条缓存。失效见 invalidate_mcp_cache。
+    """
+    global _MCP_CACHE
+    with _CACHE_LOCK:
+        if _MCP_CACHE is not None:
+            return _MCP_CACHE
     try:
         from .mcp import get_registry
         reg = get_registry()
         tools = reg.get_openai_tools()
-        return tools, reg.execute_tool
+        result = (tools, reg.execute_tool)
+        with _CACHE_LOCK:
+            _MCP_CACHE = result
+        return result
     except Exception:
         pass
     return [], None
+
+
+def invalidate_skill_cache(level: str = None, model: str = None) -> None:
+    """失效 Skill 缓存。
+
+    不传参 = 清全部 (skill_add/skill_delete 触发);
+    传 (level, model) = 只清那条 (agent_skill_update 触发)。
+    """
+    with _CACHE_LOCK:
+        if level is None and model is None:
+            _SKILL_CACHE.clear()
+        else:
+            _SKILL_CACHE.pop((level, model), None)
+
+
+def invalidate_mcp_cache() -> None:
+    """失效 MCP 缓存 (全局, 任一 MCP 写操作触发)。"""
+    global _MCP_CACHE
+    with _CACHE_LOCK:
+        _MCP_CACHE = None
 
 
 def _make_permission_checker() -> callable:
@@ -314,6 +362,8 @@ def _make_permission_checker() -> callable:
                     return False, reason
             if needs_approval(agent_level, agent_model, tool_name):
                 try:
+                    # 延迟导入破环: orchestrator → _exec → dispatcher → orchestrator
+                    # 此处导入切断环链，不可提升为顶层导入
                     from .orchestrator import _pending_sse_events as _pe
                     _pe.append({"kind": "approval", "msg": f"[{task_id[:8]}] {tool_name} 需审批",
                                  "ts": time.time(), "task_id": task_id})

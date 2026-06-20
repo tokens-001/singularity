@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from . import config
 from . import tracker
 from .tracker import TaskStatus
-from .executors.worktree import merge_ref, merge_tree_probe
+from ._git_worktree import merge_ref, merge_tree_probe
 
 
 @dataclass

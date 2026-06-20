@@ -385,12 +385,11 @@ MCP_CONFIG_PATH = config.SCHEDULER_DIR / "mcp_servers.toml"
 
 def load_mcp_configs() -> list[MCPServerConfig]:
     """从 TOML 配置文件加载 MCP 服务器配置。"""
-    import tomllib
+    from ._io import load_toml
     if not MCP_CONFIG_PATH.exists():
         return _default_configs()
     try:
-        with open(MCP_CONFIG_PATH, "rb") as f:
-            data = tomllib.load(f)
+        data = load_toml(MCP_CONFIG_PATH)
     except Exception as e:
         _log_warn(_TAG, f"读取 mcp_servers.toml 失败: {e}, 使用默认配置")
         return _default_configs()

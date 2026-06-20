@@ -34,12 +34,11 @@ class Persona:
 
 def _load_personas() -> dict[str, Persona]:
     """从 personas.toml 加载人格面具定义。"""
-    import tomllib
+    from ._io import load_toml
     path = sched_config.SCHEDULER_DIR / "personas.toml"
     if not path.exists():
         return {}
-    with open(path, "rb") as f:
-        data = tomllib.load(f)
+    data = load_toml(path)
     result = {}
     for key, d in data.items():
         result[key] = Persona(
@@ -114,12 +113,11 @@ class Role:
 
 def _load_roles() -> dict[str, Role]:
     """从 roles.toml 加载角色定义。"""
-    import tomllib
+    from ._io import load_toml
     path = sched_config.SCHEDULER_DIR / "roles.toml"
     if not path.exists():
         return {}
-    with open(path, "rb") as f:
-        data = tomllib.load(f)
+    data = load_toml(path)
     result = {}
     for key, d in data.items():
         caps_raw = d.get("capabilities", [])
