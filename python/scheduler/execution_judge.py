@@ -204,26 +204,36 @@ def build_reflexion_feedback(verdict: JudgeVerdict) -> str:
 # Self-Fusion — 多模型并行 + 合成裁判 (model-fusion 论文)
 # ═══════════════════════════════════════════════
 
-_FUSION_SYNTHESIS_PROMPT = """你是多模型输出合成器。以下是两个模型对同一任务的独立产出。
+_FUSION_SYNTHESIS_PROMPT = """你是多模型输出合成器。以下是两个模型以不同角色对同一任务的独立产出。
+
+模型 A 角色: Builder（建设者）— 关注可实现性、具体步骤、代码结构
+模型 B 角色: Skeptic（质疑者）— 关注边界条件、潜在风险、遗漏场景
 
 【任务】
 {task}
 
-【模型 A 产出】
+【Builder 产出】
 {output_a}
 
-【模型 B 产出】
+【Skeptic 产出】
 {output_b}
 
 请按以下 6 项提纲合成一份最终方案:
-1. 两个模型的共识点
-2. 模型 A 独有的有价值观点
-3. 模型 B 独有的有价值观点
+1. 两个角色的共识点
+2. Builder 独有的可实施方案
+3. Skeptic 独有的风险发现
 4. 两者冲突的地方及你的判断
-5. 补充两者都遗漏的重要点
+5. 补充两者都遗漏的重要点（Analyst 视角）
 6. 最终合成方案
 
 只输出合成后的内容，不输出元讨论。"""
+
+# 角色定义 — 借鉴 model-fusion 角色多样性 (skeptic/builder/analyst)
+_FUSION_ROLES = {
+    "builder": "你是 Builder（建设者）。关注可实现性、具体步骤、代码结构、模块划分。给出可落地的方案。",
+    "skeptic": "你是 Skeptic（质疑者）。主动找方案的漏洞：边界条件、并发安全、异常路径、向后兼容。指出所有可能出错的地方。",
+    "analyst": "你是 Analyst（分析者）。关注架构合理性、技术选型权衡、长期维护成本。从更高维度评估方案。",
+}
 
 
 def fuse_outputs(task_desc: str, output_a: str, output_b: str) -> str:
@@ -247,20 +257,22 @@ def fuse_outputs(task_desc: str, output_a: str, output_b: str) -> str:
 def run_parallel_models(task_desc: str, level: str = "E") -> list[str]:
     """并行调用 2 个 cheap model 产出独立方案。返回 [output_a, output_b]。
 
-    ponytail: 固定 2 路。需要时扩展到 N 路。
+    角色多样性: model A=Builder, model B=Skeptic。
+    ponytail: 固定 2 路。需要时扩展到 N 路 (加 Analyst)。
     """
     import os
     import concurrent.futures
 
     api_configs = [
-        ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/chat/completions", "deepseek-chat"),
-        ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-5-turbo"),
+        ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/chat/completions", "deepseek-chat", "builder"),
+        ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-5-turbo", "skeptic"),
     ]
 
-    def _call_one(env_var, base_url, model):
+    def _call_one(env_var, base_url, model, role):
         api_key = os.environ.get(env_var, "")
         if not api_key:
             return ""
+        system_prompt = _FUSION_ROLES.get(role, "你是代码专家。请针对以下任务给出分析和方案。")
         try:
             import httpx
             with httpx.Client(timeout=httpx.Timeout(60)) as client:
@@ -270,7 +282,7 @@ def run_parallel_models(task_desc: str, level: str = "E") -> list[str]:
                     json={
                         "model": model,
                         "messages": [
-                            {"role": "system", "content": "你是代码专家。请针对以下任务给出分析和方案，不要修改文件。"},
+                            {"role": "system", "content": system_prompt},
                             {"role": "user", "content": task_desc},
                         ],
                         "max_tokens": 2000,
