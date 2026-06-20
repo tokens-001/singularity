@@ -19,6 +19,42 @@ from .project import ProjectState, Phase, save, load
 from .tracker import TaskStatus
 
 
+def _try_parse_json(raw: str, try_repair: bool = False) -> dict:
+    """从 agent 原始输出中提取 JSON。统一处理 ```json 块/裸{}/截断修复。
+
+    返回 dict, 如果解析失败则含 parse_error 标记。
+    """
+    import re as _re
+    if not raw:
+        return {"raw_output": "", "parse_error": True}
+    candidates = []
+    # 方式1: ```json ... ``` 代码块
+    for m in _re.finditer(r"```(?:json)?\s*\n(.*?)```", raw, _re.DOTALL):
+        candidates.append(m.group(1).strip())
+    # 方式2: 裸 {...} 块
+    if not candidates:
+        m = _re.search(r"\{[\s\S]*\}", raw)
+        if m:
+            candidates.append(m.group().strip())
+    for c in candidates:
+        try:
+            return json.loads(c)
+        except json.JSONDecodeError:
+            # 修复常见 JSON 错误
+            try:
+                fixed = _re.sub(r',\s*}', '}', c)
+                fixed = _re.sub(r',\s*]', ']', fixed)
+                return json.loads(fixed)
+            except Exception:
+                continue
+    # 尝试截断修复
+    if try_repair:
+        repaired = _repair_truncated_json(raw)
+        if repaired is not None:
+            return repaired
+    return {"raw_output": raw[:5000], "parse_error": True}
+
+
 def _repair_truncated_json(raw: str) -> dict | None:
     """尝试修复被截断的 JSON —— 补全未闭合的括号和引号。"""
     if not raw:
@@ -264,34 +300,7 @@ def _run_research(project: ProjectState, agents: dict) -> str:
         raw = ""
 
     # 4. 解析 JSON 产出
-    import re as _re
-    report = None
-    if raw:
-        # 尝试多种方式提取 JSON
-        candidates = []
-        # 方式1: ```json ... ``` 代码块
-        for m in _re.finditer(r"```(?:json)?\s*\n(.*?)```", raw, _re.DOTALL):
-            candidates.append(m.group(1).strip())
-        # 方式2: 裸 {...} 块 (找最外层的)
-        if not candidates:
-            m = _re.search(r"\{[\s\S]*\}", raw)
-            if m:
-                candidates.append(m.group().strip())
-        for c in candidates:
-            try:
-                report = json.loads(c)
-                break
-            except json.JSONDecodeError:
-                # 修复常见 JSON 错误
-                try:
-                    fixed = _re.sub(r',\s*}', '}', c)  # trailing comma
-                    fixed = _re.sub(r',\s*]', ']', fixed)
-                    report = json.loads(fixed)
-                    break
-                except Exception:
-                    continue
-    if report is None:
-        report = {"raw_output": raw[:5000] if raw else "", "parse_error": True}
+    report = _try_parse_json(raw)
 
     project.research_report = report
     project.add_lineage({"action": "research_complete",
@@ -338,45 +347,20 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
         raw = ""
 
     # 3. 解析 JSON 产出
-    import re as _re
-    arch = None
-    if raw:
-        try:
-            m = _re.search(r"```json\s*\n(.*?)\n```", raw, _re.DOTALL)
-            if m:
-                arch = json.loads(m.group(1))
-            else:
-                m2 = _re.search(r"\{[\s\S]*\}", raw)
-                if m2:
-                    arch = json.loads(m2.group())
-        except (json.JSONDecodeError, Exception):
-            arch = _repair_truncated_json(raw)
-    if arch is None:
+    arch = _try_parse_json(raw, try_repair=True)
+    if arch.get("parse_error"):
         # 重试一次: 附加格式指令
-        retry_prompt = prompt + "\n\n[格式错误] 上一次输出不是合法JSON。请用 ```json ... ``` 包裹输出，确保可以被 JSON.parse 解析。"
-        raw2 = ""
+        retry_prompt = prompt + "\n\n[格式错误] 上一次输出不是合法JSON。请用 ```json ... ``` 包裹输出。"
         try:
             disp_result2 = disp_mod.dispatch(
                 retry_prompt, "D", task_id + "_r", agents,
                 project_lineup=project.agent_lineup,
             )
             raw2 = disp_result2.executor_result.raw_output if disp_result2 else ""
+            if raw2:
+                arch = _try_parse_json(raw2, try_repair=True)
         except Exception:
             pass
-        if raw2:
-            import re as _re3
-            try:
-                m = _re3.search(r"```json\s*\n(.*?)\n```", raw2, _re3.DOTALL)
-                if m:
-                    arch = json.loads(m.group(1))
-                else:
-                    m2 = _re3.search(r"\{[\s\S]*\}", raw2)
-                    if m2:
-                        arch = json.loads(m2.group())
-            except (json.JSONDecodeError, Exception):
-                arch = _repair_truncated_json(raw2) or _repair_truncated_json(raw)
-    if arch is None:
-        arch = {"raw_output": raw[:5000], "parse_error": True}
 
     project.architecture = arch
     # 校验架构完整性 — 阻塞级错误不许过
@@ -531,22 +515,7 @@ def _run_review(project: ProjectState, agents: dict) -> str:
         raw = ""
 
     # 4. 解析 JSON 产出
-    import re as _re
-    review = None
-    if raw:
-        try:
-            m = _re.search(r"```json\s*\n(.*?)\n```", raw, _re.DOTALL)
-            if m:
-                review = json.loads(m.group(1))
-            else:
-                m2 = _re.search(r"\{[\s\S]*\}", raw)
-                if m2:
-                    review = json.loads(m2.group())
-        except (json.JSONDecodeError, Exception):
-            pass
-    if review is None:
-        review = {"raw_output": raw[:5000], "parse_error": True}
-
+    review = _try_parse_json(raw)
     issues = review.get("issues", [])
     project.issues = issues
     project.add_lineage({"action": "review_complete",
