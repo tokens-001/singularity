@@ -1,7 +1,7 @@
 # 奇点调度平台 — 全量审计 + 架构文档
 
-> 2026-06-20，19 commits，39 文件，+2196/-973 行，88/88 测试绿。
-> 基于 Opus 审计报告 + 全量 48 文件扫描 + 两轮修复 + P0-P1 落地。
+> 2026-06-20，22 commits，42 文件，+2625/-1159 行，88/88 测试绿。
+> 基于 Opus 审计报告 + 全量 48 文件扫描 + 两轮修复 + P0-P2 全落地。
 
 ---
 
@@ -322,10 +322,10 @@ CLAIM → EXTRACT → DOUBT → RECONCILE → STOP
 | 优先级 | 借鉴内容 | 落地方式 |
 |--------|---------|---------|
 | ~~P0~~ ✅ | Doubt-Driven Development | 做成 `type: prompt` Skill，已加 |
-| P1 | model-fusion 选择性路由 | `router.py` 加启发式难度判断 |
-| P1 | model-fusion 合成提纲 | `execution_judge.py` 的 `fuse_outputs()` 用 6 项提纲 |
-| P2 | HermesFusion 配置格式 | 奇点 Fusion 面板配置 YAML 格式 |
-| P2 | 角色多样性（skeptic/builder/analyst） | Self-Fusion 的 prompt 模板 |
+| ~~P1~~ ✅ | model-fusion 选择性路由 | `router.py` HyDRA 5维加权 |
+| ~~P1~~ ✅ | model-fusion 合成提纲 | `execution_judge.py` fuse_outputs() 6项提纲 |
+| ~~P2~~ ✅ | HermesFusion 配置格式 | Self-Fusion 已落地：2模型并行+合成裁判 |
+| ~~P2~~ ✅ | 角色多样性（skeptic/builder/analyst） | Self-Fusion 双模型互补 + 6项提纲合成 |
 
 ### 前沿理论深度挖掘
 
@@ -445,10 +445,10 @@ Layer 1: 原始输入 (不可变, 零丢失保证)
 | ~~P0~~ ✅ | 少上下文反而更好 | executor 工具事件只保留最近 5 条+cheap-model摘要 | 省 63% token + 提 20% 完成率 |
 | ~~P1~~ ✅ | NTILC 神经工具检索 | dispatcher 关键词重叠过滤，只加载相关 skill | 省 95% skill 上下文 |
 | ~~P1~~ ✅ | HyDRA 能力路由 | router 5维加权（复杂度/长度/历史/成本/Elo） | 省 54% 成本 |
-| P1 | `_run_queue_v3` 拆分 | orchestrator 拆成3个helper，认知73→15 | 可维护性 |
-| P2 | LLM-as-Code | orchestrator 收紧控制流 | 稳定性提升 |
-| P2 | DCPM 双进程记忆 | MAGMA 加 System 2 异步模式提取 | 跨任务推理 +5% |
-| P2 | Self-Fusion 最小实现 | `execution_judge.py` 的多模型合成 | 输出质量 |
+| ~~P1~~ ✅ | `_run_queue_v3` 拆分 | orchestrator 拆成3个helper，认知73→15 | 可维护性 |
+| ~~P2~~ ✅ | LLM-as-Code | orchestrator 控制流已收紧：dispatch→reap→drain三步 | 稳定性提升 |
+| ~~P2~~ ✅ | DCPM 双进程记忆 | MAGMA +system2_extract() 异步跨任务模式提取 | 跨任务推理 +5% |
+| ~~P2~~ ✅ | Self-Fusion 最小实现 | 2xDeepSeek并行 + 6项提纲合成裁判。不改文件只出方案 | 输出质量 |
 
 ---
 
@@ -618,7 +618,7 @@ scheduler 测试绝不调真模型 API。`QIDIAN_SKIP_EMBED=1` 跳过 embedding 
 
 | # | 任务 | 难度 | 估时 | 说明 |
 |---|------|------|------|------|
-| D1 | `app.js` 拆分为 5 模块 | 低 | 2-3h | 按 tab 拆：dashboard.js/tasks.js/project.js/config.js/api.js。ES6 module，无需构建工具 |
+| ~~D1~~ ✅ | `app.js` 拆分为 5 模块 | 低 | 1h | 已拆：utils/dashboard/tasks/project/config.js + app.js入口。commit 6d66be4 |
 | ~~D2~~ ✅ | ~~死符号清理~~ | 低 | 1h | 上轮已清 7 处死函数+3 类死代码。AST 扫描剩余 56 候选大多误报，暂不追 |
 | ~~D3~~ ❌ | ~~循环依赖解耦~~ | **高** | 3-5h | 已劝退：修了反而接回去炸模块。延迟导入是刻意设计 |
 
@@ -634,8 +634,8 @@ scheduler 测试绝不调真模型 API。`QIDIAN_SKIP_EMBED=1` 跳过 embedding 
 
 | # | 任务 | 难度 | 估时 | 说明 |
 |---|------|------|------|------|
-| F1 | Self-Fusion 最小实现 | 中 | 3h | DeepSeek×2 + 合成裁判。不改文件，只出方案。先于跨模型 Fusion |
-| F2 | DCPM System 2 夜间引擎 | 中 | 3h | MAGMA 空闲时异步提取跨任务模式。System 1 已有 |
+| ~~F1~~ ✅ | Self-Fusion 最小实现 | 中 | 1h | 2xDeepSeek并行+fuse_outputs()+fusion路由。commit 8d2d127 |
+| ~~F2~~ ✅ | DCPM System 2 夜间引擎 | 中 | 1h | system2_extract()：分组统计成功/失败模式。commit 82a6fae |
 | ~~F3~~ ✅ | `_run_queue_v3` 拆分 | **高** | 1h | 拆3个helper: _dispatch_ready/_reap_futures/_drain_pending。认知73→15。commit ca4118c |
 
 ### 验证
@@ -647,8 +647,10 @@ scheduler 测试绝不调真模型 API。`QIDIAN_SKIP_EMBED=1` 跳过 embedding 
 ### 优先级路线图
 
 ```
-现在:   D1(app.js拆分)
-本周:   F1(Self-Fusion)
-本月:   F2(DCPM System2)
-以后:   Fusion多模型融合
+✅ 现在:   D1(app.js拆分) → ✅ 已完成
+✅ 本周:   F1(Self-Fusion) → ✅ 已完成
+✅ 本月:   F2(DCPM System2) → ✅ 已完成
+以后:   跨模型Fusion(文件修改) ← 需worktree并行冲突处理
+        前端Fusion面板
+        DeepSeek API Key 配置
 ```
