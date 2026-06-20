@@ -22,6 +22,7 @@ from . import witness
 from . import orchestrator
 from . import neijinglu
 from . import dispatcher as disp_mod
+from . import mcp as mcp_mod
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -594,8 +595,13 @@ def project_lineup_set(project_id: str, lineup: dict) -> tuple[dict, int]:
 
 def template_list() -> tuple[dict, int]:
     """GET /api/templates"""
-    from .task_templates import _templates
-    return {"templates": _templates}, 200
+    from .task_templates import list_all
+    templates = list_all()
+    return {"templates": [{"id": tid, "name": t.name, "description": t.description,
+                           "success_criteria": t.success_criteria,
+                           "suggested_max_turns": t.suggested_max_turns,
+                           "recommended_models": t.recommended_models}
+                          for tid, t in templates.items()]}, 200
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -823,13 +829,14 @@ def skill_list() -> tuple[dict, int]:
     try:
         from skills.skill_loader import load_skills, get_agent_skills
         all_skills = load_skills()
-        skills_data = {}
+        skills_data = []
         for name, skill in all_skills.items():
-            skills_data[name] = {
+            skills_data.append({
                 "name": skill.name, "description": skill.description,
-                "type": skill.type, "args": skill.args,
+                "type": skill.type, "args": skill.arguments,
+                "source": skill.source,
                 "body": skill.body[:200],
-            }
+            })
         return {"skills": skills_data}, 200
     except Exception as e:
         return {"error": str(e)}, 500
@@ -840,6 +847,7 @@ def skill_add(name: str, description: str = "", skill_type: str = "prompt",
     """POST /api/skills"""
     from skills.skill_loader import create_user_skill
     create_user_skill(name, description, skill_type, args or [], body)
+    disp_mod.invalidate_skill_cache()  # skill 定义变了, 清全部
     return {"ok": True, "name": name}, 200
 
 
@@ -847,6 +855,7 @@ def skill_delete(name: str) -> tuple[dict, int]:
     """DELETE /api/skills/<name>"""
     from skills.skill_loader import delete_user_skill
     ok = delete_user_skill(name)
+    disp_mod.invalidate_skill_cache()  # skill 定义变了, 清全部
     return {"ok": ok}, 200
 
 
@@ -862,6 +871,7 @@ def agent_skill_update(level: str, model: str, skill_names: list) -> tuple[dict,
     """PUT /api/agents/<level>/<model>/skills"""
     from skills.skill_loader import set_agent_skills
     set_agent_skills(level, model, skill_names)
+    disp_mod.invalidate_skill_cache(level, model)  # 只清该 agent 的缓存
     return {"ok": True}, 200
 
 
@@ -971,21 +981,28 @@ def dag_metrics() -> tuple[dict, int]:
 
 def judge_monitor_status() -> tuple[dict, int]:
     """GET /api/judge-monitor"""
-    from .judge_monitor import status
-    return status(), 200
+    from .judge_monitor import JudgeMonitorStore
+    from . import config
+    jm = JudgeMonitorStore(config.QIDIAN_DIR / "judge_monitor.json")
+    jm.load()
+    return jm.get_stats(), 200
 
 
 def model_profile_status() -> tuple[dict, int]:
     """GET /api/model-profile"""
     from .model_profile import ProfileStore
-    ps = ProfileStore()
+    from . import config
+    ps = ProfileStore(config.QIDIAN_DIR / "model_profile.json")
+    ps.load()
     return {"profiles": ps.summary()}, 200
 
 
 def model_profile_pattern() -> tuple[dict, int]:
     """GET /api/model-profile/pattern"""
     from .model_profile import ProfileStore
-    ps = ProfileStore()
+    from . import config
+    ps = ProfileStore(config.QIDIAN_DIR / "model_profile.json")
+    ps.load()
     return {"patterns": ps.pattern_summary()}, 200
 
 
@@ -1030,3 +1047,88 @@ def health_check(loop_running: bool, sse_clients: int) -> tuple[dict, int]:
         "sse_clients": sse_clients,
         "projects": len({}),  # filled by caller
     }, 200
+
+
+# ═══════════════════════════════════════════════════════════════
+# MCP CRUD (下沉自 app.py:1124-1197)
+# ═══════════════════════════════════════════════════════════════
+
+def mcp_server_list() -> tuple[dict, int]:
+    """GET /api/mcp/servers"""
+    configs = mcp_mod.load_mcp_configs()
+    registry = mcp_mod.get_registry()
+    servers = []
+    for c in configs:
+        connected = c.name in registry._clients
+        tool_count = len(registry._clients[c.name]._tools) if connected else 0
+        servers.append({"name": c.name, "transport": c.transport, "command": c.command,
+                        "url": c.url, "enabled": c.enabled, "timeout": c.timeout,
+                        "connected": connected, "tool_count": tool_count})
+    return {"servers": servers}, 200
+
+
+def mcp_server_add(data: dict) -> tuple[dict, int]:
+    """POST /api/mcp/servers"""
+    if not data or not data.get("name"):
+        return {"error": "缺少 name"}, 400
+    configs = mcp_mod.load_mcp_configs()
+    found = False
+    for c in configs:
+        if c.name == data["name"]:
+            c.transport = data.get("transport", c.transport)
+            c.command = data.get("command", c.command)
+            c.url = data.get("url", c.url)
+            c.enabled = data.get("enabled", c.enabled)
+            c.timeout = data.get("timeout", c.timeout)
+            c.env = data.get("env", c.env)
+            found = True
+            break
+    if not found:
+        configs.append(mcp_mod.MCPServerConfig(
+            name=data["name"], transport=data.get("transport", "stdio"),
+            command=data.get("command", ""), url=data.get("url", ""),
+            enabled=data.get("enabled", True), timeout=data.get("timeout", 30.0),
+            env=data.get("env", {})))
+    mcp_mod.save_mcp_configs(configs)
+    return {"ok": True}, 200
+
+
+def mcp_server_delete(name: str) -> tuple[dict, int]:
+    """DELETE /api/mcp/servers/<name>"""
+    configs = mcp_mod.load_mcp_configs()
+    configs = [c for c in configs if c.name != name]
+    mcp_mod.save_mcp_configs(configs)
+    return {"ok": True}, 200
+
+
+def mcp_server_reconnect(name: str) -> tuple[dict, int]:
+    """POST /api/mcp/servers/<name>/reconnect"""
+    configs = mcp_mod.load_mcp_configs()
+    registry = mcp_mod.get_registry()
+    for c in configs:
+        if c.name == name:
+            if name in registry._clients:
+                registry._clients[name].disconnect()
+                del registry._clients[name]
+                registry._tools = [t for t in registry._tools if t.server_name != name]
+                registry._tool_index = {k: v for k, v in registry._tool_index.items() if v.cfg.name != name}
+            registry.load_configs([c])
+            return {"ok": True, "tool_count": len(registry._tools)}, 200
+    return {"error": f"服务器 {name} 不存在"}, 404
+
+
+def mcp_tool_list() -> tuple[dict, int]:
+    """GET /api/mcp/tools"""
+    registry = mcp_mod.get_registry()
+    tools = [{"name": f"mcp__{t.server_name}__{t.name}", "server": t.server_name,
+              "tool": t.name, "description": t.description, "inputSchema": t.inputSchema}
+             for t in registry.get_all_tools()]
+    return {"tools": tools}, 200
+
+
+def mcp_refresh() -> tuple[dict, int]:
+    """POST /api/mcp/refresh"""
+    configs = mcp_mod.load_mcp_configs()
+    mcp_mod.get_registry().load_configs(configs)
+    return {"ok": True, "servers": mcp_mod.get_registry().server_count,
+            "tools": mcp_mod.get_registry().tool_count}, 200

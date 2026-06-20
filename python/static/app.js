@@ -102,6 +102,13 @@ async function api(path,opts){
 }
 
 // ═══════════════════════════════════════════════════════
+// Interaction states (loading / empty / error)
+// ═══════════════════════════════════════════════════════
+function showSkeleton(el, rows=5){ el.innerHTML=Array.from({length:rows},()=>`<div class="skeleton w${80-Math.floor(Math.random()*50)}"></div>`).join(''); }
+function showEmpty(el, msg, tabHint=''){ el.innerHTML=`<div class="empty-state">${msg}${tabHint?` <a onclick="switchTab('${tabHint}')">${tabHint}</a>`:''}</div>`; }
+function showError(el, msg, retryFn){ el.innerHTML=`<div class="error-inline" onclick="(${retryFn.toString()})()">${msg}</div>`; }
+
+// ═══════════════════════════════════════════════════════
 // Refresh
 // ═══════════════════════════════════════════════════════
 async function refreshAll(){
@@ -200,7 +207,7 @@ async function renderTokenStats(){
     if(!u.error){
       html+=`<br><b>今日</b> ${fmtTokens(u.daily_tokens||0)} · <b>费用</b> $${(u.daily_cost||0).toFixed(4)}`;
       if(u.budget_daily>0) html+=` · <b>预算</b> $${u.daily_cost.toFixed(2)}/$${u.budget_daily.toFixed(2)}`;
-      if(u.warning) html+=`<br><span style="color:var(--orange)">⚠ ${esc(u.warning)}</span>`;
+      if(u.warning) html+=`<br><span style="color:var(--st-pending)">⚠ ${esc(u.warning)}</span>`;
     }
   }catch(_){}
   body.innerHTML=html;
@@ -218,14 +225,14 @@ async function checkSetup(){
     if(onboarding){
       if(active.length===0){
         onboarding.style.display='block';
-        onboarding.innerHTML=`<div style="font-size:14px;font-weight:600;margin-bottom:8px;color:var(--orange)">⚡ 快速设置</div>
+        onboarding.innerHTML=`<div style="font-size:14px;font-weight:600;margin-bottom:8px;color:var(--st-pending)">⚡ 快速设置</div>
           <div style="font-size:10px;color:var(--text2);line-height:1.8">
-          <div>检测到 <b style="color:var(--red)">0</b> 个可用 API。在 <b style="color:var(--cyan);cursor:pointer" onclick="document.querySelector('[data-tab=config]').click()">配置 → API 库</b> 添加或启用。</div>
+          <div>检测到 <b style="color:var(--st-fail)">0</b> 个可用 API。在 <b style="color:var(--accent);cursor:pointer" onclick="document.querySelector('[data-tab=config]').click()">配置 → API 库</b> 添加或启用。</div>
           <div style="margin-top:4px;color:var(--text3)">API Key 需在 .env 文件中配置环境变量后重启服务。</div>
           </div>`;
       }else if(active.length<2){
         onboarding.style.display='block';
-        onboarding.innerHTML=`<div style="font-size:14px;font-weight:600;margin-bottom:8px;color:var(--cyan)">${active.length} 个 API 就绪</div>
+        onboarding.innerHTML=`<div style="font-size:14px;font-weight:600;margin-bottom:8px;color:var(--accent)">${active.length} 个 API 就绪</div>
           <div style="font-size:10px;color:var(--text2);line-height:1.8">
           <div>已检测到: ${active.map(e=>esc(e.provider)).join(', ')}</div>
           <div>建议至少配置 2 个不同 provider 以实现容灾。</div>
@@ -246,7 +253,7 @@ async function loadPerfStats(){
       let html=`<b>${d.count}</b> 样本 · 平均 <b>${(d.avg_total_ms/1000).toFixed(1)}s</b>`;
       if(d.phase_avg_ms) html+=` · 执行:${(d.phase_avg_ms.execute_ms/1000).toFixed(1)}s`;
       if(d.slowest_5&&d.slowest_5.length){
-        html+=`<br>最慢: `+d.slowest_5.map(s=>`<span style="font-family:mono;font-size:9px;color:var(--orange)">${s.task_id} ${s.total_s}s</span>`).join(' ');
+        html+=`<br>最慢: `+d.slowest_5.map(s=>`<span style="font-family:mono;font-size:9px;color:var(--st-pending)">${s.task_id} ${s.total_s}s</span>`).join(' ');
       }
       document.getElementById('perf-body').innerHTML=html;
     }
@@ -381,7 +388,7 @@ async function toggleDetail(taskId){
       tlHtml+=`<div class="tl-node ${cls}">
         <span class="tl-from">${node.from||'∅'}</span>→<span class="tl-to">${node.to}</span>
         ${node.meta&&node.meta.route_level?`<span class="tl-meta">level=${node.meta.route_level}</span>`:''}
-        ${node.meta&&node.meta.error?`<span class="tl-meta" style="color:var(--red)">${esc(node.meta.error.slice(0,80))}</span>`:''}
+        ${node.meta&&node.meta.error?`<span class="tl-meta" style="color:var(--st-fail)">${esc(node.meta.error.slice(0,80))}</span>`:''}
       </div>`;
     });
   }
@@ -411,7 +418,7 @@ async function toggleDetail(taskId){
       <div><dt>ID</dt><dd style="font-family:'SF Mono',monospace;font-size:11px">${data.id||taskId}</dd></div>
       <div><dt>状态</dt><dd><span class="badge ${st}">${STATUS_CN[st]||st}</span>
         ${data.held?'<span class="held-tag">扣留</span>':''}
-        ${data.route_locked?'<span style="font-size:9px;color:var(--orange);margin-left:4px">🔒锁定</span>':''}
+        ${data.route_locked?'<span style="font-size:9px;color:var(--st-pending);margin-left:4px">🔒锁定</span>':''}
       </dd></div>
       <div><dt>描述</dt><dd>${esc(data.description||'')}</dd></div>
       <div><dt>路由级别 · 类型</dt><dd>${data.route_level||'--'} · ${data.route_type||'--'}</dd></div>
@@ -482,7 +489,7 @@ async function loadDecisions(){
     if(pre.top_decisions&&pre.top_decisions.length){
       html+=`<div style="margin-bottom:6px;font-weight:600;font-size:10px">📚 知识库命中</div>`;
       pre.top_decisions.forEach(d=>{
-        html+=`<div class="kb-hit">▸ <span style="color:var(--cyan)">score=${(d.score||0).toFixed(1)}</span> · ${esc((d.title||d.id||'').slice(0,60))}</div>`;
+        html+=`<div class="kb-hit">▸ <span style="color:var(--accent)">score=${(d.score||0).toFixed(1)}</span> · ${esc((d.title||d.id||'').slice(0,60))}</div>`;
       });
     }
     if(pre.memory&&!pre.memory.error){
@@ -491,7 +498,7 @@ async function loadDecisions(){
       if(mem.narrative&&mem.narrative.length){
         mem.narrative.slice(0,3).forEach(h=>{
           html+=`<div class="magma-hit">
-            <span style="color:var(--purple)">${(h.score||0).toFixed(4)}</span>
+            <span style="color:var(--st-hold)">${(h.score||0).toFixed(4)}</span>
             <span style="font-family:'SF Mono',monospace;font-size:10px">${(h.task_id||'').slice(-8)}</span>
             [${(h.graph_sources||[]).join(',')}]
             ${esc((h.description||'').slice(0,50))}
@@ -538,7 +545,7 @@ function renderIntervention(){
         <input type="checkbox" class="q-check" value="${t.id}" onchange="updateCheckedCount()">
         <span style="font-family:'SF Mono',monospace;font-size:10px;color:var(--text2)">${(t.id||'').slice(-8)}</span>
         ${t.held?'<span class="held-tag">扣留</span>':''}
-        ${t.route_locked?'<span style="font-size:9px;color:var(--orange)">🔒</span>':''}
+        ${t.route_locked?'<span style="font-size:9px;color:var(--st-pending)">🔒</span>':''}
         <span>${esc((t.description||'').slice(0,50))}</span>
         <span class="badge ${t.status}">${STATUS_CN[t.status]||t.status}</span>
       </label>
@@ -558,7 +565,7 @@ function renderIntervention(){
     const lvl = t.route_level || '?';
     return `<div class="intervention-row">
       <span style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-        <span class="pulse-dot" style="width:5px;height:5px;background:var(--cyan);display:inline-block;border-radius:50%"></span>
+        <span class="pulse-dot" style="width:5px;height:5px;background:var(--accent);display:inline-block;border-radius:50%"></span>
         <span style="font-family:'SF Mono',monospace;font-size:10px;color:var(--text2)">${(t.id||'').slice(-8)}</span>
         <span class="badge ${t.status}">${STATUS_CN[t.status]||t.status}</span>
         <span style="font-size:9px;color:var(--text3)">[${lvl}]</span>
@@ -577,7 +584,7 @@ function renderIntervention(){
         <span style="font-family:'SF Mono',monospace;font-size:10px;color:var(--text2)">${(t.id||'').slice(-8)}</span>
         <span class="badge ${t.status}">${STATUS_CN[t.status]||t.status}</span>
         ${esc((t.description||'').slice(0,50))}
-        ${t.error?`<span style="font-size:10px;color:var(--red)">${esc(t.error.slice(0,60))}</span>`:''}
+        ${t.error?`<span style="font-size:10px;color:var(--st-fail)">${esc(t.error.slice(0,60))}</span>`:''}
       </span>
       <button class="btn cyan sm" onclick="retryTask('${t.id}')">重试</button>
     </div>`).join(''):'<span style="color:var(--text2);font-size:11px">无可重试任务</span>';
@@ -665,7 +672,7 @@ function renderConflicts(){
       <span>
         <span style="font-family:'SF Mono',monospace;font-size:10px;color:var(--text2)">${(c.id||'').slice(-8)}</span>
         ${esc((c.description||'').slice(0,50))}
-        ${c.error?`<span style="font-size:10px;color:var(--orange)">${esc(c.error.slice(0,80))}</span>`:''}
+        ${c.error?`<span style="font-size:10px;color:var(--st-pending)">${esc(c.error.slice(0,80))}</span>`:''}
       </span>
       <div style="display:flex;gap:4px">
         <button class="btn cyan sm" onclick="resolveConflict('${c.id}','manual')">已解决</button>
@@ -699,7 +706,7 @@ async function loadProjects(){
 async function loadProject(id){
   if (!id) return;
   const p = await api('/api/projects/'+id);
-  if (p.error) { document.getElementById('project-detail-body').innerHTML=`<span style="color:var(--red)">${esc(p.error)}</span>`; return; }
+  if (p.error) { document.getElementById('project-detail-body').innerHTML=`<span style="color:var(--st-fail)">${esc(p.error)}</span>`; return; }
   const phases=['template','researching','gate1','planning','gate2','executing','gate3','reviewing','fixing','gate4','done'];
   const labels=['📋模板','🔍调研','①门','🏗架构','②门','⚡执行','③门','🔎审查','🔧修复','④门','✅完成'];
   const idx = phases.indexOf(p.phase);
@@ -776,8 +783,8 @@ async function loadProject(id){
         <div>${v} <b>${esc(h.agent_model)}</b> · ${esc(h.phase)} · ${new Date(h.ts*1000).toLocaleString('zh-CN')}</div>
         <div style="color:var(--text2)">📝 ${esc((h.conclusion||'').slice(0,120))}</div>
         ${h.deliverable?`<div style="color:var(--text3)">📦 ${esc((h.deliverable||'').slice(0,100))}</div>`:''}
-        ${h.next_agent?`<div style="color:var(--cyan)">→ ${esc(h.next_agent)}</div>`:''}
-        ${h.human_confirm?'<div style="color:var(--orange)">⚠ 需人工确认</div>':''}
+        ${h.next_agent?`<div style="color:var(--accent)">→ ${esc(h.next_agent)}</div>`:''}
+        ${h.human_confirm?'<div style="color:var(--st-pending)">⚠ 需人工确认</div>':''}
       </div>`;
     });
     hHtml += `</div>`;
@@ -792,7 +799,7 @@ async function loadProject(id){
   let activeAgent = '';
   if (p.handoffs && p.handoffs.length) {
     const last = p.handoffs[p.handoffs.length-1];
-    activeAgent = `<span style="font-size:9px;color:var(--purple);font-family:var(--mono)">当前: ${esc(last.agent_model)} · ${esc(last.phase)}</span>`;
+    activeAgent = `<span style="font-size:9px;color:var(--st-hold);font-family:var(--mono)">当前: ${esc(last.agent_model)} · ${esc(last.phase)}</span>`;
   }
 
   let actions = '';
@@ -917,12 +924,12 @@ function renderReports(reports){
   const body=document.getElementById('reports-body');
   if(!reports.length){sec.style.display='none';return;}
   sec.style.display='block';
-  const colors={critical:'var(--red)',alert:'var(--orange)'};
+  const colors={critical:'var(--st-fail)',alert:'var(--st-pending)'};
   body.innerHTML=reports.map(r=>`<div style="padding:6px 0;border-bottom:1px solid var(--border)">
     <span style="color:${colors[r.severity]||'var(--text2)'};font-weight:600">[${r.severity}]</span>
     <b>${esc(r.title)}</b>
     <div style="color:var(--text2);margin-top:2px">${esc(r.what||'')}</div>
-    ${r.suggestion?`<div style="color:var(--cyan);font-size:9px;margin-top:2px">→ ${esc(r.suggestion)}</div>`:''}
+    ${r.suggestion?`<div style="color:var(--accent);font-size:9px;margin-top:2px">→ ${esc(r.suggestion)}</div>`:''}
   </div>`).join('');
 }
 function esc(s){if(!s)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
@@ -937,10 +944,10 @@ async function renderAPIStore(){
   const body = document.getElementById('api-store-body');
   try {
     const d = await api('/api/api-store');
-    if (d.error) { body.innerHTML = `<span style="color:var(--red)">${esc(d.error)}</span>`; return; }
+    if (d.error) { body.innerHTML = `<span style="color:var(--st-fail)">${esc(d.error)}</span>`; return; }
     const entries = Object.values(d);
     if (!entries.length) { body.innerHTML = '<span style="color:var(--text3);font-family:var(--mono);font-size:9px">NO_API_CONFIGURED</span>'; return; }
-    const statusDot = {active:'<span style="color:var(--green);font-size:7px">●</span>',quota_exhausted:'<span style="color:var(--orange);font-size:7px">◑</span>',rate_limited:'<span style="color:var(--orange);font-size:7px">◐</span>',disabled:'<span style="color:var(--red);font-size:7px">○</span>'};
+    const statusDot = {active:'<span style="color:var(--st-done);font-size:7px">●</span>',quota_exhausted:'<span style="color:var(--st-pending);font-size:7px">◑</span>',rate_limited:'<span style="color:var(--st-pending);font-size:7px">◐</span>',disabled:'<span style="color:var(--st-fail);font-size:7px">○</span>'};
     const statusLabel = {active:'ON',quota_exhausted:'QTA',rate_limited:'RTL',disabled:'OFF'};
     body.innerHTML = entries.map(e => {
       const dot = statusDot[e.status]||statusDot.disabled;
@@ -958,10 +965,10 @@ async function renderAPIStore(){
           <option value="rate_limited">RTL</option>
           <option value="disabled">OFF</option>
         </select>
-        <button class="btn sm" style="color:var(--red);font-size:8px;padding:1px 4px" onclick="removeAPI('${esc(e.id)}')">DEL</button>
+        <button class="btn sm" style="color:var(--st-fail);font-size:8px;padding:1px 4px" onclick="removeAPI('${esc(e.id)}')">DEL</button>
       </div>`;
     }).join('');
-  } catch(e) { body.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`; }
+  } catch(e) { body.innerHTML = `<span style="color:var(--st-fail)">${esc(e.message)}</span>`; }
 }
 
 async function addAPI(){
@@ -1092,7 +1099,7 @@ async function editModel(id){
   const m = Object.values(models).find(x => x.id === id);
   if (!m) return;
   const tiers = m.tiers||[];
-  const html = '<div id="model-edit-'+esc(m.id)+'" style="margin:4px 0;padding:8px;border:1px solid var(--cyan);background:var(--bg2)">层级：'+['E','E+','D'].map(t=>{
+  const html = '<div id="model-edit-'+esc(m.id)+'" style="margin:4px 0;padding:8px;border:1px solid var(--accent);background:var(--bg2)">层级：'+['E','E+','D'].map(t=>{
     const checked = tiers.includes(t);
     return '<label style="display:inline-block;margin-right:12px;cursor:pointer;font-size:11px"><input type="checkbox" id="em-'+esc(m.id)+'-'+t+'" '+(checked?'checked':'')+'> '+t+'</label>';
   }).join('')+' <button class="btn sm" onclick="saveModelEdit(\''+esc(m.id)+'\')" style="margin-left:8px;margin-right:4px">保存</button><button class="btn sm" style="color:var(--text3)" onclick="editModel(\''+esc(m.id)+'\')">取消</button></div>';
@@ -1114,7 +1121,7 @@ async function renderModels(){
   const body = document.getElementById('models-body');
   try {
     const d = await api('/api/models');
-    if (d.error) { body.innerHTML = '<span style="color:var(--red)">'+esc(d.error)+'</span>'; return; }
+    if (d.error) { body.innerHTML = '<span style="color:var(--st-fail)">'+esc(d.error)+'</span>'; return; }
     const models = Object.values(d);
     if (!models.length) { body.innerHTML = '<span style="color:var(--text3);font-family:var(--mono);font-size:9px">NO_MODELS_REGISTERED</span>'; return; }
     let agentData = {};
@@ -1138,11 +1145,11 @@ async function renderModels(){
     }
     function renderCard(m){
       const tiers = (m.tiers||[]).map(t => {
-        const tc = {E:'var(--cyan)','E+':'var(--orange)',D:'var(--purple)'}[t]||'var(--text3)';
+        const tc = {E:'var(--accent)','E+':'var(--st-pending)',D:'var(--st-hold)'}[t]||'var(--text3)';
         return '<span style="color:'+tc+';font-family:var(--mono);font-size:8px">'+t+'</span>';
       }).join('/');
       const dot = m.api_available
-        ? '<span style="color:var(--green);font-size:7px">●</span>'
+        ? '<span style="color:var(--st-done);font-size:7px">●</span>'
         : '<span style="color:var(--text3);font-size:7px">○</span>';
       const cm = costMark[m.cost]||'_';
       let html = '<div style="padding:4px 0 4px 12px;border-bottom:1px solid var(--bg3)">';
@@ -1152,24 +1159,24 @@ async function renderModels(){
       html += '<span style="font-family:var(--mono);font-size:9px;color:var(--text3)">'+esc(m.id)+'</span>';
       html += '<span style="font-size:9px;color:var(--text3);font-family:var(--mono)">'+cm+'</span>';
       html += '<span style="font-size:8px;color:var(--text3)">'+m.speed+'</span>';
-      if (m.reasoning) html += '<span style="font-size:8px;color:var(--purple);font-family:var(--mono)">RSN</span>';
+      if (m.reasoning) html += '<span style="font-size:8px;color:var(--st-hold);font-family:var(--mono)">RSN</span>';
       html += '<span style="flex:1"></span>';
       html += '<span style="font-size:8px;font-family:var(--mono)">'+tiers+'</span>';
-      html += ' <button class="btn sm" style="color:var(--cyan);font-size:7px;padding:1px 3px;margin-left:4px" onclick="event.stopPropagation();editModel(\''+esc(m.id)+'\')">✎</button>';
-      html += ' <button class="btn sm" style="color:var(--red);font-size:7px;padding:1px 3px;margin-left:4px" onclick="event.stopPropagation();removeModel(\''+esc(m.id)+'\')">DEL</button>';
+      html += ' <button class="btn sm" style="color:var(--accent);font-size:7px;padding:1px 3px;margin-left:4px" onclick="event.stopPropagation();editModel(\''+esc(m.id)+'\')">✎</button>';
+      html += ' <button class="btn sm" style="color:var(--st-fail);font-size:7px;padding:1px 3px;margin-left:4px" onclick="event.stopPropagation();removeModel(\''+esc(m.id)+'\')">DEL</button>';
       html += '</div>';
       html += '<div style="font-size:8px;color:var(--text3);margin-top:2px;font-family:var(--mono)">'+esc(m.notes||'')+'</div>';
       html += '<div style="margin-top:2px;display:flex;gap:2px">';
       for (const t of ['E','E+','D']) {
         const on = (m.tiers||[]).includes(t);
-        const tc = {E:'var(--cyan)','E+':'var(--orange)',D:'var(--purple)'}[t]||'var(--text3)';
+        const tc = {E:'var(--accent)','E+':'var(--st-pending)',D:'var(--st-hold)'}[t]||'var(--text3)';
         html += '<span onclick="event.stopPropagation();updateModel(\''+esc(m.id)+'\',\'tiers\',\''+t+'\')" style="cursor:pointer;font-size:7px;font-family:var(--mono);padding:1px 4px;color:'+(on?tc:'var(--text3)')+';background:'+(on?'var(--bg3)':'transparent')+'">['+t+']</span>';
       }
       html += '<span style="font-size:7px;color:var(--text3);font-family:var(--mono)"> 层级</span>';
       for (const t of ['E','E+','D']) {
         if (!(m.tiers||[]).includes(t)) continue;
         const isDef = m._isDefault && m._isDefault[t];
-        html += '<span onclick="event.stopPropagation();setDefaultModel(\''+esc(m.id)+'\',\''+t+'\')" style="cursor:pointer;font-size:7px;font-family:var(--mono);padding:1px 4px;color:'+(isDef?'var(--cyan)':'var(--text3)')+';background:'+(isDef?'rgba(57,210,192,.12)':'transparent')+'">'+(isDef?'DEF':'def')+'</span>';
+        html += '<span onclick="event.stopPropagation();setDefaultModel(\''+esc(m.id)+'\',\''+t+'\')" style="cursor:pointer;font-size:7px;font-family:var(--mono);padding:1px 4px;color:'+(isDef?'var(--accent)':'var(--text3)')+';background:'+(isDef?'rgba(57,210,192,.12)':'transparent')+'">'+(isDef?'DEF':'def')+'</span>';
       }
       html += '</div></div>';
       return html;
@@ -1179,12 +1186,12 @@ async function renderModels(){
     for (const p of order) {
       if (!groups[p] || !groups[p].length) continue;
       html += '<div style="margin-bottom:8px">';
-      html += '<div style="color:var(--cyan);font-size:10px;font-weight:500;padding:4px 0;border-bottom:1px solid var(--cyan)">'+esc(providerNames[p]||p)+' <span style="color:var(--text3);font-size:8px">'+groups[p].length+'个</span></div>';
+      html += '<div style="color:var(--accent);font-size:10px;font-weight:500;padding:4px 0;border-bottom:1px solid var(--accent)">'+esc(providerNames[p]||p)+' <span style="color:var(--text3);font-size:8px">'+groups[p].length+'个</span></div>';
       html += groups[p].map(renderCard).join('');
       html += '</div>';
     }
     body.innerHTML = html;
-  } catch(e) { body.innerHTML = '<span style="color:var(--red)">'+esc(e.message)+'</span>'; }
+  } catch(e) { body.innerHTML = '<span style="color:var(--st-fail)">'+esc(e.message)+'</span>'; }
 }
 
 
@@ -1209,7 +1216,7 @@ async function loadLineup(){
     c.innerHTML = models.map(m => {
       const checked = selected.includes(m.id) ? 'checked' : '';
       const dot = m.api_available
-        ? '<span style="color:var(--green);font-size:7px">●</span>'
+        ? '<span style="color:var(--st-done);font-size:7px">●</span>'
         : '<span style="color:var(--text3);font-size:7px">○</span>';
       return `<label style="display:block;padding:2px 0;cursor:pointer;font-family:var(--mono);font-size:9px">
         <input type="checkbox" value="${esc(m.id)}" ${checked} onchange="lineupChanged()"
@@ -1228,7 +1235,7 @@ async function loadLineup(){
 
 function lineupChanged(){
   document.getElementById('lineup-status').textContent = '已修改，待保存';
-  document.getElementById('lineup-status').style.color = 'var(--orange)';
+  document.getElementById('lineup-status').style.color = 'var(--st-pending)';
 }
 
 async function saveLineup(){
@@ -1242,18 +1249,18 @@ async function saveLineup(){
   const r = await api(`/api/projects/${pid}/lineup`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({lineup})});
   if (r.error) { alert(r.error); return; }
   document.getElementById('lineup-status').textContent = '已保存 ✓';
-  document.getElementById('lineup-status').style.color = 'var(--green)';
+  document.getElementById('lineup-status').style.color = 'var(--st-done)';
 }
 
 async function renderLayerSwitch(){
   const body = document.getElementById('layer-switch-body');
   const [agents, models] = await Promise.all([api('/api/agents'), api('/api/models')]);
-  if (agents.error || models.error) { body.innerHTML = '<span style="color:var(--red)">加载失败</span>'; return; }
+  if (agents.error || models.error) { body.innerHTML = '<span style="color:var(--st-fail)">加载失败</span>'; return; }
 
   const tiers = [
-    {id:'E', color:'var(--cyan)', label:'E 层', desc:'日常执行 · bugfix · 查询'},
-    {id:'E+', color:'var(--orange)', label:'E+ 层', desc:'复杂构建 · 多文件 · 新模块'},
-    {id:'D', color:'var(--purple)', label:'D 层', desc:'架构设计 · 审查 · 方案'},
+    {id:'E', color:'var(--accent)', label:'E 层', desc:'日常执行 · bugfix · 查询'},
+    {id:'E+', color:'var(--st-pending)', label:'E+ 层', desc:'复杂构建 · 多文件 · 新模块'},
+    {id:'D', color:'var(--st-hold)', label:'D 层', desc:'架构设计 · 审查 · 方案'},
   ];
 
   body.innerHTML = tiers.map(t => {
@@ -1267,8 +1274,8 @@ async function renderLayerSwitch(){
       const bg = active ? 'var(--bg3)' : 'transparent';
       const border = active ? t.color : 'var(--bg3)';
       const statusDot = online
-        ? `<span style="color:var(--green);font-size:7px">●</span>`
-        : `<span style="color:var(--red);font-size:7px">●</span>`;
+        ? `<span style="color:var(--st-done);font-size:7px">●</span>`
+        : `<span style="color:var(--st-fail);font-size:7px">●</span>`;
       const costLabel = {budget:'$',standard:'$$',premium:'$$$'}[m.cost]||'$$';
 
       return `<div onclick="toggleLayerAgent('${t.id}','${esc(m.id)}',${!active})"
@@ -1374,14 +1381,14 @@ function connectSSE(){
       toast('实时推送断开，已切换轮询模式', 'error');
     }
     const ind = document.getElementById('live-indicator');
-    if(ind) { ind.style.color = 'var(--red)'; ind.textContent = '◇'; }
+    if(ind) { ind.style.color = 'var(--st-fail)'; ind.textContent = '◇'; }
     if (_reconnectTimer) clearTimeout(_reconnectTimer);
     _reconnectTimer = setTimeout(connectSSE, 5000);
   };
   es.onopen = () => {
     if (_fallbackPolling) { clearInterval(_fallbackPolling); _fallbackPolling = null; toast('实时推送已恢复', 'success'); }
     const ind = document.getElementById('live-indicator');
-    if(ind) { ind.style.color = 'var(--green)'; ind.textContent = '◆'; }
+    if(ind) { ind.style.color = 'var(--st-done)'; ind.textContent = '◆'; }
   };
 }
 
@@ -1407,19 +1414,19 @@ async function refreshJudgeMonitor(){
 
     // 通过率
     if(d.pass_rates_by_type){
-      html+='<div style="color:var(--cyan);margin-bottom:4px">通过率</div>';
+      html+='<div style="color:var(--accent);margin-bottom:4px">通过率</div>';
       for(const [type,stats] of Object.entries(d.pass_rates_by_type)){
-        const color=stats.rate>0.9?'var(--orange)':stats.rate<0.1?'var(--red)':'var(--green)';
+        const color=stats.rate>0.9?'var(--st-pending)':stats.rate<0.1?'var(--st-fail)':'var(--st-done)';
         html+=`<div>${type}: <span style="color:${color}">${(stats.rate*100).toFixed(0)}%</span> (${stats.passes}/${stats.total})</div>`;
       }
     }
 
     // 模型偏差
     if(d.model_correlations&&Object.keys(d.model_correlations).length){
-      html+='<div style="color:var(--cyan);margin-top:6px">模型偏差</div>';
+      html+='<div style="color:var(--accent);margin-top:6px">模型偏差</div>';
       for(const [m,c] of Object.entries(d.model_correlations)){
         if(c.bias_flag||c.total_judged>=5){
-          const color2=c.bias_flag?'var(--orange)':c.avg_score<0.5?'var(--yellow)':'';
+          const color2=c.bias_flag?'var(--st-pending)':c.avg_score<0.5?'var(--yellow)':'';
           html+=`<div>${m}: ${(c.avg_score*100).toFixed(0)}分 (${c.total_judged}次)${c.bias_flag?' ⚠':''}</div>`;
         }
       }
@@ -1428,12 +1435,12 @@ async function refreshJudgeMonitor(){
     // 异常
     if(d.anomalies&&d.anomalies.length>0){
       if(flag) flag.style.display='inline';
-      html+='<div style="color:var(--orange);margin-top:6px">异常</div>';
-      for(const a of d.anomalies) html+=`<div style="color:var(--orange)">• ${esc(a.detail)}</div>`;
+      html+='<div style="color:var(--st-pending);margin-top:6px">异常</div>';
+      for(const a of d.anomalies) html+=`<div style="color:var(--st-pending)">• ${esc(a.detail)}</div>`;
     }else if(flag) flag.style.display='none';
 
-    body.innerHTML=html||'<span style="color:var(--text3)">暂无数据</span>';
-  }catch(e){}
+    body.innerHTML=html||'<div class="empty-state">暂无裁判数据</div>';
+  }catch(e){ body.innerHTML='<div class="error-inline" onclick="refreshJudgeMonitor()">加载失败，点击重试</div>'; }
 }
 
 async function refreshPatternProfile(){
@@ -1456,14 +1463,14 @@ async function refreshPatternProfile(){
 
     for(const [type,models] of Object.entries(byType)){
       models.sort((a,b)=>b.success_rate-a.success_rate);
-      html+=`<div style="color:var(--cyan);margin-top:4px">${type}</div>`;
+      html+=`<div style="color:var(--accent);margin-top:4px">${type}</div>`;
       for(const m of models.slice(0,3)){
         html+=`<div>${m.model}: ${(m.success_rate*100).toFixed(0)}% (${m.total}次)</div>`;
       }
     }
 
-    body.innerHTML=html||'<span style="color:var(--text3)">暂无数据</span>';
-  }catch(e){}
+    body.innerHTML=html||'<div class="empty-state">暂无画像数据</div>';
+  }catch(e){ body.innerHTML='<div class="error-inline" onclick="refreshPatternProfile()">加载失败，点击重试</div>'; }
 }
 
 // 每 30 秒刷新一次裁判监控和模式画像（低频，避免不必要的负载）
