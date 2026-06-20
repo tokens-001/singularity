@@ -147,6 +147,7 @@ orchestrator / _exec / tracker / dispatcher / openai_agent / memory。找 GPT �
 
 ## 约束
 
+- **只读。不修改任何文件。** 你的产出是审计报告和修复计划，不是改代码
 - 每项证据：文件:行号。不确定标"无法确认"，不猜
 - 修复计划每步 smoke test 预估
 - 不审代码风格和命名（GPT已覆盖D5）
