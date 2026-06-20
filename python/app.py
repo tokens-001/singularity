@@ -531,47 +531,46 @@ def api_fusion_config():
     if request.method == "GET":
         try:
             from scheduler._io import load_toml
-            cfg = load_toml(fusion_path)
-            return jsonify(cfg)
+            return jsonify(load_toml(fusion_path))
         except Exception:
             return jsonify({})
-    # PUT: 合并自定义配置
+    # PUT: 更新指定 tier 配置 (dual/triple/super/custom)
     data = request.get_json(silent=True) or {}
-    custom = data.get("custom", {})
-    if custom:
-        try:
-            from scheduler._io import load_toml
-            cfg = load_toml(fusion_path)
-            cfg["custom"] = custom
-            toml_lines = []
-            def _dump(d, prefix=""):
-                for k, v in d.items():
-                    if isinstance(v, dict):
-                        toml_lines.append(f"\n[{prefix}{k}]")
-                        _dump(v, f"{prefix}{k}.")
-                    elif isinstance(v, list):
-                        toml_lines.append(f"{k} = {_json.dumps(v, ensure_ascii=False)}")
-                    elif isinstance(v, bool):
-                        toml_lines.append(f"{k} = {str(v).lower()}")
-                    elif isinstance(v, str):
-                        toml_lines.append(f'{k} = "{v}"')
-                    else:
-                        toml_lines.append(f"{k} = {v}")
-            # 保留原文件格式，只更新 custom section
-            existing = fusion_path.read_text() if fusion_path.exists() else ""
-            if "[custom]" in existing:
-                # 替换已有 custom section
-                import re
-                existing = re.sub(r'\[custom\].*?(\n\[|\Z)', '', existing, flags=re.DOTALL)
-                existing = existing.rstrip()
-            existing += f"\n\n[custom]\nmodels = {_json.dumps(custom.get('models', []), ensure_ascii=False)}\n"
-            existing += f'judge_model = "{custom.get("judge_model", "deepseek-chat")}"\n'
-            existing += f'call_model = "{custom.get("call_model", "deepseek-chat")}"\n'
-            fusion_path.write_text(existing)
-            return jsonify({"ok": True})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-    return jsonify({"ok": True})
+    try:
+        from scheduler._io import load_toml
+        cfg = load_toml(fusion_path)
+        for tier in ["dual", "triple", "super", "custom"]:
+            if tier in data:
+                cfg[tier] = {**cfg.get(tier, {}), **data[tier]}
+        # 写回toml
+        lines = []
+        done_sections = set()
+        for tier in ["dual", "triple", "super"]:
+            tc = cfg.get(tier, {})
+            lines.append(f"\n[{tier}]")
+            lines.append(f"models = {_json.dumps(tc.get('models',[]), ensure_ascii=False)}")
+            lines.append(f"roles = {_json.dumps(tc.get('roles',['builder','skeptic']), ensure_ascii=False)}")
+            lines.append(f'judge_model = "{tc.get("judge_model","deepseek-chat")}"')
+            lines.append(f'call_model = "{tc.get("call_model","deepseek-chat")}"')
+            lines.append(f"max_tokens = {tc.get('max_tokens',2000)}")
+            lines.append(f"temperature = {tc.get('temperature',0.7)}")
+            lines.append(f"timeout_sec = {tc.get('timeout_sec',60)}")
+            done_sections.add(tier)
+        if "super" in cfg:
+            lines.append(f"\n[super.detail]")
+            lines.append(f'description = "N模型 × 多视角 × 对抗验证 × 迭代熔合 × 人工卡点"')
+        # 保留 custom + roles + auto + execution 等不变
+        existing = fusion_path.read_text()
+        for section in ["custom", "roles", "auto", "tier_routing", "execution"]:
+            import re
+            m = re.search(rf'\[{section}\].*?(\n\[|\Z)', existing, re.DOTALL)
+            if m:
+                lines.append("\n" + m.group(0).rstrip())
+        lines.append("")
+        fusion_path.write_text("\n".join(lines))
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # ═══════════════════════════════════════════════════════════
 # 监控

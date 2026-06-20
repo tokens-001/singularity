@@ -935,125 +935,104 @@ async function refreshMCPTools(){
 }
 
 // ═══════════════════════════════════════════════════════
-// Fusion 多模型融合
+// Fusion 多模型融合 — dual/triple/super 三级可自定义
 // ═══════════════════════════════════════════════════════
 
-const FUSION_MODELS = {
-  budget: ['deepseek-chat', 'glm-5-turbo', 'kimi-k2.7-code'],
-  self: ['deepseek-chat', 'deepseek-chat'],
-  standard: ['deepseek-v4-pro', 'kimi-k2.7-code'],
-};
 const FUSION_MODEL_LABELS = {
-  'deepseek-chat': 'DeepSeek Chat',
-  'glm-5-turbo': 'GLM-5 Turbo',
-  'kimi-k2.7-code': 'Kimi K2.7',
-  'deepseek-v4-pro': 'DeepSeek V4 Pro',
+  'deepseek-chat': 'DeepSeek Chat', 'glm-5-turbo': 'GLM-5 Turbo',
+  'kimi-k2.7-code': 'Kimi K2.7', 'deepseek-v4-pro': 'DeepSeek V4 Pro',
 };
-let _fusionCustomModels = [];
+const FUSION_DEFAULTS = {
+  dual:   {models:['deepseek-chat','glm-5-turbo'], judge:'deepseek-chat', call:'deepseek-chat'},
+  triple: {models:['deepseek-chat','glm-5-turbo','kimi-k2.7-code'], judge:'deepseek-chat', call:'deepseek-chat'},
+  super:  {models:['deepseek-v4-pro','kimi-k2.7-code','glm-5-turbo'], judge:'deepseek-v4-pro', call:'deepseek-v4-pro'},
+};
+let _fusionConfig = {};  // {dual:{}, triple:{}, super:{}}
 
-async function loadFusionCustom() {
+async function loadFusionConfig() {
   try {
     const r = await fetch('/api/fusion/config');
     const d = await r.json();
-    if (d.custom) {
-      _fusionCustomModels = d.custom.models || [];
-      document.getElementById('fusion-custom-judge').value = d.custom.judge_model || 'deepseek-chat';
-      document.getElementById('fusion-custom-call').value = d.custom.call_model || 'deepseek-chat';
+    for (const t of ['dual','triple','super']) {
+      _fusionConfig[t] = d[t] || FUSION_DEFAULTS[t];
     }
     buildFusionCheckboxes();
+    updateFusionModels();
   } catch(e) { /* 使用默认 */ }
 }
 
 async function buildFusionCheckboxes() {
-  // 从 /api/models 获取可用模型列表
   let availModels = ['deepseek-chat','glm-5-turbo','kimi-k2.7-code','deepseek-v4-pro'];
   try {
     const r = await fetch('/api/models');
     const d = await r.json();
     if (d.models) availModels = d.models.map(m => m.id || m.model);
   } catch(e) {}
+  // 存储全局
+  window._fusionAvailModels = availModels;
+
+  const tier = document.getElementById('fusion-tier').value;
+  const cfg = _fusionConfig[tier] || FUSION_DEFAULTS[tier];
+  const selected = cfg.models || [];
+
   const container = document.getElementById('fusion-model-checkboxes');
   if (!container) return;
   container.innerHTML = availModels.map(m => {
-    const checked = _fusionCustomModels.includes(m) ? 'checked' : '';
+    const checked = selected.includes(m) ? 'checked' : '';
     return `<label style="font-size:9px;cursor:pointer;white-space:nowrap">
-      <input type="checkbox" value="${m}" ${checked} onchange="updateFusionCustomModels()"> ${FUSION_MODEL_LABELS[m]||m}
+      <input type="checkbox" value="${m}" ${checked} onchange="onFusionModelChange()"> ${FUSION_MODEL_LABELS[m]||m}
     </label>`;
   }).join('');
-  // 填充裁判/定稿下拉
-  ['fusion-custom-judge','fusion-custom-call'].forEach(id => {
+
+  ['fusion-judge','fusion-call'].forEach(id => {
     const sel = document.getElementById(id); if(!sel) return;
     sel.innerHTML = availModels.map(m => `<option value="${m}">${FUSION_MODEL_LABELS[m]||m}</option>`).join('');
   });
+  document.getElementById('fusion-judge').value = cfg.judge_model || 'deepseek-chat';
+  document.getElementById('fusion-call').value = cfg.call_model || 'deepseek-chat';
 }
 
-function updateFusionCustomModels() {
+function onFusionModelChange() {
+  const tier = document.getElementById('fusion-tier').value;
   const checks = document.querySelectorAll('#fusion-model-checkboxes input:checked');
-  _fusionCustomModels = [...checks].map(c => c.value);
-  const list = document.getElementById('fusion-models-list');
-  if (list) {
-    const names = _fusionCustomModels.map(m => FUSION_MODEL_LABELS[m]||m);
-    list.innerHTML = `<span>模型: ${names.join(' + ') || '(至少选2个)'}</span>`;
-  }
-  document.getElementById('fusion-save-btn').style.display = 'inline-block';
+  _fusionConfig[tier].models = [...checks].map(c => c.value);
 }
 
-async function saveFusionCustom() {
-  if (_fusionCustomModels.length < 2) { alert('至少选2个模型'); return; }
-  const judge = document.getElementById('fusion-custom-judge').value;
-  const call = document.getElementById('fusion-custom-call').value;
+function updateFusionModels() {
+  const tier = document.getElementById('fusion-tier').value;
+  const superOpts = document.getElementById('fusion-super-opts');
+  superOpts.style.display = tier === 'super' ? 'block' : 'none';
+  buildFusionCheckboxes();
+}
+
+async function saveFusionConfig() {
+  const tier = document.getElementById('fusion-tier').value;
+  const cfg = _fusionConfig[tier];
+  cfg.judge_model = document.getElementById('fusion-judge').value;
+  cfg.call_model = document.getElementById('fusion-call').value;
+  if (!cfg.models || cfg.models.length < 2) { alert('至少选2个模型'); return; }
   try {
     const r = await api('/api/fusion/config', {
       method:'PUT', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({custom:{models:_fusionCustomModels, judge_model:judge, call_model:call}}),
+      body: JSON.stringify({[tier]: cfg}),
     });
     if (r.ok) {
-      document.getElementById('fusion-save-btn').style.display = 'none';
-      document.getElementById('fusion-status').textContent = '✅ 已保存';
+      document.getElementById('fusion-status').textContent = `✅ ${tier} 已保存`;
       document.getElementById('fusion-status').style.color = '#57d9a3';
     }
   } catch(e) { alert('保存失败: '+e.message); }
 }
 
-function updateFusionModels() {
-  const tier = document.getElementById('fusion-tier').value;
-  const customPanel = document.getElementById('fusion-custom-panel');
-  const list = document.getElementById('fusion-models-list');
-  const saveBtn = document.getElementById('fusion-save-btn');
-
-  if (tier === 'custom') {
-    customPanel.style.display = 'block';
-    saveBtn.style.display = 'inline-block';
-    updateFusionCustomModels();
-    loadFusionCustom();
-    return;
-  }
-  customPanel.style.display = 'none';
-  saveBtn.style.display = 'none';
-
-  const models = FUSION_MODELS[tier] || FUSION_MODELS.budget;
-  if (list) {
-    const names = models.map(m => FUSION_MODEL_LABELS[m] || m);
-    const uniq = [...new Set(names)];
-    const desc = tier === 'self' ? `${uniq[0]} ×2 (不同温度)` : uniq.join(' + ');
-    list.innerHTML = `<span>模型: ${desc}</span>`;
-  }
-}
-
 function updateFusionStatus() {
   const auto = document.getElementById('fusion-auto');
   const hint = document.getElementById('fusion-auto-hint');
-  if (auto && hint) {
-    hint.textContent = auto.checked
-      ? '架构/安全/跨模块任务自动走 Fusion'
-      : '需手动指定 route_type=fusion 才走';
-  }
+  if (auto && hint) hint.textContent = auto.checked
+    ? '架构/安全/跨模块任务自动走 Fusion' : '需手动指定 route_type=fusion 才走';
 }
 
 function getFusionModels() {
   const tier = document.getElementById('fusion-tier').value;
-  if (tier === 'custom') return _fusionCustomModels.length >= 2 ? _fusionCustomModels : FUSION_MODELS.budget;
-  return FUSION_MODELS[tier] || FUSION_MODELS.budget;
+  return (_fusionConfig[tier] || FUSION_DEFAULTS[tier]).models;
 }
 
 async function testFusion() {
@@ -1064,32 +1043,25 @@ async function testFusion() {
   status.style.color = 'var(--text2)';
   try {
     const r = await api('/api/tasks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         description: '分析奇点调度平台的架构优缺点，给出改进建议（Fusion测试，不修改文件）',
-        priority: 80,
-        route_level: 'E',
-        route_type: 'fusion',
+        priority: 80, route_level: 'E', route_type: 'fusion',
       }),
     });
     if (r.ok) {
       const names = [...new Set(models.map(m => FUSION_MODEL_LABELS[m]||m))];
       status.textContent = `✅ ${r.task_id.slice(-8)} ${tier}: ${names.join('+')}`;
-      status.style.color = '#57d9a3';
-      refreshAll();
+      status.style.color = '#57d9a3'; refreshAll();
     } else {
-      status.textContent = `❌ ${r.error || '失败'}`;
-      status.style.color = '#f44747';
+      status.textContent = `❌ ${r.error||'失败'}`; status.style.color = '#f44747';
     }
   } catch(e) {
-    status.textContent = `❌ ${e.message}`;
-    status.style.color = '#f44747';
+    status.textContent = `❌ ${e.message}`; status.style.color = '#f44747';
   }
 }
 
-updateFusionModels();
-loadFusionCustom();
+loadFusionConfig();
 
 // ═══════════════════════════════════════════════════════
 // Init (removed — see app.js)

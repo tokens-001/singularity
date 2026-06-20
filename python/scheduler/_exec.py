@@ -383,7 +383,7 @@ def _decide_cascade(task, level, turn, validation, disp_result, all_tool_events,
 
 
 def _run_fusion(task, level: str, agents: dict, ctx: RunContext = None,
-                tier: str = "budget") -> BatchOutput:
+                tier: str = "triple") -> BatchOutput:
     """Fusion 多模型融合 — OpenRouter 完整设计。
 
     三级火力: budget/self/standard (配置: fusion.toml)

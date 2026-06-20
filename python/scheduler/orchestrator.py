@@ -269,7 +269,8 @@ def _execute_one_task(task, agents: dict):
             batch = _run_committee(task, ctx, effective_agents, d_agents)
         elif use_fusion:
             from ._exec import _run_fusion
-            batch = _run_fusion(task, route.level, effective_agents, ctx=ctx)
+            tier = "super" if route.level == "D" else ("triple" if route.level == "E+" else "dual")
+            batch = _run_fusion(task, route.level, effective_agents, ctx=ctx, tier=tier)
         else:
             batch = _run_with_retry(task, ctx, effective_agents)
     batch.pre_search_skipped = pre.skipped

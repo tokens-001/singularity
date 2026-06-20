@@ -2,76 +2,74 @@
 # HermesFusion: 模型无关，换模型只改配置不改代码
 
 # ═══════════════════════════════════════
-# 三级火力
+# 三级框架 (全部可自定义)
 # ═══════════════════════════════════════
 
-[tiers.budget]
-# Budget Fusion: 3x便宜模型 + 便宜裁判 (~$0.5/任务)
-# DeepSeek+GLM+Kimi 三路并行
-models = ["deepseek-chat", "glm-5-turbo", "kimi-k2.7-code"]
-roles = ["builder", "skeptic", "analyst"]
-judge_model = "deepseek-chat"       # 阶段一裁判
-call_model = "deepseek-chat"        # 阶段二定稿
-max_tokens = 2000
-temperature = 0.7
-timeout_sec = 60
-
-[tiers.self]
-# Self Fusion: 同模型跑两遍 (~$0.2/任务)
-# 推理路径不同，交叉比对仍然增值 (论文: +6.7分)
-models = ["deepseek-chat", "deepseek-chat"]
+[dual]
+# 双模型并行 → 合成
+models = ["deepseek-chat", "glm-5-turbo"]
 roles = ["builder", "skeptic"]
 judge_model = "deepseek-chat"
 call_model = "deepseek-chat"
 max_tokens = 2000
-temperature = 0.8                  # 更高温度增加多样性
+temperature = 0.7
 timeout_sec = 60
 
-[tiers.standard]
-# Standard Fusion: 强模型并行 + 强裁判 (~$3/任务)
-models = ["deepseek-v4-pro", "kimi-k2.7-code"]
-roles = ["builder", "skeptic"]
-judge_model = "deepseek-v4-pro"    # 强裁判
-call_model = "deepseek-v4-pro"     # 强定稿
+[triple]
+# 三模型并行 → 合成
+models = ["deepseek-chat", "glm-5-turbo", "kimi-k2.7-code"]
+roles = ["builder", "skeptic", "analyst"]
+judge_model = "deepseek-chat"
+call_model = "deepseek-chat"
+max_tokens = 2000
+temperature = 0.7
+timeout_sec = 60
+
+[super]
+# 超级协作: N模型 × 多视角 × 对抗验证 × 迭代熔合
+models = ["deepseek-v4-pro", "kimi-k2.7-code", "glm-5-turbo"]
+roles = ["builder", "skeptic", "analyst"]
+judge_model = "deepseek-v4-pro"
+call_model = "deepseek-v4-pro"
+perspectives = ["architecture", "security", "performance", "maintainability"]
+red_team_count = 2
+max_iterations = 3
+human_checkpoint = true
 max_tokens = 4000
 temperature = 0.7
 timeout_sec = 120
 
 # ═══════════════════════════════════════
-# Super Fusion (按需触发)
+# Super Fusion 展开 (代码引用此段)
 # ═══════════════════════════════════════
 
-[super]
-perspectives = ["architecture", "security", "performance", "maintainability"]
-red_team_count = 2                 # 每份产出经2个red-team裁判审查
-max_iterations = 3                 # 熔合迭代上限
-human_checkpoint = true            # 关键决策暂停等人工确认
+[super.detail]
+# 多视角分解: 同一任务从4个视角独立分析
+# 对抗验证: 每份产出经 red_team_count 个裁判攻击性审查
+# 迭代熔合: round1→交叉审查→round2→...→最终输出(max_iterations上限)
+# 人工卡点: 关键决策暂停等人工确认
+description = "N模型 × 多视角 × 对抗验证 × 迭代熔合 × 人工卡点"
 
 # ═══════════════════════════════════════
 # 路由判定
 # ═══════════════════════════════════════
 
 [auto]
-# 自动触发 Fusion 的任务类型
 trigger_types = ["fusion", "refactor"]
 min_priority = 50
 min_task_length = 30
 
-# 简单任务选择 tier
 [tier_routing]
-simple = "budget"                   # 日常代码改动 → Budget Fusion
-complex = "standard"                # 架构/跨模块 → Standard Fusion
-review = "self"                     # 审查/反思 → Self Fusion
+simple = "dual"                    # 日常代码改动 → 双模型
+complex = "triple"                 # 跨模块 → 三模型
+critical = "super"                 # 架构/安全/关键决策 → 超级协作
 
 # ═══════════════════════════════════════
-# 两阶段执行 (代码修改型任务)
+# 两阶段执行
 # ═══════════════════════════════════════
 
 [execution]
-# 分析阶段: 各模型并行读取代码，产出"方案+建议diff"，不实际修改文件
-# 执行阶段: 裁判选定最优方案后，单模型在worktree中执行实际改动
-# 避免多模型并行写同一worktree的文件冲突
-mode = "two_phase"                  # two_phase | parallel_readonly
+mode = "two_phase"                 # 分析(并行读)→执行(单模型改)
 
 # ═══════════════════════════════════════
 # 角色定义
@@ -81,7 +79,6 @@ mode = "two_phase"                  # two_phase | parallel_readonly
 builder = "你是 Builder（建设者）。关注可实现性、具体步骤、代码结构、模块划分。给出可落地的方案。"
 skeptic = "你是 Skeptic（质疑者）。主动找方案的漏洞：边界条件、并发安全、异常路径、向后兼容。指出所有可能出错的地方。"
 analyst = "你是 Analyst（分析者）。关注架构合理性、技术选型权衡、长期维护成本。从更高维度评估方案。"
-
 
 [custom]
 models = ["deepseek-chat", "kimi-k2.7-code"]

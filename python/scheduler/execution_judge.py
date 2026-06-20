@@ -295,7 +295,7 @@ _STAGE2_PROMPT = """你是 Fusion 最终定稿人。请基于以下五维分析�
 
 
 def fuse_outputs(task_desc: str, output_a: str, output_b: str,
-                 outputs: list[str] = None, tier: str = "budget") -> str:
+                 outputs: list[str] = None, tier: str = "triple") -> str:
     """Fusion 两阶段合成:
     阶段一: 裁判模型输出结构化五维JSON分析
     阶段二: 调用模型基于五维分析+6项提纲写出定稿
@@ -354,8 +354,8 @@ FUSION_TOOL_DEF = {
                 },
                 "tier": {
                     "type": "string",
-                    "enum": ["budget", "self", "standard"],
-                    "description": "融合级别: budget(便宜2模型), self(同模型跑两遍), standard(强模型)"
+                    "enum": ["dual", "triple", "super"],
+                    "description": "融合级别: dual(双模型), triple(三模型), super(超级协作)"
                 }
             },
             "required": ["question"]
@@ -458,16 +458,12 @@ def run_parallel_models(task_desc: str, level: str = "E", tier: str = "budget") 
     from .model_registry import provider_for_model
 
     cfg = _load_fusion_config()
-    if tier == "custom":
-        custom = cfg.get("custom", {})
-        tier_cfg = {
-            "models": custom.get("models", ["deepseek-chat", "glm-5-turbo"]),
-            "judge_model": custom.get("judge_model", "deepseek-chat"),
-            "call_model": custom.get("call_model", "deepseek-chat"),
-            "max_tokens": 2000, "temperature": 0.7, "timeout_sec": 60,
-        }
-    else:
-        tier_cfg = cfg.get("tiers", {}).get(tier, cfg.get("tiers", {}).get("budget", {}))
+    # 支持新框架 dual/triple/super + 旧兼容 budget→dual, standard→triple, self→dual
+    tier_map = {"budget": "dual", "self": "dual", "standard": "triple"}
+    tier = tier_map.get(tier, tier)
+    tier_cfg = cfg.get(tier, cfg.get("triple", {}))
+    if not tier_cfg:
+        tier_cfg = {"models": ["deepseek-chat", "glm-5-turbo"], "max_tokens": 2000, "temperature": 0.7, "timeout_sec": 60}
     models = tier_cfg.get("models", ["deepseek-chat", "glm-5-turbo"])
     roles_list = tier_cfg.get("roles", ["builder", "skeptic"])
     base_temp = tier_cfg.get("temperature", 0.7)

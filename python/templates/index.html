@@ -353,28 +353,26 @@
     <div class="section-title">🧬 Fusion 多模型融合 <span style="font-size:9px;color:var(--text3);font-weight:400">— 并行派发→五维分析→定稿</span></div>
     <div class="section-body" style="font-size:10px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <label style="white-space:nowrap">级别:</label>
+        <label style="white-space:nowrap">框架:</label>
         <select id="fusion-tier" onchange="updateFusionModels()" style="font-size:9px;padding:2px;flex:1">
-          <option value="budget">Budget (3模型, ~$0.5)</option>
-          <option value="self">Self (同模型×2, ~$0.2)</option>
-          <option value="standard">Standard (2强模型, ~$3)</option>
-          <option value="custom">自定义...</option>
+          <option value="dual">🔹 双模型 — 2路并行+合成</option>
+          <option value="triple" selected>🔸 三模型 — 3路并行+合成</option>
+          <option value="super">🔺 超级协作 — N模型×多视角×对抗验证×迭代熔合</option>
         </select>
       </div>
-      <div id="fusion-models-list" style="margin-bottom:8px;font-size:9px;color:var(--text2)">
-        <span>模型: DeepSeek Chat + GLM-5 Turbo + Kimi K2.7</span>
+      <div id="fusion-model-checkboxes" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <label style="font-size:9px">裁判:</label>
+        <select id="fusion-judge" style="font-size:9px;padding:2px;width:130px"></select>
+        <label style="font-size:9px">定稿:</label>
+        <select id="fusion-call" style="font-size:9px;padding:2px;width:130px"></select>
       </div>
-      <div id="fusion-custom-panel" style="display:none;margin-bottom:8px">
-        <div style="font-size:9px;color:var(--text2);margin-bottom:4px">选择模型 (至少2个):</div>
-        <div id="fusion-model-checkboxes" style="display:flex;flex-wrap:wrap;gap:4px"></div>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
-          <label style="font-size:9px">裁判模型:</label>
-          <select id="fusion-custom-judge" style="font-size:9px;padding:2px;width:140px"></select>
-          <label style="font-size:9px">定稿模型:</label>
-          <select id="fusion-custom-call" style="font-size:9px;padding:2px;width:140px"></select>
-        </div>
+      <div id="fusion-super-opts" style="display:none;margin-bottom:8px;font-size:9px;color:var(--text2)">
+        <div>多视角: <span id="fusion-perspectives">架构/安全/性能/可维护性</span></div>
+        <div>对抗验证: <span id="fusion-redteam">2</span> 个 red-team · 迭代上限: <span id="fusion-iters">3</span> 轮</div>
+        <div style="margin-top:2px"><label><input type="checkbox" id="fusion-human" checked> 人工卡点 (关键决策暂停确认)</label></div>
       </div>
-      <div style="font-size:9px;color:var(--text3);margin-bottom:8px">
+      <div style="font-size:9px;color:var(--text3);margin-bottom:6px">
         两阶段合成: 裁判五维JSON → 调用模型定稿
       </div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
@@ -384,8 +382,8 @@
         <span style="color:var(--text3);font-size:9px" id="fusion-auto-hint">架构/安全/跨模块任务自动走 Fusion</span>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
-        <button class="btn purple sm" onclick="testFusion()">🧪 测试 Fusion</button>
-        <button class="btn cyan sm" onclick="saveFusionCustom()" id="fusion-save-btn" style="display:none">💾 保存</button>
+        <button class="btn purple sm" onclick="testFusion()">🧪 测试</button>
+        <button class="btn cyan sm" onclick="saveFusionConfig()">💾 保存</button>
         <span id="fusion-status" style="font-size:9px;color:var(--text2)"></span>
       </div>
     </div>
