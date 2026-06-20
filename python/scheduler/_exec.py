@@ -175,7 +175,40 @@ def _build_project_context(task) -> str:
     except Exception:
         return ""
 
-def _build_effective_task(task, turn: int, feedback: str, is_planner: bool) -> str:
+_CONSTRUCT_WINDOW = 5  # Microsoft ConstructContext: 保留最近 N 对工具调用
+
+def _construct_context(all_tool_events: list, turn: int) -> str:
+    """ConstructContext 算法 (Microsoft 2026): 保留最近 N 条工具事件, 更早的压缩为一行计数。
+
+    论文数据: 最近5次+摘要 完成率从 71%→91.6%, token 从 1.48M→553K (省 63%)。
+    ponytail: 不做 LLM 摘要, 一行计数已足够。需要时加 cheap-model 摘要。
+    """
+    if not all_tool_events or turn <= 1:
+        return ""
+    total = len(all_tool_events)
+    if total <= _CONSTRUCT_WINDOW:
+        recent = all_tool_events
+        old_count = 0
+    else:
+        recent = all_tool_events[-_CONSTRUCT_WINDOW:]
+        old_count = total - _CONSTRUCT_WINDOW
+    lines = ["[历史工具调用]"]
+    if old_count > 0:
+        lines.append(f"（更早 {old_count} 条已省略，仅保留最近 {_CONSTRUCT_WINDOW} 条）")
+    for ev in recent:
+        tool = ev.get("tool", ev.get("name", "?"))
+        status = ev.get("status", "")
+        elapsed = ev.get("elapsed", "")
+        detail = f"  {tool}: {status}"
+        if elapsed:
+            detail += f" ({elapsed:.1f}s)" if isinstance(elapsed, (int, float)) else f" ({elapsed})"
+        lines.append(detail[:120])
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _build_effective_task(task, turn: int, feedback: str, is_planner: bool,
+                          tool_events: list = None) -> str:
     """拼接最终 prompt: 记忆注入 + planner preamble + 项目上下文。
 
     顺序 (与原 run() 内一致):
@@ -189,6 +222,11 @@ def _build_effective_task(task, turn: int, feedback: str, is_planner: bool) -> s
         mem_ctx = _inject_memory(task.description)
         if mem_ctx:
             effective_task = mem_ctx + "\n\n" + effective_task
+    # ── ConstructContext: 工具历史裁剪 (turn≥2 且有工具事件时) ──
+    if tool_events:
+        ctx_ctx = _construct_context(tool_events, turn)
+        if ctx_ctx:
+            effective_task = ctx_ctx + "\n" + effective_task
     if is_planner:
         effective_task = _PLANNER_PREAMBLE + effective_task
     # ── 项目上下文注入 ──
@@ -381,7 +419,8 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 if cancelled is not None:
                     return cancelled
 
-                effective_task = _build_effective_task(task, turn, feedback, is_planner)
+                effective_task = _build_effective_task(task, turn, feedback, is_planner,
+                                                        tool_events=all_tool_events)
 
                 disp_result = disp_mod.dispatch(
                     effective_task, level, task.id, agents,
