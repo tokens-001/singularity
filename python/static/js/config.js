@@ -949,11 +949,89 @@ const FUSION_MODEL_LABELS = {
   'kimi-k2.7-code': 'Kimi K2.7',
   'deepseek-v4-pro': 'DeepSeek V4 Pro',
 };
+let _fusionCustomModels = [];
+
+async function loadFusionCustom() {
+  try {
+    const r = await fetch('/api/fusion/config');
+    const d = await r.json();
+    if (d.custom) {
+      _fusionCustomModels = d.custom.models || [];
+      document.getElementById('fusion-custom-judge').value = d.custom.judge_model || 'deepseek-chat';
+      document.getElementById('fusion-custom-call').value = d.custom.call_model || 'deepseek-chat';
+    }
+    buildFusionCheckboxes();
+  } catch(e) { /* 使用默认 */ }
+}
+
+async function buildFusionCheckboxes() {
+  // 从 /api/models 获取可用模型列表
+  let availModels = ['deepseek-chat','glm-5-turbo','kimi-k2.7-code','deepseek-v4-pro'];
+  try {
+    const r = await fetch('/api/models');
+    const d = await r.json();
+    if (d.models) availModels = d.models.map(m => m.id || m.model);
+  } catch(e) {}
+  const container = document.getElementById('fusion-model-checkboxes');
+  if (!container) return;
+  container.innerHTML = availModels.map(m => {
+    const checked = _fusionCustomModels.includes(m) ? 'checked' : '';
+    return `<label style="font-size:9px;cursor:pointer;white-space:nowrap">
+      <input type="checkbox" value="${m}" ${checked} onchange="updateFusionCustomModels()"> ${FUSION_MODEL_LABELS[m]||m}
+    </label>`;
+  }).join('');
+  // 填充裁判/定稿下拉
+  ['fusion-custom-judge','fusion-custom-call'].forEach(id => {
+    const sel = document.getElementById(id); if(!sel) return;
+    sel.innerHTML = availModels.map(m => `<option value="${m}">${FUSION_MODEL_LABELS[m]||m}</option>`).join('');
+  });
+}
+
+function updateFusionCustomModels() {
+  const checks = document.querySelectorAll('#fusion-model-checkboxes input:checked');
+  _fusionCustomModels = [...checks].map(c => c.value);
+  const list = document.getElementById('fusion-models-list');
+  if (list) {
+    const names = _fusionCustomModels.map(m => FUSION_MODEL_LABELS[m]||m);
+    list.innerHTML = `<span>模型: ${names.join(' + ') || '(至少选2个)'}</span>`;
+  }
+  document.getElementById('fusion-save-btn').style.display = 'inline-block';
+}
+
+async function saveFusionCustom() {
+  if (_fusionCustomModels.length < 2) { alert('至少选2个模型'); return; }
+  const judge = document.getElementById('fusion-custom-judge').value;
+  const call = document.getElementById('fusion-custom-call').value;
+  try {
+    const r = await api('/api/fusion/config', {
+      method:'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({custom:{models:_fusionCustomModels, judge_model:judge, call_model:call}}),
+    });
+    if (r.ok) {
+      document.getElementById('fusion-save-btn').style.display = 'none';
+      document.getElementById('fusion-status').textContent = '✅ 已保存';
+      document.getElementById('fusion-status').style.color = '#57d9a3';
+    }
+  } catch(e) { alert('保存失败: '+e.message); }
+}
 
 function updateFusionModels() {
   const tier = document.getElementById('fusion-tier').value;
-  const models = FUSION_MODELS[tier] || FUSION_MODELS.budget;
+  const customPanel = document.getElementById('fusion-custom-panel');
   const list = document.getElementById('fusion-models-list');
+  const saveBtn = document.getElementById('fusion-save-btn');
+
+  if (tier === 'custom') {
+    customPanel.style.display = 'block';
+    saveBtn.style.display = 'inline-block';
+    updateFusionCustomModels();
+    loadFusionCustom();
+    return;
+  }
+  customPanel.style.display = 'none';
+  saveBtn.style.display = 'none';
+
+  const models = FUSION_MODELS[tier] || FUSION_MODELS.budget;
   if (list) {
     const names = models.map(m => FUSION_MODEL_LABELS[m] || m);
     const uniq = [...new Set(names)];
@@ -972,9 +1050,15 @@ function updateFusionStatus() {
   }
 }
 
+function getFusionModels() {
+  const tier = document.getElementById('fusion-tier').value;
+  if (tier === 'custom') return _fusionCustomModels.length >= 2 ? _fusionCustomModels : FUSION_MODELS.budget;
+  return FUSION_MODELS[tier] || FUSION_MODELS.budget;
+}
+
 async function testFusion() {
   const tier = document.getElementById('fusion-tier').value;
-  const models = FUSION_MODELS[tier] || FUSION_MODELS.budget;
+  const models = getFusionModels();
   const status = document.getElementById('fusion-status');
   status.textContent = `提交中 (${tier})...`;
   status.style.color = 'var(--text2)';
@@ -1004,7 +1088,8 @@ async function testFusion() {
   }
 }
 
-updateFusionModels();  // 初始化显示
+updateFusionModels();
+loadFusionCustom();
 
 // ═══════════════════════════════════════════════════════
 // Init (removed — see app.js)

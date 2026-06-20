@@ -521,6 +521,59 @@ def api_loop_status():
                     "events": [{"kind": e["kind"], "msg": e["msg"], "ts": e["ts"]} for e in events]})
 
 # ═══════════════════════════════════════════════════════════
+# Fusion 配置
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/fusion/config", methods=["GET", "PUT"])
+def api_fusion_config():
+    import json as _json
+    fusion_path = sched_config.SCHEDULER_DIR / "fusion.toml"
+    if request.method == "GET":
+        try:
+            from scheduler._io import load_toml
+            cfg = load_toml(fusion_path)
+            return jsonify(cfg)
+        except Exception:
+            return jsonify({})
+    # PUT: 合并自定义配置
+    data = request.get_json(silent=True) or {}
+    custom = data.get("custom", {})
+    if custom:
+        try:
+            from scheduler._io import load_toml
+            cfg = load_toml(fusion_path)
+            cfg["custom"] = custom
+            toml_lines = []
+            def _dump(d, prefix=""):
+                for k, v in d.items():
+                    if isinstance(v, dict):
+                        toml_lines.append(f"\n[{prefix}{k}]")
+                        _dump(v, f"{prefix}{k}.")
+                    elif isinstance(v, list):
+                        toml_lines.append(f"{k} = {_json.dumps(v, ensure_ascii=False)}")
+                    elif isinstance(v, bool):
+                        toml_lines.append(f"{k} = {str(v).lower()}")
+                    elif isinstance(v, str):
+                        toml_lines.append(f'{k} = "{v}"')
+                    else:
+                        toml_lines.append(f"{k} = {v}")
+            # 保留原文件格式，只更新 custom section
+            existing = fusion_path.read_text() if fusion_path.exists() else ""
+            if "[custom]" in existing:
+                # 替换已有 custom section
+                import re
+                existing = re.sub(r'\[custom\].*?(\n\[|\Z)', '', existing, flags=re.DOTALL)
+                existing = existing.rstrip()
+            existing += f"\n\n[custom]\nmodels = {_json.dumps(custom.get('models', []), ensure_ascii=False)}\n"
+            existing += f'judge_model = "{custom.get("judge_model", "deepseek-chat")}"\n'
+            existing += f'call_model = "{custom.get("call_model", "deepseek-chat")}"\n'
+            fusion_path.write_text(existing)
+            return jsonify({"ok": True})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": True})
+
+# ═══════════════════════════════════════════════════════════
 # 监控
 # ═══════════════════════════════════════════════════════════
 

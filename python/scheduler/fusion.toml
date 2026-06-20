@@ -81,3 +81,9 @@ mode = "two_phase"                  # two_phase | parallel_readonly
 builder = "你是 Builder（建设者）。关注可实现性、具体步骤、代码结构、模块划分。给出可落地的方案。"
 skeptic = "你是 Skeptic（质疑者）。主动找方案的漏洞：边界条件、并发安全、异常路径、向后兼容。指出所有可能出错的地方。"
 analyst = "你是 Analyst（分析者）。关注架构合理性、技术选型权衡、长期维护成本。从更高维度评估方案。"
+
+
+[custom]
+models = ["deepseek-chat", "kimi-k2.7-code"]
+judge_model = "glm-5-turbo"
+call_model = "deepseek-chat"

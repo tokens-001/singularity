@@ -358,10 +358,21 @@
           <option value="budget">Budget (3模型, ~$0.5)</option>
           <option value="self">Self (同模型×2, ~$0.2)</option>
           <option value="standard">Standard (2强模型, ~$3)</option>
+          <option value="custom">自定义...</option>
         </select>
       </div>
       <div id="fusion-models-list" style="margin-bottom:8px;font-size:9px;color:var(--text2)">
         <span>模型: DeepSeek Chat + GLM-5 Turbo + Kimi K2.7</span>
+      </div>
+      <div id="fusion-custom-panel" style="display:none;margin-bottom:8px">
+        <div style="font-size:9px;color:var(--text2);margin-bottom:4px">选择模型 (至少2个):</div>
+        <div id="fusion-model-checkboxes" style="display:flex;flex-wrap:wrap;gap:4px"></div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+          <label style="font-size:9px">裁判模型:</label>
+          <select id="fusion-custom-judge" style="font-size:9px;padding:2px;width:140px"></select>
+          <label style="font-size:9px">定稿模型:</label>
+          <select id="fusion-custom-call" style="font-size:9px;padding:2px;width:140px"></select>
+        </div>
       </div>
       <div style="font-size:9px;color:var(--text3);margin-bottom:8px">
         两阶段合成: 裁判五维JSON → 调用模型定稿
@@ -374,6 +385,7 @@
       </div>
       <div style="display:flex;align-items:center;gap:8px">
         <button class="btn purple sm" onclick="testFusion()">🧪 测试 Fusion</button>
+        <button class="btn cyan sm" onclick="saveFusionCustom()" id="fusion-save-btn" style="display:none">💾 保存</button>
         <span id="fusion-status" style="font-size:9px;color:var(--text2)"></span>
       </div>
     </div>

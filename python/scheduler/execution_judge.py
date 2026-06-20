@@ -458,7 +458,16 @@ def run_parallel_models(task_desc: str, level: str = "E", tier: str = "budget") 
     from .model_registry import provider_for_model
 
     cfg = _load_fusion_config()
-    tier_cfg = cfg.get("tiers", {}).get(tier, cfg.get("tiers", {}).get("budget", {}))
+    if tier == "custom":
+        custom = cfg.get("custom", {})
+        tier_cfg = {
+            "models": custom.get("models", ["deepseek-chat", "glm-5-turbo"]),
+            "judge_model": custom.get("judge_model", "deepseek-chat"),
+            "call_model": custom.get("call_model", "deepseek-chat"),
+            "max_tokens": 2000, "temperature": 0.7, "timeout_sec": 60,
+        }
+    else:
+        tier_cfg = cfg.get("tiers", {}).get(tier, cfg.get("tiers", {}).get("budget", {}))
     models = tier_cfg.get("models", ["deepseek-chat", "glm-5-turbo"])
     roles_list = tier_cfg.get("roles", ["builder", "skeptic"])
     base_temp = tier_cfg.get("temperature", 0.7)
