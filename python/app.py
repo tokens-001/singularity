@@ -497,11 +497,6 @@ from scheduler import _api as _api_handler
 def index():
     return render_template("index.html")
 
-@app.route("/dashboard")
-def dashboard():
-    from flask import redirect
-    return redirect("/static/dashboard.html")
-
 
 # ═══════════════════════════════════════════════════════════
 # Loop Control API — 面板即控制中心

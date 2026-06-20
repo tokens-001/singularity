@@ -129,35 +129,91 @@ async function refreshAll(){
   const flowChanged=flowHash!==_lastFlowHash;
 
   tasks=newTasks; _lastTasksHash=tasksHash;
-  renderStatusCards(); renderAgentRow(); renderTokenStats(); loadPerfStats();
+  renderStatusCards(); renderAgentRow();
 
-  if(tasksChanged){ renderTasks(); renderConflicts(); }
-  renderIntervention(); // dashboard always shows held/failed
+  if(tasksChanged){ renderTasks(); }
+  // 卡片网格已包含 token/耗时/冲突/干预信息
   if(activeTab==='tasks'){ renderTasks(); if(flowChanged){ _lastFlowHash=flowHash; renderFlowDiagram(); } }
 
   ind.className='live on'; ind.textContent='●';
 }
 
 // ═══════════════════════════════════════════════════════
-// Status Cards
+// Dashboard 卡片网格
 // ═══════════════════════════════════════════════════════
-function renderStatusCards(){
-  const counts=statusData.counts||{};
-  const heldCount=tasks.filter(t=>t.held).length;
-  const cards=[
-    {k:'pending',label:'待处理',cls:'pending'},
-    {k:'running',label:'运行中',cls:'running',n:statusData.running_total||0},
-    {k:'done',label:'已完成',cls:'done'},
-    {k:'failed',label:'失败',cls:'failed'},
-    {k:'conflict_held',label:'冲突',cls:'conflict'},
-    {k:'held',label:'扣留',cls:'held',n:heldCount},
-  ];
-  document.getElementById('status-cards').innerHTML=cards.map(c=>{
-    const n=c.n!==undefined?c.n:(counts[c.k]||0);
-    return `<div class="card ${c.cls}"><div class="count${c.k==='running'?' pulse':''}">${n}</div><div class="label">${c.label}</div></div>`;
-  }).join('');
+function fmt(n){ if(n==null)return'—'; if(typeof n==='number'){ if(n>1e6)return(n/1e6).toFixed(2)+'M'; if(n>1e3)return(n/1e3).toFixed(1)+'K'; return n.toFixed(0); } return n; }
 
-  // 空状态引导: 无任务 + 调度循环未启动
+async function renderStatusCards(){
+  const grid=document.getElementById('db-grid');
+  if(!grid) return;
+
+  const counts=statusData.counts||{};
+  const total=Object.values(counts).reduce((a,b)=>a+b,0)||1;
+
+  // 健康卡片
+  const loopOn=_loop_running;
+  const healthHTML = `<div class="db-card"><h3>🫀 健康</h3>
+    <div class="db-stat"><span class="l">服务</span><span class="v"><span class="db-dot ${statusData.status==='ok'?'db-dot-green':'db-dot-red'}"></span>${statusData.status||'?'}</span></div>
+    <div class="db-stat"><span class="l">磁盘</span><span class="v">${fmt(statusData.disk_free_mb)} MB</span></div>
+    <div class="db-stat"><span class="l">调度循环</span><span class="v"><span class="db-dot ${loopOn?'db-dot-green':'db-dot-red'}"></span>${loopOn?'运行中':'已停止'}</span></div>
+    <div class="db-stat"><span class="l">SSE 客户端</span><span class="v">${statusData.sse_clients||0}</span></div>
+  </div>`;
+
+  // 任务卡片
+  const tasksHTML = `<div class="db-card"><h3>📋 任务队列</h3>
+    <div class="db-stat"><span class="l"><span class="db-dot db-dot-yellow"></span>待处理</span><span class="v">${counts.pending||0}</span></div>
+    <div class="db-bar"><div class="db-bar-fill db-bar-yellow" style="width:${(counts.pending||0)/Math.max(total,1)*100}%"></div></div>
+    <div class="db-stat"><span class="l"><span class="db-dot db-dot-green"></span>运行中</span><span class="v">${counts.running||0}</span></div>
+    <div class="db-bar"><div class="db-bar-fill db-bar-green" style="width:${(counts.running||0)/Math.max(total,1)*100}%"></div></div>
+    <div class="db-stat"><span class="l">已完成</span><span class="v">${counts.done||0}</span></div>
+    <div class="db-stat"><span class="l">失败</span><span class="v">${counts.failed||0}</span></div>
+  </div>`;
+
+  // Token 卡片
+  const tt=statusData.token_totals||{};
+  const tTotal=Object.values(tt).reduce((a,b)=>a+b,0)||0;
+  const tokensHTML = `<div class="db-card"><h3>💰 Token 消耗</h3>
+    <div class="db-stat"><span class="l"><span class="db-tag db-tag-e">E</span></span><span class="v">${fmt(tt.E||0)}</span></div>
+    <div class="db-stat"><span class="l"><span class="db-tag db-tag-ep">E+</span></span><span class="v">${fmt(tt['E+']||0)}</span></div>
+    <div class="db-stat"><span class="l"><span class="db-tag db-tag-d">D</span></span><span class="v">${fmt(tt.D||0)}</span></div>
+    <div class="db-stat"><span class="l">总计</span><span class="v">${fmt(tTotal)}</span></div>
+  </div>`;
+
+  // Agent 卡片
+  const agents=statusData.agents||{};
+  const agCounts={}; Object.entries(agents).forEach(([l,ag])=>{agCounts[l]=(ag||[]).length;});
+  const agTotal=Object.values(agCounts).reduce((a,b)=>a+b,0);
+  const agentsHTML = `<div class="db-card"><h3>🤖 Agent</h3>
+    <div class="db-stat"><span class="l">模型数</span><span class="v">${agTotal}</span></div>
+    <div class="db-stat"><span class="l"><span class="db-tag db-tag-e">E</span></span><span class="v">${agCounts.E||0} agent</span></div>
+    <div class="db-stat"><span class="l"><span class="db-tag db-tag-ep">E+</span></span><span class="v">${agCounts['E+']||0} agent</span></div>
+    <div class="db-stat"><span class="l"><span class="db-tag db-tag-d">D</span></span><span class="v">${agCounts.D||0} agent</span></div>
+  </div>`;
+
+  // 耗时卡片
+  const perfHTML = `<div class="db-card"><h3>📊 耗时</h3>
+    <div class="db-stat"><span class="l">平均等待</span><span class="v">${statusData.avg_wait||'—'}</span></div>
+    <div class="db-stat"><span class="l">平均完成</span><span class="v">${statusData.avg_done||'—'}</span></div>
+    <div class="db-stat"><span class="l">卡住任务</span><span class="v">${(statusData.stalled||[]).length}</span></div>
+  </div>`;
+
+  // 项目卡片
+  let projHTML = `<div class="db-card"><h3>📁 项目</h3><div class="db-stat"><span class="l">项目数</span><span class="v">—</span></div></div>`;
+  try{
+    const pRes=await (await fetch('/api/projects')).json();
+    const ps=pRes.projects||[];
+    const active=ps.filter(p=>!['done','archived'].includes(p.phase)).length;
+    const done=ps.filter(p=>p.phase==='done').length;
+    projHTML = `<div class="db-card"><h3>📁 项目</h3>
+      <div class="db-stat"><span class="l">项目数</span><span class="v">${ps.length}</span></div>
+      <div class="db-stat"><span class="l">进行中</span><span class="v">${active}</span></div>
+      <div class="db-stat"><span class="l">已完成</span><span class="v">${done}</span></div>
+    </div>`;
+  }catch(e){}
+
+  grid.innerHTML = healthHTML + tasksHTML + tokensHTML + agentsHTML + perfHTML + projHTML;
+
+  // 空状态引导
   const totalTasks = Object.values(counts).reduce((a,b)=>a+b,0);
   const onboarding = document.getElementById('onboarding');
   if (onboarding) {
@@ -166,7 +222,7 @@ function renderStatusCards(){
 
   // Populate filter dropdown
   const sel=document.getElementById('filter-status');
-  if(sel.options.length<=1){
+  if(sel&&sel.options.length<=1){
     [...new Set(tasks.map(t=>t.status))].sort().forEach(s=>{
       if(!sel.querySelector(`[value="${s}"]`)){
         const o=document.createElement('option');o.value=s;o.textContent=STATUS_CN[s]||s;sel.appendChild(o);

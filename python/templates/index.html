@@ -32,17 +32,6 @@
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-content active" id="tab-dashboard">
 
-  <div class="cards" id="status-cards"></div>
-
-  <div id="onboarding" style="display:none;padding:20px 24px;margin-bottom:8px;background:var(--bg2);border-left:2px solid var(--cyan)">
-    <div style="font-size:14px;font-weight:600;margin-bottom:12px;color:var(--cyan)">欢迎使用奇点调度平台</div>
-    <div style="font-size:10px;color:var(--text2);line-height:2">
-      <div>1. 在 <strong style="color:var(--text)">配置</strong> tab 中检查 API Key 和模型状态</div>
-      <div>2. 在 <strong style="color:var(--text)">任务</strong> tab 中提交你的第一个任务</div>
-      <div>3. 返回仪表盘，点击 <strong style="color:var(--cyan)">「启动」</strong> 开始调度循环</div>
-    </div>
-  </div>
-
   <div class="loop-bar">
     <span class="loop-indicator off" id="loop-dot"></span>
     <span class="loop-status off" id="loop-label">⚠ 调度循环未启动 — 任务不会被执行</span>
@@ -53,66 +42,23 @@
     <button class="btn sm" style="color:var(--text3);font-size:9px;margin-left:4px" onclick="cleanupStale()" title="清理残留心跳和缓存">扫除</button>
   </div>
 
-  <div style="display:flex;gap:1px;flex-wrap:wrap;margin-bottom:8px">
-    <div class="section" id="event-section" style="flex:1;min-width:240px">
-      <div class="section-title">实时事件</div>
-      <div class="section-body event-feed" id="event-feed" style="min-height:60px;max-height:200px;overflow-y:auto">
-        <span style="color:var(--text3);font-family:var(--mono);font-size:9px">等待调度循环启动...</span>
-      </div>
-    </div>
-    <div class="section" id="reports-section" style="flex:1;min-width:200px">
-      <div class="section-title">奏报</div>
-      <div class="section-body" id="reports-body" style="font-size:9px;max-height:200px;overflow-y:auto;font-family:var(--mono)"></div>
-    </div>
-    <div class="section" id="judge-monitor-section" style="flex:1;min-width:200px">
-      <div class="section-title">裁判监控 <span id="jm-anomaly-flag" style="color:var(--orange);display:none">⚠</span></div>
-      <div class="section-body" id="judge-monitor-body" style="font-size:9px;max-height:200px;overflow-y:auto;font-family:var(--mono)">
-        <span style="color:var(--text3)">等待数据...</span>
-      </div>
+  <div id="onboarding" style="display:none;padding:12px 16px;margin-bottom:8px;background:var(--bg2);border-left:2px solid var(--cyan);font-size:10px;color:var(--text2);line-height:1.8">
+    1. <strong style="color:var(--text)">配置</strong> → 检查 API Key · 2. <strong style="color:var(--text)">任务</strong> → 提交任务 · 3. 点击 <strong style="color:var(--cyan)">启动</strong> 开始调度
+  </div>
+
+  <div class="db-grid" id="db-grid">
+    <!-- JS 动态填充 -->
+  </div>
+
+  <div class="section" style="margin-top:12px">
+    <div class="section-title">实时事件</div>
+    <div class="section-body event-feed" id="event-feed" style="min-height:60px;max-height:250px;overflow-y:auto;font-family:var(--mono);font-size:10px">
+      <span style="color:var(--text3)">等待调度循环启动...</span>
     </div>
   </div>
 
-  <div style="display:flex;gap:1px;flex-wrap:wrap;margin-bottom:8px">
-    <div class="section" id="pattern-profile-section" style="flex:1;min-width:200px">
-      <div class="section-title">模式画像</div>
-      <div class="section-body" id="pattern-profile-body" style="font-size:9px;max-height:180px;overflow-y:auto;font-family:var(--mono)">
-        <span style="color:var(--text3)">等待数据...</span>
-      </div>
-    </div>
-    <div class="section" style="flex:1;min-width:200px">
-      <div class="section-title">扣留待处理</div>
-      <div class="section-body" id="held-list" style="font-size:10px"><span style="color:var(--text3)">无</span></div>
-    </div>
-    <div class="section" style="flex:1;min-width:200px">
-      <div class="section-title">失败可重试</div>
-      <div class="section-body" id="failed-list" style="font-size:10px"><span style="color:var(--text3)">无</span></div>
-    </div>
-  </div>
-
-  <div style="display:flex;gap:1px;flex-wrap:wrap;margin-bottom:8px">
-    <div class="section" style="flex:1;min-width:200px">
-      <div class="section-title">活跃任务</div>
-      <div class="section-body" id="active-list" style="font-size:10px"><span style="color:var(--text3)">无</span></div>
-    </div>
-    <div class="section" style="flex:1;min-width:200px">
-      <div class="section-title">合并冲突 <span id="conflict-count" style="font-size:9px;color:var(--orange)"></span></div>
-      <div class="section-body" id="conflict-section" style="display:none;font-size:10px">
-        <div id="conflict-body"></div>
-      </div>
-      <div class="section-body" id="conflict-empty" style="font-size:10px"><span style="color:var(--text3)">无冲突</span></div>
-    </div>
-  </div>
-
-  <div class="agent-row" id="agent-row"></div>
+  <div class="agent-row" id="agent-row" style="margin-top:8px"></div>
   <div style="font-size:9px;color:var(--text3);font-family:var(--mono);margin-top:4px" id="timing-line"></div>
-  <div class="section" id="token-section" style="margin-top:4px;display:none">
-    <div class="section-title">Token 消耗</div>
-    <div class="section-body" id="token-body" style="font-size:9px;font-family:var(--mono)"></div>
-  </div>
-  <div class="section" id="perf-section" style="margin-top:4px;display:none">
-    <div class="section-title">性能分析</div>
-    <div class="section-body" id="perf-body" style="font-size:9px;font-family:var(--mono)"></div>
-  </div>
 
 </div>
 

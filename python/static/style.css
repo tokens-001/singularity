@@ -344,6 +344,28 @@ pre.agent-out {
   .tab-bar { overflow-x: auto; }
 }
 
+/* ═══ Dashboard 卡片网格 ═══ */
+.db-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:8px; margin-bottom:4px; }
+.db-card { background:var(--bg2); border:1px solid var(--grid); border-radius:6px; padding:12px; }
+.db-card h3 { font-size:10px; color:var(--text2); text-transform:uppercase; letter-spacing:0.3px; margin:0 0 8px 0; font-weight:500; }
+.db-stat { display:flex; justify-content:space-between; align-items:center; padding:3px 0; border-bottom:1px solid var(--grid); font-size:10px; }
+.db-stat:last-child { border-bottom:none; }
+.db-stat .l { color:var(--text2); }
+.db-stat .v { font-weight:600; font-variant-numeric:tabular-nums; color:var(--text); }
+.db-bar { height:4px; background:var(--bg3); border-radius:2px; margin-top:2px; overflow:hidden; }
+.db-bar-fill { height:100%; border-radius:2px; transition:width .3s; }
+.db-bar-yellow { background:var(--yellow); }
+.db-bar-green { background:var(--green); }
+.db-bar-red { background:var(--red); }
+.db-dot { display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+.db-dot-green { background:var(--green); }
+.db-dot-red { background:var(--red); }
+.db-dot-yellow { background:var(--yellow); }
+.db-tag { display:inline-block; padding:1px 6px; border-radius:10px; font-size:9px; font-weight:500; }
+.db-tag-e { background:#1a3a2a; color:var(--green); }
+.db-tag-ep { background:#2a2a1a; color:var(--yellow); }
+.db-tag-d { background:#2a1a3a; color:var(--purple); }
+
 /* ═══ Focus ring ═══ */
 a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 1px;
