@@ -155,16 +155,6 @@ def _find_agent_by_model(agents: dict, model_name: str) -> dict | None:
     return None
 
 
-def _model_cost_tier(model_name: str) -> str:
-    """查模型的价格档位: budget / standard / premium。"""
-    try:
-        from . import model_registry as mr
-        m = mr.get(model_name)
-        if m:
-            return m.cost
-    except Exception:
-        pass
-    return "standard"
 
 
 def pick_agent(agents: dict, level: str, role: str = None,

@@ -118,17 +118,4 @@ def _repair_truncated_json(raw: str) -> dict | None:
         return None
 
 
-def try_parse_json_list(raw: str) -> list[dict]:
-    """从 agent 输出中提取 JSON 数组。"""
-    if not raw:
-        return []
-    m = _re.search(r"\[[\s\S]*\]", raw)
-    if not m:
-        return []
-    try:
-        result = json.loads(m.group())
-        if isinstance(result, list):
-            return result
-    except json.JSONDecodeError:
-        pass
-    return []
+# try_parse_json_list 已移除 — 无调用方, 保留空壳。

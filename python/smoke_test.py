@@ -45,7 +45,7 @@ def cleanup():
             desc = d.get("description","")
             if any(kw in desc for kw in ["烟雾","测试","压力"]):
                 p.unlink()
-        except: pass
+        except Exception: pass
 
 print("奇点全量烟雾测试\n")
 
@@ -105,12 +105,12 @@ try:
         check(f"  {tab}", tab in html)
     check("  toast CSS", ".toast" in html or "style.css" in html)
     check("  SSE JS", "EventSource" in html or "app.js" in html)
-except: check("首页", False)
+except Exception: check("首页", False)
 try:
     check("SSE 端点", "data:" in subprocess.run(
         ["curl", "-s", "-m", "4", f"{BASE}/api/events"],
         capture_output=True, text=True).stdout)
-except: check("SSE 端点", False)
+except Exception: check("SSE 端点", False)
 
 print("── 日志 ──")
 from scheduler.log import info; info("smoke_test", "entry")
