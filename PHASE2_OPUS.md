@@ -2,23 +2,22 @@
 
 ## 你的角色
 
-你是 Opus 4.8，对 Codex（GPT）的 Phase 1 审计报告做深度复核。你的价值不是再扫一遍——是质疑 Codex 的结论、做根因分析、给修复方案。
+你是 Opus 4.8，对 Codex（GPT）的 Phase 1 审计报告做深度复核。你的价值不是再扫一遍——是质疑 Codex（GPT）两轮扫描的 34 项结论、做根因分析、给修复方案。
+你有全部 48 个文件，不需要盲区猜测。
 
 ## 输入文件（我会全部上传）
 
-**审计文档**：
-- AUDIT_SPEC.md — 31 项审计规则
-- ARCHITECTURE.md — 架构约束 + 分层图
+**审计文档**（3 个）：
+- AUDIT_SPEC.md
+- ARCHITECTURE.md
+- 本文件（PHASE2_OPUS.md，含完整 Phase 1 + 1b 报告）
 
-**Phase 1 报告**（Codex 输出，见下方完整报告）
-
-**核心代码（逐函数审）**：
-- scheduler/orchestrator.py
-- scheduler/_exec.py
-- scheduler/tracker.py
-- scheduler/dispatcher.py
-- scheduler/executors/openai_agent.py
-- scheduler/memory.py
+**全部代码**（48 个 .py 文件）：
+- app.py
+- scheduler/ 下全部 .py 文件（35 个）
+- scheduler/executors/ 下全部 .py 文件（5 个）
+- skills/ 下全部 .py 文件（2 个）
+- *.toml 配置文件（3 个）
 
 ---
 
@@ -90,14 +89,33 @@
 | D7-5 | worktree 泄漏 | _exec.py:202-374 | 清理不在 try/finally | ❌ | — |
 | D7-6 | 内存事件持久化 | memory.py:53-57 | tmp + replace 原子写 | ✅ | — |
 
-### Phase 1 发现汇总
+### Phase 1b 新增发现（补审 38 文件）
 
-| 严重度 | 数量 | 关键项 |
-|--------|------|--------|
-| P0 | 7 | D6-1, D6-2, D6-3, D7-1, D7-2, D7-4, D7-5 |
-| P1 | 7 | D1-1, D1-3, D1-5, D4-1, D4-2, D4-3, D4-4 |
-| P2 | 7 | D2-1, D2-2, D2-3, D3-1, D3-2, D3-3, D3-4 |
-| P3 | 1 | D5-4；D5-1 未验收 |
+| 维度 | # | 文件:行号 | 问题 | 严重度 |
+|------|---|---------|------|--------|
+| D1 | D1-3 | merge.py:28 | scheduler 导入 executor 内部函数 merge_ref, merge_tree_probe | P1 |
+| D1 | D1-5 | _planner.py:73, __main__.py:313, pre_search.py:113 | 函数体内延迟导入 | P1 |
+| D2 | D2-2 | _planner.py:206, conductor.py:124, pre_search.py:47 | 新增 3 个超 80 行函数 | P2 |
+| D3 | D3-2 | conductor.py:227, execution_judge.py:131, goal_loop.py:129 | JSON 提取未复用统一解析 | P2 |
+| D3 | D3-3 | _auth.py:86, _profiler.py:41, _token_budget.py:45 | except Exception: pass 模式重复 | P2 |
+| D3 | D3-4 | mcp.py:392, model_registry.py:80, roles.py:41 | TOML 配置加载未统一封装 | P2 |
+| D4 | D4-1 | skills/legal/verify_laws.py:58,116,189 | skills 文件裸 except | P1 |
+| D4 | D4-2 | mcp.py:233, mcp.py:278, verify_laws.py:135 | 吞异常无日志 | P1 |
+| D4 | D4-4 | zhipu_api.py:153,188, skill_loader.py:262 | 文件读写无 try | P1 |
+| D5 | D5-4 | _planner.py, mcp.py, verify_laws.py | 类型注解 <80% | P3 |
+| D6 | D6-1 | _planner.py:18,73, goal_loop.py:23 | 新文件参与导入环 | P0 |
+| D6 | D6-2 | _planner.py:73, api_store.py:70, model_registry.py:149 | 延迟导入未标注破环原因 | P0 |
+| D7 | D7-1 | __main__.py:117, _planner.py:31, merge.py:180 | CLI、planner、merge 直接写 tracker | P0 |
+
+### 全量审计汇总（Phase 1 + 1b 合并）
+
+| 严重度 | Phase 1 | 新增 | 合计 |
+|--------|---------|------|------|
+| P0 | 7 | +3 | **10** |
+| P1 | 7 | +4 | **11** |
+| P2 | 7 | +4 | **11** |
+| P3 | 1 | +1 | **2** |
+| **总计** | **22** | **+12** | **34** |
 
 ---
 
