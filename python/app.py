@@ -9,7 +9,6 @@ import sys
 import time
 import threading
 from collections import deque
-import itertools
 from pathlib import Path
 
 from urllib.parse import urlparse
@@ -244,6 +243,18 @@ def _guard_rate_limit():
     return None
 
 
+# ── Body 大小守卫 ──────────────────────────────────────────
+_MAX_BODY_BYTES = 1_000_000  # 1MB
+
+@app.before_request
+def _guard_body_size():
+    """拒绝超大请求体，防止内存耗尽。"""
+    if request.method in ("POST", "PUT", "PATCH") and request.path.startswith("/api/"):
+        cl = request.content_length
+        if cl is not None and cl > _MAX_BODY_BYTES:
+            return jsonify({"error": "请求体过大", "max_bytes": _MAX_BODY_BYTES}), 413
+
+
 # ── SSRF 防护：URL 验证 ─────────────────────────────────
 import ipaddress
 import re as _re_url
@@ -420,7 +431,7 @@ def _sse_broadcast(kind: str, msg: str, ts: float = None):
     dead = []
     for q in _sse_clients:
         try:
-            q.append(payload)
+            q.put(payload)
         except Exception:
             dead.append(q)
     for q in dead:
@@ -1186,9 +1197,10 @@ def api_sse_events():
     _sse_clients.append(q)
 
     # 解析 Last-Event-ID（浏览器 EventSource 重连时自动携带）
+    # 优先 HTTP 头(浏览器原生重连), 其次 query param(手动重连)
     last_eid = 0
     try:
-        hdr = request.headers.get("Last-Event-ID", "")
+        hdr = request.headers.get("Last-Event-ID") or request.args.get("last_event_id", "")
         if hdr:
             last_eid = int(hdr)
     except (ValueError, TypeError):
@@ -1199,11 +1211,10 @@ def api_sse_events():
         if last_eid > 0:
             replayed = 0
             # 缓冲区按时间排序，找到所有 >last_eid 的事件
-            with _sse_event_lock:
-                for eid, data in _sse_event_buffer:
-                    if eid > last_eid:
-                        yield f"id: {eid}\ndata: {data}\n\n"
-                        replayed += 1
+            for eid, data in _sse_event_buffer:
+                if eid > last_eid:
+                    yield f"id: {eid}\ndata: {data}\n\n"
+                    replayed += 1
             if replayed:
                 _log_info("sse", f"回放 {replayed} 个遗漏事件 (Last-Event-ID={last_eid})")
 
@@ -1216,8 +1227,8 @@ def api_sse_events():
                 "running_total": sum(witness._heartbeat_task_levels().values()),
                 "running": _loop_running, "events": events_data})
             yield f"id: {init_eid}\ndata: {initial}\n\n"
-        except Exception:
-            pass
+        except Exception as _e:
+            yield f"data: {json.dumps({'kind': 'error', 'msg': f'init failed: {_e}'})}\n\n"
 
         # 3) 持续推送
         while True:
