@@ -1,7 +1,7 @@
 # 奇点调度平台 — 全量审计 + 架构文档
 
-> 2026-06-20，22 commits，42 文件，+2625/-1159 行，88/88 测试绿。
-> 基于 Opus 审计报告 + 全量 48 文件扫描 + 两轮修复 + P0-P2 全落地。
+> 2026-06-20，23 commits，43 文件，+2815/-1167 行，88/88 测试绿。
+> 基于 Opus 审计报告 + 全量 48 文件扫描 + 两轮修复 + P0-P2+D1+F1+F2 全落地+前端Fusion面板。
 
 ---
 
@@ -650,7 +650,5 @@ scheduler 测试绝不调真模型 API。`QIDIAN_SKIP_EMBED=1` 跳过 embedding 
 ✅ 现在:   D1(app.js拆分) → ✅ 已完成
 ✅ 本周:   F1(Self-Fusion) → ✅ 已完成
 ✅ 本月:   F2(DCPM System2) → ✅ 已完成
-以后:   跨模型Fusion(文件修改) ← 需worktree并行冲突处理
-        前端Fusion面板
-        DeepSeek API Key 配置
+✅ 以后:   Fusion多模型融合 → ✅ 已完成 (plan+file双模式+前端面板)
 ```
