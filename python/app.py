@@ -111,7 +111,7 @@ if _AUTH_ENABLED:
 
 # 无需认证的公开端点
 _PUBLIC_ENDPOINTS = {
-    "api_auth_status", "api_auth_bootstrap",
+    "api_auth_status",
     "api_status", "api_loop_status",
     "index",
 }

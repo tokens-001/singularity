@@ -384,32 +384,28 @@ def _dispatch_ready(dispatched: set, pool, agents, running_futures: dict) -> boo
             tracker.transition(t.id, TaskStatus.RUNNING, snapshot_id=snap.id)
             dispatched.add(t.id)
             fut = pool.submit(_execute_one_task, t, agents)
-            running_futures[fut] = (t, route, snap, pre)
+            running_futures[fut] = (t, route, snap, pre, time.time())
             dispatched_any = True
     return dispatched_any
 
 
 def _reap_futures(running_futures: dict, pending_batches: dict,
                   mq, results: list) -> bool:
-    """_run_queue_v3 步骤④: 回收已完成 future → _finalize_result 或入 pending。返回是否有回收。"""
+    """_run_queue_v3 步骤④: 回收已完成 future → _finalize_result 或入 pending。返回是否有回收。
+
+    修复: 不再用 FIRST_COMPLETED 误杀未完成的并发任务。
+    改为 ALL_COMPLETED + 短超时轮询，仅对超过 per-future deadline 的标记超时。
+    """
     if not running_futures:
         return False
-    done, not_done = wait(running_futures.keys(), timeout=600, return_when=FIRST_COMPLETED)
-    for fut in not_done:
-        t, route, snap, pre = running_futures.pop(fut, (None, None, None, None))
-        if t is not None:
-            try:
-                tracker.transition(t.id, TaskStatus.FAILED, error="执行超时(>600s)")
-            except Exception:
-                pass
-            results.append((t.id, "timeout", None))
-            try:
-                _save_trace(t, route, snap, None, None, False)
-            except Exception:
-                pass
-        fut.cancel()
-    for fut in done:
-        t, route, snap, pre = running_futures.pop(fut)
+    now = time.time()
+    deadline = 600  # per-future 超时阈值
+    reaped = False
+    # 先收割已完成的
+    done_futs = [f for f in running_futures if f.done()]
+    for fut in done_futs:
+        t, route, snap, pre, submitted_at = running_futures.pop(fut)
+        reaped = True
         try:
             batch, t_route, t_snap = fut.result()
         except Exception as e:
@@ -428,7 +424,28 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
             pending_batches[t.id] = (t, t_route, t_snap, batch)
         else:
             _finalize_result(t, batch, t_route, t_snap, results)
-    return len(done) > 0
+    # 检查超时: 仅杀超过 deadline 的 future
+    for fut in list(running_futures.keys()):
+        if fut.done():
+            continue  # 下一轮 done_futs 收割
+        t, route, snap, pre, submitted_at = running_futures.get(fut, (None,)*5)
+        if t is not None and now - submitted_at > deadline:
+            running_futures.pop(fut)
+            try:
+                tracker.transition(t.id, TaskStatus.FAILED, error=f"执行超时(>{deadline}s)")
+            except Exception:
+                pass
+            results.append((t.id, "timeout", None))
+            try:
+                _save_trace(t, route, snap, None, None, False)
+            except Exception:
+                pass
+            fut.cancel()
+            reaped = True
+    # 如果无事可收但还有 running future, 短暂 block 等下一个完成
+    if not reaped and running_futures:
+        wait(running_futures.keys(), timeout=5, return_when=FIRST_COMPLETED)
+    return reaped
 
 
 def _drain_pending(pending_batches: dict, mq, results: list) -> int:

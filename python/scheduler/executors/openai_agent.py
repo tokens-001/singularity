@@ -150,8 +150,8 @@ class OpenAIAgentExecutor(BaseExecutor):
                  permission_checker: callable = None):
         super().__init__(cfg, task, task_id, baseline_ref=baseline_ref, cwd=cwd)
         self._api_key = os.environ.get(cfg.get("api_key_env", ""), "")
-        for k, v in cfg.get("env", {}).items():
-            os.environ[k] = v
+        # ponytail: 存为实例属性, 不写全局 os.environ (防并发 Agent 竞态)
+        self._agent_env = dict(cfg.get("env", {}))
         self._url = cfg.get("entry", "")
         self._is_responses_api = "/v1/responses" in self._url or "/responses" in self._url
         self._model = cfg.get("request_template", {}).get("model", cfg.get("model", ""))
@@ -453,7 +453,9 @@ class OpenAIAgentExecutor(BaseExecutor):
             return f"命令解析失败: {e}"
         if not argv:
             return "空命令"
-        safe_env = {k:v for k,v in os.environ.items() if not any(p in k.upper() for p in ("API_KEY","TOKEN","SECRET","PASSWORD","AUTH","CREDENTIAL","CERT"))}
+        # ponytail: 合并 agent env 到局部环境, 不污染 os.environ
+        merged = {**os.environ, **getattr(self, '_agent_env', {})}
+        safe_env = {k:v for k,v in merged.items() if not any(p in k.upper() for p in ("API_KEY","TOKEN","SECRET","PASSWORD","AUTH","CREDENTIAL","CERT"))}
         try:
             r = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=30, cwd=str(self._cwd), env=safe_env)
             out = r.stdout[-4000:] if r.stdout else ""

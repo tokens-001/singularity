@@ -124,20 +124,21 @@ def _read(task_id: str) -> Optional[Task]:
 _NEXT_ID_CACHE = 0
 
 def _next_id() -> str:
-    """基于毫秒时间戳, 缓存兜底防碰撞。O(1) 非 O(n) 全表扫描。"""
+    """基于毫秒时间戳, 缓存兜底防碰撞。O(1) 非 O(n) 全表扫描。_LOCK 保护并发。"""
     global _NEXT_ID_CACHE
-    base = int(time.time() * 1000)
-    # 缓存过期时才扫一次全表 (时间戳进位或首次调用)
-    if _NEXT_ID_CACHE <= base:
-        max_existing = base
-        for p in _tasks_dir().glob("*.json"):
-            try:
-                max_existing = max(max_existing, int(p.stem))
-            except ValueError:
-                continue
-        _NEXT_ID_CACHE = max(max_existing, base)
-    _NEXT_ID_CACHE += 1
-    return str(_NEXT_ID_CACHE)
+    with _LOCK:
+        base = int(time.time() * 1000)
+        # 缓存过期时才扫一次全表 (时间戳进位或首次调用)
+        if _NEXT_ID_CACHE <= base:
+            max_existing = base
+            for p in _tasks_dir().glob("*.json"):
+                try:
+                    max_existing = max(max_existing, int(p.stem))
+                except ValueError:
+                    continue
+            _NEXT_ID_CACHE = max(max_existing, base)
+        _NEXT_ID_CACHE += 1
+        return str(_NEXT_ID_CACHE)
 
 
 def create(

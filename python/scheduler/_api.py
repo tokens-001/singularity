@@ -745,10 +745,14 @@ def auth_status() -> tuple[dict, int]:
 
 
 def auth_bootstrap() -> tuple[dict, int]:
-    """POST /api/auth/bootstrap"""
+    """POST /api/auth/bootstrap — 仅首次无用户时可用。明文 token 仅 console 打印。"""
     from ._auth import get_auth
-    admin = get_auth().bootstrap()
-    return {"ok": True, "user": admin.to_dict(), "message": "Admin token — 请保存: " + admin.token}, 200
+    auth = get_auth()
+    # 已有用户时拒绝重复 bootstrap
+    if auth._users:
+        return {"ok": False, "error": "已有用户，bootstrap 不可重复调用"}, 403
+    admin = auth.bootstrap()
+    return {"ok": True, "user": admin.to_dict(), "message": f"Admin 创建成功，token: {admin.token[:8]}...（完整 token 已在服务端 console 打印）"}, 200
 
 
 def auth_add_user(uid: str, name: str = "", role: str = "viewer") -> tuple[dict, int]:
