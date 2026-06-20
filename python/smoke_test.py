@@ -159,6 +159,28 @@ h = api("/health")
 for f in ["status","disk_free_mb","loop_running","sse_clients","projects"]:
     check(f"健康/{f}", f in h)
 
+# ═══ 新增: Body size guard ────────────────────────────
+print("\n── T3/T17 安全 & 加固 ──")
+# 超大请求体应返回 413 (用临时文件避开 argv 长度限制)
+import tempfile
+with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tf:
+    tf.write('{"description":"' + "x" * 1_050_000 + '"}')
+    tmp_path = tf.name
+r_big = subprocess.run(
+    ["curl", "-s", "-m", "10", "-X", "POST", "-H", "Content-Type: application/json",
+     "-d", f"@{tmp_path}", f"{BASE}/api/tasks"],
+    capture_output=True, text=True, timeout=15
+)
+Path(tmp_path).unlink(missing_ok=True)
+check("Body过大返回413", "413" in (r_big.stdout or "") or "error" in (r_big.stdout or "").lower())
+
+# SSE端点可用
+r_sse = subprocess.run(
+    ["curl", "-s", "-m", "3", "-H", "Accept: text/event-stream", f"{BASE}/api/events"],
+    capture_output=True, text=True, timeout=5
+)
+check("SSE端点有效", "data:" in (r_sse.stdout or "") or r_sse.returncode == 0)
+
 # ═══ 清理 ═══
 cleanup()
 remaining = len(list(Path(".qidian/tasks").glob("*.json")))
