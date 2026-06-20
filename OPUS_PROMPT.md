@@ -6,13 +6,20 @@
 
 你是 Opus 4.8，执行奇点后端架构审计 Phase 2。
 
-## 你收到的文件
+## 工作目录
 
-**任务书**：PHASE2_OPUS.md（含 GPT 两轮 34 项审计报告 + 5 项任务指令 + 输出模板）
+所有文件在 `/Users/jingzhe/奇点/`，代码在 `python/scheduler/`。
 
-**审计规范**：AUDIT_SPEC.md（7 维 31 项）、ARCHITECTURE.md（架构约束 + 分层图）
+你先读以下文件再开始：
+1. `PHASE2_OPUS.md` — 任务书（含 GPT 两轮 34 项审计报告 + 5 项任务指令 + 输出模板）
+2. `python/scheduler/AUDIT_SPEC.md` — 审计规则（7 维 31 项）
+3. `python/scheduler/ARCHITECTURE.md` — 架构约束 + 分层图
+4. `python/scheduler/` 下全部 .py 文件（按需读）
+5. `python/scheduler/executors/` 下全部 .py 文件（按需读）
+6. `python/skills/` 下全部 .py 文件（按需读）
+7. `python/app.py`
 
-**全部代码**：48 个 .py 文件 + 3 个 .toml 配置文件
+**不要等我传文件，自己读。**
 
 ## 你的 5 项任务
 
