@@ -108,6 +108,24 @@ let _refreshGen = 0;
 let _activeTabAtRefresh = 'dashboard';
 
 // ═══════════════════════════════════════════════════════
+// RAF 批量 DOM 更新 — 同一帧内多次调用合并为一次
+// ═══════════════════════════════════════════════════════
+let _rafPending = new Set();
+let _rafScheduled = false;
+function scheduleDOMUpdate(fn) {
+  _rafPending.add(fn);
+  if (!_rafScheduled) {
+    _rafScheduled = true;
+    requestAnimationFrame(() => {
+      _rafScheduled = false;
+      const fns = [..._rafPending];
+      _rafPending.clear();
+      for (const f of fns) f();
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════════
 // Interaction states (loading / empty / error)
 // ═══════════════════════════════════════════════════════
 function showSkeleton(el, rows=5){ el.innerHTML=Array.from({length:rows},()=>`<div class="skeleton w${80-Math.floor(Math.random()*50)}"></div>`).join(''); }

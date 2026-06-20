@@ -7,8 +7,38 @@
 //   config.js — 配置/Skill/MCP/SSE/Loop/模板
 
 // ═══════════════════════════════════════════════════════
+// 主题切换 (localStorage 持久化 + prefers-color-scheme 默认)
+// ═══════════════════════════════════════════════════════
+(function(){
+  var KEY = 'qd-theme';
+  var saved = localStorage.getItem(KEY);
+  var sysDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+  if (saved) {
+    document.documentElement.setAttribute('data-theme', saved);
+  } else if (!sysDark) {
+    // ponytail: dark 是 CSS 默认值, 仅 light 需显式标记
+    document.documentElement.setAttribute('data-theme', 'light');
+  }
+
+  // 系统主题变化时, 若用户未显式选择则跟随
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e){
+    if (localStorage.getItem(KEY)) return;
+    document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light');
+  });
+
+  window.toggleTheme = function(){
+    var cur = document.documentElement.getAttribute('data-theme');
+    var next = cur === 'light' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  };
+})();
+
+// ═══════════════════════════════════════════════════════
 // Init
 // ═══════════════════════════════════════════════════════
+showSkeleton(document.getElementById('db-grid'), 3);
 refreshAll();
 refreshJudgeMonitor();
 refreshPatternProfile();

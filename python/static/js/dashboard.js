@@ -212,6 +212,7 @@ function renderFlowDiagram(){
     const cnt=counts[n.id]||0;
     const highlight=flowClickFilter===n.id?'stroke-width="2" stroke="'+c+'"':'';
     svg+=`<g class="flow-node" onclick="flowClick('${n.id}')" ${highlight}>
+      <title>${n.label}: ${cnt} 个任务</title>
       <rect x="${n.x}" y="${n.y}" width="72" height="24" rx="4" fill="rgba(19,23,31,.9)" stroke="${cnt>0?c:'#252a35'}"/>
       <text x="${n.x+36}" y="${n.y+14}" fill="${cnt>0?c:'#6b7280'}" font-size="9">${n.label}</text>
       <text x="${n.x+36}" y="${n.y+44}" class="count" fill="${cnt>0?c:'#252a35'}">${cnt}</text>
