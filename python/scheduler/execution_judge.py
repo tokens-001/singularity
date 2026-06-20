@@ -250,6 +250,45 @@ _FUSION_ROLES = {
     "analyst": "你是 Analyst（分析者）。关注架构合理性、技术选型权衡、长期维护成本。从更高维度评估方案。",
 }
 
+# ═══════════════════════════════════════════════
+# Fusion 进阶机制
+# ═══════════════════════════════════════════════
+
+_CROSS_MODEL_PROMPT = """[跨模型第二意见]
+单模型审查完毕。以下是另一个模型对同一任务的独立分析。
+请对比你的结论和以下第二意见，找出:
+1. 你同意但第二意见反对的点
+2. 你反对但第二意见坚持的点
+3. 第二意见发现但你遗漏的点
+4. 综合判断: 是否需要修正你的结论？
+
+第二意见:
+{other_output}"""
+
+_FINDING_CLASSES = {
+    "contract_misread": "误读需求 — 模型误解了任务要求，产出偏离原始意图",
+    "valid_actionable": "有效可操作 — 真实问题，有明确的修复方案",
+    "valid_tradeoff": "有效但可接受 — 方案合理但非唯一，属于风格或取舍差异",
+    "noise": "噪音 — 误报或不影响实际功能的细枝末节",
+}
+
+def classify_finding(finding: str) -> str:
+    """用 cheap-model 对发现做 4 类分类。
+    返回: contract_misread | valid_actionable | valid_tradeoff | noise
+    ponytail: 单次 LLM 调用。需要时上训练分类器。
+    """
+    classes_desc = "\n".join(f"- {k}: {v}" for k, v in _FINDING_CLASSES.items())
+    prompt = f"将以下代码审查发现归入4类之一:\n{classes_desc}\n\n发现: {finding}\n\n只输出类别名。"
+    raw = _call_e_layer(prompt)
+    for k in _FINDING_CLASSES:
+        if k in raw:
+            return k
+    return "valid_actionable"  # 默认归为有效
+
+def build_cross_model_prompt(other_output: str) -> str:
+    """生成跨模型第二意见提示。"""
+    return _CROSS_MODEL_PROMPT.format(other_output=other_output[:1500])
+
 
 def fuse_outputs(task_desc: str, output_a: str, output_b: str) -> str:
     """Self-Fusion 合成裁判: 用 cheap model 融合两个模型的独立产出。

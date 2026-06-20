@@ -399,8 +399,9 @@ def _run_fusion(task, level: str, agents: dict, ctx: RunContext = None) -> Batch
     if ctx is not None:
         return _run_fusion_with_files(task, level, agents, ctx)
 
-    # ── plan模式: API 直接调用 ──
+    # ── plan模式: 迭代融合 (round1→交叉审查→round2→分类) ──
     try:
+        from .execution_judge import classify_finding, build_cross_model_prompt
         outputs = run_parallel_models(task.description, level)
         if len(outputs) < 2:
             return BatchOutput(
@@ -412,24 +413,57 @@ def _run_fusion(task, level: str, agents: dict, ctx: RunContext = None) -> Batch
                 ),
                 tool_events=all_tool_events, turn_count=0,
             )
+
+        # Round 1: 初始合成
         fused = fuse_outputs(task.description, outputs[0], outputs[1])
+
+        # Round 2: 交叉审查 — 各模型审查对方产出 + 合成结果
+        cross_a = build_cross_model_prompt(outputs[1])
+        cross_b = build_cross_model_prompt(outputs[0])
+        review_a = _call_single_model(task.description + "\n\n" + cross_a, "deepseek-chat")
+        review_b = _call_single_model(task.description + "\n\n" + cross_b, "glm-5-turbo")
+
+        if review_a and review_b:
+            # 第二轮合成 — 纳入交叉审查结果
+            fused = fuse_outputs(
+                task.description,
+                f"{fused}\n\n[交叉审查A]\n{review_a}",
+                f"[交叉审查B]\n{review_b}",
+            )
+
+        # 发现分类
+        findings = _extract_findings(fused)
+        classified = []
+        for f_text in findings[:5]:  # 最多5条
+            f_class = classify_finding(f_text)
+            classified.append(f"{f_class}: {f_text[:80]}")
+
+        # 人工卡点检查
+        human_confirm = _needs_human_confirm(task.description, fused)
+
+        unverified = [f"Fusion 2轮迭代: 2模型并行+交叉审查+合成"]
+        if classified:
+            unverified.append(f"发现分类: {'; '.join(classified[:3])}")
+        if human_confirm:
+            unverified.append("⚠️ 人工卡点: 建议人工确认后再执行")
+
         return BatchOutput(
             ok=True, task_id=task.id,
-            term_reason="fusion_complete",
+            term_reason="fusion_complete_2round",
             validation=val_mod.ValidationReport(
-                verdict="通过", action="pass",
-                unverified=[f"Self-Fusion: 2模型并行+合成"],
+                verdict="通过", action="pass" if not human_confirm else "abort",
+                unverified=unverified,
             ),
             dispatch_result=disp_mod.DispatchResult(
                 level=level, agent_cfg={},
                 executor_result=type('obj', (object,), {
                     'success': True, 'raw_output': fused,
-                    'changed_files': [], 'tool_events': [],
+                    'changed_files': [], 'tool_events': all_tool_events,
                     'elapsed': 0, 'token_count': 0, 'error': '',
                 })(),
                 attempts=1,
             ),
-            tool_events=all_tool_events, turn_count=1,
+            tool_events=all_tool_events, turn_count=2,
         )
     except Exception as e:
         return BatchOutput(
@@ -441,6 +475,62 @@ def _run_fusion(task, level: str, agents: dict, ctx: RunContext = None) -> Batch
             ),
             tool_events=all_tool_events, turn_count=0,
         )
+
+
+def _call_single_model(task_desc: str, model: str) -> str:
+    """调单个 cheap model（用于交叉审查）。ponytail: 直接 HTTP，不经过 dispatcher。"""
+    import os
+    api_map = {
+        "deepseek-chat": ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/chat/completions"),
+        "glm-5-turbo": ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4/chat/completions"),
+    }
+    env_var, base_url = api_map.get(model, ("", ""))
+    api_key = os.environ.get(env_var, "")
+    if not api_key:
+        return ""
+    try:
+        import httpx
+        with httpx.Client(timeout=httpx.Timeout(30)) as client:
+            r = client.post(
+                base_url, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"model": model, "messages": [{"role": "user", "content": task_desc}],
+                      "max_tokens": 800, "temperature": 0.3},
+            )
+            if r.status_code == 200:
+                return r.json()["choices"][0]["message"]["content"]
+    except Exception:
+        pass
+    return ""
+
+
+def _extract_findings(text: str) -> list[str]:
+    """从合成文本中提取独立发现条目。
+    ponytail: 按行分割，取以 - / • / 数字 开头的行。
+    """
+    findings = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if line and (line.startswith("- ") or line.startswith("• ") or
+                     (line[0].isdigit() and ". " in line[:4])):
+            findings.append(line.lstrip("- •1234567890. "))
+    return findings[:10]
+
+
+def _needs_human_confirm(task_desc: str, fused: str) -> bool:
+    """判断是否需要人工卡点: 涉及安全/架构/破坏性变更。
+    ponytail: 关键词检测。需要时上 LLM 判断。
+    """
+    safety_keywords = ["安全", "权限", "认证", "auth", "密钥", "密码", "token",
+                       "SQL注入", "XSS", "注入", "shell", "sudo", "删除数据库"]
+    arch_keywords = ["架构", "重构", "数据库迁移", "API破坏", "接口变更", "schema"]
+    combined = f"{task_desc} {fused[:500]}".lower()
+    for kw in safety_keywords:
+        if kw.lower() in combined:
+            return True
+    for kw in arch_keywords:
+        if kw.lower() in combined:
+            return True
+    return False
 
 
 def _run_fusion_with_files(task, level: str, agents: dict, ctx: RunContext) -> BatchOutput:
