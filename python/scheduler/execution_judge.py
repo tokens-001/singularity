@@ -214,41 +214,142 @@ def _load_fusion_config() -> dict:
     except Exception:
         return {}
 
-def _build_fusion_prompt(cfg: dict) -> str:
-    """从配置构建合成 prompt。"""
-    items = cfg.get("plan", {}).get("synthesis", {}).get("items", [])
-    roles_cfg = cfg.get("roles", {})
-    if not items:
-        items = ["共识点", "独有观点A", "独有观点B", "冲突判断", "遗漏补充", "最终方案"]
-    item_lines = "\n".join(f"{i+1}. {item}" for i, item in enumerate(items))
-    return f"""你是多模型输出合成器。以下是两个模型以不同角色对同一任务的独立产出。
-
-模型 A 角色: Builder（建设者）— 关注可实现性、具体步骤、代码结构
-模型 B 角色: Skeptic（质疑者）— 关注边界条件、潜在风险、遗漏场景
-
-【任务】
-{{task}}
-
-【Builder 产出】
-{{output_a}}
-
-【Skeptic 产出】
-{{output_b}}
-
-请按以下提纲合成一份最终方案:
-{item_lines}
-
-只输出合成后的内容，不输出元讨论。"""
-
-# 默认值 — 运行时被 fusion.toml 覆盖
-_FUSION_SYNTHESIS_PROMPT = _build_fusion_prompt({})
-
 # 角色定义 — 借鉴 model-fusion 角色多样性 (skeptic/builder/analyst)
 _FUSION_ROLES = {
     "builder": "你是 Builder（建设者）。关注可实现性、具体步骤、代码结构、模块划分。给出可落地的方案。",
     "skeptic": "你是 Skeptic（质疑者）。主动找方案的漏洞：边界条件、并发安全、异常路径、向后兼容。指出所有可能出错的地方。",
     "analyst": "你是 Analyst（分析者）。关注架构合理性、技术选型权衡、长期维护成本。从更高维度评估方案。",
 }
+
+# ═══════════════════════════════════════════════
+# 阶段一：裁判分析 — 五维结构化 JSON
+# ═══════════════════════════════════════════════
+
+_STAGE1_PROMPT = """你是 Fusion 裁判分析器。以下 N 个模型对同一任务独立产出了方案/代码。
+
+【任务】
+{task}
+
+【各模型产出】
+{outputs}
+
+请输出结构化五维分析 JSON（不要输出其他内容）:
+
+{{
+  "consensus": ["所有模型一致同意的点 — 最高置信，直接锁定"],
+  "contradictions": [
+    {{"point": "矛盾点描述", "model_a": "模型A观点", "model_b": "模型B观点", "resolution": "你的裁决及理由"}}
+  ],
+  "partial_coverage": [
+    {{"point": "部分模型覆盖的点", "covered_by": ["model_x"], "confidence": "high/medium/low"}}
+  ],
+  "unique_insights": [
+    {{"point": "只有一个模型提出的独到见解", "source_model": "model_name"}}
+  ],
+  "blind_spots": ["需求要求但所有模型都遗漏的点"]
+}}
+
+分析原则:
+- consensus 只放真正一致的，不要模糊归类
+- contradictions 必须给出明确裁决，不能 "两者都对"
+- blind_spots 对照原始需求逐条检查，不要说 "无"
+- 如果某个维度确实为空，用空数组 []"""
+
+
+def _stage1_analyze(task: str, outputs: list[str], judge_model: str = "deepseek-chat") -> dict:
+    """阶段一：裁判模型输出结构化五维 JSON。"""
+    import os
+    outputs_text = "\n\n---\n".join(
+        f"[模型{i+1}]\n{o[:1500]}" for i, o in enumerate(outputs)
+    )
+    prompt = _STAGE1_PROMPT.format(task=task, outputs=outputs_text)
+    raw = _call_e_layer(prompt)
+    return try_parse_json(raw) if raw else {}
+
+
+# ═══════════════════════════════════════════════
+# 阶段二：调用模型基于五维分析定稿
+# ═══════════════════════════════════════════════
+
+_STAGE2_PROMPT = """你是 Fusion 最终定稿人。请基于以下五维分析写出最终答案。
+
+【原始任务】
+{task}
+
+【五维分析】
+{analysis}
+
+【各模型原始产出】
+{outputs}
+
+要求:
+- consensus 中的点直接采纳
+- contradictions 采纳裁判裁决
+- partial_coverage 按置信度加权纳入
+- unique_insights 保留并标注来源
+- blind_spots 必须补充覆盖
+
+只输出最终方案/代码，不输出分析过程。"""
+
+
+def fuse_outputs(task_desc: str, output_a: str, output_b: str,
+                 outputs: list[str] = None, tier: str = "budget") -> str:
+    """Fusion 两阶段合成:
+    阶段一: 裁判模型输出结构化五维JSON分析
+    阶段二: 调用模型基于五维分析写出定稿
+
+    tier: budget|self|standard — 决定裁判模型和调用模型
+    """
+    all_outputs = outputs or [output_a, output_b]
+    if len(all_outputs) < 2:
+        return all_outputs[0] if all_outputs else ""
+
+    cfg = _load_fusion_config()
+    tier_cfg = cfg.get("tiers", {}).get(tier, {})
+    judge_model = tier_cfg.get("judge_model", "deepseek-chat")
+
+    # 阶段一
+    analysis = _stage1_analyze(task_desc, all_outputs, judge_model)
+
+    # 阶段二: 基于五维分析定稿
+    outputs_text = "\n\n---\n".join(
+        f"[模型{i+1}]\n{o[:1200]}" for i, o in enumerate(all_outputs)
+    )
+    analysis_text = json.dumps(analysis, ensure_ascii=False, indent=2) if analysis else "分析不可用"
+    prompt = _STAGE2_PROMPT.format(task=task_desc, analysis=analysis_text, outputs=outputs_text)
+
+    call_model = tier_cfg.get("call_model", "deepseek-chat")
+    fused = _call_single_model(prompt, call_model)
+    return fused if fused else f"{output_a}\n\n---\n{output_b}"
+
+
+def _call_single_model(prompt: str, model: str) -> str:
+    """直接调单个模型（用于合成阶段）。"""
+    import os
+    api_map = {
+        "deepseek-chat": ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/chat/completions"),
+        "glm-5-turbo": ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4/chat/completions"),
+        "kimi-k2.7-code": ("KIMI_API_KEY", "https://api.moonshot.cn/v1/chat/completions"),
+        "deepseek-v4-pro": ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/chat/completions"),
+    }
+    env_var, base_url = api_map.get(model, ("", ""))
+    api_key = os.environ.get(env_var, "")
+    if not api_key:
+        return ""
+    try:
+        import httpx
+        with httpx.Client(timeout=httpx.Timeout(60)) as client:
+            r = client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"model": model, "messages": [{"role": "user", "content": prompt}],
+                      "max_tokens": 2000, "temperature": 0.3},
+            )
+            if r.status_code == 200:
+                return r.json()["choices"][0]["message"]["content"]
+    except Exception:
+        pass
+    return ""
 
 # ═══════════════════════════════════════════════
 # Fusion 进阶机制
@@ -288,24 +389,6 @@ def classify_finding(finding: str) -> str:
 def build_cross_model_prompt(other_output: str) -> str:
     """生成跨模型第二意见提示。"""
     return _CROSS_MODEL_PROMPT.format(other_output=other_output[:1500])
-
-
-def fuse_outputs(task_desc: str, output_a: str, output_b: str) -> str:
-    """Self-Fusion 合成裁判: 用 cheap model 融合两个模型的独立产出。
-
-    论文: model-fusion Self-Fusion 模式 — 2 cheap-models 并行 + 1 合成器。
-    配置: fusion.toml → plan.synthesis (HermesFusion 模型无关格式)。
-    """
-    if not output_a or not output_b:
-        return output_a or output_b or ""
-    cfg = _load_fusion_config()
-    prompt = _build_fusion_prompt(cfg).format(
-        task=task_desc,
-        output_a=output_a[:2000],
-        output_b=output_b[:2000],
-    )
-    fused = _call_e_layer(prompt)
-    return fused if fused else f"{output_a}\n\n---\n{output_b}"
 
 
 def run_parallel_models(task_desc: str, level: str = "E") -> list[str]:
