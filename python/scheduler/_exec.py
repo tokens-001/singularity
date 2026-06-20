@@ -26,6 +26,7 @@ from . import witness
 from . import memory as mem_mod
 from . import pre_search as pre_mod
 from . import chancellor as chan_mod
+from .log import timed
 from ._git_worktree import (
     Worktree, create as wt_create, cleanup as wt_cleanup,
     merge_back as wt_merge_back, commit_wt, changed_files_between,
@@ -364,6 +365,7 @@ def _run_fusion_with_files(task, level: str, agents: dict, ctx: RunContext) -> B
     )
 
 
+@timed(name="executor")
 def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     """纯执行: dispatch + validate, 返回 BatchOutput。
 

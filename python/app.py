@@ -9,11 +9,12 @@ import sys
 import time
 import threading
 from collections import deque
+import itertools
 from pathlib import Path
 
 from urllib.parse import urlparse
 
-from flask import Flask, Response, render_template, request, jsonify
+from flask import Flask, Response, g, render_template, request, jsonify
 
 # ── 加载 .env ──────────────────────────────────────────────
 _ENV_PATH = Path(__file__).parent / ".env"
@@ -34,7 +35,7 @@ from scheduler import witness
 from scheduler import orchestrator
 from scheduler import project as proj_mod
 from scheduler.project import Phase
-from scheduler.log import info as _log_info, warn as _log_warn
+from scheduler.log import info as _log_info, warn as _log_warn, get_logger
 from scheduler import mcp as mcp_mod
 
 app = Flask(__name__)
@@ -164,7 +165,6 @@ def _guard_auth():
     if err:
         return jsonify({"error": err}), 401
     # 注入 user 到 g，供路由内使用
-    from flask import g
     g.auth_user = user
     return None
 
@@ -298,6 +298,10 @@ _loop_events: deque = deque(maxlen=50)  # 最近 50 个事件
 _loop_running: bool = False
 _loop_lock = threading.Lock()
 _sse_clients: list = []  # SSE 连接的客户端队列
+_sse_event_id = 0             # 全局递增事件 ID
+_sse_event_lock = threading.Lock()
+_sse_event_buffer: deque = deque(maxlen=200)  # 事件回放缓冲区 (event_id, data_json)
+_sse_heartbeat_interval = 15  # SSE 心跳间隔(秒)
 
 
 def _loop_worker():
@@ -396,15 +400,27 @@ def _push_event(kind: str, msg: str, ts: float = None):
     _sse_broadcast(kind, msg, ts)
 
 
+def _next_event_id():
+    global _sse_event_id
+    with _sse_event_lock:
+        _sse_event_id += 1
+        return _sse_event_id
+
+
 def _sse_broadcast(kind: str, msg: str, ts: float = None):
-    """向所有 SSE 客户端推送事件。"""
+    """向所有 SSE 客户端推送事件，附加递增 event_id 并存入回放缓冲区。"""
     if ts is None:
         ts = time.time()
+    eid = _next_event_id()
     data = json.dumps({"kind": kind, "msg": msg, "ts": ts})
+    # 回放缓冲区（心跳不入缓冲区，免浪费空间）
+    if kind != "ping":
+        _sse_event_buffer.append((eid, data))
+    payload = (eid, data)
     dead = []
     for q in _sse_clients:
         try:
-            q.append(data)
+            q.append(payload)
         except Exception:
             dead.append(q)
     for q in dead:
@@ -445,6 +461,26 @@ def _is_local_origin(origin: str) -> bool:
         return hostname in ("localhost", "127.0.0.1", "0.0.0.0", "[::1]")
     except Exception:
         return False
+
+
+_api_log = get_logger("api")
+
+@app.before_request
+def _api_timing_start():
+    """记录 API 请求开始时间。"""
+    if request.path.startswith("/api/"):
+        g._start_time = time.perf_counter()
+
+
+@app.after_request
+def _api_timing_log(response):
+    """记录 API 请求耗时。"""
+    t0 = getattr(g, "_start_time", None)
+    if t0 is not None:
+        elapsed = (time.perf_counter() - t0) * 1000
+        status = response.status_code
+        _api_log.info("%s %s → %s | %.0fms", request.method, request.path, status, elapsed)
+    return response
 
 
 @app.after_request
@@ -1142,30 +1178,60 @@ def api_perm_unbind(level, model):
 
 @app.route("/api/events")
 def api_sse_events():
-    """SSE 端点: 服务器主动推送调度事件。"""
+    """SSE 端点: 服务器主动推送调度事件，支持 Last-Event-ID 断线重连回放。"""
     import queue
     if len(_sse_clients) >= _MAX_SSE_CLIENTS:
         return jsonify({"error": "SSE 连接数已满"}), 503
     q = queue.Queue()
     _sse_clients.append(q)
+
+    # 解析 Last-Event-ID（浏览器 EventSource 重连时自动携带）
+    last_eid = 0
+    try:
+        hdr = request.headers.get("Last-Event-ID", "")
+        if hdr:
+            last_eid = int(hdr)
+    except (ValueError, TypeError):
+        pass
+
     def generate():
+        # 1) 回放断线期间遗漏的事件
+        if last_eid > 0:
+            replayed = 0
+            # 缓冲区按时间排序，找到所有 >last_eid 的事件
+            with _sse_event_lock:
+                for eid, data in _sse_event_buffer:
+                    if eid > last_eid:
+                        yield f"id: {eid}\ndata: {data}\n\n"
+                        replayed += 1
+            if replayed:
+                _log_info("sse", f"回放 {replayed} 个遗漏事件 (Last-Event-ID={last_eid})")
+
+        # 2) 初始状态快照（作为当前连接的首个事件）
         try:
+            init_eid = _next_event_id()
             counts = witness._count_by_status()
             events_data = list(_loop_events)[:20]
             initial = json.dumps({"kind": "init", "counts": counts,
                 "running_total": sum(witness._heartbeat_task_levels().values()),
                 "running": _loop_running, "events": events_data})
-            yield f"data: {initial}\n\n"
+            yield f"id: {init_eid}\ndata: {initial}\n\n"
         except Exception:
             pass
+
+        # 3) 持续推送
         while True:
             try:
-                data = q.get(timeout=10)
-                yield f"data: {data}\n\n"
+                eid, data = q.get(timeout=_sse_heartbeat_interval)
+                yield f"id: {eid}\ndata: {data}\n\n"
             except queue.Empty:
-                yield f"data: {json.dumps({'kind': 'ping', 'ts': time.time()})}\n\n"
+                # 心跳保活
+                ping_eid = _next_event_id()
+                ping = json.dumps({"kind": "ping", "ts": time.time()})
+                yield f"id: {ping_eid}\ndata: {ping}\n\n"
             except GeneratorExit:
                 break
+
     return Response(generate(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -1245,9 +1311,12 @@ def api_mcp_refresh():
 
 if __name__ == "__main__":
     import signal as _signal
+    import logging as _logging
+
+    _startup_log = _logging.getLogger("startup")
 
     def _graceful_shutdown(signum, frame):
-        print("\n[shutdown] 收到信号, 优雅关闭中...")
+        _startup_log.info("收到信号, 优雅关闭中...")
         orchestrator.stop_loop()
         import scheduler.mcp as _mcp
         try:
@@ -1256,21 +1325,21 @@ if __name__ == "__main__":
                 reg._clients[name].disconnect()
         except Exception:
             pass
-        print("[shutdown] 完成")
+        _startup_log.info("关闭完成")
         sys.exit(0)
 
     _signal.signal(_signal.SIGTERM, _graceful_shutdown)
     _signal.signal(_signal.SIGINT, _graceful_shutdown)
 
     # ── 启动自检 ──
-    print("奇点调度面板 → http://127.0.0.1:5050")
+    _startup_log.info("奇点调度面板 → http://127.0.0.1:5050")
     try:
         from scheduler import model_registry, api_store
         models = model_registry.load_models()
         available = sum(1 for m in models.values() if api_store.is_available(m.provider))
-        print(f"[startup] 模型: {len(models)} 注册, {available} 可用")
+        _startup_log.info("模型: %d 注册, %d 可用", len(models), available)
     except Exception as e:
-        print(f"[startup] 模型检查失败: {e}")
+        _startup_log.warning("模型检查失败: %s", e)
     try:
         _ = tracker.ready_tasks()  # 预热缓存
     except Exception:
@@ -1280,7 +1349,9 @@ if __name__ == "__main__":
         mcp_configs = mcp_mod.load_mcp_configs()
         if mcp_configs:
             mcp_mod.get_registry().load_configs(mcp_configs)
-            print(f"MCP: {mcp_mod.get_registry().server_count} 服务器, {mcp_mod.get_registry().tool_count} 工具")
+            _startup_log.info("MCP: %d 服务器, %d 工具",
+                              mcp_mod.get_registry().server_count,
+                              mcp_mod.get_registry().tool_count)
     except Exception as e:
-        print(f"MCP 初始化失败 (非致命): {e}")
+        _startup_log.warning("MCP 初始化失败 (非致命): %s", e)
     app.run(debug=False, host="127.0.0.1", port=5050)

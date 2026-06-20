@@ -17,6 +17,7 @@ v1 砍了什么:
 from __future__ import annotations
 import re
 from dataclasses import dataclass, field
+from .log import timed
 
 
 @dataclass
@@ -66,6 +67,7 @@ _SIMPLE_D_RE = re.compile(r"加个|加一个|增加|添加|删掉|去掉|修改�
 _NEGATION_FILTER = re.compile(r"(?:不|别|不要|不必|不用)(?:新建|创建|搭建|建立|写代码|编写|重写|实现|重构|审查|修改)")
 
 
+@timed(name="router")
 def route(task: str) -> RouteResult:
     result = RouteResult(level="E")  # 兜底 E
 

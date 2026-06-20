@@ -457,8 +457,10 @@ async function populateLineupProjects(){
 }
 
 // ═══════════════════════════════════════════════════════
-// SSE 事件流 — 替代轮询
+// SSE 事件流 — 替代轮询，Last-Event-ID + 指数退避重连
 // ═══════════════════════════════════════════════════════
+let _sseBackoff = 1000;            // 退避延迟，初始 1s，指数增长至 30s
+const _SSE_BACKOFF_MAX = 30000;
 function connectSSE(){
   const es = new EventSource('/api/events');
   es.onmessage = e => {
@@ -504,6 +506,8 @@ function connectSSE(){
       }
     } catch(_){}
   };
+  let _sseBackoff = 1000;            // 指数退避初始 1s
+  const _SSE_BACKOFF_MAX = 30000;   // 退避上限 30s
   let _reconnectTimer = null;
   let _fallbackPolling = null;
   es.onerror = () => {
@@ -515,9 +519,12 @@ function connectSSE(){
     const ind = document.getElementById('live-indicator');
     if(ind) { ind.style.color = 'var(--st-fail)'; ind.textContent = '◇'; }
     if (_reconnectTimer) clearTimeout(_reconnectTimer);
-    _reconnectTimer = setTimeout(connectSSE, 5000);
+    // 指数退避: 1s → 2s → 4s → ... → max 30s
+    _reconnectTimer = setTimeout(() => { connectSSE(); }, _sseBackoff);
+    _sseBackoff = Math.min(_sseBackoff * 2, _SSE_BACKOFF_MAX);
   };
   es.onopen = () => {
+    _sseBackoff = 1000;  // 连接成功，重置退避
     if (_fallbackPolling) { clearInterval(_fallbackPolling); _fallbackPolling = null; toast('实时推送已恢复', 'success'); }
     const ind = document.getElementById('live-indicator');
     if(ind) { ind.style.color = 'var(--st-done)'; ind.textContent = '◆'; }

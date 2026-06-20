@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass
 
 from . import config
+from .log import timed
 from .executors import (
     BaseExecutor, ExecutorResult,
     ClaudeCliExecutor, ZhipuApiExecutor, OpenAIAgentExecutor,
@@ -393,6 +394,7 @@ def _make_permission_checker() -> callable:
         return None
 
 
+@timed(name="dispatcher")
 def dispatch(
     task: str,
     level: str,
