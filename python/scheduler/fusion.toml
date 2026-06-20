@@ -6,9 +6,10 @@
 # ═══════════════════════════════════════
 
 [tiers.budget]
-# Budget Fusion: 2x便宜模型 + 便宜裁判 (~$0.5/任务)
-models = ["deepseek-chat", "glm-5-turbo"]
-roles = ["builder", "skeptic"]
+# Budget Fusion: 3x便宜模型 + 便宜裁判 (~$0.5/任务)
+# DeepSeek+GLM+Kimi 三路并行
+models = ["deepseek-chat", "glm-5-turbo", "kimi-k2.7-code"]
+roles = ["builder", "skeptic", "analyst"]
 judge_model = "deepseek-chat"       # 阶段一裁判
 call_model = "deepseek-chat"        # 阶段二定稿
 max_tokens = 2000

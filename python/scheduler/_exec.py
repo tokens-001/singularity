@@ -400,7 +400,7 @@ def _run_fusion(task, level: str, agents: dict, ctx: RunContext = None,
 
     # ── plan模式: 并行派发 → 两阶段合成 ──
     try:
-        outputs = run_parallel_models(task.description, level)
+        outputs = run_parallel_models(task.description, level, tier=tier)
         if len(outputs) < 2:
             return BatchOutput(
                 ok=False, task_id=task.id,
