@@ -321,11 +321,13 @@ def task_approval(task_id: str, decision: str = "reject", action: str = "", push
 
 def task_apply(task_id: str, push_event=None) -> tuple[dict, int]:
     """POST /api/tasks/<id>/apply — 应用 E+ 智谱 patch 到工作区。"""
-    from ._exec import _apply_patch as apply_patch
+    from .executors.zhipu_api import ZhipuApiExecutor
     task = tracker._read(task_id)
     if task is None:
         return {"error": "任务不存在"}, 404
-    success, msg = apply_patch(task_id)
+    result = ZhipuApiExecutor.apply_patch(task_id)
+    success = bool(result.get("applied"))
+    msg = result.get("message", "")
     if push_event:
         push_event("system", f"[{task_id[:8]}] apply: {msg}")
     return {"ok": success, "message": msg}, 200
@@ -349,9 +351,17 @@ def task_supervise(task_id: str, data: dict, push_event=None) -> tuple[dict, int
     task = tracker._read(task_id)
     if task is None:
         return {"error": "任务不存在"}, 404
-    result = supervise(task_id, data)
+    verdict = supervise(
+        task_description=task.description,
+        changed_files=data.get("changed_files", []),
+        constraints=data.get("constraints", []),
+        checklist=data.get("checklist", []),
+        agent_output=data.get("agent_output", ""),
+        task_id=task_id,
+    )
+    result = {"verdict": verdict.verdict, "action": verdict.verdict, "issues": verdict.issues}
     if push_event:
-        push_event("system", f"[{task_id[:8]}] 监督介入: {result.get('action','?')}")
+        push_event("system", f"[{task_id[:8]}] 监督介入: {verdict.verdict}")
     return result, 200
 
 
@@ -479,10 +489,12 @@ def project_run_phase(project_id: str, phase_name: str = "",
         return {"error": "项目未设定阶段"}, 400
     phase = phase_name or proj.phase.value
     task_desc = task_desc or f"[{project_id}] {phase} 阶段任务"
-    result = wf_mod.run_phase(project_id, phase, task_desc, agent_override)
+    from . import dispatcher as disp_mod
+    agents = disp_mod.load_agents()
+    result = wf_mod.run_phase(proj, agents)
     if push_event:
         push_event("system", f"[{project_id[:8]}] {phase} 阶段已启动")
-    return {"ok": True, "phase": phase, "tasks": result.get("tasks", [])}, 200
+    return {"ok": True, "phase": phase, "result": str(result)}, 200
 
 
 def project_start(project_id: str, push_event=None) -> tuple[dict, int]:
@@ -492,7 +504,9 @@ def project_start(project_id: str, push_event=None) -> tuple[dict, int]:
     proj = proj_mod.load(project_id)
     if proj is None:
         return {"error": "项目不存在"}, 404
-    result = wf_mod.start_project_workflow(project_id)
+    from . import dispatcher as disp_mod
+    agents = disp_mod.load_agents()
+    result = wf_mod.start_project_workflow(proj, agents)
     if push_event:
         push_event("system", f"[{project_id[:8]}] workflow 已启动")
     return {"ok": True, "workflow": result}, 200
@@ -537,8 +551,8 @@ def project_lineage(project_id: str) -> tuple[dict, int]:
 def project_snapshot(project_id: str) -> tuple[dict, int]:
     """POST /api/projects/<id>/snapshot"""
     from . import snapshot as snap_mod
-    snap = snap_mod.create_for_project(project_id)
-    return {"ok": True, "snapshot_id": snap.id if hasattr(snap, 'id') else str(snap)}, 200
+    snap = snap_mod.take(project_id)
+    return {"ok": True, "snapshot_id": snap.id, "ref": snap.ref}, 200
 
 
 def project_auto(project_id: str) -> tuple[dict, int]:
@@ -581,7 +595,7 @@ def project_lineup_get(project_id: str) -> tuple[dict, int]:
     proj = proj_mod.load(project_id)
     if proj is None:
         return {"error": "项目不存在"}, 404
-    lineup = getattr(proj, 'lineup', {}) or {}
+    lineup = getattr(proj, 'agent_lineup', {}) or {}
     return {"lineup": lineup}, 200
 
 
@@ -591,7 +605,7 @@ def project_lineup_set(project_id: str, lineup: dict) -> tuple[dict, int]:
     proj = proj_mod.load(project_id)
     if proj is None:
         return {"error": "项目不存在"}, 404
-    proj.lineup = lineup
+    proj.agent_lineup = lineup
     proj_mod.save(proj)
     return {"ok": True}, 200
 
@@ -789,9 +803,9 @@ def model_add(model_id: str, provider: str = "", display: str = "",
     """POST /api/models"""
     from . import model_registry
     from . import api_store
-    model_registry.save_custom_model(
+    model_registry.add_model(
         model_id, provider, display, tiers or ["E"],
-        speed, cost, reasoning, max_turns, strengths, notes,
+        speed, cost, reasoning, max_turns,
     )
     return {"ok": True, "model_id": model_id}, 200
 
@@ -799,7 +813,7 @@ def model_add(model_id: str, provider: str = "", display: str = "",
 def model_remove(model_id: str) -> tuple[dict, int]:
     """DELETE /api/models/<id>"""
     from . import model_registry
-    ok = model_registry.remove_custom_model(model_id)
+    ok = model_registry.remove_model(model_id)
     return {"ok": ok}, 200
 
 
@@ -812,7 +826,7 @@ def model_update(model_id: str, data: dict) -> tuple[dict, int]:
     if model_id not in models:
         return {"error": "模型不存在"}, 404
     m = models[model_id]
-    model_registry.save_custom_model(
+    model_registry.add_model(
         model_id,
         data.get("provider", m.provider),
         data.get("display", m.display),
@@ -821,8 +835,6 @@ def model_update(model_id: str, data: dict) -> tuple[dict, int]:
         data.get("cost", m.cost),
         data.get("reasoning", m.reasoning),
         data.get("max_turns", m.max_turns),
-        data.get("strengths", m.strengths),
-        data.get("notes", m.notes),
     )
     return {"ok": True, "model_id": model_id}, 200
 

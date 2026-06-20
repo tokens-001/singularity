@@ -1,0 +1,110 @@
+{
+  "D": [
+    {
+      "model": "deepseek-v4-pro",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 5,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
+    }
+  ],
+  "E_plus": [
+    {
+      "model": "kimi-k2.7-code",
+      "type": "openai-agent",
+      "entry": "https://api.moonshot.cn/v1/chat/completions",
+      "api_key_env": "KIMI_API_KEY",
+      "max_turns": 5,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree",
+      "request_template": {
+        "model": "kimi-k2.7-code",
+        "max_tokens": 4096
+      }
+    },
+    {
+      "model": "deepseek-v4-pro",
+      "type": "openai-agent",
+      "entry": "https://api.deepseek.com/v1/chat/completions",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "max_turns": 5,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
+    },
+    {
+      "model": "gpt-5.5",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 5,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
+    }
+  ],
+  "E": [],
+  "_disabled": {
+    "D": [
+      "kimi-k2.7-code",
+      "gpt-5.5-pro",
+      "claude-opus-4-8",
+      "glm-5.2",
+      "gpt-5.5"
+    ],
+    "E": [
+      "deepseek-v4-pro",
+      "kimi-k2.7-code"
+    ],
+    "E+": [
+      "glm-5.2"
+    ]
+  },
+  "_order": {
+    "D": [
+      "deepseek-v4-pro",
+      "glm-5.2",
+      "gpt-5.5-pro"
+    ],
+    "E+": [
+      "kimi-k2.7-code",
+      "deepseek-v4-pro",
+      "glm-5-turbo"
+    ],
+    "E": [
+      "deepseek-chat",
+      "glm-5-turbo",
+      "kimi-k2.7-code",
+      "deepseek-v4-pro"
+    ]
+  },
+  "_skills": {
+    "E": {
+      "deepseek-chat": [],
+      "glm-5-turbo": [],
+      "deepseek-v4-flash": []
+    },
+    "D": {
+      "deepseek-v4-pro": [
+        "ddd"
+      ]
+    },
+    "E+": {
+      "glm-5-turbo": [
+        "ddd"
+      ]
+    }
+  }
+}
