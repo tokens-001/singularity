@@ -606,3 +606,46 @@ scheduler 测试绝不调真模型 API。`QIDIAN_SKIP_EMBED=1` 跳过 embedding 
 | 前端 | 2 | ~2200 |
 | 测试 | 3 | ~720 |
 | **总计** | **55** | **~17,200** |
+
+---
+
+## 五、待办任务
+
+### 债务清理
+
+| # | 任务 | 难度 | 估时 | 说明 |
+|---|------|------|------|------|
+| D1 | `app.js` 拆分为 5 模块 | 低 | 2-3h | 按 tab 拆：dashboard.js/tasks.js/project.js/config.js/api.js。ES6 module，无需构建工具 |
+| D2 | 死符号清理 | 低 | 1h | CodeGraph 已标 1963 个死符号。标注 `@reserved` 或删除。需要用户确认哪些保留 |
+| D3 | 循环依赖解耦 | **高** | 3-5h | 引入 `_interfaces.py`，抽走互相引用的类型/签名。修完后 `_api.py` 68 条延迟导入自然消失 |
+
+### 上下文优化
+
+| # | 任务 | 难度 | 估时 | 说明 |
+|---|------|------|------|------|
+| C1 | Microsoft ConstructContext | 低 | 1h | 论文 Algorithm 1 直译。executor 只保留最近 5 对工具调用+摘要。省 63% token |
+| C2 | NTILC 技能嵌入匹配 | 中 | 2h | dispatcher 用 `_embed()` 预嵌入技能描述，dispatch 时只加载 top-3 |
+| C3 | HyDRA 多维能力路由 | 中 | 2h | `model_profile.py` 加维度字段。需要用户先定评分权重 |
+
+### 功能开发
+
+| # | 任务 | 难度 | 估时 | 说明 |
+|---|------|------|------|------|
+| F1 | Self-Fusion 最小实现 | 中 | 3h | DeepSeek×2 + 合成裁判。不改文件，只出方案。先于跨模型 Fusion |
+| F2 | DCPM System 2 夜间引擎 | 中 | 3h | MAGMA 空闲时异步提取跨任务模式。System 1 已有 |
+| F3 | `_run_queue_v3` 拆分 | **高** | 2h | 认知 73→目标 <20。先补回归测试再拆，不能跳过 |
+
+### 验证
+
+| # | 任务 | 难度 | 估时 | 说明 |
+|---|------|------|------|------|
+| V1 | 跑通一个真实任务 | 低 | 30min | 投代码任务，看全链路是否通。目前所有测试都是 mock |
+
+### 优先级路线图
+
+```
+现在:   D1(app.js拆分) → V1(真任务) → C1(ConstructContext)
+本周:   C2(NTILC) → D2(死符号) → C3(HyDRA)
+本月:   D3(循环依赖) → F3(run_queue_v3) → F1(Self-Fusion)
+以后:   F2(DCPM System2)
+```
