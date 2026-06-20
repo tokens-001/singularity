@@ -503,7 +503,7 @@ def consolidate_memory() -> int:
     global _consolidate_calls
     _consolidate_calls += 1
 
-    # 每10次运行一次记忆生命周期维护
+    # 每10次运行一次记忆生命周期维护 + System2 模式提取
     if _consolidate_calls % 10 == 0:
         try:
             lc = mem_mod.auto_maintain()
@@ -512,6 +512,17 @@ def consolidate_memory() -> int:
                     "kind": "memory", "msg": f"记忆清理: {lc['pruned']} 过期事件",
                     "ts": time.time(),
                 })
+        except Exception:
+            pass
+        # DCPM System2: 夜间异步模式提取
+        try:
+            s2 = mem_mod.system2_extract()
+            if s2.get("added", 0) > 0:
+                for ins in s2.get("insights", []):
+                    _pending_sse_events.append({
+                        "kind": "insight", "msg": ins.get("summary", ""),
+                        "ts": time.time(),
+                    })
         except Exception:
             pass
     try:

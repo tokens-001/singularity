@@ -969,3 +969,96 @@ def auto_maintain() -> dict:
     """自动维护: 清理 + 统计。"""
     return _lc_maintain(_load_events, _load_edges, _save_events, _save_edges,
                         _read_json, _write_json, _ENTITY_IDX_PATH, _EVENTS_PATH)
+
+
+# ═══════════════════════════════════════════════════════════
+# DCPM System 2 — 夜间异步模式提取 (DCPM 2026 论文)
+# ═══════════════════════════════════════════════════════════
+# System 1 (现有): embedding 粗筛 + 单对 LLM 精判
+# System 2 (新增): 空闲时异步批处理，提取跨任务模式
+# ponytail: 分组统计 + 简单启发式，不做 LLM 批处理
+
+_INSIGHTS_PATH = _MEMORY_DIR / "insights.json"
+
+
+def system2_extract() -> dict:
+    """DCPM System 2: 空闲时异步提取跨任务模式。
+
+    分组维度: 任务类型 × 状态 × 层级
+    提取:
+      1. 成功模式 — 哪些模型/策略在特定任务类型上成功率高
+      2. 失败模式 — 哪些失败模式反复出现
+      3. 有效策略 — 从成功任务中提取共性
+
+    返回: {"insights": [...], "added": N}
+    ponytail: 纯统计分析，不调 LLM。需要时加 LLM 模式提取。
+    """
+    events = _load_events()
+    if len(events) < 10:
+        return {"insights": [], "added": 0, "reason": "insufficient_data"}
+
+    # 分组
+    successes: dict[str, list] = defaultdict(list)  # (type×level) → events
+    failures: dict[str, list] = defaultdict(list)
+
+    for tid, ev in events.items():
+        if not isinstance(ev, dict):
+            continue
+        status = ev.get("attrs", {}).get("status", "") if isinstance(ev.get("attrs"), dict) else ""
+        task_type = ev.get("attrs", {}).get("route_type", "default") if isinstance(ev.get("attrs"), dict) else "default"
+        level = ev.get("attrs", {}).get("route_level", "E") if isinstance(ev.get("attrs"), dict) else "E"
+        key = f"{task_type}×{level}"
+        if status in ("done", "pass", "merged"):
+            successes[key].append(tid)
+        elif status in ("failed", "blocked"):
+            failures[key].append(tid)
+
+    insights = []
+    # 1. 成功率统计（按分组）
+    for key in set(list(successes.keys()) + list(failures.keys())):
+        s_count = len(successes.get(key, []))
+        f_count = len(failures.get(key, []))
+        total = s_count + f_count
+        if total >= 3:
+            rate = s_count / total
+            if rate >= 0.8:
+                insights.append({
+                    "type": "high_success_pattern",
+                    "group": key,
+                    "success_rate": round(rate, 2),
+                    "total": total,
+                    "summary": f"{key} 任务成功率 {rate:.0%} ({s_count}/{total})",
+                })
+            elif rate <= 0.3 and total >= 3:
+                insights.append({
+                    "type": "failure_hotspot",
+                    "group": key,
+                    "success_rate": round(rate, 2),
+                    "total": total,
+                    "summary": f"⚠️ {key} 任务失败率 {1-rate:.0%} ({f_count}/{total})，建议升级路由",
+                })
+
+    # 2. 去重：只保留与已有 insights 不同的
+    existing = _load_insights()
+    existing_summaries = {i.get("summary", "") for i in existing}
+    new_insights = [i for i in insights if i["summary"] not in existing_summaries]
+
+    if new_insights:
+        _save_insights(existing + new_insights)
+
+    return {"insights": new_insights, "added": len(new_insights),
+            "groups_analyzed": len(successes) + len(failures)}
+
+
+def _load_insights() -> list[dict]:
+    return list(_read_json(_INSIGHTS_PATH) or [])
+
+
+def _save_insights(data: list[dict]) -> None:
+    _write_json(_INSIGHTS_PATH, data)
+
+
+def get_insights(limit: int = 10) -> list[dict]:
+    """获取最近的 System 2 洞察。"""
+    all_insights = _load_insights()
+    return all_insights[-limit:]
