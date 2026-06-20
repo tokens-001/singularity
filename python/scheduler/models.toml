@@ -27,6 +27,30 @@ strengths = ["编码", "调试", "中等复杂度", "架构设计"]
 notes = "E 层主力 + D 层 DeepSeek 头部模型。Claude Code CLI。能力均衡，性价比高。"
 
 [[models]]
+id = "kimi-k2.6"
+provider = "kimi"
+display = "Kimi K2.6"
+tiers = ["D", "E+"]
+speed = "medium"
+cost = "premium"
+reasoning = true
+max_turns = 5
+strengths = ["复杂编码", "架构设计", "多模态理解", "长上下文推理"]
+notes = "Kimi 顶级旗舰。1T MoE / 32B 激活。262K上下文。多模态(图+视频)。贵但最强。"
+
+[[models]]
+id = "kimi-k2.5"
+provider = "kimi"
+display = "Kimi K2.5"
+tiers = ["E+", "D"]
+speed = "medium"
+cost = "standard"
+reasoning = true
+max_turns = 5
+strengths = ["编码", "多模态", "长上下文", "工具使用"]
+notes = "Kimi 次旗舰。262K上下文。视觉编码器 MoonViT 400M。性价比高于 K2.6。"
+
+[[models]]
 id = "kimi-k2.7-code"
 provider = "kimi"
 display = "Kimi K2.7 Code"
@@ -37,6 +61,18 @@ reasoning = true
 max_turns = 5
 strengths = ["编码", "长上下文", "工具使用", "架构审查"]
 notes = "推理模型(reasoning_content)。工具使用流畅，自我验证。"
+
+[[models]]
+id = "kimi-k2.7-code-highspeed"
+provider = "kimi"
+display = "Kimi K2.7 Code HS"
+tiers = ["E", "E+"]
+speed = "fast"
+cost = "standard"
+reasoning = false
+max_turns = 8
+strengths = ["快速编码", "简单任务", "高吞吐"]
+notes = "K2.7 高速版。~180 tok/s。适合简单任务快速批量执行。"
 
 [[models]]
 id = "glm-5-turbo"
