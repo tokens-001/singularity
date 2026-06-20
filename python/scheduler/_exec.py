@@ -382,15 +382,24 @@ def _decide_cascade(task, level, turn, validation, disp_result, all_tool_events,
     ))
 
 
-def _run_fusion(task, level: str, agents: dict) -> BatchOutput:
-    """Self-Fusion: 2 cheap-model 并行产出方案 + 合成裁判融合。
+def _run_fusion(task, level: str, agents: dict, ctx: RunContext = None) -> BatchOutput:
+    """Fusion: 2模型并行 → 合成裁判融合。
 
-    不改文件，只出方案。适用于 route_type=fusion 的复杂架构/设计任务。
+    两种模式:
+      - plan模式 (ctx=None): 不改文件，只出方案 (Self-Fusion)
+      - file模式 (ctx提供): 各自worktree内执行+改文件 → merge
+
     论文: model-fusion Self-Fusion 模式 — 2×便宜 ≈ 1×贵，成本 ~1/3。
     """
     from .execution_judge import run_parallel_models, fuse_outputs
     from . import validator as val_mod
     all_tool_events = []
+
+    # ── file模式: worktree 并行执行 ──
+    if ctx is not None:
+        return _run_fusion_with_files(task, level, agents, ctx)
+
+    # ── plan模式: API 直接调用 ──
     try:
         outputs = run_parallel_models(task.description, level)
         if len(outputs) < 2:
@@ -432,6 +441,93 @@ def _run_fusion(task, level: str, agents: dict) -> BatchOutput:
             ),
             tool_events=all_tool_events, turn_count=0,
         )
+
+
+def _run_fusion_with_files(task, level: str, agents: dict, ctx: RunContext) -> BatchOutput:
+    """Fusion file模式: 2模型在独立worktree并行执行+改文件，merge冲突时合成裁判裁决。
+
+    ponytail: 2路并行。需要时扩展到N路。
+    """
+    from .execution_judge import fuse_outputs
+    from . import validator as val_mod
+    import concurrent.futures
+
+    # 取前2个可用agent
+    level_agents = agents.get(level, agents.get("E", []))
+    if len(level_agents) < 2:
+        # 不够2个 → fallback到plan模式
+        return _run_fusion(task, level, agents, ctx=None)
+
+    agent_a, agent_b = level_agents[0], level_agents[1]
+    all_tool_events = []
+
+    def _run_one(agent_cfg):
+        """在一个worktree里跑完整 executor 流水线。"""
+        single_agents = {level: [agent_cfg]}
+        # 使用基类的 run() — 它内部处理 worktree/dispatch/validate
+        return _run_with_retry(task, ctx, single_agents)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        fut_a = pool.submit(_run_one, agent_a)
+        fut_b = pool.submit(_run_one, agent_b)
+        done = concurrent.futures.wait([fut_a, fut_b], timeout=600, return_when='ALL_COMPLETED')
+
+    batch_a = fut_a.result() if fut_a.done() else None
+    batch_b = fut_b.result() if fut_b.done() else None
+
+    if not batch_a or not batch_b:
+        ok_batch = batch_a or batch_b
+        if ok_batch:
+            return ok_batch
+        return BatchOutput(ok=False, task_id=task.id, term_reason="fusion_both_timeout",
+                          validation=val_mod.ValidationReport(verdict="阻断", action="abort",
+                              unverified=["Fusion 两路均超时"]))
+
+    # 收集结果
+    out_a = batch_a.dispatch_result.executor_result.raw_output if batch_a.dispatch_result else ""
+    out_b = batch_b.dispatch_result.executor_result.raw_output if batch_b.dispatch_result else ""
+    files_a = batch_a.dispatch_result.executor_result.changed_files if batch_a.dispatch_result else []
+    files_b = batch_b.dispatch_result.executor_result.changed_files if batch_b.dispatch_result else []
+
+    if batch_a.tool_events:
+        all_tool_events.extend(batch_a.tool_events)
+    if batch_b.tool_events:
+        all_tool_events.extend(batch_b.tool_events)
+
+    # 检查文件冲突
+    conflict_files = set(files_a) & set(files_b)
+    all_files = list(set(files_a) | set(files_b))
+
+    if conflict_files:
+        # 有冲突 → 合成裁判裁决
+        fused = fuse_outputs(task.description, out_a, out_b)
+        unverified = [f"Fusion file模式: 2模型({agent_a.get('model','')}+{agent_b.get('model','')})并行",
+                      f"冲突文件: {', '.join(conflict_files)}，已合成裁决"]
+    else:
+        fused = f"{out_a}\n\n---\n[模型B: {agent_b.get('model','')}]\n{out_b}"
+        unverified = [f"Fusion file模式: 2模型并行，无文件冲突",
+                      f"文件: {', '.join(all_files)}"]
+
+    # 合并 merge requests (如果有)
+    merge_req = batch_a.merge_request  # ponytail: 取A的，冲突时合成器已裁决
+
+    return BatchOutput(
+        ok=batch_a.ok or batch_b.ok, task_id=task.id,
+        term_reason="fusion_file_complete",
+        validation=val_mod.ValidationReport(verdict="通过", action="pass", unverified=unverified),
+        dispatch_result=disp_mod.DispatchResult(
+            level=level, agent_cfg={},
+            executor_result=type('obj', (object,), {
+                'success': True, 'raw_output': fused,
+                'changed_files': all_files, 'tool_events': all_tool_events,
+                'elapsed': 0, 'token_count': 0, 'error': '',
+            })(),
+            attempts=1,
+        ),
+        merge_request=merge_req,
+        tool_events=all_tool_events, turn_count=max(
+            getattr(batch_a, 'turn_count', 1), getattr(batch_b, 'turn_count', 1)),
+    )
 
 
 def run(task, ctx: RunContext, agents: dict) -> BatchOutput:

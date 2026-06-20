@@ -349,6 +349,36 @@
     </div>
   </div>
 
+  <div class="section" style="margin-bottom:8px">
+    <div class="section-title">🧬 Fusion 多模型融合 <span style="font-size:9px;color:var(--text3);font-weight:400">— 2x便宜模型并行+合成</span></div>
+    <div class="section-body" style="font-size:10px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <label style="white-space:nowrap">模型A:</label>
+        <select id="fusion-model-a" style="font-size:9px;padding:2px;flex:1">
+          <option value="deepseek-chat">DeepSeek Chat (E)</option>
+          <option value="glm-5-turbo">GLM-5 Turbo (E+)</option>
+          <option value="kimi-k2.7-code">Kimi K2.7 (E+)</option>
+        </select>
+        <label style="white-space:nowrap">模型B:</label>
+        <select id="fusion-model-b" style="font-size:9px;padding:2px;flex:1">
+          <option value="deepseek-chat">DeepSeek Chat (E)</option>
+          <option value="glm-5-turbo" selected>GLM-5 Turbo (E+)</option>
+          <option value="kimi-k2.7-code">Kimi K2.7 (E+)</option>
+        </select>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <label style="white-space:nowrap;font-size:9px">
+          <input type="checkbox" id="fusion-auto" checked onchange="updateFusionStatus()"> 自动触发
+        </label>
+        <span style="color:var(--text3);font-size:9px" id="fusion-auto-hint">架构/安全/跨模块任务自动走 Fusion</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button class="btn purple sm" onclick="testFusion()">🧪 测试 Fusion</button>
+        <span id="fusion-status" style="font-size:9px;color:var(--text2)"></span>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- ═══════════════════════════════════════════════════════

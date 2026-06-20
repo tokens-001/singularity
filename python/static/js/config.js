@@ -935,4 +935,49 @@ async function refreshMCPTools(){
 }
 
 // ═══════════════════════════════════════════════════════
-// Init
+// Fusion 多模型融合
+// ═══════════════════════════════════════════════════════
+
+function updateFusionStatus() {
+  const auto = document.getElementById('fusion-auto');
+  const hint = document.getElementById('fusion-auto-hint');
+  if (auto && hint) {
+    hint.textContent = auto.checked
+      ? '架构/安全/跨模块任务自动走 Fusion'
+      : '需手动指定 route_type=fusion 才走';
+  }
+}
+
+async function testFusion() {
+  const ma = document.getElementById('fusion-model-a').value;
+  const mb = document.getElementById('fusion-model-b').value;
+  const status = document.getElementById('fusion-status');
+  status.textContent = '提交中...';
+  status.style.color = 'var(--text2)';
+  try {
+    const r = await api('/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        description: '分析奇点调度平台的架构优缺点，给出改进建议（Fusion 测试，不修改文件）',
+        priority: 80,
+        route_level: 'E',
+        route_type: 'fusion',
+      }),
+    });
+    if (r.ok) {
+      status.textContent = `✅ 任务 ${r.task_id.slice(-8)} 已提交 (${ma}+${mb})`;
+      status.style.color = '#57d9a3';
+      refreshAll();
+    } else {
+      status.textContent = `❌ ${r.error || '失败'}`;
+      status.style.color = '#f44747';
+    }
+  } catch(e) {
+    status.textContent = `❌ ${e.message}`;
+    status.style.color = '#f44747';
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// Init (removed — see app.js)

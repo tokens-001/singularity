@@ -658,9 +658,13 @@ def api_task_submit():
     route_level = data.get("route_level", "")
     if route_level and route_level not in _VALID_LEVELS:
         return jsonify({"error": f"route_level 必须是 E/E+/D"}), 400
+    route_type = data.get("route_type", "")
+    _VALID_TYPES = frozenset({"default", "bugfix", "feature", "refactor", "docs", "fusion"})
+    if route_type and route_type not in _VALID_TYPES:
+        return jsonify({"error": f"route_type 无效，允许: {','.join(sorted(_VALID_TYPES))}"}), 400
     _invalidate_task_cache()
     result, code = _api_handler.task_submit(desc, priority=priority, depends_on=depends_on,
-                                             route_level=route_level, push_event=_push_event)
+                                             route_level=route_level, route_type=route_type, push_event=_push_event)
     return jsonify(result), code
 
 # ═══════════════════════════════════════════════════════════

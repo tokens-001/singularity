@@ -357,12 +357,19 @@ def task_supervise(task_id: str, data: dict, push_event=None) -> tuple[dict, int
 
 def task_submit(desc: str, priority: int = 0, depends_on: list = None,
                 route_level: str = "", route_locked: bool = True,
+                route_type: str = "",
                 push_event=None) -> tuple[dict, int]:
     """POST /api/tasks — 创建新任务。"""
     config.ensure_dirs()
     task = tracker.create(desc, priority=priority, depends_on=depends_on or [])
-    if route_level:
-        tracker.transition(task.id, TaskStatus.PENDING, route_level=route_level, route_locked=route_locked)
+    if route_level or route_type:
+        kwargs = {}
+        if route_level:
+            kwargs["route_level"] = route_level
+            kwargs["route_locked"] = route_locked
+        if route_type:
+            kwargs["route_type"] = route_type
+        tracker.transition(task.id, TaskStatus.PENDING, **kwargs)
     if push_event:
         push_event("task_create", f"[{task.id[:8]}] {desc[:60]}")
     return {"ok": True, "task_id": task.id, "description": desc[:120]}, 200
