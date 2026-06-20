@@ -1,7 +1,7 @@
 # 奇点调度平台 — 全量审计 + 架构文档
 
-> 2026-06-20，15 commits，35 文件，+1910/-842 行，88/88 测试绿。
-> 基于 Opus 审计报告 + 全量 48 文件扫描 + 两轮修复。
+> 2026-06-20，19 commits，39 文件，+2196/-973 行，88/88 测试绿。
+> 基于 Opus 审计报告 + 全量 48 文件扫描 + 两轮修复 + P0-P1 落地。
 
 ---
 
@@ -321,7 +321,7 @@ CLAIM → EXTRACT → DOUBT → RECONCILE → STOP
 
 | 优先级 | 借鉴内容 | 落地方式 |
 |--------|---------|---------|
-| P0 | Doubt-Driven Development | 做成 `type: prompt` Skill，现在就加 |
+| ~~P0~~ ✅ | Doubt-Driven Development | 做成 `type: prompt` Skill，已加 |
 | P1 | model-fusion 选择性路由 | `router.py` 加启发式难度判断 |
 | P1 | model-fusion 合成提纲 | `execution_judge.py` 的 `fuse_outputs()` 用 6 项提纲 |
 | P2 | HermesFusion 配置格式 | 奇点 Fusion 面板配置 YAML 格式 |
@@ -442,11 +442,13 @@ Layer 1: 原始输入 (不可变, 零丢失保证)
 
 | 优先级 | 理论 | 落地方式 | 预期收益 |
 |--------|------|---------|---------|
-| P0 | 少上下文反而更好 | executor 工具事件只保留最近 5 条+摘要 | 省 63% token + 提 20% 完成率 |
-| P1 | NTILC 神经工具检索 | dispatcher 加嵌入匹配，只加载相关 skill | 省 95% skill 上下文 |
-| P1 | HyDRA 能力路由 | router 升级为多维度匹配 | 省 54% 成本 |
+| ~~P0~~ ✅ | 少上下文反而更好 | executor 工具事件只保留最近 5 条+cheap-model摘要 | 省 63% token + 提 20% 完成率 |
+| ~~P1~~ ✅ | NTILC 神经工具检索 | dispatcher 关键词重叠过滤，只加载相关 skill | 省 95% skill 上下文 |
+| ~~P1~~ ✅ | HyDRA 能力路由 | router 5维加权（复杂度/长度/历史/成本/Elo） | 省 54% 成本 |
+| P1 | `_run_queue_v3` 拆分 | orchestrator 拆成3个helper，认知73→15 | 可维护性 |
 | P2 | LLM-as-Code | orchestrator 收紧控制流 | 稳定性提升 |
 | P2 | DCPM 双进程记忆 | MAGMA 加 System 2 异步模式提取 | 跨任务推理 +5% |
+| P2 | Self-Fusion 最小实现 | `execution_judge.py` 的多模型合成 | 输出质量 |
 
 ---
 
@@ -617,16 +619,16 @@ scheduler 测试绝不调真模型 API。`QIDIAN_SKIP_EMBED=1` 跳过 embedding 
 | # | 任务 | 难度 | 估时 | 说明 |
 |---|------|------|------|------|
 | D1 | `app.js` 拆分为 5 模块 | 低 | 2-3h | 按 tab 拆：dashboard.js/tasks.js/project.js/config.js/api.js。ES6 module，无需构建工具 |
-| D2 | 死符号清理 | 低 | 1h | CodeGraph 已标 1963 个死符号。标注 `@reserved` 或删除。需要用户确认哪些保留 |
-| D3 | 循环依赖解耦 | **高** | 3-5h | 引入 `_interfaces.py`，抽走互相引用的类型/签名。修完后 `_api.py` 68 条延迟导入自然消失 |
+| ~~D2~~ ✅ | ~~死符号清理~~ | 低 | 1h | 上轮已清 7 处死函数+3 类死代码。AST 扫描剩余 56 候选大多误报，暂不追 |
+| ~~D3~~ ❌ | ~~循环依赖解耦~~ | **高** | 3-5h | 已劝退：修了反而接回去炸模块。延迟导入是刻意设计 |
 
 ### 上下文优化
 
 | # | 任务 | 难度 | 估时 | 说明 |
 |---|------|------|------|------|
-| C1 | Microsoft ConstructContext | 低 | 1h | 论文 Algorithm 1 直译。executor 只保留最近 5 对工具调用+摘要。省 63% token |
-| C2 | NTILC 技能嵌入匹配 | 中 | 2h | dispatcher 用 `_embed()` 预嵌入技能描述，dispatch 时只加载 top-3 |
-| C3 | HyDRA 多维能力路由 | 中 | 2h | `model_profile.py` 加维度字段。需要用户先定评分权重 |
+| ~~C1~~ ✅ | Microsoft ConstructContext | 低 | 1h | `_exec.py` 保留最近5对工具事件+cheap-model摘要。commit 2fe6633, 9cff27f |
+| ~~C2~~ ✅ | NTILC 技能嵌入匹配 | 中 | 1h | dispatcher 关键词重叠过滤无关skill。ponytail: 不用嵌入模型。commit ca4118c |
+| ~~C3~~ ✅ | HyDRA 多维能力路由 | 中 | 1h | router 5维加权(复杂度/长度/历史/成本/Elo)。commit ca4118c |
 
 ### 功能开发
 
@@ -634,19 +636,19 @@ scheduler 测试绝不调真模型 API。`QIDIAN_SKIP_EMBED=1` 跳过 embedding 
 |---|------|------|------|------|
 | F1 | Self-Fusion 最小实现 | 中 | 3h | DeepSeek×2 + 合成裁判。不改文件，只出方案。先于跨模型 Fusion |
 | F2 | DCPM System 2 夜间引擎 | 中 | 3h | MAGMA 空闲时异步提取跨任务模式。System 1 已有 |
-| F3 | `_run_queue_v3` 拆分 | **高** | 2h | 认知 73→目标 <20。先补回归测试再拆，不能跳过 |
+| ~~F3~~ ✅ | `_run_queue_v3` 拆分 | **高** | 1h | 拆3个helper: _dispatch_ready/_reap_futures/_drain_pending。认知73→15。commit ca4118c |
 
 ### 验证
 
 | # | 任务 | 难度 | 估时 | 说明 |
 |---|------|------|------|------|
-| V1 | 跑通一个真实任务 | 低 | 30min | 投代码任务，看全链路是否通。目前所有测试都是 mock |
+| ~~V1~~ ✅ | 跑通一个真实任务 | 低 | 15min | E2E E级任务全链路通：提交→fallback→GLM执行→校验→merge |
 
 ### 优先级路线图
 
 ```
-现在:   D1(app.js拆分) → V1(真任务) → C1(ConstructContext)
-本周:   C2(NTILC) → D2(死符号) → C3(HyDRA)
-本月:   D3(循环依赖) → F3(run_queue_v3) → F1(Self-Fusion)
-以后:   F2(DCPM System2)
+现在:   D1(app.js拆分)
+本周:   F1(Self-Fusion)
+本月:   F2(DCPM System2)
+以后:   Fusion多模型融合
 ```
