@@ -310,8 +310,9 @@ def index_task(
         if not any(e[0] == task_id and e[1] == next_id for e in edges["temporal"]):
             edges["temporal"].append((task_id, next_id))
 
-    # 语义边: 增量更新 — 只算新节点 vs 现有节点
-    for existing_id, existing_node in events.items():
+    # 语义边: 增量更新 — 只算新节点 vs 最近 N 个 (防 O(n) 退化)
+    recent_for_sem = sorted(events.items(), key=lambda x: -x[1].timestamp)[:200]
+    for existing_id, existing_node in recent_for_sem:
         if existing_id == task_id:
             continue
         sim = _cosine_sim(tokens, existing_node.emb)

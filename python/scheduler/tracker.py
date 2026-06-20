@@ -170,6 +170,7 @@ def create(
         depth=depth,
     )
     _write(task)
+    _invalidate_scan_cache()
     return task
 
 
@@ -184,6 +185,7 @@ def transition(task_id: str, new_status: TaskStatus, **kwargs) -> Optional[Task]
                 setattr(task, k, v)
         task.updated_at = time.time()
         _write(task)
+        _invalidate_scan_cache()
         return task
 
 
@@ -269,6 +271,14 @@ def cas(
         return True
 
 
+# ponytail: TTL 缓存减少 glob 全表扫描, 写操作时清空
+_TASK_SCAN_CACHE: dict = {"ts": 0, "tasks": []}
+
+
+def _invalidate_scan_cache():
+    _TASK_SCAN_CACHE["ts"] = 0
+
+
 def ready_tasks(exclude: set[str] = None) -> list[Task]:
     """DAG 就绪判定: 扫 PENDING + ROUTED + BLOCKED, 返回可调度的。
 
@@ -278,15 +288,23 @@ def ready_tasks(exclude: set[str] = None) -> list[Task]:
     - 按 (-priority, -starvation_score) 排
     """
     exclude = exclude or set()
-    ready: list[Task] = []
+    now = time.time()
     # 整段进锁 (修复 P1-4): 每个任务的 读→held判定→ROUTED/BLOCKED 写 必须原子,
     # 否则 Flask 线程的 hold/cancel 会被本扫描的 ROUTED 覆盖 (lost-update)。
     with _LOCK:
-        for p in _tasks_dir().glob("*.json"):
-            try:
-                task = Task.from_dict(json.loads(p.read_text(encoding="utf-8")))
-            except (json.JSONDecodeError, TypeError, ValueError):
-                continue
+        # ponytail: 2s TTL 缓存, 命中时跳过 glob+json.loads
+        if now - _TASK_SCAN_CACHE["ts"] < 2 and _TASK_SCAN_CACHE["tasks"]:
+            all_tasks = _TASK_SCAN_CACHE["tasks"]
+        else:
+            all_tasks = []
+            for p in _tasks_dir().glob("*.json"):
+                try:
+                    all_tasks.append(Task.from_dict(json.loads(p.read_text(encoding="utf-8"))))
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    continue
+            _TASK_SCAN_CACHE["ts"] = now
+            _TASK_SCAN_CACHE["tasks"] = all_tasks
+        for task in all_tasks:
             if task.status not in _SCHEDULABLE:
                 continue
             if task.id in exclude:

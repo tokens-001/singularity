@@ -60,8 +60,15 @@ class User:
 
 
 def _hash_token(token: str) -> str:
-    # ponytail: 128-bit secrets.token_hex(16) 抗彩虹表, 不加盐不增加实际风险
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+# ponytail: v2 加盐哈希 — 新用户直接用; 旧用户认证时自动迁移
+_TOKEN_SALT = "qidian-auth-v2"
+
+
+def _hash_token_v2(token: str) -> str:
+    return hashlib.sha256(_TOKEN_SALT.encode() + token.encode()).hexdigest()
 
 
 class AuthStore:
@@ -97,7 +104,7 @@ class AuthStore:
         if self._users:
             return list(self._users.values())[0]
         token = secrets.token_hex(16)
-        token_h = _hash_token(token)
+        token_h = _hash_token_v2(token)
         admin = User(id="admin", name="管理员", token=token, token_hash=token_h,
                      role="admin", created_at=time.time())
         self._users["admin"] = admin
@@ -108,13 +115,22 @@ class AuthStore:
         return admin
 
     def authenticate(self, token: str) -> Optional[User]:
-        """哈希比对 + 过期检查。"""
-        token_h = _hash_token(token)
-        # 遍历 token_map (hash → user) 查找匹配
+        """哈希比对 + 过期检查。v2 优先，v1 兼容 → 命中后自动迁移。"""
+        token_h_v2 = _hash_token_v2(token)
+        token_h_v1 = _hash_token(token)
         for h, u in self._token_map.items():
-            if h == token_h:
+            if h == token_h_v2:
                 if u.expired:
-                    return None  # 过期视为无效
+                    return None
+                return u
+            if h == token_h_v1:
+                if u.expired:
+                    return None
+                # 自动迁移: 旧哈希 → 新哈希
+                del self._token_map[token_h_v1]
+                u.token_hash = token_h_v2
+                self._token_map[token_h_v2] = u
+                self._save()
                 return u
         # 向后兼容: 旧明文 token 直存 key → 现场哈希比对
         u = self._token_map.get(token)
@@ -124,7 +140,7 @@ class AuthStore:
 
     def add_user(self, user_id: str, name: str, role: str = "viewer") -> User:
         token = secrets.token_hex(16)
-        token_h = _hash_token(token)
+        token_h = _hash_token_v2(token)
         u = User(id=user_id, name=name, token=token, token_hash=token_h,
                  role=role, created_at=time.time())
         self._users[user_id] = u
