@@ -1,3 +1,4 @@
+from __future__ import annotations
 #!/usr/bin/env python3
 """奇点调度指挥中心 — Textual TUI 控制台
 用法: python3 tools/dash_tui.py

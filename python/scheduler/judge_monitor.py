@@ -8,6 +8,8 @@ and flags them for human attention.
 This module is purely statistical — zero LLM calls.
 Data persists to .qidian/judge_monitor.json (aggregates only, not raw snapshots).
 """
+from __future__ import annotations
+
 
 import json
 import logging

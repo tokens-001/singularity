@@ -8,6 +8,8 @@
 
 路由时参考画像，避免把任务发给对它不擅长的模型。
 """
+from __future__ import annotations
+
 
 import json
 import time

@@ -1,3 +1,4 @@
+from __future__ import annotations
 # 奇点 Agent 调度平台 — Web 控制台
 # Flask 后端：查看调度状态、提交任务、处理合并冲突
 # v2: 调度循环后台线程，面板即控制中心

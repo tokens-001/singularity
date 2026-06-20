@@ -7,6 +7,8 @@
   conductor.auto_advance(project_id)  # 一次性推到下一个卡点
   conductor.start_autopilot(project_id)  # 启动后台自动推进线程
 """
+from __future__ import annotations
+
 
 import json, re as _re, time, threading, logging
 from pathlib import Path

@@ -5,6 +5,8 @@
 每个模板包含：推荐的 system prompt、建议的 max_turns、推荐模型优先级。
 用户提交任务时可选模板，提高成功率。
 """
+from __future__ import annotations
+
 
 from dataclasses import dataclass, field
 from typing import Optional

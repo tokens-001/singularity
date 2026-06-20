@@ -8,6 +8,8 @@
   python -m scheduler.codegraph --query imports=orchestrator  # 查谁引用了它
   python -m scheduler.codegraph --query calls=run_queue        # 查谁调了这个函数
 """
+from __future__ import annotations
+
 
 import ast
 import json
