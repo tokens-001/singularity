@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from dataclasses import dataclass, field, asdict
 from enum import Enum
@@ -9,6 +10,13 @@ from pathlib import Path
 from typing import Optional
 
 from . import config
+
+# 修复 P1-4: tracker 实际被两类线程并发写——后台 loop 线程 (orchestrator) 与
+# Flask 请求线程 (_api 的 hold/retry/override/cancel)。transition/cas/ready_tasks
+# 都是 read→modify→write 非原子, 裸跑会 lost-update。
+# 一把可重入锁串行化所有 read-modify-write 区段, 配合 _write 的 os.replace 原子落盘,
+# 即可消除竞态。RLock 允许 maybe_complete_parent→transition 这类同线程重入。
+_LOCK = threading.RLock()
 
 
 class TaskStatus(Enum):
@@ -113,16 +121,23 @@ def _read(task_id: str) -> Optional[Task]:
     return Task.from_dict(json.loads(p.read_text(encoding="utf-8")))
 
 
+_NEXT_ID_CACHE = 0
+
 def _next_id() -> str:
-    # 基于毫秒时间戳, 并查目录里已有最大 id 兜底, 保证唯一且单调
+    """基于毫秒时间戳, 缓存兜底防碰撞。O(1) 非 O(n) 全表扫描。"""
+    global _NEXT_ID_CACHE
     base = int(time.time() * 1000)
-    max_existing = base
-    for p in _tasks_dir().glob("*.json"):
-        try:
-            max_existing = max(max_existing, int(p.stem))
-        except ValueError:
-            continue
-    return str(max(max_existing, base) + 1)
+    # 缓存过期时才扫一次全表 (时间戳进位或首次调用)
+    if _NEXT_ID_CACHE <= base:
+        max_existing = base
+        for p in _tasks_dir().glob("*.json"):
+            try:
+                max_existing = max(max_existing, int(p.stem))
+            except ValueError:
+                continue
+        _NEXT_ID_CACHE = max(max_existing, base)
+    _NEXT_ID_CACHE += 1
+    return str(_NEXT_ID_CACHE)
 
 
 def create(
@@ -158,16 +173,17 @@ def create(
 
 
 def transition(task_id: str, new_status: TaskStatus, **kwargs) -> Optional[Task]:
-    task = _read(task_id)
-    if task is None:
-        return None
-    task.status = new_status
-    for k, v in kwargs.items():
-        if hasattr(task, k):
-            setattr(task, k, v)
-    task.updated_at = time.time()
-    _write(task)
-    return task
+    with _LOCK:
+        task = _read(task_id)
+        if task is None:
+            return None
+        task.status = new_status
+        for k, v in kwargs.items():
+            if hasattr(task, k):
+                setattr(task, k, v)
+        task.updated_at = time.time()
+        _write(task)
+        return task
 
 
 def _deps_satisfied(task: Task) -> bool:
@@ -236,19 +252,20 @@ def cas(
 ) -> bool:
     """compare-and-swap 原子抢占: 状态==expect_from 才转 to。
 
-    文件系统层面的"比较并交换": 单线程调度器下, _read→判定→_write 之间无竞争,
+    文件系统层面的"比较并交换": _LOCK 串行化 _read→判定→_write (修复 P1-4),
     os.replace 原子写保证 crash 不损坏。返回是否抢占成功。
     """
-    task = _read(task_id)
-    if task is None or task.status != expect_from:
-        return False
-    task.status = to
-    for k, v in kwargs.items():
-        if hasattr(task, k):
-            setattr(task, k, v)
-    task.updated_at = time.time()
-    _write(task)
-    return True
+    with _LOCK:
+        task = _read(task_id)
+        if task is None or task.status != expect_from:
+            return False
+        task.status = to
+        for k, v in kwargs.items():
+            if hasattr(task, k):
+                setattr(task, k, v)
+        task.updated_at = time.time()
+        _write(task)
+        return True
 
 
 def ready_tasks(exclude: set[str] = None) -> list[Task]:
@@ -261,51 +278,55 @@ def ready_tasks(exclude: set[str] = None) -> list[Task]:
     """
     exclude = exclude or set()
     ready: list[Task] = []
-    for p in _tasks_dir().glob("*.json"):
-        try:
-            task = Task.from_dict(json.loads(p.read_text(encoding="utf-8")))
-        except (json.JSONDecodeError, TypeError, ValueError):
-            continue
-        if task.status not in _SCHEDULABLE:
-            continue
-        if task.id in exclude:
-            continue
-        if task.held:  # 人工扣留 → 跳过调度
-            continue
-        dead_dep = _any_dead_dep(task)
-        if dead_dep:
-            # 上游死路 → 本级连带 FAILED (建议 #7)
-            task.status = TaskStatus.FAILED
-            task.error = f"上游依赖 {dead_dep} 已失败/冲突/回滚, 本级连带失败"
-            task.updated_at = time.time()
-            _write(task)
-            continue
-        if _deps_satisfied(task):
-            # 就绪的 PENDING/BLOCKED 都转 ROUTED (修复 #1: PENDING 不转则 CAS 必失败)
-            if task.status in (TaskStatus.PENDING, TaskStatus.BLOCKED):
-                task.status = TaskStatus.ROUTED
+    # 整段进锁 (修复 P1-4): 每个任务的 读→held判定→ROUTED/BLOCKED 写 必须原子,
+    # 否则 Flask 线程的 hold/cancel 会被本扫描的 ROUTED 覆盖 (lost-update)。
+    with _LOCK:
+        for p in _tasks_dir().glob("*.json"):
+            try:
+                task = Task.from_dict(json.loads(p.read_text(encoding="utf-8")))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+            if task.status not in _SCHEDULABLE:
+                continue
+            if task.id in exclude:
+                continue
+            if task.held:  # 人工扣留 → 跳过调度
+                continue
+            dead_dep = _any_dead_dep(task)
+            if dead_dep:
+                # 上游死路 → 本级连带 FAILED (建议 #7)
+                task.status = TaskStatus.FAILED
+                task.error = f"上游依赖 {dead_dep} 已失败/冲突/回滚, 本级连带失败"
                 task.updated_at = time.time()
                 _write(task)
-            task.compute_starvation()
-            ready.append(task)
-        else:
-            # 依赖未满足 → 标 BLOCKED (仅 PENDING/ROUTED 转, 已 BLOCKED 不重复写)
-            if task.status != TaskStatus.BLOCKED:
-                task.status = TaskStatus.BLOCKED
-                task.updated_at = time.time()
-                _write(task)
+                continue
+            if _deps_satisfied(task):
+                # 就绪的 PENDING/BLOCKED 都转 ROUTED (修复 #1: PENDING 不转则 CAS 必失败)
+                if task.status in (TaskStatus.PENDING, TaskStatus.BLOCKED):
+                    task.status = TaskStatus.ROUTED
+                    task.updated_at = time.time()
+                    _write(task)
+                task.compute_starvation()
+                ready.append(task)
+            else:
+                # 依赖未满足 → 标 BLOCKED (仅 PENDING/ROUTED 转, 已 BLOCKED 不重复写)
+                if task.status != TaskStatus.BLOCKED:
+                    task.status = TaskStatus.BLOCKED
+                    task.updated_at = time.time()
+                    _write(task)
     ready.sort(key=_sort_key)
     return ready
 
 
 def set_children(parent_id: str, child_ids: list[str]) -> None:
     """记录 parent 的子任务 id 列表 (DAG 分解后调)。"""
-    task = _read(parent_id)
-    if task is None:
-        return
-    task.children = list(child_ids)
-    task.updated_at = time.time()
-    _write(task)
+    with _LOCK:
+        task = _read(parent_id)
+        if task is None:
+            return
+        task.children = list(child_ids)
+        task.updated_at = time.time()
+        _write(task)
 
 
 def maybe_complete_parent(parent_id: str) -> bool:
@@ -313,41 +334,43 @@ def maybe_complete_parent(parent_id: str) -> bool:
 
     返回是否触发了 parent 终态转换。
     """
-    parent = _read(parent_id)
-    if parent is None or not parent.children:
+    with _LOCK:
+        parent = _read(parent_id)
+        if parent is None or not parent.children:
+            return False
+        statuses = []
+        for cid in parent.children:
+            c = _read(cid)
+            if c is None:
+                return False  # 子任务文件丢了, 不敢判
+            statuses.append(c.status)
+        if TaskStatus.FAILED in statuses:
+            transition(parent_id, TaskStatus.FAILED, error="子任务失败, 父任务连带失败")
+            return True
+        if all(s == TaskStatus.DONE for s in statuses):
+            transition(parent_id, TaskStatus.DONE)
+            return True
         return False
-    statuses = []
-    for cid in parent.children:
-        c = _read(cid)
-        if c is None:
-            return False  # 子任务文件丢了, 不敢判
-        statuses.append(c.status)
-    if TaskStatus.FAILED in statuses:
-        transition(parent_id, TaskStatus.FAILED, error="子任务失败, 父任务连带失败")
-        return True
-    if all(s == TaskStatus.DONE for s in statuses):
-        transition(parent_id, TaskStatus.DONE)
-        return True
-    return False
 
 
 def recover() -> int:
     count = 0
-    for p in _tasks_dir().glob("*.json"):
-        try:
-            task = Task.from_dict(json.loads(p.read_text(encoding="utf-8")))
-        except (json.JSONDecodeError, TypeError, ValueError):
-            continue
-        if task.status in _INFLIGHT:
-            task.retry_count += 1
-            if task.retry_count >= task.max_retries:
-                task.status = TaskStatus.FAILED
-                task.error = f"recover: 重试 {task.retry_count} 次仍崩, 转 FAILED"
-            else:
-                task.status = TaskStatus.PENDING
-            task.updated_at = time.time()
-            _write(task)
-            count += 1
+    with _LOCK:
+        for p in _tasks_dir().glob("*.json"):
+            try:
+                task = Task.from_dict(json.loads(p.read_text(encoding="utf-8")))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+            if task.status in _INFLIGHT:
+                task.retry_count += 1
+                if task.retry_count >= task.max_retries:
+                    task.status = TaskStatus.FAILED
+                    task.error = f"recover: 重试 {task.retry_count} 次仍崩, 转 FAILED"
+                else:
+                    task.status = TaskStatus.PENDING
+                task.updated_at = time.time()
+                _write(task)
+                count += 1
     return count
 
 
