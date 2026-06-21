@@ -23,6 +23,18 @@
         "daily"
       ],
       "sandbox": "worktree"
+    },
+    {
+      "model": "kimi-k2.6",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 5,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
     }
   ],
   "E_plus": [
@@ -41,18 +53,6 @@
   ],
   "E": [
     {
-      "model": "kimi-k2.7-code-highspeed",
-      "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
-      "max_turns": 8,
-      "default": true,
-      "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
-    },
-    {
       "model": "qwen3-coder-next",
       "type": "openai-agent",
       "entry": "",
@@ -63,18 +63,40 @@
         "daily"
       ],
       "sandbox": "worktree"
+    },
+    {
+      "model": "qwen3-coder-plus",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 5,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
+    },
+    {
+      "model": "qwen3.7-plus",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 5,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
     }
   ],
   "_disabled": {
     "D": [
       "kimi-k2.7-code",
+      "gpt-5.5",
       "gpt-5.5-pro",
-      "claude-opus-4-8",
-      "gpt-5.5"
+      "claude-opus-4-8"
     ],
     "E": [
-      "deepseek-v4-pro",
-      "kimi-k2.7-code",
       "deepseek-chat",
       "glm-5-turbo"
     ],

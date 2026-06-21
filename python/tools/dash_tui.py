@@ -432,9 +432,9 @@ class QidianTUI(App):
 
         # Phase stepper
         phases = ["template", "researching", "gate1", "planning", "gate2",
-                   "executing", "gate3", "reviewing", "fixing", "gate4", "done"]
-        labels = ["📋模板", "🔍调研", "①门", "🏗架构", "②门",
-                   "⚡执行", "③门", "🔎审查", "🔧修复", "④门", "✅完成"]
+                   "executing", "reviewing", "fixing", "gate3", "done"]
+        labels = ["📋模板", "🔍调研", "①调研", "🏗架构", "②架构",
+                   "⚡执行", "🔎内审", "🔧修复", "③交付", "✅完成"]
         idx = phases.index(phase) if phase in phases else 0
         dots = []
         for i, (ph, lb) in enumerate(zip(phases, labels)):
@@ -475,7 +475,7 @@ class QidianTUI(App):
         # Gate confirms
         confirms = p.get("owner_confirm", {}) or {}
         confirm_str = ""
-        for g in ["gate1", "gate2", "gate3", "gate4"]:
+        for g in ["gate1", "gate2", "gate3"]:
             v = confirms.get(g)
             if v:
                 icon = "✅" if v == "approved" else "❌"

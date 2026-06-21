@@ -184,7 +184,7 @@ class TestModelRegistry(unittest.TestCase):
         from scheduler.model_registry import load_models
         models = load_models()
         self.assertGreater(len(models), 3)
-        self.assertIn("deepseek-chat", models)
+        self.assertIn("deepseek-v4-pro", models)
 
     def test_for_tier(self):
         from scheduler.model_registry import for_tier
@@ -385,6 +385,133 @@ class TestMAGMAMemoryEviction(unittest.TestCase):
         # drop→keep 边应被清
         self.assertEqual(len(edges["causal"]), 0)
         self.assertEqual(len(edges["semantic"]), 0)
+
+
+# ═══════════════════════════════════════════════════════
+# Project workflow — 不调 LLM，纯测状态流转和任务落地
+# ═══════════════════════════════════════════════════════
+
+class TestProjectWorkflow(unittest.TestCase):
+    """项目工作流: phase 流转 + 任务创建落地 + auto/manual gate。"""
+
+    def setUp(self):
+        from scheduler.project import create, Phase
+        self.p = create(
+            name="test-wf",
+            description="测试工作流: 写一个 hello world",
+            scope="test",
+            template="feature",
+            auto_mode=False,
+        )
+        self.p.architecture = {
+            "architecture": "单文件脚本",
+            "tasks": [
+                {"id": "T1", "title": "写 hello.py", "description": "创建 hello.py",
+                 "complexity": "low", "acceptance": "python hello.py 输出 hello world",
+                 "estimated_files": ["hello.py"]},
+                {"id": "T2", "title": "写测试", "description": "创建 test_hello.py",
+                 "complexity": "low", "acceptance": "python -m pytest test_hello.py 通过",
+                 "estimated_files": ["test_hello.py"]},
+            ],
+            "constraints": [{"text": "不用外部依赖", "type": "no_new_deps",
+                              "check": "grep -r 'import' hello.py | wc -l <= 2"}],
+            "risks": ["无"],
+            "test_strategy": "跑 pytest",
+        }
+        from scheduler.project import save
+        save(self.p)
+
+    def tearDown(self):
+        from scheduler import tracker
+        from scheduler.project import _path as _proj_path
+        # 清理项目任务
+        for tid in list(self.p.task_ids):
+            p = tracker._path(tid)
+            if p.exists():
+                p.unlink()
+        # 清理项目文件
+        pp = _proj_path(self.p.id)
+        if pp.exists():
+            pp.unlink()
+
+    def test_run_execution_creates_real_tasks(self):
+        """_run_execution 必须创建落盘任务, 不能是幽灵 ID。"""
+        from scheduler.workflow import _run_execution
+        from scheduler import tracker
+        _run_execution(self.p, {})
+        self.assertGreater(len(self.p.task_ids), 0, "应创建子任务")
+        for tid in self.p.task_ids:
+            t = tracker._read(tid)
+            self.assertIsNotNone(t, f"任务 {tid[:8]} 应落盘存在")
+            self.assertTrue(t.route_locked, "项目任务应锁定路由")
+            self.assertEqual(t.project_id, self.p.id)
+            self.assertIn(t.route_level, ("E", "E+", "D"))
+        self.assertEqual(self.p.phase.value, "executing",
+                         "执行后应保持 executing, 等 orchestrator 跑完")
+
+    def test_run_phase_manual_stops_at_gates(self):
+        """手动模式: 每道门停止, 不自动前进。"""
+        from scheduler.workflow import run_phase
+        # 模拟 phase=template
+        self.p.phase = self.p.phase.__class__.TEMPLATE
+        msg = run_phase(self.p, {})
+        self.assertIn("等待 Owner", msg)
+
+        # 模拟 gate1
+        self.p.phase = self.p.phase.__class__.GATE1
+        msg = run_phase(self.p, {})
+        self.assertIn("等待 Owner gate1", msg)
+        self.assertEqual(self.p.phase.value, "gate1")  # 卡住不变
+
+    def test_run_phase_auto_chains_to_executing(self):
+        """auto_mode: 贯穿 gate1→planning→gate2→executing 一气呵成。"""
+        from scheduler.workflow import run_phase
+        from unittest.mock import patch, MagicMock
+        self.p.auto_mode = True
+        self.p.phase = self.p.phase.__class__.GATE1
+        # mock dispatcher: _run_planning 会调 LLM, 返回合法架构 JSON
+        mock_result = MagicMock()
+        mock_result.executor_result.raw_output = '{"architecture":"x","tasks":[{"id":"T1","title":"t","description":"d","complexity":"low","acceptance":"a","estimated_files":["f.py"]}],"constraints":[],"risks":[],"test_strategy":"x"}'
+        mock_result.agent_cfg = {"model": "test"}
+        with patch('scheduler.workflow.disp_mod.dispatch', return_value=mock_result):
+            msg = run_phase(self.p, {})
+        self.assertIn("auto: gate1 → planning", msg)
+        self.assertIn("auto: gate2 → executing", msg)
+        # 最终应停在 executing (等 orchestrator 跑完任务)
+        self.assertIn(self.p.phase.value, ("executing", "gate3"))
+
+    def test_gate_confirm_approved_advances(self):
+        """批准: GATE1→PLANNING, GATE2→EXECUTING, GATE3→DONE。"""
+        from scheduler.project import Phase
+        tests = [
+            (Phase.GATE1, Phase.PLANNING),
+            (Phase.GATE2, Phase.EXECUTING),
+            (Phase.GATE3, Phase.DONE),
+        ]
+        for gate, expected in tests:
+            self.p.phase = gate
+            self.p.confirm_gate(gate, "approved")
+            self.assertEqual(self.p.phase, expected,
+                             f"{gate.value} approve → {expected.value}")
+
+    def test_gate_confirm_rejected_falls_back(self):
+        """打回: GATE3→PLANNING, GATE2→RESEARCHING。"""
+        from scheduler.project import Phase
+        self.p.phase = Phase.GATE3
+        self.p.confirm_gate(Phase.GATE3, "rejected")
+        self.assertEqual(self.p.phase, Phase.PLANNING)  # 打回让D重新出方案
+
+        self.p.phase = Phase.GATE2
+        self.p.confirm_gate(Phase.GATE2, "rejected")
+        self.assertEqual(self.p.phase, Phase.RESEARCHING)
+
+    def test_architecture_redo_from_executing(self):
+        """架构返工: EXECUTING→PLANNING, 清空旧架构。"""
+        from scheduler.project import Phase
+        self.p.phase = Phase.EXECUTING
+        self.p.architecture_redo()
+        self.assertEqual(self.p.phase, Phase.PLANNING)
+        self.assertIsNone(self.p.architecture)
 
 
 if __name__ == "__main__":

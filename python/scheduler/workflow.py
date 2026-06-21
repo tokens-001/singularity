@@ -1,9 +1,9 @@
 """workflow.py — 项目工作流执行引擎。
 
-把 ProjectState 和 orchestrator 串联:
-  - 读 project phase → 决定下一步动作
-  - 调对应 agent (Researcher/Architect/Implementer/Supervisor)
-  - 写回 project 状态
+3门 + D审查内循环:
+  TEMPLATE → RESEARCHING → GATE1(用户审调研) → PLANNING → GATE2(用户审架构)
+  → EXECUTING(拆任务→orchestrator执行) → [内循环:D审查→修复] → GATE3(用户最终审核)
+  → DONE
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from ._io import try_parse_json
 
 
 # ═══════════════════════════════════════════════════════════
-# Phase → Action 映射
+# Prompt 模板
 # ═══════════════════════════════════════════════════════════
 
 _RESEARCHER_PREAMBLE = """你是项目调研员。基于项目需求，搜集可借鉴的架构/方案/理论。
@@ -86,39 +86,84 @@ Schema 规则:
 
 输出时用 ```json ... ``` 包裹。"""
 
-_REVIEWER_PREAMBLE = """你是系统审查员。只审查本次改动的文件和任务，不扫全项目。
+_REVIEWER_PREAMBLE = """你是代码审查员。只审查本次改动的代码质量，不审架构方向（架构已由 Owner 确认）。
 
-架构方案: {architecture}
 本次改动的任务: {task_ids}
 改动范围: {changed_files}
 
-只审查上述 changed_files 中的文件，不要扫描未改动的模块。不要调用工具，直接输出 JSON:
+只审查上述 changed_files 中的文件。重点找 bug 和测试问题。不要调用工具，直接输出 JSON:
 {{
   "issues": [
     {{
       "id": "I1",
       "file": "文件路径",
-      "line": null,
-      "severity": "bug|perf|style|arch",
+      "severity": "bug|test_gap|style",
       "title": "问题标题",
       "description": "详细描述",
       "suggestion": "修复建议"
     }}
-  ]
+  ],
+  "summary": "一句话总结",
+  "tests_pass": true
 }}
 
 扫描维度:
 1. bug: 逻辑错误、空指针、类型不匹配、边界条件
-2. 架构一致性: 是否偏离架构方案、模块职责是否清晰
-3. 性能: N+1 查询、不必要的拷贝、内存泄漏风险
-4. 代码风格: 命名规范、注释缺失、重复代码
-5. 测试覆盖: 关键路径是否有测试、断言是否充分
+2. test_gap: 验收标准未覆盖、缺少边界测试、mock 不合理
+3. style: 死代码、命名混乱、注释缺失
 
-注意: 如果没有发现问题，返回空 issues 数组。输出必须严格 JSON。"""
+如果 tests_pass 未知则填 null。输出必须严格 JSON。"""
 
+_FIXER_PREAMBLE = """你是系统架构师(D层)。Owner 审核交付物后发现不足，这是完整的错误报告，请出修复方案。
+
+═══════════════════════════════════════
+【项目需求】
+{description}
+
+【架构方案】
+{architecture}
+
+【执行结果】
+{execution_report}
+
+【Owner 反馈】
+{feedback}
+
+【D层审查 issue 清单】
+{current_issues}
+═══════════════════════════════════════
+
+请基于以上完整信息输出修复方案（JSON）:
+{{
+  "diagnosis": "根因分析: 结合执行结果+审查+反馈, 定位根因 (<200字)",
+  "fix_tasks": [
+    {{
+      "id": "F1",
+      "title": "修复任务标题 (<50字)",
+      "description": "详细描述 (<200字)",
+      "complexity": "low|medium|high",
+      "acceptance": "验收标准: 必须可机器检查 (<100字)",
+      "estimated_files": ["涉及文件"]
+    }}
+  ],
+  "constraints_update": ["新增或修改的约束, 保持与架构方案一致的 type+check 格式"]
+}}
+
+规则:
+- fix_tasks 最多 5 个
+- 优先最小改动，不要推翻重来
+- 每个任务验收标准必须可机器检查
+- 如果执行结果中某个任务已 FAILED, 优先修复它
+输出时用 ```json ... ``` 包裹。"""
+
+_MAX_FIX_ROUNDS = 3  # 内循环硬上限
+
+
+# ═══════════════════════════════════════════════════════════
+# 辅助
+# ═══════════════════════════════════════════════════════════
 
 def _needs_research(project: ProjectState) -> bool:
-    """判断是否需要调研阶段。bug_fix 和简单任务自动跳过。"""
     if project.template == "bug_fix":
         return False
     desc = project.description.lower()
@@ -130,59 +175,95 @@ def _should_skip(project, key: str) -> bool:
     return project.owner_confirm.get(key) == "skip"
 
 
+def _collect_changed_files(project: ProjectState) -> set[str]:
+    """从 task traces 收集改动文件。"""
+    changed = set()
+    for tid in project.task_ids:
+        trace_path = config.TRACE_DIR / f"{tid}.json"
+        if trace_path.exists():
+            try:
+                trace = json.loads(trace_path.read_text(encoding="utf-8"))
+                for f in trace.get("changed_files", []):
+                    changed.add(f)
+            except Exception:
+                pass
+    return changed
+
+
+# ═══════════════════════════════════════════════════════════
+# Phase 执行
+# ═══════════════════════════════════════════════════════════
+
 def run_phase(project: ProjectState, agents: dict) -> str:
-    """执行 project 当前 phase 对应的动作。返回日志信息。"""
-    phase = project.phase
+    """执行当前 phase。auto_mode 循环推进直到等待 Owner 或完成。"""
+    msgs = []
+    while True:
+        phase = project.phase
 
-    if phase == Phase.TEMPLATE:
-        return "等待 Owner 填写需求并确认"
+        if phase == Phase.TEMPLATE:
+            msgs.append("等待 Owner 填写需求并确认")
+            break
 
-    elif phase == Phase.RESEARCHING:
-        return _run_research(project, agents)
+        elif phase == Phase.RESEARCHING:
+            msgs.append(_run_research(project, agents))
+            continue
 
-    elif phase in (Phase.GATE1, Phase.GATE2, Phase.GATE3, Phase.GATE4):
-        if project.auto_mode:
-            project.confirm_gate(phase, "approved")
-            save(project)
-            return f"auto: {phase.value} → {project.phase.value}"
-        return f"等待 Owner {phase.value} 确认"
+        elif phase == Phase.PLANNING:
+            msgs.append(_run_planning(project, agents))
+            continue
 
-    elif phase == Phase.PLANNING:
-        return _run_planning(project, agents)
+        elif phase == Phase.EXECUTING:
+            msgs.append(_run_execution(project, agents))
+            break  # 任务分发后等 orchestrator 跑完
 
-    elif phase == Phase.EXECUTING:
-        return _run_execution(project, agents)
+        elif phase in (Phase.GATE1, Phase.GATE2, Phase.GATE3):
+            if project.auto_mode:
+                project.confirm_gate(phase, "approved")
+                save(project)
+                msgs.append(f"auto: {phase.value} → {project.phase.value}")
+                continue
+            msgs.append(f"等待 Owner {phase.value} 确认")
+            break
 
-    elif phase == Phase.REVIEWING:
-        return _run_review(project, agents)
+        elif phase == Phase.REVIEWING:
+            # 内部: D审查 → 结果驱动内循环
+            msgs.append(_run_internal_review(project, agents))
+            # _run_internal_review 会把 phase 改为 FIXING/GATE3
+            continue
 
-    elif phase == Phase.FIXING:
-        return _run_fixing(project, agents)
+        elif phase == Phase.FIXING:
+            # 内部: 创建修复任务 → 等 orchestrator 执行
+            msgs.append(_run_internal_fixing(project, agents))
+            break  # 等 orchestrator 跑完修复任务 → app.py loop 推进
 
-    elif phase == Phase.DONE:
-        return "项目已完成"
+        elif phase == Phase.DONE:
+            msgs.append("项目已完成")
+            break
 
-    return f"未知 phase: {phase.value}"
+        else:
+            msgs.append(f"未知 phase: {phase.value}")
+            break
+    return "; ".join(msgs)
 
+
+# ═══════════════════════════════════════════════════════════
+# GATE1: 调研
+# ═══════════════════════════════════════════════════════════
 
 def _run_research(project: ProjectState, agents: dict) -> str:
-    """调 Researcher(E层) 同步搜集可借鉴方案 → 解析 JSON → 写入 project。
-
-    与旧版不同: 不创建 tracker task (不丢产出), 直接 dispatch 等结果。
-    """
+    """调 Researcher(E层) 搜集可借鉴方案 → GATE1。"""
     if _should_skip(project, "gate1"):
         project.phase = Phase.GATE1
         save(project)
-        return "调研已跳过 (Owner 设定)"
+        return "调研已跳过"
 
-    # 1. 构建 prompt
     prompt = _RESEARCHER_PREAMBLE.format(
         description=project.description,
         scope=project.scope,
         constraints=project.raw_constraints,
     )
 
-    # 2. MAGMA 记忆上下文 (已有历史任务参考)
+    # MAGMA 记忆上下文
     try:
         from . import pre_search as pre_mod
         from . import router as router_mod
@@ -196,43 +277,39 @@ def _run_research(project: ProjectState, agents: dict) -> str:
             )
             prompt = f"[背景记忆]\n{mem_ctx}\n\n{prompt}"
     except Exception:
-        pass  # 记忆挂了不阻塞调研
+        pass
 
-    # 3. 同步 dispatch 到 E 层
     task_id = f"research_{project.id}"
+    disp_result = None
     try:
         disp_result = disp_mod.dispatch(
             prompt, "E", task_id, agents,
             project_lineup=project.agent_lineup,
         )
         raw = disp_result.executor_result.raw_output if disp_result else ""
-    except Exception as e:
+    except Exception:
         raw = ""
 
-    # 4. 解析 JSON 产出
     report = try_parse_json(raw)
-
     project.research_report = report
     project.add_lineage({"action": "research_complete",
                          "agent": disp_result.agent_cfg.get("model","?") if disp_result else "?"})
-
-    # 5. 推进到 GATE1
     project.phase = Phase.GATE1
     save(project)
-    return (
-        f"调研完成: {len(report.get('references', []))} 条引用, "
-        f"推荐: {report.get('recommendation', 'N/A')[:80]}"
-    )
+    return f"调研完成: {len(report.get('references', []))} 条引用"
 
+
+# ═══════════════════════════════════════════════════════════
+# GATE2: 架构规划
+# ═══════════════════════════════════════════════════════════
 
 def _run_planning(project: ProjectState, agents: dict) -> str:
-    """调 Architect(D层) 同步出方案+任务清单 → 解析 JSON → 写入 project。"""
+    """调 Architect(D层) 出方案+任务清单 → GATE2。"""
     if _should_skip(project, "gate2"):
         project.phase = Phase.GATE2
         save(project)
-        return "规划已跳过 (Owner 设定)"
+        return "规划已跳过"
 
-    # 1. 构建 prompt (含调研报告)
     research_json = json.dumps(project.research_report, ensure_ascii=False, indent=2) \
         if project.research_report else "无调研报告"
 
@@ -243,23 +320,19 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
         research=research_json,
     )
 
-    # 2. 同步 dispatch 到 D 层
     task_id = f"architect_{project.id}"
     disp_result = None
-    raw = ""
     try:
         disp_result = disp_mod.dispatch(
             prompt, "D", task_id, agents,
             project_lineup=project.agent_lineup,
         )
         raw = disp_result.executor_result.raw_output if disp_result else ""
-    except Exception as e:
+    except Exception:
         raw = ""
 
-    # 3. 解析 JSON 产出
     arch = try_parse_json(raw, try_repair=True)
     if arch.get("parse_error"):
-        # 重试一次: 附加格式指令
         retry_prompt = prompt + "\n\n[格式错误] 上一次输出不是合法JSON。请用 ```json ... ``` 包裹输出。"
         try:
             disp_result2 = disp_mod.dispatch(
@@ -269,11 +342,10 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
             raw2 = disp_result2.executor_result.raw_output if disp_result2 else ""
             if raw2:
                 arch = try_parse_json(raw2, try_repair=True)
-        except Exception as e:
-            witness.heartbeat('workflow', f'warn:{e}')
+        except Exception:
+            pass
 
     project.architecture = arch
-    # 校验架构完整性 — 阻塞级错误不许过
     arch_issues = _validate_architecture(arch)
     blockers = [i for i in arch_issues if "缺少" in i or "无效" in i or "应为" in i]
     project.add_lineage({"action": "planning_complete",
@@ -282,27 +354,18 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
                          "validation_issues": len(arch_issues),
                          "blockers": len(blockers)})
 
-    # 4. 推进到 GATE2 (有阻塞级问题就标记,但不过早中止——让 Owner 在 Gate 看到警告)
     project.phase = Phase.GATE2
     save(project)
     block_warn = f" (⚠阻塞: {'; '.join(blockers[:2])})" if blockers else ""
-    warn = f" (校验: {'; '.join(arch_issues[:3])})" if arch_issues and not blockers else block_warn
-    return (
-        f"架构完成: {len(arch.get('tasks', []))} 个任务, "
-        f"{len(arch.get('constraints', []))} 条约束"
-        f"{warn}, "
-        f"设计: {arch.get('architecture','N/A')[:80]}"
-    )
+    return f"架构完成: {len(arch.get('tasks', []))} 个任务, {len(arch.get('constraints', []))} 条约束{block_warn}"
 
 
 def _validate_architecture(arch: dict) -> list[str]:
-    """校验架构产出完整性。返回问题列表, 空=通过。"""
+    """校验架构产出完整性。"""
     issues = []
-    # 必填顶层字段
     for key in ["architecture", "tasks", "constraints", "test_strategy"]:
         if not arch.get(key):
             issues.append(f"缺少必填字段: {key}")
-    # tasks 校验
     tasks = arch.get("tasks", [])
     if not isinstance(tasks, list) or len(tasks) == 0:
         issues.append("tasks 为空或格式错误")
@@ -313,10 +376,9 @@ def _validate_architecture(arch: dict) -> list[str]:
                 if not t.get(f):
                     issues.append(f"任务 {tid}: 缺少 {f}")
             if t.get("complexity") not in ("low", "medium", "high"):
-                issues.append(f"任务 {tid}: complexity 无效 ({t.get('complexity')})")
+                issues.append(f"任务 {tid}: complexity 无效")
             if not isinstance(t.get("estimated_files", []), list):
                 issues.append(f"任务 {tid}: estimated_files 应为数组")
-    # constraints 校验
     constraints = arch.get("constraints", [])
     if isinstance(constraints, list):
         for i, c in enumerate(constraints):
@@ -324,20 +386,22 @@ def _validate_architecture(arch: dict) -> list[str]:
                 if not c.get("text"):
                     issues.append(f"约束 {i}: 缺少 text")
                 if c.get("type") not in ("api_surface", "test_green", "no_new_deps", "compat", "perf", "other"):
-                    issues.append(f"约束 {i}: type 无效 ({c.get('type')})")
+                    issues.append(f"约束 {i}: type 无效")
             elif isinstance(c, str):
-                issues.append(f"约束 {i}: 应为对象格式 {{text,type,check}}, 不是纯字符串")
-    # risks
+                issues.append(f"约束 {i}: 应为对象格式")
     if "risks" not in arch:
         issues.append("缺少 risks 字段")
     return issues
 
 
-def _run_execution(project: ProjectState, agents: dict) -> str:
-    """分发 Architect 分解的子任务到 Implementer/Builder。"""
-    if not project.architecture:
-        return "无架构方案，无法分发执行"
+# ═══════════════════════════════════════════════════════════
+# EXECUTING: 拆任务 → tracker → orchestrator
+# ═══════════════════════════════════════════════════════════
 
+def _run_execution(project: ProjectState, agents: dict) -> str:
+    """分发架构任务到 tracker。不调 LLM, 只创建任务。"""
+    if not project.architecture:
+        return "无架构方案"
     tasks = project.architecture.get("tasks", [])
     constraints = project.architecture.get("constraints", [])
     if not tasks:
@@ -362,59 +426,71 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
             parent_id = child.id
         created += 1
 
+    project.fix_round = 0
     project.constraints_checklist = constraints
-    project.phase = Phase.GATE3  # 执行完成后进入 Gate3
+    project.phase = Phase.EXECUTING
     save(project)
-    return f"已分发 {created} 个子任务到 E/E+/D 层"
+    return f"已分发 {created} 个子任务"
 
 
-def _run_review(project: ProjectState, agents: dict) -> str:
-    """调 Reviewer(D层) 同步增量审查 → 解析 JSON → 写入 project.issues。"""
-    if _should_skip(project, "skip_gate3"):
-        project.phase = Phase.GATE4
-        save(project)
-        return "审查已跳过 (Owner 设定 skip_gate3)"
+# ═══════════════════════════════════════════════════════════
+# 内循环: D审查 → 修复 → 再审查 → ... → GATE3
+# ═══════════════════════════════════════════════════════════
 
-    # 1. 收集本次改动的文件 (从 task traces)
-    changed_files = set()
-    for tid in project.task_ids:
-        trace_path = config.TRACE_DIR / f"{tid}.json"
-        if trace_path.exists():
-            try:
-                trace = json.loads(trace_path.read_text(encoding="utf-8"))
-                for f in trace.get("changed_files", []):
-                    changed_files.add(f)
-            except Exception as e:
-                try:
-                    from . import witness
-                    witness.heartbeat("workflow", f"warn:trace_read:{e}"[:80])
-                except Exception as e:
-                    witness.heartbeat('workflow', f'warn:{e}')
-    # 无改动文件 → 跳过审查, 不调LLM
-    if not changed_files:
+def run_test_fix_loop(project: ProjectState, agents: dict) -> str:
+    """EXECUTING 任务全部完成后调用。内循环推进直到 GATE3。"""
+    msgs = []
+
+    # 收集改动文件
+    changed = _collect_changed_files(project)
+    if not changed:
+        project.phase = Phase.GATE3
         project.issues = []
-        project.add_lineage({"action": "review_skipped", "reason": "no_changed_files"})
-        project.phase = Phase.GATE4
         save(project)
-        return "审查跳过: 无改动文件"
+        return "无改动文件 → GATE3"
 
+    msgs.append(f"内循环开始: {len(changed)} 个文件, 最多{_MAX_FIX_ROUNDS}轮")
+
+    while project.fix_round < _MAX_FIX_ROUNDS:
+        # D层审查
+        issues = _do_review(project, agents, changed)
+        bugs = [i for i in issues if i.get("severity") == "bug"]
+        project.issues = issues
+        project.add_lineage({"action": "review_round", "round": project.fix_round + 1,
+                             "issues": len(issues), "bugs": len(bugs)})
+
+        if not bugs:
+            project.phase = Phase.GATE3
+            save(project)
+            msgs.append(f"审查通过 (0 bug, {len(issues)} 个建议) → GATE3")
+            return "; ".join(msgs)
+
+        # 有 bug → 创建修复任务
+        project.fix_round += 1
+        if project.fix_round >= _MAX_FIX_ROUNDS:
+            project.phase = Phase.GATE3
+            save(project)
+            msgs.append(f"已达{_MAX_FIX_ROUNDS}轮上限 ({len(bugs)} bug 残留) → GATE3 (人工裁决)")
+            return "; ".join(msgs)
+
+        _create_fix_tasks(project, bugs)
+        msgs.append(f"第{project.fix_round}轮: {len(bugs)} 个 bug → {len(bugs)} 个修复任务 → 等待执行")
+        break  # 等 orchestrator 跑完修复任务, app.py loop 会再调
+
+    return "; ".join(msgs)
+
+
+def _do_review(project: ProjectState, agents: dict, changed_files: set[str]) -> list[dict]:
+    """调 D层审查代码。返回 issues 列表。"""
     changed_str = ", ".join(sorted(changed_files))
+    task_ids_str = ", ".join(project.task_ids[-10:]) if project.task_ids else "无"
 
-    architecture_json = json.dumps(project.architecture, ensure_ascii=False, indent=2) \
-        if project.architecture else "无架构方案"
-    task_ids_str = ", ".join(project.task_ids) if project.task_ids else "无任务"
-
-    # 2. 构建 prompt
     prompt = _REVIEWER_PREAMBLE.format(
-        architecture=architecture_json,
         task_ids=task_ids_str,
         changed_files=changed_str,
     )
 
-    # 3. 同步 dispatch 到 D 层 (审查需要真推理能力)
-    task_id = f"review_{project.id}"
-    disp_result = None
-    raw = ""
+    task_id = f"review_{project.id}_r{project.fix_round}"
     try:
         disp_result = disp_mod.dispatch(
             prompt, "D", task_id, agents,
@@ -424,72 +500,153 @@ def _run_review(project: ProjectState, agents: dict) -> str:
     except Exception:
         raw = ""
 
-    # 4. 解析 JSON 产出
     review = try_parse_json(raw)
-    issues = review.get("issues", [])
-    project.issues = issues
-    project.add_lineage({"action": "review_complete",
-                         "agent": disp_result.agent_cfg.get("model","?") if disp_result else "?",
-                         "issue_count": len(issues)})
-
-    # 5. 推进到 GATE4
-    project.phase = Phase.GATE4
-    save(project)
-    return (
-        f"审查完成: 发现 {len(issues)} 个问题 "
-        + (f"(bug={sum(1 for i in issues if i.get('severity')=='bug')})" if issues else "")
-    )
+    return review.get("issues", [])
 
 
-def _run_fixing(project: ProjectState, agents: dict) -> str:
-    """为 Reviewer 发现的每条 issue 创建修复任务，然后回到审查循环。"""
-    if _should_skip(project, "skip_gate4"):
-        project.phase = Phase.DONE
-        save(project)
-        return "修复已跳过 (Owner 设定 skip_gate4)"
-
-    if not project.issues:
-        project.phase = Phase.DONE
-        save(project)
-        return "无 issues，项目完成 ✅"
-
-    # 检查迭代次数，防死循环
-    fix_rounds = sum(1 for e in project.lineage if e.get("action") == "fixing_round")
-    if fix_rounds >= 5:
-        project.phase = Phase.DONE
-        save(project)
-        return f"修复已迭代 {fix_rounds} 轮，达上限，请人工接管"
-
-    created = 0
-    for issue in project.issues:
-        severity = issue.get("severity", "style")
-        level = "E+" if severity == "bug" else "E"
-
+def _create_fix_tasks(project: ProjectState, bugs: list[dict]):
+    """为 bug 级 issue 创建修复任务。"""
+    for issue in bugs:
         child = tracker.create(
             f"[修复] {issue.get('id', '?')} {issue.get('title', '')}: {issue.get('description', '')}",
+            depth=2,
+        )
+        tracker.transition(child.id, TaskStatus.PENDING,
+                           route_level="E+", route_locked=True,
+                           project_id=project.id)
+        project.task_ids.append(child.id)
+    project.phase = Phase.FIXING
+    save(project)
+
+
+# ═══════════════════════════════════════════════════════════
+# 内部: REVIEWING / FIXING (非用户门, 内循环用)
+# ═══════════════════════════════════════════════════════════
+
+def _run_internal_review(project: ProjectState, agents: dict) -> str:
+    """内循环审查入口: 收集文件 → D审查 → 决定下一步。"""
+    changed = _collect_changed_files(project)
+    if not changed:
+        project.phase = Phase.GATE3
+        save(project)
+        return "无改动 → GATE3"
+
+    issues = _do_review(project, agents, changed)
+    bugs = [i for i in issues if i.get("severity") == "bug"]
+    project.issues = issues
+    project.fix_round += 1
+
+    if not bugs or project.fix_round >= _MAX_FIX_ROUNDS:
+        project.phase = Phase.GATE3
+        save(project)
+        limit_msg = f" (达{_MAX_FIX_ROUNDS}轮上限)" if project.fix_round >= _MAX_FIX_ROUNDS else ""
+        return f"审查: {len(bugs)} bug → GATE3{limit_msg}"
+
+    _create_fix_tasks(project, bugs)
+    return f"第{project.fix_round}轮审查: {len(bugs)} bug → 修复任务已创建"
+
+
+def _run_internal_fixing(project: ProjectState, agents: dict) -> str:
+    """内部修复: 任务已创建, 等 orchestrator 执行完 → app.py loop 推进到 REVIEWING。"""
+    project.phase = Phase.REVIEWING  # 标记: 修复任务完成后回到审查
+    save(project)
+    return f"等待修复任务执行 → 回到审查"
+
+
+# ═══════════════════════════════════════════════════════════
+# GATE3 打回: D出方案 → 修复 → 测试 → 回 GATE3
+# ═══════════════════════════════════════════════════════════
+
+def _build_execution_report(project: ProjectState) -> str:
+    """收集所有任务执行状态 + 改动文件 → 结构化报告。"""
+    lines = []
+    for tid in project.task_ids:
+        t = tracker._read(tid)
+        if t is None:
+            continue
+        status_icon = {"done": "✅", "failed": "❌", "rolled_back": "↩️", "running": "⏳",
+                       "pending": "⏸️"}.get(t.status.value if hasattr(t.status, 'value') else str(t.status), "❓")
+        lines.append(f"  {status_icon} [{tid[-8:]}] {t.description[:80]}")
+        if t.status == TaskStatus.FAILED and hasattr(t, 'error') and t.error:
+            lines.append(f"     错误: {str(t.error)[:200]}")
+    # 改动文件
+    changed = _collect_changed_files(project)
+    if changed:
+        lines.append(f"\n改动文件 ({len(changed)}):")
+        for f in sorted(changed):
+            lines.append(f"  - {f}")
+    # 测试策略
+    if project.architecture and project.architecture.get("test_strategy"):
+        lines.append(f"\n测试策略: {project.architecture['test_strategy'][:200]}")
+    return "\n".join(lines) if lines else "无执行记录"
+
+
+def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "") -> str:
+    """GATE3 被用户打回: D出修复方案 → 创建任务 → 等执行 → 内循环 → 回 GATE3。"""
+    architecture_json = json.dumps(project.architecture, ensure_ascii=False, indent=2) \
+        if project.architecture else "无架构方案"
+    issues_json = json.dumps(project.issues, ensure_ascii=False, indent=2) \
+        if project.issues else "无"
+    exec_report = _build_execution_report(project)
+
+    prompt = _FIXER_PREAMBLE.format(
+        description=project.description,
+        architecture=architecture_json,
+        execution_report=exec_report,
+        feedback=feedback or "请审查交付物并修复问题",
+        current_issues=issues_json,
+    )
+
+    task_id = f"fixer_{project.id}_g3"
+    try:
+        disp_result = disp_mod.dispatch(
+            prompt, "D", task_id, agents,
+            project_lineup=project.agent_lineup,
+        )
+        raw = disp_result.executor_result.raw_output if disp_result else ""
+    except Exception:
+        raw = ""
+
+    fix_plan = try_parse_json(raw, try_repair=True)
+    fix_tasks = fix_plan.get("fix_tasks", [])
+
+    project.add_lineage({"action": "gate3_rejected", "diagnosis": fix_plan.get("diagnosis", ""),
+                         "fix_tasks": len(fix_tasks)})
+
+    if not fix_tasks:
+        # D 没出任务: 直接回到架构规划
+        project.phase = Phase.PLANNING
+        save(project)
+        return "D层未产出修复任务 → 回到架构规划"
+
+    # 创建修复任务
+    project.fix_round = 0
+    for ft in fix_tasks:
+        level_map = {"low": "E", "medium": "E+", "high": "D"}
+        level = level_map.get(ft.get("complexity", "medium"), "E+")
+        child = tracker.create(
+            f"[G3修复] {ft.get('id', '?')} {ft.get('title', '')}: {ft.get('description', '')}",
             depth=2,
         )
         tracker.transition(child.id, TaskStatus.PENDING,
                            route_level=level, route_locked=True,
                            project_id=project.id)
         project.task_ids.append(child.id)
-        created += 1
 
-    # 记录迭代
-    project.add_lineage({"action": "fixing_round", "round": fix_rounds + 1,
-                         "issues_fixed": len(project.issues)})
-    # 回到审查阶段，验证修复效果
-    project.phase = Phase.REVIEWING
+    project.phase = Phase.REVIEWING  # 修复任务完成后 → 内循环审查 → GATE3
     save(project)
-    return f"已创建 {created} 个修复任务 (第{fix_rounds+1}轮)，回到审查验证"
+    return f"GATE3 打回: D出{len(fix_tasks)}个修复任务 → 等执行 → 内循环 → 回GATE3"
 
+
+# ═══════════════════════════════════════════════════════════
+# 入口
+# ═══════════════════════════════════════════════════════════
 
 def start_project_workflow(project: ProjectState, agents: dict) -> str:
-    """项目工作流入口: 根据 phase 执行下一步。"""
+    """项目工作流入口。"""
     if project.phase != Phase.TEMPLATE:
         return run_phase(project, agents)
 
-    # 需求确认 → research
     if not project.description:
         return "请先填写需求描述再启动工作流"
 

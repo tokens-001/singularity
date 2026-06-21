@@ -101,8 +101,8 @@ async function loadProjects(){
   const list = document.getElementById('project-list');
   const projects = r.projects || [];
   if (!projects.length) { list.innerHTML='<span style="color:var(--text3);font-family:var(--mono);font-size:9px">暂无项目</span>'; return; }
-  const phases=['template','researching','gate1','planning','gate2','executing','gate3','reviewing','fixing','gate4','done'];
-  const labels=['模板','调研','①','架构','②','执行','③','审查','修复','④','完成'];
+  const phases=['template','researching','gate1','planning','gate2','executing','reviewing','fixing','gate3','done'];
+  const labels=['模板','调研','①调研','架构','②架构','执行','内审','修复','③交付','完成'];
   list.innerHTML = projects.map(p => {
     const idx = phases.indexOf(p.phase); const phaseLabel = idx>=0 ? labels[idx] : p.phase;
     return `<div onclick="loadProject('${esc(p.id)}')" style="padding:6px 0;border-bottom:1px solid var(--bg3);cursor:pointer;display:flex;justify-content:space-between;align-items:center">
@@ -115,8 +115,8 @@ async function loadProject(id){
   if (!id) return;
   const p = await api('/api/projects/'+id);
   if (p.error) { document.getElementById('project-detail-body').innerHTML=`<span style="color:var(--st-fail)">${esc(p.error)}</span>`; return; }
-  const phases=['template','researching','gate1','planning','gate2','executing','gate3','reviewing','fixing','gate4','done'];
-  const labels=['📋模板','🔍调研','①门','🏗架构','②门','⚡执行','③门','🔎审查','🔧修复','④门','✅完成'];
+  const phases=['template','researching','gate1','planning','gate2','executing','reviewing','fixing','gate3','done'];
+  const labels=['📋模板','🔍调研','①调研','🏗架构','②架构','⚡执行','🔎内审','🔧修复','③交付','✅完成'];
   const idx = phases.indexOf(p.phase);
   const bar = phases.map((ph,i)=>{
     let cls='future'; if(i<idx) cls='done'; else if(i===idx) cls='current';

@@ -383,18 +383,39 @@ def _loop_worker():
                 try:
                     for tid, reason, validation in results:
                         for proj in proj_mod.recover_all():
-                            if tid in proj.task_ids and proj.phase in (Phase.EXECUTING, Phase.GATE3):
-                                # 检查是否所有子任务完成 → 推进到 Gate3
-                                all_done = True
-                                for tid2 in proj.task_ids:
-                                    t = tracker._read(tid2)
-                                    if t and t.status not in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.ROLLED_BACK):
-                                        all_done = False
-                                        break
-                                if all_done and proj.phase == Phase.EXECUTING:
-                                    proj.phase = Phase.GATE3
-                                    proj_mod.save(proj)
-                                    _push_event("workflow", f"项目 {proj.name[:20]}: 执行完成 → Gate3")
+                            if tid not in proj.task_ids:
+                                continue
+                            if proj.phase not in (Phase.EXECUTING, Phase.FIXING):
+                                continue
+                            # 检查是否所有子任务完成
+                            all_done = True
+                            for tid2 in proj.task_ids:
+                                t = tracker._read(tid2)
+                                if t and t.status not in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.ROLLED_BACK):
+                                    all_done = False
+                                    break
+                            if not all_done:
+                                continue
+
+                            from scheduler import workflow as wf_mod
+                            if proj.phase == Phase.EXECUTING:
+                                _push_event("workflow", f"项目 {proj.name[:20]}: 执行完成 → 内循环")
+                                msg = wf_mod.run_test_fix_loop(proj, agents)
+                                _push_event("workflow", f"项目 {proj.name[:20]}: {msg}")
+                                # auto_mode: 继续推进
+                                if proj.auto_mode:
+                                    try:
+                                        wf_mod.run_phase(proj, agents)
+                                    except Exception:
+                                        pass
+                            elif proj.phase == Phase.FIXING:
+                                _push_event("workflow", f"项目 {proj.name[:20]}: 修复任务完成 → 回到审查")
+                                wf_mod.run_phase(proj, agents)
+                                if proj.auto_mode:
+                                    try:
+                                        wf_mod.run_phase(proj, agents)
+                                    except Exception:
+                                        pass
                 except Exception:
                     pass
         except Exception as e:

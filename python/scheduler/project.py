@@ -18,14 +18,13 @@ from . import config
 class Phase(str, Enum):
     TEMPLATE = "template"
     RESEARCHING = "researching"
-    GATE1 = "gate1"
+    GATE1 = "gate1"          # 用户审调研报告
     PLANNING = "planning"
-    GATE2 = "gate2"
+    GATE2 = "gate2"          # 用户审架构+任务分配
     EXECUTING = "executing"
-    GATE3 = "gate3"
-    REVIEWING = "reviewing"
-    FIXING = "fixing"
-    GATE4 = "gate4"
+    REVIEWING = "reviewing"  # 内部: D层审查(非用户门)
+    FIXING = "fixing"        # 内部: 修复任务(非用户门)
+    GATE3 = "gate3"          # 用户最终交付审核
     DONE = "done"
 
 
@@ -33,19 +32,17 @@ class Phase(str, Enum):
 _REJECT_FALLBACK: dict[Phase, Phase] = {
     Phase.GATE1: Phase.TEMPLATE,
     Phase.GATE2: Phase.RESEARCHING,        # 回调研或重写需求
-    Phase.GATE3: Phase.EXECUTING,          # 回执行或重架构
-    Phase.GATE4: Phase.REVIEWING,
+    Phase.GATE3: Phase.PLANNING,           # 打回让D重新出方案
 }
 
-# 架构级返工: 从执行/审查直接回 planning
-_ARCHITECTURE_REDO = {Phase.EXECUTING, Phase.GATE3, Phase.REVIEWING}
+# 架构级返工: 可从这些阶段直接回 planning
+_ARCHITECTURE_REDO = {Phase.EXECUTING, Phase.GATE3, Phase.REVIEWING, Phase.FIXING}
 
 # Gate 确认→下一个 phase
 _GATE_NEXT: dict[Phase, Phase] = {
     Phase.GATE1: Phase.PLANNING,
     Phase.GATE2: Phase.EXECUTING,
-    Phase.GATE3: Phase.REVIEWING,
-    Phase.GATE4: Phase.DONE,
+    Phase.GATE3: Phase.DONE,               # 最终批准→交付
 }
 
 
@@ -76,6 +73,7 @@ class ProjectState:
     handoffs: list[dict] = field(default_factory=list)              # Agent 交接记录
     token_budget_total: float = 5.0        # $ (默认 $5)
     token_spent: float = 0.0               # $ 累计
+    fix_round: int = 0                      # 内循环修复轮次(上限3)
 
     # Agent 编组: {"E": ["flash","kimi"], "E+": ["glm-5.2"], "D": ["opus"]}
     # 不设则使用 agents.toml 全局配置
@@ -99,6 +97,7 @@ class ProjectState:
             "auto_mode": self.auto_mode,
             "token_budget_total": self.token_budget_total,
             "token_spent": self.token_spent,
+            "fix_round": self.fix_round,
             "agent_lineup": self.agent_lineup,
             "created_at": self.created_at, "updated_at": self.updated_at,
         }
@@ -123,6 +122,7 @@ class ProjectState:
         d.setdefault("auto_mode", False)
         d.setdefault("token_budget_total", 5.0)
         d.setdefault("token_spent", 0.0)
+        d.setdefault("fix_round", 0)
         d.setdefault("agent_lineup", {})
         d.setdefault("created_at", 0.0)
         d.setdefault("updated_at", 0.0)

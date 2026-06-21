@@ -255,10 +255,9 @@ _PHASE_PREFERENCE = {
     "planning": "reasoning",     # 架构规划：需要强推理
     "gate2": "reasoning",        # 架构审查：需要强推理
     "executing": "reliable",     # 执行阶段：可靠中模型，高 turns
-    "gate3": "accurate",         # 执行审查：准确模型
-    "reviewing": "accurate",     # 评审阶段：准确模型
-    "fixing": "accurate",        # 修复阶段：准确模型，中 turns
-    "gate4": "accurate",         # 最终审查
+    "gate3": "accurate",         # 最终交付审核
+    "reviewing": "accurate",     # 内部审查：准确模型
+    "fixing": "accurate",        # 内部修复：准确模型
     "done": "default",           # 已完成
 }
 

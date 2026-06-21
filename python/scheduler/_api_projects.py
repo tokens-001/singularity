@@ -35,14 +35,35 @@ def project_detail(project_id: str) -> tuple[dict, int]:
     return proj.to_dict() if hasattr(proj, 'to_dict') else {"ok": True}, 200
 
 
-def project_gate_confirm(project_id: str, gate: str = "", decision: str = "") -> tuple[dict, int]:
+def project_gate_confirm(project_id: str, gate: str = "", decision: str = "",
+                          feedback: str = "") -> tuple[dict, int]:
     """POST /api/projects/<id>/gate-confirm"""
     from . import project as proj_mod
+    from .project import Phase
     proj = proj_mod.load(project_id)
     if proj is None:
         return {"error": "项目不存在"}, 404
-    # gate-confirm 暂为 no-op (安全关口需手动确认)
-    return {"ok": True, "gate": gate, "decision": decision or "skip"}, 200
+
+    gate_phase = Phase(gate) if gate else proj.phase
+    if decision == "approved":
+        next_p = proj.confirm_gate(gate_phase, "approved")
+        proj_mod.save(proj)
+        return {"ok": True, "gate": gate, "decision": "approved",
+                "next_phase": next_p.value if next_p else "done"}, 200
+    elif decision == "rejected":
+        proj.confirm_gate(gate_phase, "rejected")
+        proj_mod.save(proj)
+        # GATE3 打回: D出修复方案
+        if gate_phase == Phase.GATE3:
+            from . import workflow as wf_mod
+            from . import dispatcher as disp_mod
+            agents = disp_mod.load_agents()
+            result = wf_mod.handle_gate3_reject(proj, agents, feedback)
+            return {"ok": True, "gate": "gate3", "decision": "rejected",
+                    "result": result, "next_phase": proj.phase.value}, 200
+        return {"ok": True, "gate": gate, "decision": "rejected",
+                "next_phase": proj.phase.value}, 200
+    return {"ok": True, "gate": gate, "decision": decision or "pending"}, 200
 
 
 def project_run_phase(project_id: str, phase_name: str = "",
