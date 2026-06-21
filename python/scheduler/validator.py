@@ -205,3 +205,124 @@ JSON:"""
                     "summary":d.get("summary",raw[:200])}
     except Exception: pass
     return {"issues":[],"verdict":"pass","summary":raw[:200] if raw else "no result"}
+
+
+def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
+                       max_chunk_lines: int = 300) -> dict:
+    """多模型并行独立审查一个文件。分段→并行派发→汇总。
+
+    Args:
+        filepath: 要审查的文件路径(相对项目根)
+        models: 模型名列表, 默认用D层前3个可用模型
+        cwd: 工作目录
+        max_chunk_lines: 每段最大行数
+
+    Returns:
+        {issues:[{model,severity,line,detail}], verdicts:[{model,verdict}],
+         summaries:[{model,summary}], models_used:[str], elapsed:float}
+    """
+    import concurrent.futures, time as _time
+    from pathlib import Path as _Path
+
+    root = cwd or str(config.PROJECT_ROOT)
+    fpath = _Path(root) / filepath
+    if not fpath.exists():
+        return {"issues":[],"verdicts":[],"summaries":[],
+                "models_used":[],"elapsed":0,"error":f"file not found: {filepath}"}
+
+    code = fpath.read_text(); lines = code.split('\n'); total_lines = len(lines)
+    from . import dispatcher as _disp
+    agents = _disp.load_agents()
+
+    # 选模型: 指定 > D层可用 > 前3个
+    if models:
+        model_cfgs = []
+        for name in models:
+            for a in agents.get("D",[]):
+                if a.get("model") == name and _disp.agent_api_available(a):
+                    model_cfgs.append(a); break
+    else:
+        model_cfgs = [a for a in agents.get("D",[]) if _disp.agent_api_available(a)][:3]
+
+    if not model_cfgs:
+        return {"issues":[],"verdicts":[],"summaries":[],"models_used":[],"elapsed":0,"error":"no models available"}
+
+    # 分段
+    chunks = []
+    for i in range(0, total_lines, max_chunk_lines):
+        end = min(i + max_chunk_lines, total_lines)
+        chunks.append((f"L{i+1}-L{end}", "\n".join(lines[i:end])))
+
+    def _parse_json(raw):
+        """Robust JSON extraction."""
+        try: return json.loads(raw)
+        except: pass
+        m = re.search(r'```json\s*\n?(.*?)\n?```', raw, re.DOTALL)
+        if m:
+            try: return json.loads(m.group(1))
+            except: pass
+        depth = 0; start = -1
+        for i, c in enumerate(raw):
+            if c == '{':
+                if depth == 0: start = i
+                depth += 1
+            elif c == '}':
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    try: return json.loads(raw[start:i+1])
+                    except: pass
+                    start = -1
+        return None
+
+    def _review_chunk(agent_cfg, chunk_name, chunk_code):
+        model = agent_cfg['model']
+        prompt = f"""Review this code section. Output ONLY valid JSON.
+
+File: {filepath} Section: {chunk_name}
+
+Code:
+```
+{chunk_code}
+```
+
+Find: logic errors, race conditions, security holes, dead code, error handling gaps.
+Output valid JSON: {{"issues":[{{"severity":"critical|warning|info","line":line_number,"detail":"..."}}],"verdict":"pass|needs_fix","summary":"one line"}}"""
+        try:
+            result = _disp.dispatch(prompt, "D", f"mmr_{model[:8]}", {"D":[agent_cfg]}, cwd=root)
+            raw = result.executor_result.raw_output if result and result.executor_result else ""
+            data = _parse_json(raw)
+            if data:
+                return {"model":model,"verdict":data.get("verdict","?"),
+                        "summary":data.get("summary",""),"issues":data.get("issues",[])}
+            return {"model":model,"verdict":"parse_err","summary":raw[:200],"issues":[]}
+        except Exception as e:
+            return {"model":model,"verdict":"error","summary":str(e)[:200],"issues":[]}
+
+    # 并行: 每个分段派给所有模型
+    t0 = _time.time()
+    all_issues = []; verdicts = []; summaries = []
+    models_used = list(set(a['model'] for a in model_cfgs))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(model_cfgs)*len(chunks), 6)) as pool:
+        futs = {}
+        for chunk_name, chunk_code in chunks:
+            for agent_cfg in model_cfgs:
+                futs[pool.submit(_review_chunk, agent_cfg, chunk_name, chunk_code)] = (agent_cfg['model'], chunk_name)
+
+        for fut in concurrent.futures.as_completed(futs, timeout=180):
+            try:
+                r = fut.result()
+                verdicts.append({"model":r['model'],"verdict":r['verdict']})
+                summaries.append({"model":r['model'],"summary":r.get('summary','')})
+                for iss in r.get('issues',[]):
+                    all_issues.append({"model":r['model'],**iss})
+            except Exception:
+                pass
+
+    elapsed = _time.time() - t0
+    # 按严重程度排序
+    sev_order = {"critical":0,"warning":1,"info":2}
+    all_issues.sort(key=lambda x: sev_order.get(x.get('severity','info'), 3))
+
+    return {"issues":all_issues,"verdicts":verdicts,"summaries":summaries,
+            "models_used":models_used,"elapsed":elapsed,"file":filepath,"lines":total_lines}
