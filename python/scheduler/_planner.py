@@ -14,7 +14,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED, as_completed
 from typing import Optional
 
-from ._types import RunContext, BatchOutput, _MAX_DEPTH
+from ._types import RunContext, BatchOutput, _MAX_DEPTH, _pending_sse_events
 from ._exec import _run_with_retry, decompose
 from . import config
 from . import tracker
@@ -70,8 +70,7 @@ def _run_committee(task, ctx: RunContext, agents: dict, d_agents: list) -> Batch
             single = dict(agents)
             single["D"] = [agent_cfg]
             # ── subagent 事件: 启动 ──
-            from .orchestrator import _pending_sse_events as _pe
-            _pe.append({
+            _pending_sse_events.append({
                 "kind": "subagent", "msg": f"委员会成员启动: {agent_cfg.get('model','?')}",
                 "ts": time.time(), "task_id": task.id,
             })
@@ -90,18 +89,18 @@ def _run_committee(task, ctx: RunContext, agents: dict, d_agents: list) -> Batch
                         "term": batch.term_reason,
                         "batch": batch,
                     })
-                    _pe.append({
+                    _pending_sse_events.append({
                         "kind": "subagent", "msg": f"委员会成员完成: {agent_cfg.get('model','?')}",
                         "ts": time.time(), "task_id": task.id,
                     })
                 else:
-                    _pe.append({
+                    _pending_sse_events.append({
                         "kind": "subagent", "msg": f"委员会成员失败: {agent_cfg.get('model','?')}",
                         "ts": time.time(), "task_id": task.id,
                     })
             except Exception as e:
                 plans.append({"model": agent_cfg.get("model", "?"), "error": str(e)})
-                _pe.append({
+                _pending_sse_events.append({
                     "kind": "subagent", "msg": f"委员会成员异常: {agent_cfg.get('model','?')}",
                     "ts": time.time(), "task_id": task.id,
                 })

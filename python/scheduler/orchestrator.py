@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED, as_com
 from typing import Optional
 
 # ── 内部模块 ────────────────────────────────────────────
-from ._types import RunContext, BatchOutput, _SnapProxy, _MAX_DEPTH
+from ._types import RunContext, BatchOutput, _SnapProxy, _MAX_DEPTH, _pending_sse_events
 from ._exec import (
     _PLANNER_PREAMBLE, _inject_memory, _build_project_context,
     run, decompose, _run_with_retry,
@@ -40,9 +40,7 @@ from ._planner import (
     _synthesize_plans, _llm_synthesize as _llm_synth,
 )
 
-# ── SSE 事件队列（_exec 写入，主线程 _loop_worker 消费并喷出）──
-# 每个元素: {"kind": "tool:start"|"tool:done"|"turn", "msg": ..., "ts": ...}
-_pending_sse_events: list[dict] = []
+# _pending_sse_events 已迁移到 _types.py，通过 import 可用
 
 # ── Goal 循环 ──────────────────────────────────────────────
 from .goal_loop import GoalLoop

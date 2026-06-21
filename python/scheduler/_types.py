@@ -19,6 +19,9 @@ except ImportError:
 # 分解深度上限 (防无限递归)
 _MAX_DEPTH = 3
 
+# SSE 事件队列 — 跨模块共享，消除 orchestrator→_planner→dispatcher→orchestrator 循环导入
+_pending_sse_events: list[dict] = []
+
 
 @dataclass
 class RunContext:

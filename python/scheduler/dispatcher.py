@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from . import config
 from .log import timed
+from ._types import _pending_sse_events
 from .executors import (
     BaseExecutor, ExecutorResult,
     ClaudeCliExecutor, ZhipuApiExecutor, OpenAIAgentExecutor,
@@ -390,10 +391,7 @@ def _make_permission_checker() -> callable:
                     return False, reason
             if needs_approval(agent_level, agent_model, tool_name):
                 try:
-                    # 延迟导入破环: orchestrator → _exec → dispatcher → orchestrator
-                    # 此处导入切断环链，不可提升为顶层导入
-                    from .orchestrator import _pending_sse_events as _pe
-                    _pe.append({"kind": "approval", "msg": f"[{task_id[:8]}] {tool_name} 需审批",
+                    _pending_sse_events.append({"kind": "approval", "msg": f"[{task_id[:8]}] {tool_name} 需审批",
                                  "ts": time.time(), "task_id": task_id})
                 except Exception as e:
                     witness.heartbeat('dispatcher', f'warn:{e}')
