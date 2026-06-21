@@ -36,6 +36,7 @@ from scheduler import project as proj_mod
 from scheduler.project import Phase
 from scheduler.log import info as _log_info, warn as _log_warn, get_logger
 from scheduler import mcp as mcp_mod
+from scheduler import bridge as ws_bridge
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
@@ -438,6 +439,15 @@ def _sse_broadcast(kind: str, msg: str, ts: float = None):
         try:
             _sse_clients.remove(q)
         except ValueError:
+            pass
+    # T1: 同时推送到 WebSocket 客户端
+    if kind != "ping":
+        try:
+            ws_bridge.broadcast_json({
+                "jsonrpc": "2.0", "method": "event",
+                "params": {"kind": kind, "msg": msg, "ts": ts}}
+            )
+        except Exception:
             pass
 
 
@@ -1336,6 +1346,7 @@ if __name__ == "__main__":
     def _graceful_shutdown(signum, frame):
         _startup_log.info("收到信号, 优雅关闭中...")
         orchestrator.stop_loop()
+        ws_bridge.stop_ws_server()
         import scheduler.mcp as _mcp
         try:
             reg = _mcp.get_registry()
@@ -1372,4 +1383,10 @@ if __name__ == "__main__":
                               mcp_mod.get_registry().tool_count)
     except Exception as e:
         _startup_log.warning("MCP 初始化失败 (非致命): %s", e)
+    # T1: 启动 WebSocket 服务器 (与 Flask HTTP 并行)
+    try:
+        ws_bridge.start_ws_server(host="127.0.0.1", port=5051)
+        _startup_log.info("WebSocket 服务器已启动 ws://127.0.0.1:5051")
+    except Exception as e:
+        _startup_log.warning("WebSocket 启动失败: %s", e)
     app.run(debug=False, host="127.0.0.1", port=5050)
