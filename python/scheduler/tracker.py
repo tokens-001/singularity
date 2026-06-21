@@ -304,6 +304,7 @@ def ready_tasks(exclude: set[str] = None) -> list[Task]:
                     continue
             _TASK_SCAN_CACHE["ts"] = now
             _TASK_SCAN_CACHE["tasks"] = all_tasks
+        ready = []
         for task in all_tasks:
             if task.status not in _SCHEDULABLE:
                 continue
