@@ -55,8 +55,8 @@
     {
       "model": "qwen3-coder-next",
       "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
+      "entry": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+      "api_key_env": "DASHSCOPE_API_KEY",
       "max_turns": 8,
       "default": false,
       "roles": [
@@ -67,8 +67,8 @@
     {
       "model": "qwen3-coder-plus",
       "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
+      "entry": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+      "api_key_env": "DASHSCOPE_API_KEY",
       "max_turns": 5,
       "default": false,
       "roles": [
@@ -79,8 +79,8 @@
     {
       "model": "qwen3.7-plus",
       "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
+      "entry": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+      "api_key_env": "DASHSCOPE_API_KEY",
       "max_turns": 5,
       "default": false,
       "roles": [
@@ -96,7 +96,9 @@
       "gpt-5.5-pro",
       "claude-opus-4-8"
     ],
-    "E": [],
+    "E": [
+      "deepseek-chat"
+    ],
     "E+": []
   },
   "_order": {
