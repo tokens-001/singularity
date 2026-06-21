@@ -419,7 +419,7 @@ async function renderLayerSwitch(){
           <span style="font-size:8px;font-family:var(--mono);text-transform:uppercase;color:${active?t.color:'var(--text3)'}">${active?'ON':'OFF'}</span>
         </span>
         <div style="min-width:0;flex:1">
-          <div style="font-size:10px;font-weight:500;color:var(--text)">${esc(m.display||m.id)}</div>
+          <div style="font-size:10px;font-weight:500;color:var(--text)">${esc(m.display||m.id)}${m.rating?' <span style="font-size:8px;font-weight:600;color:'+({SSS:'var(--st-hold)',SS:'var(--accent)',S:'var(--st-done)',A:'var(--text3)'}[m.rating]||'var(--text3)')+'">'+esc(m.rating)+'</span>':''}</div>
           <div style="font-size:8px;color:var(--text3);font-family:var(--mono)">${esc(m.provider)} · ${m.speed} · ${costLabel}</div>
         </div>
       </div>`;
