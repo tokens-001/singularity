@@ -288,15 +288,21 @@ def load_custom_models() -> dict:
 
 def save_custom_model(model_id: str, provider: str, display: str = "",
                       tiers: list[str] = None) -> dict:
-    """保存一个扫描发现的模型到自定义注册表。"""
+    """保存一个扫描发现的模型到自定义注册表。已有条目保留 rating/strengths/notes。"""
     custom = load_custom_models()
+    existing = custom.get(model_id, {})
     custom[model_id] = {
         "id": model_id,
         "provider": provider,
-        "display": display or model_id,
-        "tiers": tiers or _guess_tiers(model_id),
-        "speed": "fast",
-        "cost": _guess_cost(model_id),
+        "display": display or existing.get("display") or model_id,
+        "tiers": tiers or existing.get("tiers") or _guess_tiers(model_id),
+        "speed": existing.get("speed", "fast"),
+        "cost": existing.get("cost", _guess_cost(model_id)),
+        "rating": existing.get("rating", ""),
+        "reasoning": existing.get("reasoning", False),
+        "max_turns": existing.get("max_turns", 5),
+        "strengths": existing.get("strengths", []),
+        "notes": existing.get("notes", ""),
     }
     _custom_models_path().parent.mkdir(parents=True, exist_ok=True)
     _custom_models_path().write_text(json.dumps(custom, ensure_ascii=False, indent=2))
