@@ -67,6 +67,9 @@ def model_profile_pattern():
 def reports_critical():
     from . import chancellor as chan_mod; return chan_mod.recent_critical(), 200
 
+def reports_list():
+    from . import chancellor as chan_mod; return {"reports": chan_mod.list_reports(limit=30)}, 200
+
 def template_list():
     from .task_templates import list_all
     templates = list_all()

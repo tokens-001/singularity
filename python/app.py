@@ -959,7 +959,8 @@ def api_templates():
 
 @app.route("/api/reports")
 def api_reports():
-    return jsonify({"reports": []})
+    data, code = _api_handler.reports_list()
+    return jsonify(data), code
 
 @app.route("/api/reports/critical")
 def api_reports_critical():

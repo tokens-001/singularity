@@ -66,7 +66,7 @@ from ._api_mcp import (mcp_server_list, mcp_server_add, mcp_server_delete, mcp_s
 from ._api_monitor import (auth_status, auth_bootstrap, auth_add_user, auth_remove_user,
     status_overview, cleanup, token_usage, token_budget_set, perf_stats, dag_metrics,
     judge_monitor_status, model_profile_status, model_profile_pattern, reports_critical,
-    template_list, health_check)
+    reports_list, template_list, health_check)
 
 # ═══════════════════════════════════════════════════════════════
 # Memory (小, 不值得拆)

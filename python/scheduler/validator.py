@@ -254,13 +254,13 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
         chunks.append((f"L{i+1}-L{end}", "\n".join(lines[i:end])))
 
     def _parse_json(raw):
-        """Robust JSON extraction."""
+        """Robust JSON extraction. Returns None if all strategies fail."""
         try: return json.loads(raw)
-        except: pass
+        except Exception: pass
         m = re.search(r'```json\s*\n?(.*?)\n?```', raw, re.DOTALL)
         if m:
             try: return json.loads(m.group(1))
-            except: pass
+            except Exception: pass
         depth = 0; start = -1
         for i, c in enumerate(raw):
             if c == '{':
@@ -270,8 +270,9 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
                 depth -= 1
                 if depth == 0 and start >= 0:
                     try: return json.loads(raw[start:i+1])
-                    except: pass
+                    except Exception: pass
                     start = -1
+        from .log import warn; warn("validator._parse_json", f"parse fail: {raw[:150]}")
         return None
 
     def _review_chunk(agent_cfg, chunk_name, chunk_code):
