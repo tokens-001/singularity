@@ -306,8 +306,28 @@ def _finalize_result(task, batch, route, snap, results: list) -> str:
             tracker.transition(task.id, TaskStatus.FAILED, error=f"已生成E+修复任务 {fix_task.id[:8]}: {term_reason}")
             reason = f"escalated_to_E+: {fix_task.id[:8]}"
         else:
-            tracker.transition(task.id, TaskStatus.FAILED, error=f"{validation.verdict}: {term_reason}")
-            reason = f"failed: {term_reason}"
+            # 降级重试: 重试耗尽 → 自动拆分再提交 (每个子任务更小)
+            retry_count = getattr(task, 'retry_count', 0)
+            if retry_count >= getattr(task, 'max_retries', 3) and task.depth < _MAX_DEPTH:
+                try:
+                    subtasks = decompose(task.description, agents)
+                    if subtasks and len(subtasks) > 1:
+                        child_ids = materialize_plan(task.id, subtasks)
+                        tracker.transition(task.id, TaskStatus.DECOMPOSED,
+                            error=f"重试{retry_count}次后自动拆分→{len(child_ids)}个子任务")
+                        reason = f"auto_decomposed: {len(child_ids)} children"
+                    else:
+                        tracker.transition(task.id, TaskStatus.FAILED,
+                            error=f"重试{retry_count}次仍崩且无法拆分: {term_reason}")
+                        reason = f"exhausted: {term_reason}"
+                except Exception:
+                    tracker.transition(task.id, TaskStatus.FAILED,
+                        error=f"recover: 重试 {retry_count} 次仍崩, 转 FAILED")
+                    reason = f"exhausted: {term_reason}"
+            else:
+                tracker.transition(task.id, TaskStatus.FAILED,
+                    error=f"{validation.verdict}: {term_reason}")
+                reason = f"failed: {term_reason}"
     _save_trace(task, route, snap, disp_result, validation, validation.action == "rollback",
                 pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
                 pre_search_top_decisions=batch.pre_search_top_decisions, pre_search_memory=batch.pre_search_memory)
