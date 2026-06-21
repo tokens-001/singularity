@@ -495,6 +495,8 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
             )
             return result, agent_cfg
         except Exception:
+            try: witness.heartbeat('dispatch', 'warn:run_one')
+            except Exception: pass
             return None, agent_cfg
 
     # 并行派发

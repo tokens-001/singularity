@@ -187,7 +187,8 @@ def _drain_queue(agents: dict, max_concurrent: int = 1) -> tuple[int, int]:
                 from . import witness
                 witness.heartbeat("main", f"warn:consolidate_mem:{e}"[:80])
             except Exception:
-                pass
+                try: witness.heartbeat('main', 'warn')
+                except Exception: pass
             pass
 
     exit_code = 0

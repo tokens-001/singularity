@@ -116,7 +116,8 @@ def _run_committee(task, ctx: RunContext, agents: dict, d_agents: list) -> Batch
                     planner_subtasks=subtasks,
                     term_reason=f"committee全败→拆分{len(subtasks)}子任务")
         except Exception:
-            pass
+            try: witness.heartbeat('planner', 'warn:decompose_fallback')
+            except Exception: pass
         # 拆分也失败 → 回退普通模式最后尝试
         return _run_with_retry(task, ctx, agents)
 

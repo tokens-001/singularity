@@ -514,5 +514,70 @@ class TestProjectWorkflow(unittest.TestCase):
         self.assertIsNone(self.p.architecture)
 
 
+# ============================================================
+# v2: Property tests + Chaos tests
+# ============================================================
+
+class TestScheduleMonotonicity(unittest.TestCase):
+    def _t(self, tid, priority=0, starvation=0, level='E', children=None):
+        return type('T',(),{'id':tid,'priority':priority,'starvation_score':starvation,'route_level':level,'children':children or []})()
+
+    def test_priority_ordering(self):
+        from scheduler.orchestrator import schedule_policy
+        a,b = self._t('a',priority=10), self._t('b',priority=1)
+        self.assertEqual(schedule_policy([b,a])[0].id, 'a')
+
+    def test_starvation_prevents_hunger(self):
+        from scheduler.orchestrator import schedule_policy
+        a,b = self._t('a',starvation=100), self._t('b',starvation=1)
+        self.assertEqual(schedule_policy([b,a])[0].id, 'a')
+
+    def test_level_bonus(self):
+        from scheduler.orchestrator import schedule_policy
+        a,b,c = self._t('a',level='D'), self._t('b',level='E+'), self._t('c',level='E')
+        self.assertEqual([t.id for t in schedule_policy([c,b,a])], ['a','b','c'])
+
+    def test_deterministic(self):
+        from scheduler.orchestrator import schedule_policy
+        tasks = [self._t(str(i), priority=i%5, starvation=i) for i in range(10)]
+        r1 = schedule_policy(list(tasks)); r2 = schedule_policy(list(tasks))
+        self.assertEqual([t.id for t in r1], [t.id for t in r2])
+
+    def test_dependency_weight(self):
+        from scheduler.orchestrator import schedule_policy
+        a = self._t('a',children=['x','y','z']); b = self._t('b')
+        self.assertEqual(schedule_policy([b,a])[0].id, 'a')
+
+    def test_empty_list(self):
+        from scheduler.orchestrator import schedule_policy
+        self.assertEqual(schedule_policy([]), [])
+
+
+class TestChaosResilience(unittest.TestCase):
+    def test_decompose_bad_input(self):
+        from scheduler._exec import decompose
+        self.assertEqual(decompose('not json'), [])
+        self.assertEqual(decompose(''), [])
+        self.assertEqual(decompose('{"x":1}'), [])
+
+    def test_decompose_valid(self):
+        from scheduler._exec import decompose
+        raw = '```json\n[{"desc": "task1", "suggested_level": "E", "depends_on_local_id": []}]\n```'
+        r = decompose(raw)
+        self.assertEqual(len(r), 1); self.assertEqual(r[0]['desc'], 'task1')
+
+    def test_tracker_read_nonexistent(self):
+        from scheduler.tracker import _read
+        self.assertIsNone(_read('nonexistent_99999'))
+
+    def test_schedule_policy_1k_under_50ms(self):
+        from scheduler.orchestrator import schedule_policy
+        tasks = [self._t(str(i), priority=i%10, starvation=(1000-i)*0.1, level=['E','E+','D'][i%3]) for i in range(1000)]
+        import time; t0 = time.perf_counter()
+        schedule_policy(tasks)
+        self.assertLess(time.perf_counter()-t0, 0.05, '1k tasks should sort in <50ms')
+TestChaosResilience._t = TestScheduleMonotonicity._t
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

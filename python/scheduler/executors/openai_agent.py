@@ -21,6 +21,7 @@ from typing import Optional
 import httpx
 
 from .base import BaseExecutor, ExecutorResult
+from .. import witness
 from .. import config
 
 # ── 敏感文件 blocklist（防 LLM 输出注入）──
@@ -505,7 +506,8 @@ class OpenAIAgentExecutor(BaseExecutor):
                     if f and f not in self._changed_files:
                         self._changed_files.append(f)
         except Exception:
-            pass
+            try: witness.heartbeat('oa_exec', 'warn')
+            except Exception: pass
 
     # ── API 调用 ──
 

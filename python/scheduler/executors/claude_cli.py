@@ -155,7 +155,8 @@ def _git_changed_files(baseline_ref: str = "", cwd: str = "") -> list:
             from .. import witness
             witness.heartbeat("claude_cli", f"warn:collect_changes:{e}"[:80])
         except Exception:
-            pass
+            try: witness.heartbeat('claude_cli', 'warn')
+            except Exception: pass
         pass
 
     # 排除调度器基础设施 (.qidian/ 是 snapshot/trace/patch 产物, 不是 agent 改动)
