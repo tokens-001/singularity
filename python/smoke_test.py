@@ -12,7 +12,7 @@ PASS = FAIL = 0
 
 def api(path, method="GET", body=None):
     args = ["curl", "-s", "-m", "10"]
-    if method != "GET": args += ["-X", method]
+    if method != "GET": args += ["-X", method, "-H", "X-Requested-With: XMLHttpRequest"]
     if body: args += ["-H", "Content-Type: application/json", "-d", json.dumps(body)]
     args.append(f"{BASE}{path}")
     try:
