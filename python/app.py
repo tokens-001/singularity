@@ -137,6 +137,16 @@ _READONLY_ENDPOINTS = {
 
 
 @app.before_request
+def _guard_csrf():
+    if request.method in ("GET", "HEAD", "OPTIONS"): return None
+    if not request.path.startswith("/api/"): return None
+    t = request.headers.get("X-CSRF-Token", "")
+    x = request.headers.get("X-Requested-With", "")
+    if t == _CSRF_TOKEN or x == "XMLHttpRequest": return None
+    return jsonify({"error": "CSRF token required"}), 403
+
+
+@app.before_request
 def _guard_auth():
     """鉴权钩子：QIDIAN_AUTH=1 时对所有 /api/ 端点要求认证。"""
     if not _AUTH_ENABLED:
