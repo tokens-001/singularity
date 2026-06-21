@@ -15,8 +15,8 @@
     {
       "model": "qwen3.7-max",
       "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
+      "entry": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+      "api_key_env": "DASHSCOPE_API_KEY",
       "max_turns": 5,
       "default": true,
       "roles": [
@@ -27,8 +27,8 @@
     {
       "model": "kimi-k2.6",
       "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
+      "entry": "https://api.moonshot.cn/v1/chat/completions",
+      "api_key_env": "KIMI_API_KEY",
       "max_turns": 5,
       "default": false,
       "roles": [
