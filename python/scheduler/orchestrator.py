@@ -311,7 +311,7 @@ def _finalize_result(task, batch, route, snap, results: list) -> str:
             retry_count = getattr(task, 'retry_count', 0)
             if retry_count >= getattr(task, 'max_retries', 3) and task.depth < _MAX_DEPTH:
                 try:
-                    subtasks = decompose(task.description, agents)
+                    subtasks = decompose(task.description)
                     if subtasks and len(subtasks) > 1:
                         child_ids = materialize_plan(task.id, subtasks)
                         tracker.transition(task.id, TaskStatus.DECOMPOSED,

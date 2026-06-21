@@ -109,7 +109,7 @@ def _run_committee(task, ctx: RunContext, agents: dict, d_agents: list) -> Batch
     if not plans:
         # 全失败 → 尝试降级拆分
         try:
-            subtasks = decompose(task.description, agents)
+            subtasks = decompose(task.description)
             if subtasks and len(subtasks) > 1:
                 return BatchOutput(
                     ok=False, task_id=task.id,

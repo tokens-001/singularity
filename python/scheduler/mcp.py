@@ -23,6 +23,7 @@ from typing import Optional
 import httpx
 
 from . import config
+from . import witness
 from .log import info as _log_info, warn as _log_warn
 
 _TAG = "mcp"

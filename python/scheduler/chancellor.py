@@ -39,9 +39,6 @@ class Report:
 # ── 分类规则 ──
 
 _CORE_FILES = {"core.py", "tokenizer.py", "graph.py", "search.py", "config.py", "tracker.py"}
-_VAGUE = ["应该能跑", "理论上没问题", "应该没问题", "看起来是对的", "大概可以", "TODO", "# 此处省略"]
-
-
 def assess(task_desc: str, term_reason: str, changed_files: list[str] = None,
            retry_count: int = 0, agent_tried: list[str] = None) -> Report:
     """分析一个任务结果，决定是否奏报。
