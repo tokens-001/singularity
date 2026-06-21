@@ -4,6 +4,21 @@ Extracted from _exec.py to keep the execution engine focused on dispatch flow.
 """
 
 from __future__ import annotations
+import subprocess
+from pathlib import Path
+
+
+def _is_trivial_change(changed: list[str], cwd: str) -> bool:
+    """单文件且 diff < 50 行 → 跳过审查。"""
+    if len(changed) != 1:
+        return False
+    try:
+        r = subprocess.run(["git", "diff", changed[0]],
+                         capture_output=True, text=True, timeout=10, cwd=cwd)
+        line_count = len([l for l in (r.stdout or "").split("\n") if l])
+        return line_count < 50
+    except Exception:
+        return False
 
 
 def run_post_exec_checks(*, validation, quality, exec_result,
@@ -35,7 +50,8 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             quality["warnings"].append(f"test execution error: {e}")
 
     # 2) multi-model review: 2+ models independently review changed files
-    if validation.action == "pass" and changed:
+    # ponytail: 小改动跳过审查 — 单文件 + <50行diff 不值得额外90s开销
+    if validation.action == "pass" and changed and not _is_trivial_change(changed, cwd):
         try:
             writer_model = agent_cfg.get("model", "")
             agents_all = disp_mod.load_agents()
