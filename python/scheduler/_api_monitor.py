@@ -37,7 +37,32 @@ def status_overview():
 
 def cleanup():
     n_hb, n_tasks = witness.force_cleanup_heartbeats()
-    return {"ok": True, "cleaned": {"heartbeats": n_hb, "tasks": n_tasks}}, 200
+    n_wt = _cleanup_orphan_worktrees()
+    from . import snapshot as snap_mod; n_snap = snap_mod.purge_old_snapshot_meta()
+    return {"ok": True, "cleaned": {"heartbeats": n_hb, "worktrees": n_wt, "snapshots": n_snap, "tasks": n_tasks}}, 200
+
+
+def _cleanup_orphan_worktrees() -> int:
+    """删除任务已不存在但 worktree 目录残留的孤儿。返回清理数。"""
+    import subprocess, shutil
+    from . import config as _c
+    wt_dir = _c.QIDIAN_DIR / "worktrees"
+    if not wt_dir.exists():
+        return 0
+    n = 0
+    for d in sorted(wt_dir.iterdir()):
+        if not d.is_dir():
+            continue
+        # 提取 task_id (目录名格式: {task_id}_{level})
+        tid = d.name.split("_")[0] if "_" in d.name else d.name
+        if not (tracker._tasks_dir() / f"{tid}.json").exists():
+            try:
+                subprocess.run(["git", "worktree", "remove", "--force", str(d)],
+                             cwd=str(_c.PROJECT_ROOT), capture_output=True, timeout=10)
+            except Exception:
+                shutil.rmtree(d, ignore_errors=True)
+            n += 1
+    return n
 
 def token_usage():
     from ._token_budget import get_usage_stats; return get_usage_stats(), 200

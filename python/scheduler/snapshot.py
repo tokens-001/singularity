@@ -158,6 +158,17 @@ def _purge_old_copies() -> None:
     for old in snaps[:-config.MAX_SNAPSHOTS]:
         shutil.rmtree(old, ignore_errors=True)
 
+def purge_old_snapshot_meta(keep: int = 200) -> int:
+    """清理旧的快照元数据 .json 文件，保留最近 keep 个。返回清理数。"""
+    import os as _os
+    files = sorted(config.SNAPSHOT_DIR.glob("*.json"),
+                   key=lambda p: _os.path.getmtime(p))
+    n = 0
+    for old in files[:-keep]:
+        try: old.unlink(); n += 1
+        except OSError: pass
+    return n
+
 
 # ── 元数据 ────────────────────────────────────────────────────────────
 def _save_meta(snap: Snapshot) -> None:
