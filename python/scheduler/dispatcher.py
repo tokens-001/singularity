@@ -414,13 +414,19 @@ def dispatch(
     cwd: str = "",
     project_lineup: dict[str, list[str]] = None,
 ) -> DispatchResult:
-    """选 executor 并执行。失败时自动 fallback 到下一个可用 agent。"""
+    """选 executor 并执行。D层多模型: 委员会并行→合成。其他层: fallback链。"""
     chain = pick_agent_fallback_chain(agents, level, project_lineup=project_lineup)
     if not chain:
         raise RuntimeError(f"无可用 {level} 层 agent")
 
+    # ── D层委员会模式: 多模型并行 → 合成 ──
+    if level == "D" and len(chain) >= 2:
+        return _dispatch_committee(task, level, task_id, agents, chain, feedback,
+                                   baseline_ref, cwd)
+
+    # ── 单模型 fallback 链 ──
     last_error = ""
-    for attempt, agent_cfg in enumerate(chain[:3]):  # ponytail: 最多试3个, 避免烧钱
+    for attempt, agent_cfg in enumerate(chain[:3]):
         etype = agent_cfg.get("type", "claude-cli")
         executor_cls = _EXECUTOR_BY_TYPE.get(etype)
         if not executor_cls:
@@ -435,32 +441,129 @@ def dispatch(
             )
 
         try:
-            skill_tools, skill_prompt, skills = _load_skills_for_agent(
-                level, agent_cfg.get("model", ""), task_desc=task)
-            mcp_tools, mcp_executor = _load_mcp_for_agent()
-            perm_checker = _make_permission_checker()
-
-            executor: BaseExecutor = executor_cls(
-                agent_cfg, full_task, task_id, baseline_ref=baseline_ref, cwd=cwd,
-                agent_level=level,
-                skills=skills, skill_tools=skill_tools, skill_prompt=skill_prompt,
-                mcp_tools=mcp_tools, mcp_executor=mcp_executor,
-                permission_checker=perm_checker,
+            result = _run_executor(
+                executor_cls, agent_cfg, full_task, task_id, level,
+                baseline_ref=baseline_ref, cwd=cwd,
             )
-            result = executor.run()
-
             if result and result.raw_output:
                 return DispatchResult(
-                    level=level,
-                    agent_cfg=agent_cfg,
-                    executor_result=result,
-                    attempts=attempt + 1,
+                    level=level, agent_cfg=agent_cfg,
+                    executor_result=result, attempts=attempt + 1,
                 )
             last_error = f"{agent_cfg.get('model', '?')}: 空输出"
         except Exception as e:
             last_error = f"{agent_cfg.get('model', '?')}: {type(e).__name__}: {e}"[:200]
 
     raise RuntimeError(f"{level} 层所有 agent 均失败: {last_error}")
+
+
+def _run_executor(executor_cls, agent_cfg: dict, full_task: str, task_id: str,
+                  level: str, baseline_ref: str = "", cwd: str = ""):
+    """构建 executor 并执行。"""
+    skill_tools, skill_prompt, skills = _load_skills_for_agent(
+        level, agent_cfg.get("model", ""), task_desc=full_task)
+    mcp_tools, mcp_executor = _load_mcp_for_agent()
+    perm_checker = _make_permission_checker()
+
+    executor: BaseExecutor = executor_cls(
+        agent_cfg, full_task, task_id, baseline_ref=baseline_ref, cwd=cwd,
+        agent_level=level,
+        skills=skills, skill_tools=skill_tools, skill_prompt=skill_prompt,
+        mcp_tools=mcp_tools, mcp_executor=mcp_executor,
+        permission_checker=perm_checker,
+    )
+    return executor.run()
+
+
+def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
+                        chain: list[dict], feedback: str = "",
+                        baseline_ref: str = "", cwd: str = "") -> DispatchResult:
+    """D层委员会: 所有可用D模型并行产出→合成。"""
+    import concurrent.futures
+
+    def _run_one(agent_cfg):
+        etype = agent_cfg.get("type", "claude-cli")
+        executor_cls = _EXECUTOR_BY_TYPE.get(etype)
+        if not executor_cls:
+            return None, agent_cfg
+        full_task = task
+        if feedback:
+            full_task = f"{task}\n\n---\n[上一轮校验反馈]\n{feedback}"
+        try:
+            result = _run_executor(
+                executor_cls, agent_cfg, full_task,
+                f"{task_id}_{agent_cfg.get('model','?')[:8]}", level,
+                baseline_ref=baseline_ref, cwd=cwd,
+            )
+            return result, agent_cfg
+        except Exception:
+            return None, agent_cfg
+
+    # 并行派发
+    outputs = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(chain), 4)) as ex:
+        futures = {ex.submit(_run_one, a): a for a in chain}
+        for fut in concurrent.futures.as_completed(futures, timeout=300):
+            result, agent_cfg = fut.result()
+            if result and result.raw_output:
+                outputs.append((agent_cfg.get("model", "?"), result))
+
+    if not outputs:
+        raise RuntimeError("委员会所有模型均无产出")
+
+    if len(outputs) == 1:
+        model, result = outputs[0]
+        return DispatchResult(
+            level=level,
+            agent_cfg=chain[0],
+            executor_result=result,
+            attempts=1,
+        )
+
+    # 合成: 用第一个有产出的模型做 synthesizer
+    synthesizer = chain[0]
+    synthesis_prompt = _build_synthesis_prompt(task, outputs)
+    try:
+        etype = synthesizer.get("type", "claude-cli")
+        executor_cls = _EXECUTOR_BY_TYPE.get(etype)
+        if executor_cls:
+            synth_result = _run_executor(
+                executor_cls, synthesizer, synthesis_prompt,
+                f"{task_id}_synth", level,
+                baseline_ref=baseline_ref, cwd=cwd,
+            )
+            if synth_result and synth_result.raw_output:
+                return DispatchResult(
+                    level=level,
+                    agent_cfg={"model": f"committee({','.join(m for m,_ in outputs)})"},
+                    executor_result=synth_result,
+                    attempts=len(outputs) + 1,
+                )
+
+        # 合成失败: 返回第一个产出
+        model, result = outputs[0]
+        return DispatchResult(level=level, agent_cfg=chain[0],
+                              executor_result=result, attempts=len(outputs))
+    except Exception:
+        model, result = outputs[0]
+        return DispatchResult(level=level, agent_cfg=chain[0],
+                              executor_result=result, attempts=len(outputs))
+
+
+def _build_synthesis_prompt(task: str, outputs: list[tuple]) -> str:
+    """构建委员会合成 prompt。"""
+    parts = [f"【原始需求】\n{task}\n\n【委员会各模型产出】"]
+    for i, (model, result) in enumerate(outputs, 1):
+        parts.append(f"\n── 模型{i}: {model} ──\n{result.raw_output[:3000]}")
+    parts.append("""
+
+【你的任务】
+你是委员会主席。综合以上各模型的方案，产出一份最终方案。
+- 取各方案之长，避各方案之短
+- 如有冲突，选择论证更充分的观点
+- 保持原有 JSON 格式（如各模型都输出 JSON）
+- 不要引入各模型都没提到的新内容""")
+    return "\n".join(parts)
 
 
 # ── Agent CRUD (写入自定义 JSON overlay) ──

@@ -106,8 +106,8 @@
   },
   "_order": {
     "D": [
-      "glm-5.2",
       "deepseek-v4-pro",
+      "glm-5.2",
       "gpt-5.5-pro"
     ],
     "E+": [
