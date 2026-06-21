@@ -45,6 +45,24 @@ def _cleanup_terminal_heartbeat(p: Path, tid: str) -> bool:
     return False
 
 
+def force_cleanup_heartbeats() -> tuple[int, int]:
+    """强制清理所有终态/孤儿/损坏的心跳文件。返回 (清理数, 任务文件数)。"""
+    n_hb = 0
+    for p in _heartbeat_dir().glob("*.json"):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            try: p.unlink()
+            except OSError: pass
+            n_hb += 1
+            continue
+        tid = data.get("task_id", "")
+        if tid and _cleanup_terminal_heartbeat(p, tid):
+            n_hb += 1
+    n_tasks = len(list(tracker._tasks_dir().glob("*.json")))
+    return n_hb, n_tasks
+
+
 def check_stalled(timeout_seconds: float = 600) -> list[str]:
     now = time.time()
     stalled: list[str] = []

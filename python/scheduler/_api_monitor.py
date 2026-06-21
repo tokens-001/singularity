@@ -36,9 +36,8 @@ def status_overview():
         "token_totals": tt, "stalled": stalled, "agents": agents}, 200
 
 def cleanup():
-    try: witness.cleanup()
-    except AttributeError: pass
-    return {"ok": True, "cleaned": {"heartbeats": 0, "tasks": 0}}, 200
+    n_hb, n_tasks = witness.force_cleanup_heartbeats()
+    return {"ok": True, "cleaned": {"heartbeats": n_hb, "tasks": n_tasks}}, 200
 
 def token_usage():
     from ._token_budget import get_usage_stats; return get_usage_stats(), 200
