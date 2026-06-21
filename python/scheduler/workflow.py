@@ -8,14 +8,11 @@
 
 from __future__ import annotations
 import json
-import time
-from pathlib import Path
-from typing import Optional
 
 from . import config
 from . import tracker
 from . import dispatcher as disp_mod
-from .project import ProjectState, Phase, save, load
+from .project import ProjectState, Phase, save
 from .tracker import TaskStatus
 
 from ._io import try_parse_json
