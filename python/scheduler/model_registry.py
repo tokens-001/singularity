@@ -88,9 +88,13 @@ def load_models() -> dict[str, ModelEntry]:
             for mid, data in items.items():
                 if isinstance(data, dict):
                     models[mid] = _entry_from_raw(mid, data)
-    # 2. 用户自定义覆盖 / 新增
+    # 2. 用户自定义覆盖 / 新增 (空 tiers 视为已删除, 不显示)
     custom = _load_custom()
-    models.update(custom)
+    for mid, m in custom.items():
+        if m.tiers:  # 有层级 → 覆盖/新增
+            models[mid] = m
+        elif mid in models:  # 空层级 → 删除标记
+            del models[mid]
     return models
 
 
@@ -130,13 +134,26 @@ def add_model(model_id: str, provider: str, display: str = "",
 
 
 def remove_model(model_id: str) -> bool:
-    """删除自定义模型 (只能删自定义的，不能删内置的)。"""
+    """删除模型：自定义的直接删，内置的标记 disabled 隐藏。"""
     custom = _load_custom()
-    if model_id not in custom:
-        return False
-    del custom[model_id]
-    _save_custom(custom)
-    return True
+    if model_id in custom:
+        del custom[model_id]
+        _save_custom(custom)
+        return True
+    # 内置模型：在 custom 中标记 disabled
+    all_models = load_models()
+    if model_id in all_models:
+        m = all_models[model_id]
+        custom[model_id] = ModelEntry(
+            id=model_id, provider=m.provider,
+            display=m.display,
+            tiers=[], speed=m.speed, cost=m.cost,
+            reasoning=m.reasoning, max_turns=m.max_turns,
+            strengths=m.strengths, notes=m.notes,
+        )
+        _save_custom(custom)
+        return True
+    return False
 
 
 def for_tier(tier: str, available_only: bool = True) -> list[ModelEntry]:
