@@ -110,6 +110,7 @@ def post_execution_hook(exec_result, snap):
     if conf<0.3: fk = "low_quality"
     elif conf<0.5 and fk=="ok": fk = "uncertain"
     return {"warnings":warnings,"quality_signals":signals,"confidence":max(0.0,min(1.0,conf)),"failure_kind":fk}
+# v2: test + review enabled
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -152,47 +153,50 @@ def run_project_tests(cwd=None):
 
 
 def crossover_review(task_desc, raw_output, changed_files, writer_level, writer_model="", cwd=None):
-    """Review agent output with a DIFFERENT model. Returns {issues,verdict,summary}."""
-    if not changed_files: return {"issues":[],"verdict":"pass","summary":"no file changes"}
-    review_level = {"E":"E+","E+":"D"}.get(writer_level, "D")
+    """Independent model reviews the diff. Returns {score, comments, reviewer_model}."""
+    import os, difflib, subprocess as sp
+    from .. import llm_client
+    root = cwd or str(config.PROJECT_ROOT)
+    if not changed_files:
+        return {"score":0.0,"comments":["no changed files"],"reviewer_model":"none"}
+    diffs = []
+    for f in changed_files:
+        path = os.path.join(root, f)
+        if not os.path.exists(path): continue
+        try:
+            with open(path,"r",encoding="utf-8",errors="ignore") as fh:
+                lines = fh.readlines()
+        except Exception: continue
+        before = [""]*len(lines)
+        after = lines
+        diff = list(difflib.unified_diff(before, after, fromfile=f"/dev/null", tofile=f, lineterm=""))
+        diffs.append(f"--- {f}\n" + "\n".join(diff[:200]))
+    diff_text = "\n\n".join(diffs)[:6000]
+    reviewer = llm_client.pick_model(level=min(3, writer_level+1))
+    if not reviewer:
+        reviewer = llm_client.pick_model(level=writer_level)
+    prompt = f"""You are an independent code reviewer. Task: {task_desc}
+The agent '{writer_model}' produced the following changes:
+{diff_text}
 
-    # Get git diff
-    diff_text = ""
+Please provide a concise code review in JSON: {{"score": <0-1>, "comments": [<list>]}}
+"""
     try:
-        r = sp.run(["git","diff","--stat"]+changed_files, capture_output=True,text=True,timeout=10,cwd=cwd or str(config.PROJECT_ROOT))
-        diff_text = (r.stdout or "")[:3000]
-        if diff_text:
-            r2 = sp.run(["git","diff"]+changed_files, capture_output=True,text=True,timeout=10,cwd=cwd or str(config.PROJECT_ROOT))
-            diff_text += "\n" + (r2.stdout or "")[:5000]
-    except Exception: pass
-    if not diff_text.strip(): return {"issues":[],"verdict":"pass","summary":"empty diff"}
+        response = llm_client.chat(reviewer, prompt, json_mode=True)
+        data = json.loads(response)
+        return {"score": float(data.get("score",0.0)), "comments": data.get("comments",[]), "reviewer_model": reviewer}
+    except Exception as e:
+        return {"score":0.0,"comments":[f"review failed: {e}"],"reviewer_model": reviewer or "none"}
 
-    files_list = ", ".join(changed_files[:10])
-    prompt = f"""Review this code change:
 
-Task: {task_desc[:500]}
-Files: {files_list}
-Diff:
-{diff_text[:6000]}
-
-Check: logic errors, security, unnecessary changes, missed call sites.
-Output ONLY JSON: {{"issues":[{{"severity":"critical|warning|info","line":approx,"detail":"..."}}],"verdict":"pass|retry|abort","summary":"one line"}}
-No issues: {{"issues":[],"verdict":"pass","summary":"no issues"}}
-JSON:"""
-
-    try:
-        from . import dispatcher as _disp
-        agents = _disp.load_agents()
-        chain = _disp.pick_agent_fallback_chain(agents, review_level, exclude={writer_model} if writer_model else None)
-        if not chain: return {"issues":[],"verdict":"pass","summary":f"no reviewer at {review_level}"}
-        result = _disp.dispatch(prompt, review_level, f"review_{writer_model or '?'}", {review_level:[chain[0]]}, cwd=cwd or "")
-        raw = result.executor_result.raw_output if result and result.executor_result else ""
-    except Exception as e: return {"issues":[],"verdict":"pass","summary":f"review call failed: {e}"}
-
-    try:
-        m = re.search(r'\{[^{}]*"issues"[^{}]*\}', raw, re.DOTALL)
-        if m:
-            d = json.loads(m.group())
-            return {"issues":d.get("issues",[]),"verdict":d.get("verdict","pass"),"summary":d.get("summary",raw[:200])}
-    except Exception: pass
-    return {"issues":[],"verdict":"pass","summary":raw[:200] if raw else "no result"}
+def compute_quality_score(report: ValidationReport) -> float:
+    """Combine gate, validation, tests, and review into a single score."""
+    s = 0.5
+    if report.gate_passed is True: s += 0.2
+    elif report.gate_passed is False: s -= 0.3
+    if report.validate_verdict == "通过": s += 0.2
+    elif report.validate_verdict == "阻断": s -= 0.4
+    qs = report.quality_signals or {}
+    s += qs.get("has_verification",0) * 0.1
+    s -= qs.get("error_marker_count",0) * 0.02
+    return max(0.0, min(1.0, s))
