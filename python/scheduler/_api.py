@@ -306,8 +306,9 @@ def model_list() -> tuple[dict, int]:
     return {mid: {
         "id": m.id, "provider": m.provider, "display": m.display,
         "tiers": m.tiers, "speed": m.speed, "cost": m.cost,
-        "reasoning": m.reasoning, "max_turns": m.max_turns,
-        "strengths": m.strengths, "notes": m.notes,
+        "rating": m.rating, "reasoning": m.reasoning,
+        "max_turns": m.max_turns, "strengths": m.strengths,
+        "notes": m.notes,
         "api_available": api_store.is_available(m.provider),
         "disabled_in": [t for t in m.tiers if mid in disabled_by_tier.get(t, [])],
     } for mid, m in models.items()}, 200

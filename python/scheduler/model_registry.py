@@ -22,6 +22,7 @@ class ModelEntry:
     tiers: list[str]             # ["E", "E+", "D"]
     speed: str                   # fast | medium | slow
     cost: str                    # budget | standard | premium
+    rating: str = ""             # SSS/SS/S/A 评级
     reasoning: bool = False      # 推理模型 (用 reasoning_content)
     max_turns: int = 5
     strengths: list[str] = field(default_factory=list)
@@ -31,8 +32,9 @@ class ModelEntry:
         return {
             "id": self.id, "provider": self.provider, "display": self.display,
             "tiers": self.tiers, "speed": self.speed, "cost": self.cost,
-            "reasoning": self.reasoning, "max_turns": self.max_turns,
-            "strengths": self.strengths, "notes": self.notes,
+            "rating": self.rating, "reasoning": self.reasoning,
+            "max_turns": self.max_turns, "strengths": self.strengths,
+            "notes": self.notes,
         }
 
     @classmethod
@@ -40,8 +42,9 @@ class ModelEntry:
         return cls(
             id=d.get("id",""), provider=d.get("provider",""), display=d.get("display",""),
             tiers=d.get("tiers",[]), speed=d.get("speed","medium"), cost=d.get("cost","standard"),
-            reasoning=d.get("reasoning",False), max_turns=d.get("max_turns",5),
-            strengths=d.get("strengths",[]), notes=d.get("notes",""),
+            rating=d.get("rating",""), reasoning=d.get("reasoning",False),
+            max_turns=d.get("max_turns",5), strengths=d.get("strengths",[]),
+            notes=d.get("notes",""),
         )
 
 
@@ -106,6 +109,7 @@ def _entry_from_raw(mid: str, data: dict) -> ModelEntry:
         tiers=data.get("tiers", []),
         speed=data.get("speed", "medium"),
         cost=data.get("cost", "standard"),
+        rating=data.get("rating", ""),
         reasoning=data.get("reasoning", False),
         max_turns=data.get("max_turns", 5),
         strengths=data.get("strengths", []),
@@ -117,16 +121,17 @@ def _entry_from_raw(mid: str, data: dict) -> ModelEntry:
 
 def add_model(model_id: str, provider: str, display: str = "",
               tiers: list[str] = None, speed: str = "medium",
-              cost: str = "standard", reasoning: bool = False,
-              max_turns: int = 5, notes: str = "") -> ModelEntry:
+              cost: str = "standard", rating: str = "",
+              reasoning: bool = False, max_turns: int = 5,
+              notes: str = "") -> ModelEntry:
     """添加或更新自定义模型。"""
     custom = _load_custom()
     entry = ModelEntry(
         id=model_id, provider=provider,
         display=display or model_id,
         tiers=tiers or ["E"],
-        speed=speed, cost=cost, reasoning=reasoning,
-        max_turns=max_turns, notes=notes,
+        speed=speed, cost=cost, rating=rating,
+        reasoning=reasoning, max_turns=max_turns, notes=notes,
     )
     custom[model_id] = entry
     _save_custom(custom)
@@ -148,7 +153,8 @@ def remove_model(model_id: str) -> bool:
             id=model_id, provider=m.provider,
             display=m.display,
             tiers=[], speed=m.speed, cost=m.cost,
-            reasoning=m.reasoning, max_turns=m.max_turns,
+            rating=m.rating, reasoning=m.reasoning,
+            max_turns=m.max_turns,
             strengths=m.strengths, notes=m.notes,
         )
         _save_custom(custom)

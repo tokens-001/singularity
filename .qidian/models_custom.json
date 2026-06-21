@@ -1,0 +1,121 @@
+{
+  "qwen3.7-max": {
+    "id": "qwen3.7-max",
+    "provider": "qwen",
+    "display": "Qwen3.7 Max",
+    "tiers": [
+      "E",
+      "E+",
+      "D"
+    ],
+    "speed": "medium",
+    "cost": "premium",
+    "reasoning": false,
+    "max_turns": 5,
+    "strengths": [],
+    "notes": "",
+    "rating": "SSS"
+  },
+  "deepseek-v4-pro": {
+    "id": "deepseek-v4-pro",
+    "provider": "deepseek",
+    "display": "DeepSeek V4 Pro",
+    "tiers": [
+      "E",
+      "E+",
+      "D"
+    ],
+    "speed": "medium",
+    "cost": "standard",
+    "reasoning": true,
+    "max_turns": 3,
+    "strengths": [],
+    "notes": "",
+    "rating": "SS"
+  },
+  "deepseek-chat": {
+    "id": "deepseek-chat",
+    "provider": "deepseek",
+    "display": "DeepSeek V3 (Chat)",
+    "tiers": [],
+    "speed": "fast",
+    "cost": "budget",
+    "reasoning": true,
+    "max_turns": 5,
+    "strengths": [
+      "日常编码",
+      "bugfix",
+      "查询"
+    ],
+    "notes": "最便宜的A层首选。推理模型(reasoning_content)。适合简单单文件任务。",
+    "rating": "A"
+  },
+  "qwen3-coder-next": {
+    "id": "qwen3-coder-next",
+    "provider": "qwen",
+    "display": "Qwen3 Coder Next",
+    "tiers": [],
+    "speed": "fast",
+    "cost": "budget",
+    "reasoning": false,
+    "max_turns": 8,
+    "strengths": [
+      "快速编码",
+      "lint",
+      "重构",
+      "批量任务"
+    ],
+    "notes": "极便宜($0.07/$0.30 per 1M)。专项编程模型, A层批量首选。",
+    "rating": "A"
+  },
+  "qwen3-flash": {
+    "id": "qwen3-flash",
+    "provider": "qwen",
+    "display": "Qwen3 Flash",
+    "tiers": [],
+    "speed": "fast",
+    "cost": "budget",
+    "reasoning": false,
+    "max_turns": 10,
+    "strengths": [
+      "分类",
+      "路由",
+      "简单任务",
+      "高吞吐"
+    ],
+    "notes": "最便宜($0.03/$0.13 per 1M)。1M上下文。A层高吞吐简单任务。",
+    "rating": "A"
+  },
+  "glm-5-turbo": {
+    "id": "glm-5-turbo",
+    "provider": "zhipu",
+    "display": "GLM-5 Turbo",
+    "tiers": [],
+    "speed": "slow",
+    "cost": "budget",
+    "reasoning": true,
+    "max_turns": 5,
+    "strengths": [
+      "编码",
+      "推理",
+      "仔细"
+    ],
+    "notes": "便宜的推理模型。慢但仔细, 会自己验证产物。A层备选。",
+    "rating": "A"
+  },
+  "gpt-5.5": {
+    "id": "gpt-5.5",
+    "provider": "openai",
+    "display": "GPT-5.5",
+    "tiers": [
+      "D"
+    ],
+    "speed": "fast",
+    "cost": "premium",
+    "reasoning": false,
+    "max_turns": 5,
+    "strengths": [],
+    "notes": "",
+    "rating": "SS"
+  }
+}
