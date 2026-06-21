@@ -27,6 +27,24 @@ def heartbeat(task_id: str, agent_level: str, status: str = "running", detail: s
     p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _cleanup_terminal_heartbeat(p: Path, tid: str) -> bool:
+    """清理终态任务的心跳文件。返回 True 表示已清理。"""
+    task_file = tracker._tasks_dir() / f"{tid}.json"
+    if not task_file.exists():
+        try: p.unlink()
+        except OSError: pass
+        return True
+    try:
+        data = json.loads(task_file.read_text(encoding="utf-8"))
+        if data.get("status") in ("done", "failed", "rolled_back"):
+            try: p.unlink()
+            except OSError: pass
+            return True
+    except (json.JSONDecodeError, OSError):
+        pass
+    return False
+
+
 def check_stalled(timeout_seconds: float = 600) -> list[str]:
     now = time.time()
     stalled: list[str] = []
@@ -34,12 +52,11 @@ def check_stalled(timeout_seconds: float = 600) -> list[str]:
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
+            try: p.unlink()  # 损坏的心跳文件直接清理
+            except OSError: pass
             continue
         tid = data.get("task_id", "")
-        # 清理已删除任务的心跳文件
-        if tid and not (tracker._tasks_dir() / f"{tid}.json").exists():
-            try: p.unlink()
-            except OSError: pass
+        if tid and _cleanup_terminal_heartbeat(p, tid):
             continue
         last = data.get("last_beat", 0)
         if now - last > timeout_seconds:
@@ -61,18 +78,17 @@ def _count_by_status() -> dict[str, int]:
 
 
 def _heartbeat_task_levels() -> dict[str, int]:
-    """{level: 有心跳文件的任务数}。跳过已删除任务的残留心跳。"""
+    """{level: 有心跳文件的任务数}。跳过终态/已删除任务的残留心跳。"""
     loads: dict[str, int] = {}
     for p in _heartbeat_dir().glob("*.json"):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
+            try: p.unlink()  # 损坏的心跳文件直接清理
+            except OSError: pass
             continue
         tid = data.get("task_id", "")
-        # 跳过已删除任务的心跳
-        if tid and not (tracker._tasks_dir() / f"{tid}.json").exists():
-            try: p.unlink()
-            except OSError: pass
+        if tid and _cleanup_terminal_heartbeat(p, tid):
             continue
         lvl = data.get("level", "?")
         loads[lvl] = loads.get(lvl, 0) + 1
