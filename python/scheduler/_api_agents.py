@@ -81,7 +81,18 @@ def model_add(model_id, provider="", display="", tiers=None, speed="medium", cos
     return {"ok": True, "model_id": model_id}, 200
 
 def model_remove(model_id):
-    from . import model_registry; return {"ok": model_registry.remove_model(model_id)}, 200
+    from . import model_registry, dispatcher
+    ok = model_registry.remove_model(model_id)
+    # 同步: 从所有层禁掉对应 agent
+    agents = dispatcher.load_agents()
+    disabled_levels = []
+    for lvl in ("E", "E+", "D"):
+        for a in agents.get(lvl, []):
+            if a.get("model") == model_id:
+                dispatcher.remove_agent(lvl, model_id)
+                disabled_levels.append(lvl)
+                break
+    return {"ok": ok, "synced_agents": disabled_levels}, 200
 
 def model_update(model_id, data):
     from . import model_registry

@@ -97,7 +97,8 @@
       "claude-opus-4-8"
     ],
     "E": [
-      "deepseek-chat"
+      "deepseek-chat",
+      "glm-5-turbo"
     ],
     "E+": []
   },

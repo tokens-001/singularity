@@ -150,5 +150,20 @@
     "max_turns": 5,
     "strengths": [],
     "notes": ""
+  },
+  "kimi-k2.7-code": {
+    "id": "kimi-k2.7-code",
+    "provider": "kimi",
+    "display": "Kimi K2.7 Code",
+    "tiers": [
+      "E"
+    ],
+    "speed": "medium",
+    "cost": "standard",
+    "rating": "S",
+    "reasoning": true,
+    "max_turns": 5,
+    "strengths": [],
+    "notes": ""
   }
 }
