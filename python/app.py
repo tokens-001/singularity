@@ -43,6 +43,20 @@ app.config["JSON_AS_ASCII"] = False
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024  # 安全加固：拒绝 >2MB 的请求体
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24).hex()
 
+_CSRF_TOKEN = os.environ.get("QIDIAN_CSRF_TOKEN") or os.urandom(16).hex()
+
+import logging as _al
+_audit_logger = _al.getLogger("qidian.audit")
+sched_config.ensure_dirs()
+(_ad := sched_config.QIDIAN_DIR / "logs").mkdir(parents=True, exist_ok=True)
+_ah = _al.FileHandler(str(_ad / "audit.log"))
+_ah.setFormatter(_al.Formatter('{"ts":"%(asctime)s","level":"%(levelname)s","msg":%(message)s}', datefmt='%Y-%m-%dT%H:%M:%S'))
+_audit_logger.addHandler(_ah); _audit_logger.setLevel(_al.INFO); _audit_logger.propagate = False
+
+def audit_log(action, detail="", user="", ip=""):
+    import json as _j
+    _audit_logger.info(_j.dumps({"action":action,"detail":detail[:500],"user":user or "-","ip":ip or "-"}))
+
 # ── 安全限制 ──────────────────────────────────────────
 _MAX_CONCURRENT = 8          # loop concurrent 上限
 _MAX_SSE_CLIENTS = 20        # SSE 同时连接上限
