@@ -540,26 +540,35 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                                               if a['model'] != writer_model and disp_mod.agent_api_available(a)][:2]
 
                         if reviewer_models:
-                            review = val_mod.multi_model_review(
-                                filepath=changed[0], models=reviewer_models, cwd=cwd)
-                            if review.get("issues"):
-                                crit = [i for i in review["issues"] if i.get("severity") == "critical"]
-                                warns = [i for i in review["issues"] if i.get("severity") == "warning"]
-                                if crit:
-                                    details = "; ".join(f"{i.get('model','')}:{i.get('detail','')[:60]}" for i in crit[:3])
-                                    quality["warnings"].append(f"multi-review ({len(review.get('models_used',[]))} models) found {len(crit)} critical: {details}")
-                                    quality["failure_kind"] = "review_critical"
-                                    quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.25)
-                                    validation.action = "retry"
-                                elif warns:
-                                    quality["warnings"].append(f"multi-review found {len(warns)} warnings")
-                                    quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.1)
-                            quality["quality_signals"]["review_models"] = review.get("models_used", [])
-                            quality["quality_signals"]["review_file"] = changed[0]
-                            if review.get("verdicts"):
-                                needs_fix = [v for v in review["verdicts"] if v.get("verdict") == "needs_fix"]
-                                if len(needs_fix) >= 2:
-                                    validation.action = "retry"
+                            rev_files = []; rev_models = []; all_issues = []
+                            for f in changed[:3]:  # review up to 3 changed files
+                                review = val_mod.multi_model_review(
+                                    filepath=f, models=reviewer_models, cwd=cwd)
+                                rev_files.append(f)
+                                rev_models = review.get("models_used", [])
+                                issues = review.get("issues", [])
+                                if issues:
+                                    crit = [i for i in issues if i.get("severity") == "critical"]
+                                    warns = [i for i in issues if i.get("severity") == "warning"]
+                                    if crit:
+                                        details = "; ".join(f"{i.get('model','')}:{i.get('detail','')[:60]}" for i in crit[:3])
+                                        quality["warnings"].append(f"multi-review {f}: {len(crit)} critical: {details}")
+                                        quality["failure_kind"] = "review_critical"
+                                        quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.25)
+                                        validation.action = "retry"
+                                        break  # already retrying, skip remaining files
+                                    elif warns:
+                                        quality["warnings"].append(f"multi-review {f}: {len(warns)} warnings")
+                                        quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.1)
+                                all_issues.extend(issues)
+                                if review.get("verdicts"):
+                                    needs_fix = [v for v in review["verdicts"] if v.get("verdict") == "needs_fix"]
+                                    if len(needs_fix) >= 2:
+                                        validation.action = "retry"
+                                        break
+                            quality["quality_signals"]["review_models"] = rev_models
+                            quality["quality_signals"]["review_files"] = rev_files
+                            quality["quality_signals"]["review_issues"] = len(all_issues)
                         else:
                             # fallback: single-model crossover review
                             review = val_mod.crossover_review(
@@ -568,15 +577,20 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                                 writer_model=writer_model, cwd=cwd)
                             if review.get("issues"):
                                 crit = [i for i in review["issues"] if i.get("severity") == "critical"]
+                                warns = [i for i in review["issues"] if i.get("severity") == "warning"]
                                 if crit:
-                                    quality["warnings"].append(f"review found {len(crit)} critical issues")
+                                    quality["warnings"].append(f"review found {len(crit)} critical issues: " + "; ".join(i.get("detail","")[:60] for i in crit))
                                     quality["failure_kind"] = "review_critical"
                                     quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.25)
                                     validation.action = "retry"
+                                elif warns:
+                                    quality["warnings"].append(f"review found {len(warns)} warnings")
+                                    quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.1)
                             if review.get("verdict") == "abort":
                                 validation.action = "abort"
                                 validation.unverified.append(f"review abort: {review.get('summary','')}")
                             quality["quality_signals"]["review_verdict"] = review.get("verdict", "pass")
+                            quality["quality_signals"]["review_summary"] = review.get("summary", "")[:200]
                     except Exception as e:
                         quality["warnings"].append(f"multi-review error: {e}")
 
