@@ -966,6 +966,12 @@ def api_reports_critical():
     data, code = _api_handler.reports_critical()
     return jsonify(data), code
 
+@app.route("/api/reports/<report_id>", methods=["DELETE"])
+def api_report_dismiss(report_id):
+    from scheduler import chancellor as chan_mod
+    ok = chan_mod.dismiss_report(report_id)
+    return jsonify({"ok": ok})
+
 # ═══════════════════════════════════════════════════════════
 # Agent 管理
 # ═══════════════════════════════════════════════════════════

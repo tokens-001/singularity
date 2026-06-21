@@ -157,3 +157,11 @@ def list_reports(limit: int = 30, min_severity: str = "routine") -> list[dict]:
 def recent_critical() -> list[dict]:
     """最近的关键奏报，用于面板快速查看。"""
     return list_reports(limit=5, min_severity="alert")
+
+def dismiss_report(report_id: str) -> bool:
+    """删除指定奏报。"""
+    p = _reports_dir() / f"{report_id}.json"
+    if p.exists():
+        try: p.unlink(); return True
+        except OSError: pass
+    return False
