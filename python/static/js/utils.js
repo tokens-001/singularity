@@ -95,6 +95,9 @@ function toast(msg,type='error',suggestion=''){
   setTimeout(()=>{if(t.parentNode)t.remove();},4000);
 }
 async function api(path,opts){
+  if(!opts)opts={};
+  if(!opts.headers)opts.headers={};
+  if(opts.method&&opts.method!=='GET')opts.headers['X-Requested-With']='XMLHttpRequest';
   try{const r=await fetch(path,opts);const d=await r.json();
     if(!r.ok&&d.error){toast(d.error);return{error:d.error};}
     return d;

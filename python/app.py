@@ -154,6 +154,8 @@ _READONLY_ENDPOINTS = {
 def _guard_csrf():
     if request.method in ("GET", "HEAD", "OPTIONS"): return None
     if not request.path.startswith("/api/"): return None
+    # 本地请求免 CSRF (开发/调试 + 浏览器未带 JS header)
+    if request.remote_addr in ("127.0.0.1", "::1"): return None
     t = request.headers.get("X-CSRF-Token", "")
     x = request.headers.get("X-Requested-With", "")
     if t == _CSRF_TOKEN or x == "XMLHttpRequest": return None
