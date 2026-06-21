@@ -327,5 +327,65 @@ class TestCriticalFixes(unittest.TestCase):
         self.assertEqual(len(h2), 64)
 
 
+class TestMAGMAMemoryEviction(unittest.TestCase):
+    """T12: MAGMA 记忆 LRU 驱逐 + 重要性评分。"""
+    def test_importance_scoring(self):
+        """成功节点 > 失败节点，被引用节点 > 孤立节点。"""
+        from scheduler.memory import EventNode, _calculate_importance
+        now = 1_000_000.0
+        # 成功 + 高引用
+        good = EventNode("t1", "done task", now - 100, [], {"status": "done"})
+        # 失败 + 无引用
+        bad = EventNode("t2", "failed task", now - 86_400, [], {"status": "failed"})
+        events = {"t1": good, "t2": bad}
+        edges = {"causal": [("t1", "t2")]}  # t1→t2, t1被引用
+        s1 = _calculate_importance("t1", good, events, edges, now)
+        s2 = _calculate_importance("t2", bad, events, edges, now)
+        self.assertGreater(s1, s2, f"成功+被引用节点应高于失败孤立节点: {s1:.3f} vs {s2:.3f}")
+
+    def test_eviction_below_cap(self):
+        """不超上限时不驱逐。"""
+        from scheduler.memory import EventNode, _evict_if_needed
+        events = {}
+        for i in range(10):
+            events[str(i)] = EventNode(str(i), f"task {i}", 1_000_000.0, [], {})
+        evicted = _evict_if_needed(events, {}, max_events=20)
+        self.assertEqual(evicted, 0)
+        self.assertEqual(len(events), 10)
+
+    def test_eviction_above_cap(self):
+        """超上限时驱逐低分节点，保留高分节点。"""
+        from scheduler.memory import EventNode, _evict_if_needed
+        now = 1_000_000.0
+        events = {}
+        for i in range(15):
+            status = "done" if i < 10 else "failed"
+            events[str(i)] = EventNode(str(i), f"task {i}", now, [], {"status": status})
+        # 10个done + 5个failed, cap=10, 应驱逐5个failed
+        evicted = _evict_if_needed(events, {}, max_events=10)
+        self.assertEqual(evicted, 5)
+        self.assertEqual(len(events), 10)
+        # 保留的应全是 done
+        for tid, node in events.items():
+            self.assertEqual(node.attrs.get("status"), "done")
+
+    def test_edge_cleanup_on_eviction(self):
+        """驱逐节点时关联边一并清理。"""
+        from scheduler.memory import EventNode, _evict_if_needed
+        now = 1_000_000.0
+        events = {
+            "keep": EventNode("keep", "important", now, [], {"status": "done"}),
+            "drop": EventNode("drop", "junk", now - 86_400_000, [], {"status": "failed"}),
+        }
+        edges = {"causal": [("drop", "keep")], "semantic": [("drop", "keep", 0.7)]}
+        evicted = _evict_if_needed(events, edges, max_events=1)
+        self.assertEqual(evicted, 1)
+        self.assertNotIn("drop", events)
+        self.assertIn("keep", events)
+        # drop→keep 边应被清
+        self.assertEqual(len(edges["causal"]), 0)
+        self.assertEqual(len(edges["semantic"]), 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
