@@ -65,6 +65,7 @@ from . import validator as val_mod
 from . import neijinglu as nj_mod
 from . import witness
 from . import memory as mem_mod
+from . import route_learner as rl_mod
 from . import pre_search as pre_mod
 from . import chancellor as chan_mod
 from ._git_worktree import (
@@ -331,6 +332,33 @@ def _finalize_result(task, batch, route, snap, results: list) -> str:
     _save_trace(task, route, snap, disp_result, validation, validation.action == "rollback",
                 pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
                 pre_search_top_decisions=batch.pre_search_top_decisions, pre_search_memory=batch.pre_search_memory)
+    # T1 挂钩: 任务完成后归档经验
+    try:
+        exec_out = disp_result.executor_result if disp_result else None
+        mem_mod.archive_experience(
+            task_id=task.id, description=task.description,
+            status="done" if validation.action == "pass" else "failed",
+            route_level=route.level, model=getattr(disp_result, 'agent_cfg', {}).get("model", "") if disp_result else "",
+            elapsed_ms=getattr(exec_out, 'elapsed', 0) if exec_out else 0,
+            tokens=getattr(exec_out, 'tokens', 0) if exec_out else 0,
+            failure_mode=validation.verdict if validation.action != "pass" else "",
+            files_changed=getattr(exec_out, 'changed_files', []) if exec_out else [],
+        )
+        # 同时记录到路由学习器
+        try:
+            learner = rl_mod.load_learner()
+            learner.record(
+                task_type=route.task_type, model=getattr(disp_result, 'agent_cfg', {}).get("model", "") if disp_result else "",
+                level=route.level,
+                success=validation.action == "pass",
+                elapsed_ms=getattr(exec_out, 'elapsed', 0) if exec_out else 0,
+                tokens=getattr(exec_out, 'tokens', 0) if exec_out else 0,
+            )
+            rl_mod.save_learner(learner)
+        except Exception:
+            pass
+    except Exception:
+        pass
     # 工具事件
     tool_events = getattr(batch, 'tool_events', []) or []
     for te in tool_events:

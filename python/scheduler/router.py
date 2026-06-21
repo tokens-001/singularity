@@ -225,6 +225,20 @@ def rank_models_for_task(task_desc: str, task_type: str = "",
         for s in ranked
     ]
     scored = _hydra_score(task_desc, ttype, route_level, dict_ranked)
+    # T1 集成: RouteLearner Hedge 权重混合 (有足够样本时生效)
+    try:
+        from .route_learner import load_learner
+        learner = load_learner()
+        lr_stats = learner.get_stats()
+        if lr_stats:
+            for r in scored:
+                k = f"{ttype}::{r['model']}"
+                if k in lr_stats:
+                    hedge = lr_stats[k].get("hedge", 1.0)
+                    r["score"] = r.get("score", 0.5) * hedge
+            scored.sort(key=lambda x: -x.get("score", 0))
+    except Exception:
+        pass
     if phase:
         return _apply_phase_boost(scored, phase, ttype)
     return [r["model"] for r in scored]
