@@ -1,24 +1,24 @@
 {
   "D": [
     {
-      "model": "qwen3.7-max",
+      "model": "glm-5.2",
       "type": "openai-agent",
       "entry": "",
       "api_key_env": "",
-      "max_turns": 5,
-      "default": false,
+      "max_turns": 8,
+      "default": true,
       "roles": [
         "daily"
       ],
       "sandbox": "worktree"
     },
     {
-      "model": "kimi-k2.6",
+      "model": "qwen3.7-max",
       "type": "openai-agent",
       "entry": "",
       "api_key_env": "",
       "max_turns": 5,
-      "default": false,
+      "default": true,
       "roles": [
         "daily"
       ],
@@ -39,7 +39,32 @@
       "sandbox": "worktree"
     }
   ],
-  "E": [],
+  "E": [
+    {
+      "model": "kimi-k2.7-code-highspeed",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 8,
+      "default": true,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
+    },
+    {
+      "model": "qwen3-coder-next",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 8,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
+    }
+  ],
   "_disabled": {
     "D": [
       "kimi-k2.7-code",
@@ -91,5 +116,31 @@
         "ddd"
       ]
     }
-  }
+  },
+  "E+": [
+    {
+      "model": "deepseek-v4-pro",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 3,
+      "default": true,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
+    },
+    {
+      "model": "kimi-k2.6",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 5,
+      "default": true,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
+    }
+  ]
 }
