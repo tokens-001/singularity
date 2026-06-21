@@ -140,12 +140,12 @@ HTTPS_PROXY = "http://127.0.0.1:7892"
 # DeepSeek V4 Pro — D层架构 (DeepSeek头部模型,便宜)
 [[agents.D]]
 model = "deepseek-v4-pro"
-type = "claude-cli"
-entry = "/Users/jingzhe/.claude/local/claude --exclude-dynamic-system-prompt-sections -p {prompt}"
-max_turns = 3
+type = "openai-agent"
+entry = "https://api.deepseek.com/v1/chat/completions"
+api_key_env = "DEEPSEEK_API_KEY"
+max_turns = 5
 default = false
 roles = ["architecture"]
-mode = "planner"
 sandbox = "worktree"
 
 # GLM-5.2 — D层备选 (Opus欠费时顶上)
