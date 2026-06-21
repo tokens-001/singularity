@@ -257,10 +257,7 @@ def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
                 k = a.get("model","")
                 if role in (a.get("roles") or []) and k not in s and k not in excl and agent_api_available(a):
                     res.append(a); s.add(k)
-        for a in cands:
-            k = a.get("model","")
-            if a.get("default") and k not in s and k not in excl and agent_api_available(a):
-                res.append(a); s.add(k)
+        # 同层 agent 平等, 不区分 default 优先级
         for a in cands:
             k = a.get("model","")
             if k not in s and k not in excl and agent_api_available(a):
