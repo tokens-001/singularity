@@ -88,6 +88,15 @@ def agent_api_available(agent_cfg: dict) -> bool:
     防止误烧 GPT 额度。
     """
     model = agent_cfg.get("model", "")
+    agent_type = agent_cfg.get("type", "")
+
+    # ponytail: API 类 agent 必须有 entry 或 api_key_env, 否则无法调 API
+    if agent_type in ("openai-agent", "zhipu-api"):
+        entry = agent_cfg.get("entry", "")
+        key_env = agent_cfg.get("api_key_env", "")
+        if not entry and not key_env:
+            return False  # 空壳 agent (前端添加但未配置)
+
     provider = ""
     if model:
         try:
@@ -405,40 +414,53 @@ def dispatch(
     cwd: str = "",
     project_lineup: dict[str, list[str]] = None,
 ) -> DispatchResult:
-    """选 executor 跑一次。失败由调用方决定升级或打回。"""
-    agent_cfg = pick_agent(agents, level, project_lineup=project_lineup)
-    etype = agent_cfg.get("type", "claude-cli")
-    executor_cls = _EXECUTOR_BY_TYPE.get(etype)
-    if not executor_cls:
-        raise RuntimeError(f"未知 executor type: {etype}")
+    """选 executor 并执行。失败时自动 fallback 到下一个可用 agent。"""
+    chain = pick_agent_fallback_chain(agents, level, project_lineup=project_lineup)
+    if not chain:
+        raise RuntimeError(f"无可用 {level} 层 agent")
 
-    full_task = task
-    if feedback:
-        full_task = (
-            f"{task}\n\n"
-            f"---\n[上一轮校验反馈, 请据此修正]\n{feedback}"
-        )
+    last_error = ""
+    for attempt, agent_cfg in enumerate(chain[:3]):  # ponytail: 最多试3个, 避免烧钱
+        etype = agent_cfg.get("type", "claude-cli")
+        executor_cls = _EXECUTOR_BY_TYPE.get(etype)
+        if not executor_cls:
+            last_error = f"未知 executor type: {etype}"
+            continue
 
-    # ── 依赖注入: 为 executor 准备 skill/MCP/permission ──
-    skill_tools, skill_prompt, skills = _load_skills_for_agent(level, agent_cfg.get("model", ""), task_desc=task)
-    mcp_tools, mcp_executor = _load_mcp_for_agent()
-    perm_checker = _make_permission_checker()
+        full_task = task
+        if feedback:
+            full_task = (
+                f"{task}\n\n"
+                f"---\n[上一轮校验反馈, 请据此修正]\n{feedback}"
+            )
 
-    executor: BaseExecutor = executor_cls(
-        agent_cfg, full_task, task_id, baseline_ref=baseline_ref, cwd=cwd,
-        agent_level=level,
-        skills=skills, skill_tools=skill_tools, skill_prompt=skill_prompt,
-        mcp_tools=mcp_tools, mcp_executor=mcp_executor,
-        permission_checker=perm_checker,
-    )
-    result = executor.run()
+        try:
+            skill_tools, skill_prompt, skills = _load_skills_for_agent(
+                level, agent_cfg.get("model", ""), task_desc=task)
+            mcp_tools, mcp_executor = _load_mcp_for_agent()
+            perm_checker = _make_permission_checker()
 
-    return DispatchResult(
-        level=level,
-        agent_cfg=agent_cfg,
-        executor_result=result,
-        attempts=1,
-    )
+            executor: BaseExecutor = executor_cls(
+                agent_cfg, full_task, task_id, baseline_ref=baseline_ref, cwd=cwd,
+                agent_level=level,
+                skills=skills, skill_tools=skill_tools, skill_prompt=skill_prompt,
+                mcp_tools=mcp_tools, mcp_executor=mcp_executor,
+                permission_checker=perm_checker,
+            )
+            result = executor.run()
+
+            if result and result.raw_output:
+                return DispatchResult(
+                    level=level,
+                    agent_cfg=agent_cfg,
+                    executor_result=result,
+                    attempts=attempt + 1,
+                )
+            last_error = f"{agent_cfg.get('model', '?')}: 空输出"
+        except Exception as e:
+            last_error = f"{agent_cfg.get('model', '?')}: {type(e).__name__}: {e}"[:200]
+
+    raise RuntimeError(f"{level} 层所有 agent 均失败: {last_error}")
 
 
 # ── Agent CRUD (写入自定义 JSON overlay) ──

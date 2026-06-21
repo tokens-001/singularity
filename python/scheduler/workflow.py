@@ -163,6 +163,20 @@ _MAX_FIX_ROUNDS = 3  # 内循环硬上限
 # 辅助
 # ═══════════════════════════════════════════════════════════
 
+def _safe_dispatch(prompt: str, level: str, task_id: str, agents: dict,
+                   project: ProjectState, project_lineup=None) -> tuple:
+    """调 disp_mod.dispatch 并记录错误到 project lineage。返回 (disp_result_or_None, error_str)。"""
+    try:
+        disp_result = disp_mod.dispatch(
+            prompt, level, task_id, agents,
+            project_lineup=project_lineup,
+        )
+        return disp_result, ""
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"[:200]
+        project.add_lineage({"action": "llm_error", "level": level, "task_id": task_id, "error": err})
+        return None, err
+
 def _needs_research(project: ProjectState) -> bool:
     if project.template == "bug_fix":
         return False
@@ -280,15 +294,11 @@ def _run_research(project: ProjectState, agents: dict) -> str:
         pass
 
     task_id = f"research_{project.id}"
-    disp_result = None
-    try:
-        disp_result = disp_mod.dispatch(
-            prompt, "E", task_id, agents,
-            project_lineup=project.agent_lineup,
-        )
-        raw = disp_result.executor_result.raw_output if disp_result else ""
-    except Exception:
-        raw = ""
+    disp_result, err = _safe_dispatch(prompt, "E", task_id, agents, project,
+                                       project.agent_lineup)
+    raw = disp_result.executor_result.raw_output if disp_result else ""
+    if err:
+        raw = f'{{"parse_error": true, "error": "{err}"}}'
 
     report = try_parse_json(raw)
     project.research_report = report
@@ -321,29 +331,23 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     )
 
     task_id = f"architect_{project.id}"
-    disp_result = None
-    try:
-        disp_result = disp_mod.dispatch(
-            prompt, "D", task_id, agents,
-            project_lineup=project.agent_lineup,
-        )
-        raw = disp_result.executor_result.raw_output if disp_result else ""
-    except Exception:
-        raw = ""
+    disp_result, err = _safe_dispatch(prompt, "D", task_id, agents, project,
+                                       project.agent_lineup)
+    raw = disp_result.executor_result.raw_output if disp_result else ""
+    if err:
+        raw = f'{{"parse_error": true, "error": "{err}"}}'
 
     arch = try_parse_json(raw, try_repair=True)
     if arch.get("parse_error"):
         retry_prompt = prompt + "\n\n[格式错误] 上一次输出不是合法JSON。请用 ```json ... ``` 包裹输出。"
-        try:
-            disp_result2 = disp_mod.dispatch(
-                retry_prompt, "D", task_id + "_r", agents,
-                project_lineup=project.agent_lineup,
-            )
-            raw2 = disp_result2.executor_result.raw_output if disp_result2 else ""
-            if raw2:
-                arch = try_parse_json(raw2, try_repair=True)
-        except Exception:
-            pass
+        disp_result2, err2 = _safe_dispatch(retry_prompt, "D", task_id + "_r", agents,
+                                             project, project.agent_lineup)
+        raw2 = disp_result2.executor_result.raw_output if disp_result2 else ""
+        if err2:
+            raw2 += f'\n[LLM错误: {err2}]'
+        if raw2:
+            arch = try_parse_json(raw2, try_repair=True)
+        disp_result = disp_result2  # lineage 用重试结果
 
     project.architecture = arch
     arch_issues = _validate_architecture(arch)
@@ -491,14 +495,11 @@ def _do_review(project: ProjectState, agents: dict, changed_files: set[str]) -> 
     )
 
     task_id = f"review_{project.id}_r{project.fix_round}"
-    try:
-        disp_result = disp_mod.dispatch(
-            prompt, "D", task_id, agents,
-            project_lineup=project.agent_lineup,
-        )
-        raw = disp_result.executor_result.raw_output if disp_result else ""
-    except Exception:
-        raw = ""
+    disp_result, err = _safe_dispatch(prompt, "D", task_id, agents, project,
+                                       project.agent_lineup)
+    raw = disp_result.executor_result.raw_output if disp_result else ""
+    if err:
+        raw = f'{{"parse_error": true, "error": "{err}"}}'
 
     review = try_parse_json(raw)
     return review.get("issues", [])
@@ -598,14 +599,11 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
     )
 
     task_id = f"fixer_{project.id}_g3"
-    try:
-        disp_result = disp_mod.dispatch(
-            prompt, "D", task_id, agents,
-            project_lineup=project.agent_lineup,
-        )
-        raw = disp_result.executor_result.raw_output if disp_result else ""
-    except Exception:
-        raw = ""
+    disp_result, err = _safe_dispatch(prompt, "D", task_id, agents, project,
+                                       project.agent_lineup)
+    raw = disp_result.executor_result.raw_output if disp_result else ""
+    if err:
+        raw = f'{{"parse_error": true, "error": "{err}"}}'
 
     fix_plan = try_parse_json(raw, try_repair=True)
     fix_tasks = fix_plan.get("fix_tasks", [])

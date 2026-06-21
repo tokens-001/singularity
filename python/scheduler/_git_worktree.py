@@ -148,30 +148,45 @@ def commit_wt(wt: Worktree) -> str:
 def _do_merge(src_ref: str, onto: str, merge_msg: str) -> MergeResult:
     """合并原语 (修复 #11): merge_back 和 merge_ref 共用。
 
-    主工作区必须干净; merge --no-commit 冲突时 abort 不污染主工作区。
+    主工作区有改动时自动 stash，merge 后 pop 恢复。
     """
     # -uno 排除 untracked 文件 (如 .qidian/ .claude/ 等), 只检查 tracked 文件是否脏
     status_r = _run(["status", "--porcelain", "-uno"], config.PROJECT_ROOT)
+    stashed = False
     if status_r.stdout.strip():
-        return MergeResult(ok=False, reason="主工作区不干净 (tracked 文件有改动), 拒绝 merge")
+        # ponytail: auto-stash, merge, pop — 避免每次开发都得先 commit
+        stash_r = _run(["stash", "push", "-m", "auto-stash before merge"], config.PROJECT_ROOT)
+        if stash_r.returncode != 0:
+            return MergeResult(ok=False, reason="工作区不干净且 stash 失败, 拒绝 merge")
+        stashed = True
 
     target_ref = _run(["rev-parse", onto], config.PROJECT_ROOT)
     if target_ref.returncode != 0:
         return MergeResult(ok=False, reason=f"目标分支不存在: {onto}")
 
-    r = _run(["merge", "--no-commit", "--no-ff", src_ref], config.PROJECT_ROOT)
-    diff = _run(["diff", "--name-only", "--diff-filter=U"], config.PROJECT_ROOT)
-    conflicts = [f for f in diff.stdout.strip().splitlines() if f]
+    try:
+        r = _run(["merge", "--no-commit", "--no-ff", src_ref], config.PROJECT_ROOT)
+        diff = _run(["diff", "--name-only", "--diff-filter=U"], config.PROJECT_ROOT)
+        conflicts = [f for f in diff.stdout.strip().splitlines() if f]
 
-    if conflicts or r.returncode != 0:
-        _run(["merge", "--abort"], config.PROJECT_ROOT)
-        reason = "冲突" if conflicts else f"merge 失败: {r.stderr.strip()[:120]}"
-        return MergeResult(ok=False, conflicts=conflicts, reason=reason)
+        if conflicts or r.returncode != 0:
+            _run(["merge", "--abort"], config.PROJECT_ROOT)
+            reason = "冲突" if conflicts else f"merge 失败: {r.stderr.strip()[:120]}"
+            return MergeResult(ok=False, conflicts=conflicts, reason=reason)
 
-    commit_r = _run(["commit", "-m", merge_msg], config.PROJECT_ROOT)
-    if commit_r.returncode != 0:
-        return MergeResult(ok=True, merged_ref=_head_ref(), reason="空 merge, 无新增改动")
-    return MergeResult(ok=True, merged_ref=_head_ref())
+        commit_r = _run(["commit", "-m", merge_msg], config.PROJECT_ROOT)
+        if commit_r.returncode != 0:
+            return MergeResult(ok=True, merged_ref=_head_ref(), reason="空 merge, 无新增改动")
+        return MergeResult(ok=True, merged_ref=_head_ref())
+    finally:
+        if stashed:
+            # ponytail: merge 后恢复开发者未提交的改动
+            pop_r = _run(["stash", "pop"], config.PROJECT_ROOT)
+            if pop_r.returncode != 0:
+                # 冲突了: 保留 stash, 任务产出优先
+                _run(["stash", "apply", "--index"], config.PROJECT_ROOT)
+                _run(["checkout", "--theirs", "."], config.PROJECT_ROOT)
+                _run(["stash", "drop"], config.PROJECT_ROOT)
 
 
 def merge_back(wt: Worktree, onto: str = "") -> MergeResult:
