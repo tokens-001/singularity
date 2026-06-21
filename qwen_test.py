@@ -1,1 +1,1 @@
-print("千问通了")
+print("ok")
