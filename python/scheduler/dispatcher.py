@@ -409,13 +409,13 @@ def dispatch(
     cwd: str = "",
     project_lineup: dict[str, list[str]] = None,
 ) -> DispatchResult:
-    """选 executor 并执行。2+ agent: 委员会并行→合成。单 agent: 直接执行。"""
+    """选 executor 并执行。D层:委员会并行→合成。其他层:fallback链。"""
     chain = pick_agent_fallback_chain(agents, level, project_lineup=project_lineup)
     if not chain:
         raise RuntimeError(f"无可用 {level} 层 agent")
 
-    # ── 委员会模式: 2+ 模型并行 → 合成 (所有层平等) ──
-    if len(chain) >= 2:
+    # ── D层委员会模式: 多模型并行 → 合成 ──
+    if level == "D" and len(chain) >= 2:
         return _dispatch_committee(task, level, task_id, agents, chain, feedback,
                                    baseline_ref, cwd)
 
