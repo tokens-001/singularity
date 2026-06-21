@@ -1316,6 +1316,13 @@ def api_mcp_refresh():
     return jsonify(data), code
 
 
+@app.route("/sw.js")
+def serve_sw():
+    """T19: Service Worker — 必须从根路径 /sw.js 注册才能控制全站。"""
+    from flask import send_from_directory
+    return send_from_directory("static", "sw.js", mimetype="application/javascript")
+
+
 # ═══════════════════════════════════════════════════════════
 # 启动
 # ═══════════════════════════════════════════════════════════

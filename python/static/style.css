@@ -1,5 +1,22 @@
-/* 奇点调度指挥中心 — 精致深色 */
+/* 奇点调度指挥中心 — CSS Design Tokens + 主题切换 */
+/* ═══ Shared tokens (与主题无关) ═══ */
 :root {
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'PingFang SC', sans-serif;
+  --mono: 'SF Mono', 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', monospace;
+  --font-size-xs:   10px;
+  --font-size-sm:   11px;
+  --font-size-body: 12px;
+  --font-size-md:   13px;
+  --font-size-lg:   16px;
+  --space-xs:  4px;
+  --space-sm:  8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --radius:    6px;
+  --radius-sm: 4px;
+  --radius-lg: 8px;
+  /* ═══ 暗色主题 (默认) ═══ */
   --bg:        #0e0f13;
   --surface:   #16181f;
   --surface-2: #1c1f28;
@@ -14,16 +31,70 @@
   --st-fail:   #f0616d;
   --st-hold:   #c08cff;
   --st-pending:#d8a236;
-  /* 语义别名 */
   --green:     var(--st-done);
   --red:       var(--st-fail);
   --yellow:    var(--st-pending);
   --purple:    var(--st-hold);
   --cyan:      var(--accent);
-  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'PingFang SC', sans-serif;
-  --mono: 'SF Mono', 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', monospace;
-  --radius: 6px;
-  --radius-sm: 4px;
+  --scanline:  rgba(255,255,255,.015);
+}
+
+/* ═══ 亮色主题 (OS 偏好) ═══ */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg:        #f5f6f8;
+    --surface:   #ffffff;
+    --surface-2: #f0f1f4;
+    --grid:      #e1e4e8;
+    --grid-hi:   #d1d5db;
+    --text:      #1a1d26;
+    --text2:     #5f6672;
+    --text3:     #9aa0ad;
+    --accent:    #2563eb;
+    --st-done:   #16a34a;
+    --st-run:    #2563eb;
+    --st-fail:   #dc2626;
+    --st-hold:   #7c3aed;
+    --st-pending:#ca8a04;
+    --scanline:  transparent;
+  }
+}
+
+/* ═══ 显式主题覆盖 (JS 设置, 高于媒体查询优先级) ═══ */
+[data-theme='light'] {
+  --bg:        #f5f6f8;
+  --surface:   #ffffff;
+  --surface-2: #f0f1f4;
+  --grid:      #e1e4e8;
+  --grid-hi:   #d1d5db;
+  --text:      #1a1d26;
+  --text2:     #5f6672;
+  --text3:     #9aa0ad;
+  --accent:    #2563eb;
+  --st-done:   #16a34a;
+  --st-run:    #2563eb;
+  --st-fail:   #dc2626;
+  --st-hold:   #7c3aed;
+  --st-pending:#ca8a04;
+  --scanline:  transparent;
+}
+
+[data-theme='dark'] {
+  --bg:        #0e0f13;
+  --surface:   #16181f;
+  --surface-2: #1c1f28;
+  --grid:      #262a35;
+  --grid-hi:   #333845;
+  --text:      #e4e7ee;
+  --text2:     #9aa0ad;
+  --text3:     #5f6672;
+  --accent:    #4d8dff;
+  --st-done:   #3ecf8e;
+  --st-run:    #4d8dff;
+  --st-fail:   #f0616d;
+  --st-hold:   #c08cff;
+  --st-pending:#d8a236;
+  --scanline:  rgba(255,255,255,.015);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -119,6 +190,8 @@ th { text-align: left; padding: 6px 10px; background: var(--surface-2); color: v
      font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
 td { padding: 5px 10px; font-size: 11px; }
 tr { border-bottom: 1px solid var(--surface-2); }
+/* T6: 原生虚拟滚动 — >50行时浏览器自动跳过屏外渲染 */
+tr { content-visibility: auto; contain-intrinsic-size: auto 28px; }
 tr:hover td { background: rgba(255,255,255,.02); }
 tr.expanded td { background: rgba(77,141,255,.04); }
 
