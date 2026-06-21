@@ -107,7 +107,18 @@ def _run_committee(task, ctx: RunContext, agents: dict, d_agents: list) -> Batch
                 })
 
     if not plans:
-        # 全失败 → 回退普通模式
+        # 全失败 → 尝试降级拆分
+        try:
+            subtasks = decompose(task.description, agents)
+            if subtasks and len(subtasks) > 1:
+                return BatchOutput(
+                    ok=False, task_id=task.id,
+                    planner_decomposed=True,
+                    planner_subtasks=subtasks,
+                    term_reason=f"committee全败→拆分{len(subtasks)}子任务")
+        except Exception:
+            pass
+        # 拆分也失败 → 回退普通模式最后尝试
         return _run_with_retry(task, ctx, agents)
 
     # 合成: 机械拼接 + 标注各方贡献
