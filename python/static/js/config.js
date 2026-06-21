@@ -289,6 +289,8 @@ async function renderModels(){
       html += '<span style="width:12px;text-align:center">'+dot+'</span>';
       html += '<span style="font-family:var(--mono);font-weight:500;min-width:80px;color:var(--text)">'+esc(m.display)+'</span>';
       html += '<span style="font-family:var(--mono);font-size:9px;color:var(--text3)">'+esc(m.id)+'</span>';
+      const ratingColors = {SSS:'var(--st-hold)',SS:'var(--accent)',S:'var(--st-done)',A:'var(--text3)'};
+      if (m.rating) html += '<span style="font-size:8px;font-weight:600;color:'+(ratingColors[m.rating]||'var(--text3)')+';font-family:var(--mono)">'+esc(m.rating)+'</span>';
       html += '<span style="font-size:9px;color:var(--text3);font-family:var(--mono)">'+cm+'</span>';
       html += '<span style="font-size:8px;color:var(--text3)">'+m.speed+'</span>';
       if (m.reasoning) html += '<span style="font-size:8px;color:var(--st-hold);font-family:var(--mono)">RSN</span>';
