@@ -334,7 +334,13 @@ class OpenAIAgentExecutor(BaseExecutor):
 
             # 无 tool_calls → 任务完成
             tool_turns = 0  # 重置工具计数
-            content = msg.get("content", "") or msg.get("reasoning_content", "")
+            content = msg.get("content", "")
+            reasoning = msg.get("reasoning_content", "")
+            # 推理模型可能 content 为空但 reasoning_content 有思考过程:
+            # 此时不应结束, 继续让模型产出最终答案
+            if not content.strip() and reasoning.strip():
+                messages.append({"role": "user", "content": "请直接输出最终答案，不要只输出思考过程。"})
+                continue  # 给模型多一轮产出 content
             if content.strip():
                 elapsed = time.time() - start
                 # 用 git diff 追踪改动的文件
