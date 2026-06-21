@@ -579,5 +579,45 @@ class TestChaosResilience(unittest.TestCase):
 TestChaosResilience._t = TestScheduleMonotonicity._t
 
 
+class TestValidatorV2(unittest.TestCase):
+    def setUp(self):
+        import tempfile; self.tmpdir = tempfile.TemporaryDirectory(); self.root = self.tmpdir.name
+    def tearDown(self): self.tmpdir.cleanup()
+    def _write(self, relpath, content):
+        import os; p = os.path.join(self.root, relpath)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, 'w') as f: f.write(content)
+
+    def test_run_tests_pytest_pass(self):
+        self._write('test_ok.py', 'def test_ok(): assert True')
+        from scheduler.validator import run_project_tests
+        r = run_project_tests(cwd=self.root)
+        self.assertTrue(r['passed']); self.assertEqual(r['runner'], 'pytest')
+
+    def test_run_tests_pytest_fail(self):
+        self._write('test_fail.py', 'def test_oops(): assert False')
+        from scheduler.validator import run_project_tests
+        r = run_project_tests(cwd=self.root)
+        self.assertFalse(r['passed']); self.assertGreater(r['failures'], 0)
+
+    def test_run_tests_no_tests(self):
+        from scheduler.validator import run_project_tests
+        r = run_project_tests(cwd=self.root)
+        self.assertEqual(r['runner'], 'none'); self.assertTrue(r['passed'])
+
+    def test_crossover_review_no_files(self):
+        from scheduler.validator import crossover_review
+        r = crossover_review('test', 'output', [], 'E', 'test')
+        self.assertEqual(r['verdict'], 'pass')
+
+    def test_post_execution_hook(self):
+        from scheduler.validator import post_execution_hook
+        class F: raw_output = 'test passed' * 10; changed_files = ['a.py']
+        r = post_execution_hook(F(), None)
+        self.assertGreaterEqual(r['confidence'], 0.5)
+        self.assertIn('changed_files_count', r['quality_signals'])
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

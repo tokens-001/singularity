@@ -509,6 +509,52 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     validation.quality_signals = quality.get("quality_signals", {})
                 except Exception:
                     quality = {"warnings": [], "failure_kind": "ok", "confidence": 0.5}
+
+                # ── v2: independent tests + crossover review ──
+                changed = exec_result.changed_files or []
+                if validation.action == "pass" and changed:
+                    # 1) run project tests
+                    try:
+                        test_result = val_mod.run_project_tests(cwd=cwd)
+                        if not test_result.get("passed"):
+                            quality["warnings"].append(f"tests failed ({test_result.get('runner','?')}): {test_result.get('failures','?')} failures")
+                            quality["failure_kind"] = "test_failure"
+                            quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.3)
+                            validation.unverified.append(f"tests failed: {test_result.get('output','')[:200]}")
+                            validation.action = "retry"
+                        elif test_result.get("runner") != "none":
+                            quality["quality_signals"]["tests_passed"] = test_result.get("total", 0)
+                            quality["confidence"] = min(1.0, quality.get("confidence", 0.5) + 0.1)
+                    except Exception as e:
+                        quality["warnings"].append(f"test execution error: {e}")
+
+                if validation.action == "pass" and changed:
+                    # 2) crossover review: different model reviews diff
+                    try:
+                        writer_model = agent_cfg.get("model", "")
+                        review = val_mod.crossover_review(
+                            task_desc=task.description, raw_output=exec_result.raw_output,
+                            changed_files=changed, writer_level=level,
+                            writer_model=writer_model, cwd=cwd)
+                        if review.get("issues"):
+                            crit = [i for i in review["issues"] if i.get("severity") == "critical"]
+                            warns = [i for i in review["issues"] if i.get("severity") == "warning"]
+                            if crit:
+                                quality["warnings"].append(f"review found {len(crit)} critical issues: " + "; ".join(i.get("detail","")[:60] for i in crit))
+                                quality["failure_kind"] = "review_critical"
+                                quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.25)
+                                validation.action = "retry"
+                            elif warns:
+                                quality["warnings"].append(f"review found {len(warns)} warnings")
+                                quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.1)
+                        if review.get("verdict") == "abort":
+                            validation.action = "abort"
+                            validation.unverified.append(f"review abort: {review.get('summary','')}")
+                        quality["quality_signals"]["review_verdict"] = review.get("verdict", "pass")
+                        quality["quality_signals"]["review_summary"] = review.get("summary", "")[:200]
+                    except Exception as e:
+                        quality["warnings"].append(f"review error: {e}")
+
                 last_validation = validation
 
                 cascade_action, payload = _decide_cascade(
