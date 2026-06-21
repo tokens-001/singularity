@@ -287,7 +287,10 @@ def _finalize_result(task, batch, route, snap, results: list) -> str:
     term_reason = batch.term_reason
     disp_result = batch.dispatch_result
     if batch.planner_decomposed:
-        _materialize_in_main(batch, task)
+        try:
+            _materialize_in_main(batch, task)
+        except Exception as e:
+            witness.heartbeat('orch', f'warn:materialize:{e}')
         reason = f"decomposed: {term_reason}"
     elif validation.action == "pass":
         tracker.transition(task.id, TaskStatus.DONE)
@@ -353,10 +356,12 @@ def _finalize_result(task, batch, route, snap, results: list) -> str:
                 tokens=getattr(exec_out, 'tokens', 0) if exec_out else 0,
             )
             rl_mod.save_learner(learner)
-        except Exception:
-            pass
-    except Exception:
-        pass
+        except Exception as e:
+            try: witness.heartbeat('orch', f'warn:route_learner:{e}')
+            except Exception: pass
+    except Exception as e:
+        try: witness.heartbeat('orch', f'warn:archive_experience:{e}')
+        except Exception: pass
     # 工具事件
     tool_events = getattr(batch, 'tool_events', []) or []
     for te in tool_events:
@@ -486,7 +491,7 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
                 _save_trace(t, route, snap, None, None, False)
             except Exception as e:
                 witness.heartbeat('orch', f'warn:{e}')
-            fut.cancel()
+            # fut.cancel() 对运行中 future 无效(Python限制), 任务已标 FAILED, worker 自然结束
             reaped = True
     # 如果无事可收但还有 running future, 短暂 block 等下一个完成
     if not reaped and running_futures:
@@ -512,6 +517,11 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
                             pre_search_top_decisions=batch.pre_search_top_decisions, pre_search_memory=batch.pre_search_memory)
                 results.append((t.id, f"merged: {mr.new_head[:8]}", batch.validation))
             elif mr.status == "conflict":
+                tracker.transition(t.id, TaskStatus.CONFLICT_HELD, error=f"conflict: {mr.conflict_files}")
+                _release_ref(t.id)
+                _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
+                            pre_search_skipped=batch.pre_search_skipped, pre_search_reason=batch.pre_search_reason,
+                            pre_search_top_decisions=batch.pre_search_top_decisions, pre_search_memory=batch.pre_search_memory)
                 results.append((t.id, f"conflict: {mr.conflict_files}", batch.validation))
             else:
                 tracker.transition(t.id, TaskStatus.FAILED, error=f"merge {mr.status}")

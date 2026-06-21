@@ -96,13 +96,8 @@
       "gpt-5.5-pro",
       "claude-opus-4-8"
     ],
-    "E": [
-      "deepseek-chat",
-      "glm-5-turbo"
-    ],
-    "E+": [
-      "glm-5.2"
-    ]
+    "E": [],
+    "E+": []
   },
   "_order": {
     "D": [
