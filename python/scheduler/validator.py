@@ -208,7 +208,7 @@ JSON:"""
 
 
 def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
-                       max_chunk_lines: int = 300) -> dict:
+                       max_chunk_lines: int = 300, diff_only: bool = False) -> dict:
     """多模型并行独立审查一个文件。分段→并行派发→汇总。
 
     Args:
@@ -216,6 +216,7 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
         models: 模型名列表, 默认用D层前3个可用模型
         cwd: 工作目录
         max_chunk_lines: 每段最大行数
+        diff_only: True=只审查 git diff (轻量,互补 crossover), False=审查全文
 
     Returns:
         {issues:[{model,severity,line,detail}], verdicts:[{model,verdict}],
@@ -225,12 +226,28 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
     from pathlib import Path as _Path
 
     root = cwd or str(config.PROJECT_ROOT)
-    fpath = _Path(root) / filepath
-    if not fpath.exists():
-        return {"issues":[],"verdicts":[],"summaries":[],
-                "models_used":[],"elapsed":0,"error":f"file not found: {filepath}"}
 
-    code = fpath.read_text(); lines = code.split('\n'); total_lines = len(lines)
+    if diff_only:
+        # 获取该文件的 git diff
+        try:
+            r = subprocess.run(["git", "diff", filepath],
+                             capture_output=True, text=True, timeout=10, cwd=root)
+            code = (r.stdout or "").strip()
+            if not code:
+                return {"issues":[],"verdicts":[],"summaries":[],
+                        "models_used":[],"elapsed":0,"file":filepath,"mode":"diff","lines":0}
+        except Exception:
+            code = ""
+        mode = "diff"
+    else:
+        fpath = _Path(root) / filepath
+        if not fpath.exists():
+            return {"issues":[],"verdicts":[],"summaries":[],
+                    "models_used":[],"elapsed":0,"error":f"file not found: {filepath}"}
+        code = fpath.read_text()
+        mode = "full"
+
+    lines = code.split('\n'); total_lines = len(lines)
     from . import dispatcher as _disp
     agents = _disp.load_agents()
 
@@ -248,9 +265,10 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
         return {"issues":[],"verdicts":[],"summaries":[],"models_used":[],"elapsed":0,"error":"no models available"}
 
     # 分段
+    eff_chunk = max_chunk_lines if mode == "full" else max(max_chunk_lines, total_lines)
     chunks = []
-    for i in range(0, total_lines, max_chunk_lines):
-        end = min(i + max_chunk_lines, total_lines)
+    for i in range(0, total_lines, eff_chunk):
+        end = min(i + eff_chunk, total_lines)
         chunks.append((f"L{i+1}-L{end}", "\n".join(lines[i:end])))
 
     def _parse_json(raw):
@@ -275,9 +293,12 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
         from .log import warn; warn("validator._parse_json", f"parse fail: {raw[:150]}")
         return None
 
+    context = f"{mode} review" if mode == "diff" else "code section"
+    prefix = f"Review this git diff for file: {filepath}" if mode == "diff" else f"Review this {context}"
+
     def _review_chunk(agent_cfg, chunk_name, chunk_code):
         model = agent_cfg['model']
-        prompt = f"""Review this code section. Output ONLY valid JSON.
+        prompt = f"""{prefix}. Output ONLY valid JSON.
 
 File: {filepath} Section: {chunk_name}
 
@@ -326,4 +347,4 @@ Output valid JSON: {{"issues":[{{"severity":"critical|warning|info","line":line_
     all_issues.sort(key=lambda x: sev_order.get(x.get('severity','info'), 3))
 
     return {"issues":all_issues,"verdicts":verdicts,"summaries":summaries,
-            "models_used":models_used,"elapsed":elapsed,"file":filepath,"lines":total_lines}
+            "models_used":models_used,"elapsed":elapsed,"file":filepath,"lines":total_lines,"mode":mode}

@@ -543,7 +543,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                             rev_files = []; rev_models = []; all_issues = []
                             for f in changed[:3]:  # review up to 3 changed files
                                 review = val_mod.multi_model_review(
-                                    filepath=f, models=reviewer_models, cwd=cwd)
+                                    filepath=f, models=reviewer_models, cwd=cwd, diff_only=True)
                                 rev_files.append(f)
                                 rev_models = review.get("models_used", [])
                                 issues = review.get("issues", [])

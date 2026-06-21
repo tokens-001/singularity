@@ -160,13 +160,33 @@ def _purge_old_copies() -> None:
 
 def purge_old_snapshot_meta(keep: int = 200) -> int:
     """清理旧的快照元数据 .json 文件，保留最近 keep 个。返回清理数。"""
-    import os as _os
+    import os as _os, time as _time
+    from collections import defaultdict
     files = sorted(config.SNAPSHOT_DIR.glob("*.json"),
-                   key=lambda p: _os.path.getmtime(p))
+                   key=lambda p: _os.path.getmtime(p), reverse=True)
+    now = _time.time()
+    week_ago = now - 7 * 86400
+    kept = 0
+    per_group: defaultdict[str, int] = defaultdict(int)
+    MAX_PER_GROUP = 30  # 每组最多保留
+    OVERALL_CAP = 500   # 总量上限
+
+    # 从新到老遍历，决定哪些保留
+    to_keep = set()
+    for f in files:
+        group = f.stem.split("_", 1)[1] if "_" in f.stem else f.stem
+        mtime = _os.path.getmtime(f)
+        # 保留条件: 7天内 OR 该组未满30个 OR 总量未满500
+        if mtime > week_ago or per_group[group] < MAX_PER_GROUP or kept < OVERALL_CAP:
+            to_keep.add(f)
+            kept += 1
+            per_group[group] += 1
+
     n = 0
-    for old in files[:-keep]:
-        try: old.unlink(); n += 1
-        except OSError: pass
+    for f in files:
+        if f not in to_keep:
+            try: f.unlink(); n += 1
+            except OSError: pass
     return n
 
 
