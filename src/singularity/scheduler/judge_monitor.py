@@ -106,7 +106,7 @@ class JudgeMonitorStore:
                template_id: str = "") -> None:
         """Record a judge event after each execution judge call.
 
-        Called from _judge_and_profile() in orchestrator.py.
+        Called from _judge_and_profile() in _task_runner.py.
         Caller passes the execution_judge.JudgeVerdict object.
         """
         import time

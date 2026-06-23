@@ -410,7 +410,8 @@ def _loop_worker():
 
                 # MAGMA 慢通道整合
                 try:
-                    added = orchestrator.consolidate_memory()
+                    from singularity.scheduler.memory import consolidate_memory
+                    added = consolidate_memory()
                     if added:
                         _push_event("memory", f"慢通道: +{added} 条隐含因果边")
                 except Exception:

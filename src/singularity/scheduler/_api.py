@@ -996,7 +996,8 @@ def memory_chain(task_id):
 
 
 def memory_rebuild():
-    return {"ok": True, "consolidated": orchestrator.consolidate_memory()}, 200
+    from singularity.scheduler.memory import consolidate_memory
+    return {"ok": True, "consolidated": consolidate_memory()}, 200
 
 
 def conflict_list():

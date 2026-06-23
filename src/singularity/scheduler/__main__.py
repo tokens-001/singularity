@@ -179,7 +179,8 @@ def _drain_queue(agents: dict, max_concurrent: int = 1) -> tuple[int, int]:
     # MAGMA 慢通道: 每轮 drain 后运行一次启发式整合
     if results:
         try:
-            added = orchestrator.consolidate_memory()
+            from singularity.scheduler.memory import consolidate_memory
+            added = consolidate_memory()
             if added:
                 print(f"[memory] 慢通道整合: +{added} 条隐含因果边", file=sys.stderr)
         except Exception as e:
