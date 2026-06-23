@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "singularity"
+version = "2.1.156"
+description = "Singularity Agent Dispatch Platform"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+    "Flask>=3.0",
+    "httpx>=0.28",
+    "sentence-transformers>=3.0",
+    "pyyaml>=6.0",
+    "chromadb>=0.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "pre-commit>=4.0",
+]
+
+[project.scripts]
+singularity = "singularity.web.app:main"
+singularity-cli = "singularity.scheduler.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "smoke_test.py"]
+addopts = "-q --tb=short"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]
+ignore = ["E501", "B904"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+exclude = ["src/singularity/scheduler/executors/", "src/singularity/scheduler/neijinglu\\.py", "src/singularity/scheduler/supervisor\\.py"]
+
+[tool.coverage.run]
+source = ["src/singularity"]
+branch = true
+
+[tool.coverage.report]
+exclude_also = ["def __repr__", "if __name__ == .__main__.:", "raise NotImplementedError"]

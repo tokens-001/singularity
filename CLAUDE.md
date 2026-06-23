@@ -1,6 +1,6 @@
 # 工作模式（默认）
 
-代码行为硬约束 + 项目指针。镜子模式 → `context/mirror-mode.md`，用户叫"奇点"或讨论非代码话题时触发。
+代码行为硬约束 + 项目指针。镜子模式 → `context/mirror-mode.md`，用户叫"Singularity"或讨论非代码话题时触发。
 
 ## 硬约束
 
@@ -17,7 +17,7 @@
 
 ## 项目
 
-- 代码：`/Users/jingzhe/奇点/python/`
+- 代码：`/Users/jingzhe/Singularity/python/`
 - 测试：`QIDIAN_SKIP_EMBED=1 python3 smoke_test.py(43) test_exec_run.py(21) unit_tests.py(24)`
 - 服务：`QIDIAN_SKIP_EMBED=1 python3 app.py` → 127.0.0.1:5050
 - 记忆：`~/.claude/projects/-Users-jingzhe/memory/MEMORY.md`
@@ -34,4 +34,4 @@
 - 归档规则 → `context/archive-rules.md`
 - Python教学 → 第一步强制 Skill("teach-me")
 - 项目守门员 → `context/scope-guardian.md` + `context/quality-standards.md`
-- 日常执行 → `~/奇点/日常执行.md`
+- 日常执行 → `~/Singularity/日常执行.md`

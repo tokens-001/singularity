@@ -1,18 +1,16 @@
-venv/
+.venv/
 .env
 __pycache__/
 *.pyc
 .DS_Store
 *.swp
 *.swo
-data/case_data/
-sessions/
 .memory-backup/
 
 # 知识引擎生成数据
-python/qidian-knowledge/data/chroma/
-python/qidian-knowledge/data/.eval_baseline
-python/qidian-knowledge/data/index/corpus.json
-.qidian/
+data/knowledge/data/chroma/
+data/knowledge/data/.eval_baseline
+data/knowledge/data/index/corpus.json
 .qidian/
 .codegraph/
+*.egg-info/

@@ -3,10 +3,10 @@ name: qidian-memory
 description: 查询 MAGMA 多图记忆 — 语义相似任务、因果链、实体重叠。
 ---
 
-查询奇点 MAGMA 多图记忆：
+查询Singularity MAGMA 多图记忆：
 
 ```bash
-cd /Users/jingzhe/奇点 && python3 -m scheduler memory query "$SELECTED_TEXT"
+cd /Users/jingzhe/Singularity && python3 -m scheduler memory query "$SELECTED_TEXT"
 ```
 
 子命令:

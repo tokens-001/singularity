@@ -90,18 +90,15 @@
     }
   ],
   "_disabled": {
-    "D": [
-      "kimi-k2.7-code",
-      "gpt-5.5",
-      "gpt-5.5-pro",
-      "claude-opus-4-8"
-    ],
     "E": [
       "deepseek-chat",
       "glm-5-turbo",
       "kimi-k2.7-code"
     ],
-    "E+": []
+    "E+": [],
+    "D": [
+      "kimi-k2.7-code"
+    ]
   },
   "_order": {
     "D": [

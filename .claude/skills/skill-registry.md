@@ -1,4 +1,4 @@
-# 奇点 Skill 注册表
+# Singularity Skill 注册表
 
 两个 skill，一个学一个做。
 

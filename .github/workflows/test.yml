@@ -1,0 +1,17 @@
+name: Test
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: ruff check src/ --select=E,F
+      - run: QIDIAN_SKIP_EMBED=1 python3 -m pytest tests/test_scheduler/ -q --cov=singularity --cov-report=term --cov-fail-under=20
+      - run: QIDIAN_SKIP_EMBED=1 python3 tests/test_exec_run.py
+      - run: mypy src/singularity/ --ignore-missing-imports || true

@@ -1,4 +1,4 @@
-# 奇点调度面板 — VS Code 扩展
+# Singularity Dispatch面板 — VS Code 扩展
 
 ## 安装
 
@@ -30,5 +30,5 @@ npm run compile
 
 ## 依赖
 
-- 奇点调度平台运行在 http://127.0.0.1:5050
+- Singularity Dispatch运行在 http://127.0.0.1:5050
 - WebSocket 服务器运行在 ws://127.0.0.1:5051

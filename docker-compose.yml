@@ -1,0 +1,15 @@
+version: "3.8"
+services:
+  qidian:
+    build: .
+    ports: ["5050:5050"]
+    env_file:
+      - .env
+    environment:
+      - QIDIAN_SKIP_EMBED=1
+    volumes:
+      - qidian_data:/app/.qidian
+    restart: unless-stopped
+
+volumes:
+  qidian_data:

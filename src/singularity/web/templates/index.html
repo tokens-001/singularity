@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Singularity Agent 调度平台</title>
+<link rel="stylesheet" href="/static/style.css">
+	<meta name="apple-mobile-web-app-capable" content="yes">
+	<meta name="format-detection" content="telephone=no">
+</head>
+<body role="application">
+
+<!-- ═══════════════════════════════════════════════════════
+     Top Bar
+     ═══════════════════════════════════════════════════════ -->
+<div class="topbar">
+  <h1><span>Singularity</span> / 调度指挥中心</h1>
+  <div class="live on" id="live-indicator">SYS.ONLINE</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     Tab Bar
+     ═══════════════════════════════════════════════════════ -->
+<div class="toast-container" id="toast-container"></div>
+<div class="tab-bar" id="tab-bar">
+  <div class="tab active" data-tab="dashboard">仪表盘</div>
+  <div class="tab" data-tab="tasks">任务</div>
+  <div class="tab" data-tab="project">项目</div>
+  <div class="tab" data-tab="config">配置</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     Tab 1: 仪表盘 — 一眼看完的系统状态
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content active" id="tab-dashboard">
+
+  <div class="loop-bar">
+    <span class="loop-indicator off" id="loop-dot"></span>
+    <span class="loop-status off" id="loop-label">⚠ 调度循环未启动 — 任务不会被执行</span>
+    <span style="font-size:9px;color:var(--text3);font-family:var(--mono)" id="loop-info"></span>
+    <span style="flex:1"></span>
+    <button class="btn cyan sm" id="btn-loop-start" onclick="startLoop()">启动</button>
+    <button class="btn red sm" id="btn-loop-stop" onclick="stopLoop()" style="display:none">停止</button>
+    <button class="btn sm" style="color:var(--text3);font-size:9px;margin-left:4px" onclick="cleanupStale()" title="清理残留心跳和缓存">扫除</button>
+  </div>
+
+  <div id="onboarding" style="display:none;padding:12px 16px;margin-bottom:8px;background:var(--surface);border-left:2px solid var(--cyan);font-size:10px;color:var(--text2);line-height:1.8">
+    1. <strong style="color:var(--text)">配置</strong> → 检查 API Key · 2. <strong style="color:var(--text)">任务</strong> → 提交任务 · 3. 点击 <strong style="color:var(--cyan)">启动</strong> 开始调度
+  </div>
+
+  <div class="db-grid" id="db-grid">
+    <!-- JS 动态填充 -->
+  </div>
+
+  <div class="section" style="margin-top:12px">
+    <div class="section-title">实时事件</div>
+    <div class="section-body event-feed" id="event-feed" style="min-height:60px;max-height:250px;overflow-y:auto;font-family:var(--mono);font-size:10px">
+      <span style="color:var(--text3)">等待调度循环启动...</span>
+    </div>
+  </div>
+
+  <div class="agent-row" id="agent-row" style="margin-top:8px"></div>
+  <div style="font-size:9px;color:var(--text3);font-family:var(--mono);margin-top:4px" id="timing-line"></div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     Tab 2: 任务 — 提交 / 查看 / 操作
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tab-tasks">
+
+  <div class="section">
+    <div class="section-title">新建任务</div>
+    <div class="section-body">
+      <div class="form-row">
+        <textarea id="new-task-desc" placeholder="描述任务，回车提交..."
+          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();submitTask()}"></textarea>
+        <button class="btn purple" onclick="submitTask()" style="flex-shrink:0">提交</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="filter-bar">
+    <select id="filter-status" onchange="renderTasks()">
+      <option value="">全部状态</option>
+      <option value="pending">pending</option>
+      <option value="routed">routed</option>
+      <option value="dispatched">dispatched</option>
+      <option value="running">running</option>
+      <option value="done">done</option>
+      <option value="failed">failed</option>
+    </select>
+    <select id="filter-level" onchange="renderTasks()">
+      <option value="">全部层级</option>
+      <option value="E">E</option>
+      <option value="E+">E+</option>
+      <option value="D">D</option>
+    </select>
+    <label style="font-size:9px;display:flex;align-items:center;gap:2px;margin-left:6px">
+      <input type="checkbox" id="f-held" onchange="renderTasks()"> 仅扣留
+    </label>
+    <input id="filter-search" placeholder="搜索关键词..." oninput="renderTasks()" style="width:120px;font-size:9px;padding:2px 4px;background:var(--surface);border:1px solid var(--grid);color:var(--text);margin-left:4px">
+    <span style="flex:1"></span>
+    <span style="font-size:9px;color:var(--text3);font-family:var(--mono)" id="task-count"></span>
+  </div>
+
+  <div class="section" style="overflow-x:auto">
+    <table><tbody id="task-table"></tbody></table>
+  </div>
+
+  <div class="section" style="margin-top:8px" id="flow-section">
+    <div class="section-title" onclick="document.getElementById('flow-body').style.display=document.getElementById('flow-body').style.display==='none'?'block':'none'" style="cursor:pointer">
+      任务流图 <span style="font-size:9px;color:var(--text3);font-weight:normal;text-transform:none">点击折叠</span>
+    </div>
+    <div class="section-body" id="flow-body" style="padding:0"></div>
+  </div>
+
+  <div class="section" style="margin-top:8px">
+    <div class="section-title">决策链</div>
+    <div class="section-body" id="decision-cards" style="font-size:10px">
+      <select id="dc-task-picker" onchange="loadDecisions()" style="width:100%;margin-bottom:4px;font-size:9px;padding:2px">
+        <option value="">-- 选择已完成任务 --</option>
+      </select>
+      <div id="decision-cards-content" style="font-size:10px">
+        <span style="color:var(--text2)">选择任务后加载决策链</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     Tab 3: 项目 — 工作流管理
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tab-project">
+
+  <div class="section">
+    <div class="section-title">创建项目</div>
+    <div class="section-body">
+      <div class="form-row">
+        <input id="new-project-name" placeholder="项目名称" style="flex:1">
+        <select id="new-project-template" style="width:auto">
+          <option value="product_dev">产品开发</option>
+          <option value="bug_fix">Bug修复</option>
+          <option value="refactor">重构优化</option>
+          <option value="agent_dev">Agent开发</option>
+        </select>
+        <button class="btn purple" onclick="createProject()">创建</button>
+      </div>
+      <textarea id="new-project-desc" placeholder="需求描述（必填，否则无法推进调研）" style="width:100%;margin-top:4px;min-height:60px;font-size:10px;background:var(--bg);border:1px solid var(--grid);color:var(--text);padding:4px"></textarea>
+      <div style="display:flex;gap:4px;margin-top:2px">
+        <input id="new-project-scope" placeholder="范围（涉及哪些模块/文件）" style="flex:1;font-size:9px">
+        <input id="new-project-constraints" placeholder="约束（不改哪些接口，用分号分隔）" style="flex:1;font-size:9px">
+        <input id="new-project-budget" placeholder="预算$" style="width:60px;font-size:9px" value="3.00">
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">项目列表</div>
+    <div class="section-body" id="project-list" style="font-size:10px"></div>
+  </div>
+
+  <div class="section" id="project-detail" style="display:none">
+    <div class="section-title" id="project-detail-title"></div>
+    <div class="section-body" id="project-detail-body" style="font-size:10px"></div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     Tab 4: 配置 — API库 / 模型库 / Agent编组 / 干预
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tab-config">
+
+  <div style="display:flex;gap:1px;flex-wrap:wrap;margin-bottom:8px">
+    <div class="section" style="flex:1;min-width:300px">
+      <div class="section-title">API 库 <button class="btn cyan sm" style="margin-left:8px" onclick="renderAPIStore()">刷新</button></div>
+      <div class="section-body" id="api-store-body" style="font-size:10px;max-height:250px;overflow-y:auto"></div>
+      <div style="padding:6px 10px;border-top:1px solid var(--grid);display:flex;gap:4px;flex-wrap:wrap">
+        <input id="api-new-id" placeholder="id" style="width:70px;font-size:9px">
+        <input id="api-new-provider" placeholder="提供商" style="width:70px;font-size:9px">
+        <input id="api-new-url" placeholder="base_url" style="width:130px;font-size:9px">
+        <input id="api-new-env" placeholder="环境变量" style="width:90px;font-size:9px">
+        <button class="btn cyan sm" onclick="addAPI()">添加</button>
+      </div>
+    </div>
+    <!-- Scan Results Panel -->
+    <div class="section" id="scan-results-panel" style="display:none;margin-top:8px">
+      <div class="section-title">📡 扫描结果 <span style="font-size:9px;color:var(--text3);font-weight:400">— 选择要导入的模型</span></div>
+      <div class="section-body" id="scan-results-body" style="font-size:10px;max-height:300px;overflow-y:auto"></div>
+    </div>
+    <div class="section" style="flex:1;min-width:300px">
+      <div class="section-title">模型库 <button class="btn cyan sm" style="margin-left:8px" onclick="renderModels()">刷新</button></div>
+      <div class="section-body" id="models-body" style="font-size:10px;max-height:200px;overflow-y:auto"></div>
+      <div style="padding:4px 10px;border-top:1px solid var(--grid);display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+        <select id="model-new-provider" style="font-size:9px;padding:2px;min-width:80px" onchange="onProviderChange()">
+          <option value="">-- 选 API --</option>
+        </select>
+        <input id="model-new-id" placeholder="模型 id" style="width:100px;font-size:9px">
+        <input id="model-new-display" placeholder="显示名" style="width:80px;font-size:9px">
+        <select id="model-new-tier" style="width:55px;font-size:9px;padding:2px">
+          <option value="E">E</option>
+          <option value="E+">E+</option>
+          <option value="D">D</option>
+        </select>
+        <select id="model-new-speed" style="width:55px;font-size:9px;padding:2px">
+          <option value="fast">快</option>
+          <option value="medium" selected>中</option>
+          <option value="slow">慢</option>
+        </select>
+        <select id="model-new-cost" style="width:55px;font-size:9px;padding:2px">
+          <option value="budget">低</option>
+          <option value="standard" selected>标</option>
+          <option value="premium">高</option>
+        </select>
+        <label style="font-size:9px;color:var(--text3);font-family:var(--mono);display:flex;align-items:center;gap:2px"><input type="checkbox" id="model-new-reasoning">推理</label>
+        <button class="btn cyan sm" onclick="addModel()">添加</button>
+      </div>
+    </div>
+  </div>
+
+
+  <div class="section" style="margin-bottom:8px">
+    <div class="section-title">权限管理 <button class="btn cyan sm" style="margin-left:8px" onclick="renderPermissions()">刷新</button></div>
+    <div class="section-body" style="font-size:10px">
+      <div style="display:flex;gap:8px">
+        <div style="flex:1">
+          <h4 style="font-size:10px;margin:0 0 4px 0;color:var(--text2)">Profiles</h4>
+          <div id="perm-profiles-body" style="max-height:120px;overflow-y:auto;font-family:var(--mono);font-size:9px">
+            <span style="color:var(--text2)">加载中...</span>
+          </div>
+        </div>
+        <div style="flex:1.5">
+          <h4 style="font-size:10px;margin:0 0 4px 0;color:var(--text2)">Agent 绑定</h4>
+          <div style="display:flex;gap:4px;margin-bottom:4px">
+            <select id="perm-level" style="font-size:9px;padding:2px"><option value="E">E</option><option value="E+">E+</option><option value="D">D</option></select>
+            <select id="perm-model" style="font-size:9px;padding:2px;flex:1" onchange="showPermBinding()"></select>
+            <select id="perm-profile-select" style="font-size:9px;padding:2px;flex:1"></select>
+            <button class="btn cyan sm" onclick="bindPerm()">绑定</button>
+          </div>
+          <div id="perm-binding-info" style="font-size:9px;color:var(--text2)"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="section" style="margin-bottom:8px">
+    <div class="section-title">项目编组 <button class="btn cyan sm" style="margin-left:8px" onclick="populateLineupProjects()">刷新</button></div>
+    <div class="section-body" style="font-size:10px">
+      <div style="display:flex;gap:4px;margin-bottom:8px;align-items:center">
+        <select id="lineup-project-select" style="font-size:9px;padding:2px" onchange="loadLineupForProject()"></select>
+        <span style="font-size:9px;font-family:var(--mono)" id="lineup-status"></span>
+      </div>
+      <div id="lineup-editor" style="display:none">
+        <div class="section-title" style="font-size:9px">E 层</div>
+        <div id="lineup-e" style="margin-bottom:8px"></div>
+        <div class="section-title" style="font-size:9px">E+ 层</div>
+        <div id="lineup-ep" style="margin-bottom:8px"></div>
+        <div class="section-title" style="font-size:9px">D 层</div>
+        <div id="lineup-d" style="margin-bottom:8px"></div>
+        <button class="btn purple sm" onclick="saveLineup()">保存编组</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" style="margin-bottom:8px">
+    <div class="section-title">架构切换 <button class="btn cyan sm" style="margin-left:8px" onclick="renderLayerSwitch()">刷新</button></div>
+    <div class="section-body" id="layer-switch-body" style="font-size:10px"></div>
+  </div>
+
+  <div class="section" style="margin-bottom:8px">
+    <div class="section-title">MCP 服务器 <button class="btn cyan sm" style="margin-left:8px" onclick="renderMCPServers()">刷新</button>
+      <button class="btn cyan sm" style="margin-left:8px" onclick="toggleMCPForm()">+ 添加</button></div>
+    <div class="section-body" style="font-size:10px">
+      <div id="mcp-servers-body" style="max-height:200px;overflow-y:auto;font-family:var(--mono);font-size:9px">
+        <span style="color:var(--text2)">加载中...</span>
+      </div>
+      <div id="mcp-form" style="display:none;padding:8px;border-top:1px solid var(--grid)">
+        <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+          <input id="mcp-new-name" placeholder="名称 (如 filesystem)" style="width:120px;font-size:9px">
+          <select id="mcp-new-transport" style="font-size:9px;padding:2px;width:70px" onchange="onMCPTransportChange()">
+            <option value="stdio">stdio</option>
+            <option value="http">http</option>
+          </select>
+          <input id="mcp-new-command" placeholder="启动命令 (如 npx -y @anthropic/mcp-server-filesystem /tmp)" style="width:280px;font-size:9px">
+          <input id="mcp-new-url" placeholder="HTTP URL (http传输时填写)" style="width:220px;font-size:9px;display:none">
+          <input id="mcp-new-timeout" placeholder="超时秒" value="30" style="width:50px;font-size:9px">
+          <label style="font-size:9px;display:flex;align-items:center;gap:2px"><input type="checkbox" id="mcp-new-enabled" checked>启用</label>
+          <button class="btn cyan sm" onclick="addMCPServer()">保存</button>
+          <button class="btn sm" onclick="toggleMCPForm()">取消</button>
+        </div>
+      </div>
+      <div style="padding:4px 10px;border-top:1px solid var(--grid);display:flex;gap:4px">
+        <button class="btn cyan sm" onclick="refreshMCPTools()" style="font-size:9px">刷新全部工具</button>
+        <span style="font-size:9px;color:var(--text2)" id="mcp-tool-count"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" style="margin-bottom:8px">
+    <div class="section-title">Skill 管理 <button class="btn cyan sm" style="margin-left:8px" onclick="renderSkills()">刷新</button>
+      <button class="btn cyan sm" style="margin-left:8px" onclick="toggleSkillForm()">+ 新建</button></div>
+    <div class="section-body" style="font-size:10px">
+      <div class="skill-layout">
+        <div class="skill-list">
+          <h4>可用 Skill</h4>
+          <div id="skill-list-body" style="max-height:200px;overflow-y:auto">
+            <span style="color:var(--text2)">加载中...</span>
+          </div>
+          <!-- Skill 新建表单 -->
+          <div class="skill-form" id="skill-form">
+            <input id="skill-new-name" placeholder="名称 (如 code-review)">
+            <input id="skill-new-desc" placeholder="描述">
+            <select id="skill-new-type" style="width:100%">
+              <option value="tool">tool — 注册为函数调用工具</option>
+              <option value="prompt">prompt — 注入系统提示词</option>
+            </select>
+            <input id="skill-new-args" placeholder="参数 (空格分隔, 仅tool型, 如 file_path focus)">
+            <textarea id="skill-new-body" placeholder="Skill 正文 (Markdown)"></textarea>
+            <div style="display:flex;gap:4px">
+              <button class="btn cyan sm" onclick="createSkill()">创建</button>
+              <button class="btn sm" onclick="toggleSkillForm()">取消</button>
+            </div>
+          </div>
+        </div>
+        <div class="skill-agent-matrix">
+          <h4>Agent × Skill 绑定</h4>
+          <div id="skill-matrix-body" style="max-height:200px;overflow-y:auto">
+            <span style="color:var(--text2)">加载中...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" style="margin-bottom:8px">
+    <div class="section-title">队列干预</div>
+    <div class="section-body" id="queue-list" style="font-size:10px;max-height:300px;overflow-y:auto">
+      <span style="color:var(--text2)">无排队任务</span>
+    </div>
+    <div style="padding:2px 10px;border-top:1px solid var(--grid);display:flex;align-items:center;gap:8px;font-size:9px">
+      <label style="cursor:pointer;color:var(--text2)"><input type="checkbox" onchange="document.querySelectorAll('.q-check').forEach(c=>c.checked=this.checked);updateCheckedCount()"> 全选</label>
+      <span style="color:var(--text3)" id="checked-count">0 选中</span>
+      <span style="flex:1"></span>
+    </div>
+    <div style="padding:4px 10px;border-top:1px solid var(--grid);display:flex;gap:4px;align-items:center">
+      <select id="batch-level" style="font-size:9px;padding:2px;width:80px">
+        <option value="">批量改层</option>
+        <option value="E">E</option>
+        <option value="E+">E+</option>
+        <option value="D">D</option>
+      </select>
+      <button class="btn purple sm batch-btn" onclick="batchHold()" disabled>批量扣留</button>
+      <button class="btn cyan sm batch-btn" onclick="batchRelease()" disabled>批量释放</button>
+      <button class="btn orange sm batch-btn" onclick="batchOverride()" disabled>批量覆盖</button>
+    </div>
+  </div>
+
+  <div class="section" style="margin-bottom:8px">
+    <div class="section-title">🧬 Fusion 多模型融合 <span style="font-size:9px;color:var(--text3);font-weight:400">— 并行派发→五维分析→定稿</span></div>
+    <div class="section-body" style="font-size:10px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <label style="white-space:nowrap">框架:</label>
+        <select id="fusion-tier" onchange="updateFusionModels()" style="font-size:9px;padding:2px;flex:1">
+          <option value="dual">🔹 双模型 — 2路并行+合成</option>
+          <option value="triple" selected>🔸 三模型 — 3路并行+合成</option>
+          <option value="super">🔺 超级协作 — N模型×多视角×对抗验证×迭代熔合</option>
+        </select>
+      </div>
+      <div id="fusion-model-checkboxes" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <label style="font-size:9px">裁判:</label>
+        <select id="fusion-judge" style="font-size:9px;padding:2px;width:130px"></select>
+        <label style="font-size:9px">定稿:</label>
+        <select id="fusion-call" style="font-size:9px;padding:2px;width:130px"></select>
+      </div>
+      <div id="fusion-super-opts" style="display:none;margin-bottom:8px;font-size:9px;color:var(--text2)">
+        <div>多视角: <span id="fusion-perspectives">架构/安全/性能/可维护性</span></div>
+        <div>对抗验证: <span id="fusion-redteam">2</span> 个 red-team · 迭代上限: <span id="fusion-iters">3</span> 轮</div>
+        <div style="margin-top:2px"><label><input type="checkbox" id="fusion-human" checked> 人工卡点 (关键决策暂停确认)</label></div>
+      </div>
+      <div style="font-size:9px;color:var(--text3);margin-bottom:6px">
+        两阶段合成: 裁判五维JSON → 调用模型定稿
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <label style="white-space:nowrap;font-size:9px">
+          <input type="checkbox" id="fusion-auto" checked onchange="updateFusionStatus()"> 自动触发
+        </label>
+        <span style="color:var(--text3);font-size:9px" id="fusion-auto-hint">架构/安全/跨模块任务自动走 Fusion</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button class="btn purple sm" onclick="testFusion()">🧪 测试</button>
+        <button class="btn cyan sm" onclick="saveFusionConfig()">💾 保存</button>
+        <span id="fusion-status" style="font-size:9px;color:var(--text2)"></span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     Trace Modal
+     ═══════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="trace-modal" onclick="if(event.target===this)closeTrace()">
+  <div class="modal-box" id="trace-content"></div>
+</div>
+
+<script src="/static/js/utils.js"></script>
+<script src="/static/js/dashboard.js"></script>
+<script src="/static/js/tasks.js"></script>
+<script src="/static/js/project.js"></script>
+<script src="/static/js/config.js?v=4"></script>
+<script src="/static/app.js"></script>
+
+<div class="modal-overlay" id="cost-modal" style="display:none" onclick="if(event.target===this)closeCostModal()">
+  <div class="modal-box" style="max-width:360px">
+    <div style="font-size:11px;font-weight:600;margin-bottom:8px">💰 费用确认</div>
+    <div id="cost-modal-body" style="font-size:10px;margin-bottom:12px"></div>
+    <div style="display:flex;gap:4px;justify-content:flex-end">
+      <button class="btn sm" onclick="closeCostModal()">取消</button>
+      <button class="btn purple sm" id="cost-modal-confirm">确认执行</button>
+    </div>
+  </div>
+</div>
+<!-- ═══════════════════════════════════════════════════════
+     Approval Modal
+     ═══════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="approval-modal" style="display:none" onclick="if(event.target===this)closeApproval()">
+  <div class="modal-box" style="max-width:420px">
+    <div style="font-size:11px;font-weight:600;margin-bottom:8px;color:#f44747">⚠ 操作确认</div>
+    <div id="approval-body" style="font-size:10px;margin-bottom:12px;font-family:var(--mono);max-height:200px;overflow-y:auto"></div>
+    <div style="display:flex;gap:4px;justify-content:flex-end">
+      <button class="btn sm" onclick="respondApproval('reject')">拒绝</button>
+      <button class="btn cyan sm" id="approval-confirm-btn" onclick="respondApproval('approve')">批准执行</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

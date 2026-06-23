@@ -1,7 +1,7 @@
 {
   "name": "qidian-dashboard",
-  "displayName": "奇点调度面板",
-  "description": "奇点 Agent 调度平台 VS Code 扩展 — 任务监控、项目进度、实时事件流",
+  "displayName": "Singularity Dispatch面板",
+  "description": "Singularity Agent 调度平台 VS Code 扩展 — 任务监控、项目进度、实时事件流",
   "version": "0.1.0",
   "publisher": "qidian",
   "engines": {"vscode": "^1.85.0"},
@@ -20,15 +20,15 @@
     "viewsContainers": {
       "activitybar": [{
         "id": "qidian-sidebar",
-        "title": "奇点调度",
+        "title": "Singularity Dispatch",
         "icon": "$(server)"
       }]
     },
     "commands": [
-      {"command": "qidian.submitTask", "title": "奇点: 提交任务"},
-      {"command": "qidian.startLoop", "title": "奇点: 启动调度"},
-      {"command": "qidian.stopLoop", "title": "奇点: 停止调度"},
-      {"command": "qidian.refreshAll", "title": "奇点: 刷新全部"}
+      {"command": "qidian.submitTask", "title": "Singularity: 提交任务"},
+      {"command": "qidian.startLoop", "title": "Singularity: 启动调度"},
+      {"command": "qidian.stopLoop", "title": "Singularity: 停止调度"},
+      {"command": "qidian.refreshAll", "title": "Singularity: 刷新全部"}
     ]
   },
   "scripts": {
