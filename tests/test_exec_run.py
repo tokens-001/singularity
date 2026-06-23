@@ -142,94 +142,94 @@ def run_case(v3=True):
 if __name__ == "__main__":
     install_stubs()
 
-print("── 路径1: 校验通过 (v3, 带 merge_request) ──")
-reset_wt()
-S.dispatch_queue = [("ok", FakeExec(success=True))]
-S.validate_queue = [FakeVal(action="pass")]
-b = run_case(v3=True)
-check("返回 pass", b.validation.action == "pass")
-check("带 merge_request", b.merge_request == "FAKE_MR")
-check("非 planner_decomposed", b.planner_decomposed is False)
-check("worktree 对称 (建=清)", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
+    print("── 路径1: 校验通过 (v3, 带 merge_request) ──")
+    reset_wt()
+    S.dispatch_queue = [("ok", FakeExec(success=True))]
+    S.validate_queue = [FakeVal(action="pass")]
+    b = run_case(v3=True)
+    check("返回 pass", b.validation.action == "pass")
+    check("带 merge_request", b.merge_request == "FAKE_MR")
+    check("非 planner_decomposed", b.planner_decomposed is False)
+    check("worktree 对称 (建=清)", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
 
-print("── 路径2: 用户取消 ──")
-reset_wt()
-S.task = make_task()
-(_exec.config.CANCEL_DIR / f"{S.task.id}.json").write_text("{}")
-S.dispatch_queue = []; S.validate_queue = []
-b = _exec.run(S.task, make_ctx(), {"E": list(S.chain)})
-check("term_reason=cancelled", b.term_reason == "cancelled_by_user")
-check("turn_count=0", b.turn_count == 0)
-check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
+    print("── 路径2: 用户取消 ──")
+    reset_wt()
+    S.task = make_task()
+    (_exec.config.CANCEL_DIR / f"{S.task.id}.json").write_text("{}")
+    S.dispatch_queue = []; S.validate_queue = []
+    b = _exec.run(S.task, make_ctx(), {"E": list(S.chain)})
+    check("term_reason=cancelled", b.term_reason == "cancelled_by_user")
+    check("turn_count=0", b.turn_count == 0)
+    check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
 
-print("── 路径3: executor 失败, 无 fallback → abort ──")
-reset_wt()
-S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2}]
-S.escalate_to = None
-S.dispatch_queue = [("fail", FakeExec(success=False))]
-S.validate_queue = []
-b = run_case()
-check("action=abort", b.validation.action == "abort")
-check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
+    print("── 路径3: executor 失败, 无 fallback → abort ──")
+    reset_wt()
+    S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2}]
+    S.escalate_to = None
+    S.dispatch_queue = [("fail", FakeExec(success=False))]
+    S.validate_queue = []
+    b = run_case()
+    check("action=abort", b.validation.action == "abort")
+    check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
 
-print("── 路径4 (关键 P1-1): dispatch 抛异常 → worktree 必被清理 ──")
-reset_wt()
-S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2}]
-S.dispatch_queue = [("raise",)]
-S.validate_queue = []
-raised = False
-try:
-    run_case()
-except RuntimeError:
-    raised = True
-check("异常向上传播 (交 orchestrator fut.result 兜底)", raised)
-check("worktree 仍被清理 (无泄漏)", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
+    print("── 路径4 (关键 P1-1): dispatch 抛异常 → worktree 必被清理 ──")
+    reset_wt()
+    S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2}]
+    S.dispatch_queue = [("raise",)]
+    S.validate_queue = []
+    raised = False
+    try:
+        run_case()
+    except RuntimeError:
+        raised = True
+    check("异常向上传播 (交 orchestrator fut.result 兜底)", raised)
+    check("worktree 仍被清理 (无泄漏)", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
 
-print("── 路径5: planner 分解 → planner_decomposed ──")
-reset_wt()
-S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2, "mode": "planner"}]
-plan = '方案\n```json\n[{"desc":"子任务A","suggested_level":"E"}]\n```'
-S.dispatch_queue = [("ok", FakeExec(success=True, raw_output=plan))]
-S.validate_queue = []
-b = run_case()
-check("planner_decomposed=True", b.planner_decomposed is True)
-check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
+    print("── 路径5: planner 分解 → planner_decomposed ──")
+    reset_wt()
+    S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2, "mode": "planner"}]
+    plan = '方案\n```json\n[{"desc":"子任务A","suggested_level":"E"}]\n```'
+    S.dispatch_queue = [("ok", FakeExec(success=True, raw_output=plan))]
+    S.validate_queue = []
+    b = run_case()
+    check("planner_decomposed=True", b.planner_decomposed is True)
+    check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
 
-print("── 路径6: 中置信 retry → 复用同一 wt, 下一轮 pass ──")
-reset_wt()
-S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 3}]
-S.dispatch_queue = [("ok", FakeExec(success=True)), ("ok", FakeExec(success=True))]
-S.validate_queue = [FakeVal(action="retry", confidence=0.5), FakeVal(action="pass")]
-b = run_case()
-check("最终 pass", b.validation.action == "pass")
-check("retry 不重建 wt (只建1个)", len(CREATED) == 1, f"建了{len(CREATED)}个")
-check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
+    print("── 路径6: 中置信 retry → 复用同一 wt, 下一轮 pass ──")
+    reset_wt()
+    S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 3}]
+    S.dispatch_queue = [("ok", FakeExec(success=True)), ("ok", FakeExec(success=True))]
+    S.validate_queue = [FakeVal(action="retry", confidence=0.5), FakeVal(action="pass")]
+    b = run_case()
+    check("最终 pass", b.validation.action == "pass")
+    check("retry 不重建 wt (只建1个)", len(CREATED) == 1, f"建了{len(CREATED)}个")
+    check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
 
-print("── 路径7: 低置信 cascade_skip → 升级 (escalate=None 则 exhausted) ──")
-# 真实行为: cascade_skip break 后走 escalate; escalate=None → escalation_exhausted。
-# m2 不在同层被启用 (代码用升级换 agent, 非同层 fallback)。建1清1。
-reset_wt()
-S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2},
-           {"model": "m2", "sandbox": "worktree", "max_turns": 2}]
-S.escalate_to = None
-S.dispatch_queue = [("ok", FakeExec(success=True))]
-S.validate_queue = [FakeVal(action="retry", confidence=0.2)]
-b = run_case()
-check("term_reason 含 escalation_exhausted", "escalation_exhausted" in b.term_reason, b.term_reason)
-check("cascade_skip 后只建1个 wt (升级换 agent 非同层)", len(CREATED) == 1, f"建了{len(CREATED)}个")
-check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
+    print("── 路径7: 低置信 cascade_skip → 升级 (escalate=None 则 exhausted) ──")
+    # 真实行为: cascade_skip break 后走 escalate; escalate=None → escalation_exhausted。
+    # m2 不在同层被启用 (代码用升级换 agent, 非同层 fallback)。建1清1。
+    reset_wt()
+    S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2},
+               {"model": "m2", "sandbox": "worktree", "max_turns": 2}]
+    S.escalate_to = None
+    S.dispatch_queue = [("ok", FakeExec(success=True))]
+    S.validate_queue = [FakeVal(action="retry", confidence=0.2)]
+    b = run_case()
+    check("term_reason 含 escalation_exhausted", "escalation_exhausted" in b.term_reason, b.term_reason)
+    check("cascade_skip 后只建1个 wt (升级换 agent 非同层)", len(CREATED) == 1, f"建了{len(CREATED)}个")
+    check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
 
-print("── 路径8: v2 merge 冲突 → abort ──")
-reset_wt()
-S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2}]
-S.dispatch_queue = [("ok", FakeExec(success=True))]
-S.validate_queue = []   # merge 冲突在 validate 之前 return, 不会调 validate
-b = run_case(v3=False)  # v2: merge_queue=None → 走 wt_merge_back
-check("term_reason 含 merge_conflict", "merge_conflict" in b.term_reason, b.term_reason)
-check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
+    print("── 路径8: v2 merge 冲突 → abort ──")
+    reset_wt()
+    S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2}]
+    S.dispatch_queue = [("ok", FakeExec(success=True))]
+    S.validate_queue = []   # merge 冲突在 validate 之前 return, 不会调 validate
+    b = run_case(v3=False)  # v2: merge_queue=None → 走 wt_merge_back
+    check("term_reason 含 merge_conflict", "merge_conflict" in b.term_reason, b.term_reason)
+    check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
 
-print("\n" + "=" * 48)
-total = PASS + FAIL
-print(f"{'✅ 全通过!' if FAIL == 0 else '❌ 有失败'}  通过 {PASS} / 失败 {FAIL} / 总 {total}")
-print("=" * 48)
-sys.exit(0 if FAIL == 0 else 1)
+    print("\n" + "=" * 48)
+    total = PASS + FAIL
+    print(f"{'✅ 全通过!' if FAIL == 0 else '❌ 有失败'}  通过 {PASS} / 失败 {FAIL} / 总 {total}")
+    print("=" * 48)
+    sys.exit(0 if FAIL == 0 else 1)
