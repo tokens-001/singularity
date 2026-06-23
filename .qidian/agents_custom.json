@@ -47,18 +47,6 @@
         "daily"
       ],
       "sandbox": "worktree"
-    },
-    {
-      "model": "gpt-5.5",
-      "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
-      "max_turns": 5,
-      "default": false,
-      "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
     }
   ],
   "E_plus": [
@@ -107,30 +95,6 @@
       "default": false,
       "roles": [
         "builder"
-      ],
-      "sandbox": "worktree"
-    },
-    {
-      "model": "gpt-5.5",
-      "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
-      "max_turns": 5,
-      "default": false,
-      "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
-    },
-    {
-      "model": "qwen3.7-max",
-      "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
-      "max_turns": 5,
-      "default": false,
-      "roles": [
-        "daily"
       ],
       "sandbox": "worktree"
     }
@@ -183,6 +147,42 @@
         "daily"
       ],
       "sandbox": "worktree"
+    },
+    {
+      "model": "claude-opus-4-8",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 5,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
+    },
+    {
+      "model": "gpt-5.5",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 5,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
+    },
+    {
+      "model": "gpt-5.5-pro",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 5,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
     }
   ],
   "_disabled": {
@@ -190,16 +190,15 @@
       "qwen3.7-plus",
       "deepseek-v4-pro",
       "qwen3-coder-next",
-      "qwen3-flash"
+      "qwen3-flash",
+      "gpt-5.5"
     ],
     "E+": [
-      "kimi-k2.6"
-    ],
-    "D": [
-      "claude-opus-4-8",
+      "kimi-k2.6",
       "gpt-5.5",
-      "gpt-5.5-pro"
-    ]
+      "qwen3.7-max"
+    ],
+    "D": []
   },
   "_order": {
     "D": [
