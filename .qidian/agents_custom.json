@@ -49,6 +49,18 @@
         "daily"
       ],
       "sandbox": "worktree"
+    },
+    {
+      "model": "qwen3.7-max",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 5,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
     }
   ],
   "E": [
@@ -97,7 +109,10 @@
     ],
     "E+": [],
     "D": [
-      "kimi-k2.7-code"
+      "kimi-k2.7-code",
+      "claude-opus-4-8",
+      "gpt-5.5-pro",
+      "gpt-5.5"
     ]
   },
   "_order": {

@@ -9,7 +9,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-from singularity.scheduler import config
+from singularity.scheduler import config, witness
 from singularity.scheduler.log import timed
 from singularity.scheduler._types import _pending_sse_events
 from singularity.scheduler.executors import (

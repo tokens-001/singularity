@@ -89,7 +89,7 @@ class BaseExecutor:
 
     def __init__(self, agent_cfg: dict, task: str, task_id: str,
                  baseline_ref: str = "", cwd: str = "",
-                 agent_level: str = ""):
+                 agent_level: str = "", **kwargs):
         self.cfg = agent_cfg
         self.task = task
         self.task_id = task_id
