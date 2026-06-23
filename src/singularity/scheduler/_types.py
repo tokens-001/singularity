@@ -16,8 +16,8 @@ except ImportError:
     MergeQueue = None  # type: ignore
     MergeRequest = None  # type: ignore
 
-# 分解深度上限 (防无限递归)
-_MAX_DEPTH = 3
+# 分解深度安全上限 (防无限递归。达到上限时提示用户手工处理，不限死)
+_MAX_DEPTH = 6
 
 # SSE 事件队列 — 跨模块共享，消除 orchestrator→_planner→dispatcher→orchestrator 循环导入
 _pending_sse_events: list[dict] = []

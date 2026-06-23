@@ -562,12 +562,12 @@ class TestFinalizeResult:
         def record_transition(tid, status, **kw):
             transitions.append((tid, status.name if hasattr(status, 'name') else str(status), kw))
 
-        task = self._make_task(retry_count=3, max_retries=3, depth=3)  # depth=MAX
+        task = self._make_task(retry_count=3, max_retries=3, depth=6)  # depth=MAX
         reason, results, _ = self._call(
             monkeypatch, task=task,
             batch=self._make_batch(validation=val, term_reason="abort"),
             **{"tracker.transition": record_transition},
         )
-        # depth=3 >= _MAX_DEPTH=3 → 不拆分, 直接 FAILED
+        # depth=6 >= _MAX_DEPTH=6 → 不拆分, 直接 FAILED
         assert "failed" in reason or "exhausted" in reason
         assert any("FAILED" in str(s) for _, s, _ in transitions)

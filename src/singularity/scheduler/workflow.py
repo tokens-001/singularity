@@ -153,7 +153,7 @@ _FIXER_PREAMBLE = """你是系统架构师(D层)。Owner 审核交付物后发�
 - 如果执行结果中某个任务已 FAILED, 优先修复它
 输出时用 ```json ... ``` 包裹。"""
 
-_MAX_FIX_ROUNDS = 3  # 内循环硬上限
+# ponytail: 返工不设硬上限，用户判定。收敛检测(降不降) + 用户 GATE3 审批控制终点。
 
 
 # ═══════════════════════════════════════════════════════════
@@ -450,10 +450,10 @@ def run_test_fix_loop(project: ProjectState, agents: dict) -> str:
         save(project)
         return "无改动文件 → GATE3"
 
-    msgs.append(f"内循环开始: {len(changed)} 个文件, 最多{_MAX_FIX_ROUNDS}轮")
+    msgs.append(f"内循环开始: {len(changed)} 个文件")
     prev_bug_count = None
 
-    while project.fix_round < _MAX_FIX_ROUNDS:
+    while True:
         # D层审查
         issues = _do_review(project, agents, changed)
         bugs = [i for i in issues if i.get("severity") == "bug"]
@@ -476,14 +476,8 @@ def run_test_fix_loop(project: ProjectState, agents: dict) -> str:
             return "; ".join(msgs)
         prev_bug_count = len(bugs)
 
-        # 有 bug → 创建修复任务
+        # 有 bug → 创建修复任务，继续循环
         project.fix_round += 1
-        if project.fix_round >= _MAX_FIX_ROUNDS:
-            project.phase = Phase.GATE3
-            save(project)
-            msgs.append(f"已达{_MAX_FIX_ROUNDS}轮上限 ({len(bugs)} bug 残留) → GATE3 (人工裁决)")
-            return "; ".join(msgs)
-
         _create_fix_tasks(project, bugs)
         msgs.append(f"第{project.fix_round}轮: {len(bugs)} 个 bug → {len(bugs)} 个修复任务 → 等待执行")
         break  # 等 orchestrator 跑完修复任务, app.py loop 会再调
@@ -544,11 +538,10 @@ def _run_internal_review(project: ProjectState, agents: dict) -> str:
     project.issues = issues
     project.fix_round += 1
 
-    if not bugs or project.fix_round >= _MAX_FIX_ROUNDS:
+    if not bugs:
         project.phase = Phase.GATE3
         save(project)
-        limit_msg = f" (达{_MAX_FIX_ROUNDS}轮上限)" if project.fix_round >= _MAX_FIX_ROUNDS else ""
-        return f"审查: {len(bugs)} bug → GATE3{limit_msg}"
+        return f"审查通过 (0 bug, {len(issues)} 个建议) → GATE3"
 
     _create_fix_tasks(project, bugs)
     return f"第{project.fix_round}轮审查: {len(bugs)} bug → 修复任务已创建"

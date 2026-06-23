@@ -298,7 +298,7 @@ class TaskRunner:
             else:
                 # 降级重试: 重试耗尽 → 自动拆分再提交
                 retry_count = getattr(task, 'retry_count', 0)
-                if retry_count >= getattr(task, 'max_retries', 3) and task.depth < _MAX_DEPTH:
+                if retry_count >= getattr(task, 'max_retries', 3) and task.depth < _MAX_DEPTH:  # ponytail: 安全上限6，达到需人工
                     try:
                         subtasks = decompose(task.description)
                         if subtasks and len(subtasks) > 1:

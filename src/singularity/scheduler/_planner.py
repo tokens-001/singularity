@@ -323,12 +323,16 @@ def materialize_plan(parent_id: str, subtasks: list[dict]) -> list[str]:
     if parent is None:
         return []
 
-    # depth 上限: parent 已达上限 → 拒绝再分解, parent 转 FAILED
+    # depth 安全上限: 已达上限 → 拒绝自动分解，提示用户手工处理
     if parent.depth >= _MAX_DEPTH:
         tracker.transition(
             parent_id, TaskStatus.FAILED,
-            error=f"分解深度达上限 {_MAX_DEPTH}, 拒绝再分解",
+            error=f"分解深度达安全上限 {_MAX_DEPTH}，请手工拆分或放宽需求",
         )
+        _pending_sse_events.append({
+            "kind": "alert", "msg": f"[{parent_id[:8]}] 分解达深度上限 {_MAX_DEPTH}，需人工介入",
+            "ts": time.time(), "task_id": parent_id,
+        })
         return []
 
     # 拓扑排序 + 环检测
