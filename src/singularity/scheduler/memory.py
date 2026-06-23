@@ -27,15 +27,37 @@ from dataclasses import dataclass, field
 from collections import defaultdict
 
 from singularity.scheduler import config as sched_config
+from singularity.scheduler import witness
+from singularity.scheduler._types import _pending_sse_events
 
 # ═══════════════════════════════════════════════════════════
-# 存储路径 (I/O 原语 → _memory_io.py)
+# 存储路径 + I/O 原语 (ex _memory_io.py)
 # ═══════════════════════════════════════════════════════════
 
-from singularity.scheduler._memory_io import (
-    _MEMORY_DIR, _EVENTS_PATH, _EDGES_PATH, _ENTITY_IDX_PATH,
-    ensure_dir as _ensure_dir, read_json as _read_json, write_json as _write_json,
-)
+_MEMORY_DIR = sched_config.QIDIAN_DIR / "memory"
+_EVENTS_PATH = _MEMORY_DIR / "events.json"
+_EDGES_PATH = _MEMORY_DIR / "edges.json"
+_ENTITY_IDX_PATH = _MEMORY_DIR / "entity_index.json"
+
+
+def _ensure_dir() -> None:
+    _MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _read_json(path: Path) -> dict | list:
+    if not path.exists():
+        return {} if ".json" in str(path) else []
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {} if ".json" in str(path) else []
+
+
+def _write_json(path: Path, data: dict | list) -> None:
+    _ensure_dir()
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(str(tmp), str(path))
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1010,30 +1032,78 @@ def rebuild_from_traces() -> int:
 
 # ── 记忆生命周期 (hot → warm → cold) ──────────────────────
 
-# ── 生命周期管理 (委托给 _lifecycle.py) ──
-from singularity.scheduler._lifecycle import (
-    _HOT_WINDOW, _WARM_WINDOW, _COLD_MAX, _get_age_tier,
-    lifecycle_stats as _lc_stats,
-    prune_expired as _lc_prune,
-    auto_maintain as _lc_maintain,
-)
+# ── 记忆生命周期 (hot → warm → cold, ex _lifecycle.py) ──
+
+_HOT_WINDOW = 24 * 3600       # 24小时
+_WARM_WINDOW = 7 * 86400       # 7天
+_COLD_MAX = 30 * 86400         # 30天
+
+
+def _get_age_tier(timestamp: float) -> str:
+    age = time.time() - timestamp
+    if age < _HOT_WINDOW:
+        return "hot"
+    elif age < _WARM_WINDOW:
+        return "warm"
+    elif age < _COLD_MAX:
+        return "cold"
+    return "expired"
 
 
 def lifecycle_stats() -> dict:
     """记忆生命周期统计。"""
-    return _lc_stats(_load_events, _EVENTS_PATH)
+    events = _load_events()
+    tiers = {"hot": 0, "warm": 0, "cold": 0, "expired": 0}
+    for _tid, node in events.items():
+        tiers[_get_age_tier(node.timestamp)] += 1
+    total = len(events)
+    result = {
+        "total": total, **tiers,
+        "hot_window_h": _HOT_WINDOW // 3600,
+        "warm_window_d": _WARM_WINDOW // 86400,
+        "cold_max_d": _COLD_MAX // 86400,
+    }
+    if _EVENTS_PATH.exists():
+        result["disk_bytes"] = _EVENTS_PATH.stat().st_size
+    return result
 
 
 def prune_expired() -> int:
-    """清理过期事件。"""
-    return _lc_prune(_load_events, _load_edges, _save_events, _save_edges,
-                     _read_json, _write_json, _ENTITY_IDX_PATH)
+    """清理过期 (>30天) 事件和关联边。返回清理数。"""
+    events = _load_events()
+    edges = _load_edges()
+    now = time.time()
+    expired_ids = {tid for tid, node in events.items()
+                   if now - node.timestamp > _COLD_MAX}
+    if not expired_ids:
+        return 0
+    for tid in list(events.keys()):
+        if tid in expired_ids:
+            del events[tid]
+    for edge_type in list(edges.keys()):
+        edges[edge_type] = [(s, d, src) for s, d, src in edges[edge_type]
+                           if s not in expired_ids and d not in expired_ids]
+    _save_events(events)
+    _save_edges(edges)
+    entity_idx = _read_json(_ENTITY_IDX_PATH) or {}
+    for fp in list(entity_idx.keys()):
+        entity_idx[fp] = [tid for tid in entity_idx[fp] if tid not in expired_ids]
+        if not entity_idx[fp]:
+            del entity_idx[fp]
+    _write_json(_ENTITY_IDX_PATH, entity_idx)
+    return len(expired_ids)
 
 
 def auto_maintain() -> dict:
     """自动维护: 清理 + 统计。"""
-    return _lc_maintain(_load_events, _load_edges, _save_events, _save_edges,
-                        _read_json, _write_json, _ENTITY_IDX_PATH, _EVENTS_PATH)
+    pruned = 0
+    try:
+        pruned = prune_expired()
+    except Exception as e:
+        witness.heartbeat('memory', f'warn:lifecycle:{e}')
+    stats = lifecycle_stats()
+    stats["pruned"] = pruned
+    return stats
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1130,17 +1200,278 @@ def get_insights(limit: int = 10) -> list[dict]:
 
 
 # ═══════════════════════════════════════════════════════════
-# T1: 经验归档 + 失败模式识别 + 跨项目知识迁移 (→ _memory_experience.py)
+# T1: 经验归档 + 失败模式识别 + 跨项目知识迁移 (ex _memory_experience.py)
 # ═══════════════════════════════════════════════════════════
 
-from singularity.scheduler._memory_experience import (
-    ExperienceRecord,
-    archive_experience,
-    _match_failure_pattern,
-    _extract_keywords,
-    _load_failure_patterns,
-    _save_failure_patterns,
-    analyze_failures,
-    find_similar_across_projects,
-    get_experience_stats,
-)
+_EXPERIENCES_PATH = _MEMORY_DIR / "experiences.json"
+_FAILURE_PATTERNS_PATH = _MEMORY_DIR / "failure_patterns.json"
+
+
+@dataclass
+class ExperienceRecord:
+    """单次任务执行经验。"""
+    task_id: str
+    description: str
+    status: str           # done / failed / rolled_back
+    route_level: str      # E / E+ / D
+    model: str            # 实际执行模型
+    elapsed_ms: float = 0
+    tokens: int = 0
+    failure_mode: str = ""  # 失败模式标签
+    files_changed: list[str] = field(default_factory=list)
+    pattern_id: str = ""    # 匹配到的已知模式 id
+    timestamp: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "task_id": self.task_id,
+            "description": self.description[:200],
+            "status": self.status,
+            "route_level": self.route_level,
+            "model": self.model,
+            "elapsed_ms": self.elapsed_ms,
+            "tokens": self.tokens,
+            "failure_mode": self.failure_mode,
+            "files_changed": self.files_changed[:20],
+            "pattern_id": self.pattern_id,
+            "timestamp": self.timestamp or time.time(),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ExperienceRecord":
+        return cls(**{k: d.get(k, "") if k in ("description","status","route_level","model","failure_mode","pattern_id") else
+                      d.get(k, []) if k == "files_changed" else d.get(k, 0)
+                      for k in ["task_id","description","status","route_level","model","elapsed_ms","tokens","failure_mode","files_changed","pattern_id","timestamp"]})
+
+
+def archive_experience(task_id: str, description: str, status: str, route_level: str,
+                       model: str = "", elapsed_ms: float = 0, tokens: int = 0,
+                       failure_mode: str = "", files_changed: list[str] = None) -> None:
+    """归档单次任务执行经验。orchestrator 在任务完成后调用。"""
+    rec = ExperienceRecord(
+        task_id=task_id, description=description, status=status,
+        route_level=route_level, model=model, elapsed_ms=elapsed_ms,
+        tokens=tokens, failure_mode=failure_mode,
+        files_changed=files_changed or [], timestamp=time.time(),
+    )
+    if status in ("failed", "rolled_back") and failure_mode:
+        rec.pattern_id = _match_failure_pattern(failure_mode)
+    existing = list(_read_json(_EXPERIENCES_PATH) or [])
+    existing.append(rec.to_dict())
+    if len(existing) > 1000:
+        existing = existing[-1000:]
+    _write_json(_EXPERIENCES_PATH, existing)
+
+
+def _match_failure_pattern(failure_reason: str) -> str:
+    patterns = _load_failure_patterns()
+    reason_lower = failure_reason.lower()
+    for p in patterns:
+        for kw in p.get("keywords", []):
+            if kw.lower() in reason_lower:
+                p["count"] = p.get("count", 0) + 1
+                p["last_seen"] = time.time()
+                _save_failure_patterns(patterns)
+                return p["id"]
+    pid = f"fp_{len(patterns)+1:03d}"
+    patterns.append({
+        "id": pid, "keywords": _extract_keywords(failure_reason),
+        "count": 1, "first_seen": time.time(), "last_seen": time.time(),
+    })
+    _save_failure_patterns(patterns)
+    return pid
+
+
+def _extract_keywords(text: str) -> list[str]:
+    from collections import Counter
+    words = re.findall(r"[a-zA-Z_]{3,}", text)
+    return [w for w, _ in Counter(words).most_common(5)]
+
+
+def _load_failure_patterns() -> list[dict]:
+    return list(_read_json(_FAILURE_PATTERNS_PATH) or [])
+
+
+def _save_failure_patterns(data: list[dict]) -> None:
+    _write_json(_FAILURE_PATTERNS_PATH, data)
+
+
+def analyze_failures(limit: int = 20) -> dict:
+    """分析近期失败模式，返回频次排序的失败原因。"""
+    experiences = list(_read_json(_EXPERIENCES_PATH) or [])
+    failed = [e for e in experiences if e.get("status") in ("failed", "rolled_back")]
+    if not failed:
+        return {"total_failures": 0, "patterns": [], "summary": "无近期失败记录"}
+    patterns = _load_failure_patterns()
+    patterns.sort(key=lambda p: -p.get("count", 0))
+    recent = failed[-limit:]
+    return {
+        "total_failures": len(failed),
+        "recent_count": len(recent),
+        "top_patterns": [{
+            "id": p["id"], "count": p["count"],
+            "keywords": p.get("keywords", []),
+            "last_seen": p.get("last_seen", 0),
+        } for p in patterns[:5] if p.get("count", 0) > 0],
+        "summary": f"最近 {len(recent)} 次失败, {len(patterns)} 种模式",
+    }
+
+
+def find_similar_across_projects(description: str, min_score: float = 0.3, limit: int = 5) -> list[dict]:
+    """跨项目知识迁移：在经验库中搜索相似成功案例。"""
+    experiences = list(_read_json(_EXPERIENCES_PATH) or [])
+    if not experiences:
+        return []
+    successful = [e for e in experiences if e.get("status") == "done"]
+    if not successful:
+        return []
+    desc_lower = description.lower()
+    scored = []
+    for e in successful:
+        edesc = (e.get("description", "") or "").lower()
+        if not edesc:
+            continue
+        d_words = set(desc_lower.split())
+        e_words = set(edesc.split())
+        if not d_words or not e_words:
+            continue
+        jaccard = len(d_words & e_words) / len(d_words | e_words)
+        if jaccard >= min_score:
+            scored.append({
+                "task_id": e.get("task_id", ""),
+                "description": e.get("description", "")[:120],
+                "model": e.get("model", ""),
+                "route_level": e.get("route_level", ""),
+                "elapsed_ms": e.get("elapsed_ms", 0),
+                "score": round(jaccard, 3),
+                "files": e.get("files_changed", [])[:5],
+            })
+    scored.sort(key=lambda x: -x["score"])
+    return scored[:limit]
+
+
+def get_experience_stats() -> dict:
+    """获取经验库统计概览。"""
+    experiences = list(_read_json(_EXPERIENCES_PATH) or [])
+    if not experiences:
+        return {"total": 0}
+    statuses = {}
+    for e in experiences:
+        s = e.get("status", "?")
+        statuses[s] = statuses.get(s, 0) + 1
+    models = {}
+    for e in experiences:
+        m = e.get("model", "?")
+        models[m] = models.get(m, 0) + 1
+    return {
+        "total": len(experiences),
+        "by_status": statuses,
+        "by_model": dict(sorted(models.items(), key=lambda x: -x[1])[:10]),
+    }
+
+
+# ═══════════════════════════════════════════════════════════
+# Slow Channel: 记忆整合 + 因果推断 (ex _memory_consolidator.py)
+# ═══════════════════════════════════════════════════════════
+
+_consolidate_calls = 0
+
+
+def consolidate_memory() -> int:
+    global _consolidate_calls; _consolidate_calls += 1
+    now = time.time()
+    if _consolidate_calls > 1 and now - getattr(consolidate_memory, '_last_run', 0) < 300:
+        return 0
+    consolidate_memory._last_run = now
+    _MAX_LLM = 5
+
+    if _consolidate_calls % 10 == 0:
+        try:
+            lc = auto_maintain()
+            if lc.get("pruned", 0) > 0:
+                _pending_sse_events.append({"kind":"memory","msg":f"pruned {lc['pruned']} events","ts":time.time()})
+        except Exception as e: witness.heartbeat('memory', f'warn:consolidate:{e}')
+        try:
+            s2 = system2_extract()
+            if s2.get("added", 0) > 0:
+                for ins in s2.get("insights", []):
+                    _pending_sse_events.append({"kind":"insight","msg":ins.get("summary",""),"ts":time.time()})
+        except Exception as e: witness.heartbeat('memory', f'warn:consolidate:{e}')
+
+    try:
+        candidates = find_candidate_latent_edges()
+        added = 0
+        tier3_all = [c for c in candidates if 0.55 <= c.get("semantic_sim", 0) < 0.85]
+        tier3_capped = set()
+        if len(tier3_all) > _MAX_LLM:
+            tier3_all.sort(key=lambda x: -x["semantic_sim"])
+            tier3_capped = {id(c) for c in tier3_all[_MAX_LLM:]}
+
+        for c in candidates:
+            sim = c["semantic_sim"]; gap = c["time_gap_hours"]; shared = c["shared_files"]
+            if sim >= 0.85 and gap < 4.0 and len(shared) >= 1:
+                src, dst = _resolve_causal_direction(c)
+                if src:
+                    add_inferred_causal_edge(src, dst,
+                        reason=f"high_conf:shared:{','.join(shared)} sim={sim:.2f} gap={gap:.1f}h")
+                    added += 1
+                continue
+            if sim < 0.55: continue
+            if id(c) in tier3_capped: continue
+            src, dst = _resolve_causal_direction(c)
+            if not src: continue
+            judge = _llm_judge_causal(c, src, dst)
+            if judge.get("is_causal"):
+                add_inferred_causal_edge(src, dst, reason=f"llm:{judge.get('reason','')}")
+                added += 1
+        return added
+    except Exception as e:
+        try: witness.heartbeat("memory", f"warn:consolidate:{e}")
+        except Exception: pass
+        return 0
+
+
+def _resolve_causal_direction(c: dict) -> tuple:
+    a, b = c["task_a"], c["task_b"]
+    events = _load_events()
+    node_a = events.get(a); node_b = events.get(b)
+    if not node_a or not node_b: return None, None
+    return (a, b) if node_a.timestamp <= node_b.timestamp else (b, a)
+
+
+def _llm_judge_causal(c: dict, src: str, dst: str) -> dict:
+    import httpx
+    from . import dispatcher as disp_mod
+    prompt = f"""Determine if there is a causal relationship between these two tasks.
+
+Task A [{src[:8]}]: {c.get('desc_a','')}
+Task B [{dst[:8]}]: {c.get('desc_b','')}
+Shared files: {', '.join(c.get('shared_files',[]))}
+Semantic sim: {c.get('semantic_sim',0):.3f}
+Time gap: {c.get('time_gap_hours',0):.1f}h
+
+Answer ONLY JSON: {{"is_causal": true/false, "reason": "one sentence"}}
+If task A caused task B, is_causal=true. Otherwise false. When unsure, false."""
+
+    try:
+        agents = disp_mod.load_agents()
+        e_agents = agents.get("E", [])
+        if not e_agents: return {"is_causal": False, "reason": "no_e_agent"}
+        e_cfg = e_agents[0]
+        api_key = os.environ.get(e_cfg.get("api_key_env", ""), "")
+        if not api_key: return {"is_causal": False, "reason": "no_api_key"}
+        base_url = e_cfg.get("base_url", "https://api.deepseek.com/v1")
+        model = e_cfg.get("model", "deepseek-chat")
+        body = {"model": model, "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 200, "temperature": 0.1}
+        client = httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0))
+        resp = client.post(f"{base_url}/chat/completions", json=body,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
+        resp.raise_for_status()
+        raw = resp.json()["choices"][0]["message"]["content"]
+        m = re.search(r'\{[^}]+\}', raw)
+        return json.loads(m.group()) if m else {"is_causal": False, "reason": "parse_error"}
+    except Exception as e:
+        try: import logging; logging.getLogger("qidian").warning("llm_judge_causal: %s", e)
+        except Exception: pass
+        return {"is_causal": False, "reason": f"llm_error:{e}"}

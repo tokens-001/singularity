@@ -603,5 +603,5 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
         pass  # 不阻塞主循环
 
 
-_consolidate_calls = 0  # migrated to _memory_consolidator.py
-from singularity.scheduler._memory_consolidator import consolidate_memory  # noqa: E402
+# ponytail: consolidate_memory now in memory.py
+from singularity.scheduler.memory import consolidate_memory  # noqa: E402

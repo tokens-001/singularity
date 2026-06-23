@@ -667,6 +667,13 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
         witness.heartbeat('exec', f'warn:{e}')
 
 
+def _safe_dep_list(v):
+    """depends_on_local_id: int or list[int] → list[int]."""
+    if isinstance(v, int): return [v]
+    if isinstance(v, list): return v
+    return []
+
+
 def decompose(planner_raw_output: str) -> list[dict]:
     """解析 planner stdout 里的 ```json 子任务块。
 
@@ -694,7 +701,7 @@ def decompose(planner_raw_output: str) -> list[dict]:
         subtasks.append({
             "desc": str(item["desc"]),
             "suggested_level": str(item.get("suggested_level", "E")),
-            "depends_on_local_id": list(item.get("depends_on_local_id", [])),
+            "depends_on_local_id": _safe_dep_list(item.get("depends_on_local_id", [])),
         })
     return subtasks
 
