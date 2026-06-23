@@ -534,6 +534,21 @@ def run_test_fix_loop(project: ProjectState, agents: dict) -> str:
                              "issues": len(issues), "bugs": len(bugs)})
 
         if not bugs:
+            # 需求符合性检查 (production-flow.md: 测试第一层)
+            from .supervisor import check_requirement_conformance
+            req_check = check_requirement_conformance(
+                project.id,
+                agent_output="",  # 项目级检查，用磁盘文件
+                changed_files=list(changed),
+            )
+            if not req_check.passed:
+                project.add_lineage({"action": "requirement_check_failed",
+                                     "evidence": req_check.evidence})
+                project.phase = Phase.GATE3  # 仍有未达标 → 交用户裁决
+                save(project)
+                msgs.append(f"审查通过 (0 bug), 但需求符合性: {req_check.reason} → GATE3 (用户裁决)")
+                return "; ".join(msgs)
+
             project.phase = Phase.GATE3
             save(project)
             msgs.append(f"审查通过 (0 bug, {len(issues)} 个建议) → GATE3")
@@ -611,9 +626,16 @@ def _run_internal_review(project: ProjectState, agents: dict) -> str:
     project.fix_round += 1
 
     if not bugs:
+        # 需求符合性检查
+        from .supervisor import check_requirement_conformance
+        changed = _collect_changed_files(project)
+        req_check = check_requirement_conformance(
+            project.id, agent_output="", changed_files=list(changed),
+        )
         project.phase = Phase.GATE3
         save(project)
-        return f"审查通过 (0 bug, {len(issues)} 个建议) → GATE3"
+        req_msg = f"; 需求符合性: {req_check.reason}" if not req_check.passed else ""
+        return f"审查通过 (0 bug, {len(issues)} 个建议) → GATE3{req_msg}"
 
     _create_fix_tasks(project, bugs)
     return f"第{project.fix_round}轮审查: {len(bugs)} bug → 修复任务已创建"

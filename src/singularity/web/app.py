@@ -953,6 +953,41 @@ def api_project_snapshot(project_id):
     data, code = _api_handler.project_snapshot(project_id)
     return jsonify(data), code
 
+@app.route("/api/projects/<project_id>/traceability", methods=["GET"])
+def api_project_traceability(project_id):
+    """GATE3: 返回需求追溯表 + 符合性检查结果。"""
+    from singularity.scheduler.supervisor import check_requirement_conformance
+    from singularity.scheduler.project import _projects_dir
+    import json as _json
+    # 读追溯表
+    tp = _projects_dir() / f"{project_id}.traceability.json"
+    traceability = []
+    if tp.exists():
+        try:
+            traceability = _json.loads(tp.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    # 读测试方案
+    testp = _projects_dir() / f"{project_id}.test-plan.md"
+    test_plan = None
+    if testp.exists():
+        try:
+            test_plan = _json.loads(testp.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    # 需求符合性
+    req_check = check_requirement_conformance(project_id)
+    return jsonify({
+        "ok": True,
+        "traceability": traceability,
+        "test_plan": test_plan,
+        "conformance": {
+            "passed": req_check.passed,
+            "reason": req_check.reason,
+            "evidence": req_check.evidence,
+        },
+    })
+
 @app.route("/api/projects/<project_id>/auto", methods=["POST"])
 def api_project_auto(project_id):
     data, code = _api_handler.project_auto(project_id)

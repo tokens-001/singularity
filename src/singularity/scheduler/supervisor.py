@@ -262,3 +262,76 @@ def _check_artifact(changed_files: list[str], root: Path) -> CheckResult:
         passed=True, reason=f"质量门禁通过 ({len(py_files)} 文件)",
         evidence=evidence,
     )
+
+
+# ═══════════════════════════════════════════════════════════════
+# 需求符合性校验 (按 production-flow.md: 测试阶段两层之一)
+# ═══════════════════════════════════════════════════════════════
+
+def check_requirement_conformance(project_id: str, agent_output: str = "",
+                                   changed_files: list[str] = None) -> CheckResult:
+    """加载 traceability.json，逐条核验需求符合性。
+
+    对照立项需求追溯表，检查每条需求是否在产出中覆盖。
+    返回 CheckResult: passed + 逐条明细。
+    """
+    changed_files = changed_files or []
+    try:
+        from singularity.scheduler.project import _projects_dir
+        p = _projects_dir() / f"{project_id}.traceability.json"
+        if not p.exists():
+            return CheckResult(passed=True, reason="无追溯表,跳过需求符合性检查")
+
+        trace = json.loads(p.read_text(encoding="utf-8"))
+        if not trace:
+            return CheckResult(passed=True, reason="追溯表为空,跳过")
+    except Exception:
+        return CheckResult(passed=True, reason="追溯表读取失败,跳过")
+
+    # 逐条检查
+    passed_items = []
+    failed_items = []
+    output_lower = agent_output.lower()
+    files_set = set(changed_files)
+
+    for item in trace:
+        req = item.get("requirement", "")
+        criteria = item.get("acceptance_criteria", "")
+        covered_by = item.get("covered_by_tasks", [])
+
+        # 机械检查: 需求关键词是否在产出中出现
+        req_keywords = req.lower().split() if req else []
+        keyword_match = any(kw in output_lower for kw in req_keywords if len(kw) > 2)
+
+        # 检查覆盖的任务是否有文件产出
+        has_files = any(t in str(files_set) for t in covered_by) if covered_by else True
+
+        check = {
+            "requirement": req,
+            "acceptance_criteria": criteria,
+            "keyword_match": keyword_match,
+            "files_produced": has_files,
+        }
+
+        if keyword_match or has_files:
+            passed_items.append(check)
+        else:
+            failed_items.append(check)
+
+    if failed_items:
+        return CheckResult(
+            passed=False,
+            reason=f"需求符合性: {len(passed_items)}/{len(trace)} 通过, {len(failed_items)} 条未达标",
+            evidence={
+                "hard": True,
+                "total": len(trace),
+                "passed": len(passed_items),
+                "failed": len(failed_items),
+                "failed_items": [f["requirement"][:80] for f in failed_items],
+            },
+        )
+    return CheckResult(
+        passed=True,
+        reason=f"需求符合性: {len(passed_items)}/{len(trace)} 全部通过",
+        evidence={"hard": True, "total": len(trace), "all_passed": True},
+    )

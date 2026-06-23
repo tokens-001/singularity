@@ -254,7 +254,7 @@ async function gateConfirm(id, decision) {
 }
 
 // ── GATE3 approval modal (enhanced) ──
-function showApprovalModal(projectId, decision, project) {
+async function showApprovalModal(projectId, decision, project) {
   const m = document.getElementById('approval-modal');
   const b = document.getElementById('approval-body');
   const btn = document.getElementById('approval-confirm-btn');
@@ -273,8 +273,22 @@ function showApprovalModal(projectId, decision, project) {
       最后执行: <b>${esc(lastHandoff.agent_model||'?')}</b> · ${esc(lastHandoff.phase||'?')} · ${lastHandoff.files_changed?esc(lastHandoff.files_changed.join(', ')):'无文件'}</div>`;
   }
 
-  if (handoffs.length > 1) {
-    html += `<div style="font-size:8px;color:var(--text3);margin-bottom:8px">共 ${handoffs.length} 条交接记录</div>`;
+  // 需求追溯表 (GATE3 专用)
+  if (project.phase === 'gate3') {
+    try {
+      const tResp = await api('/api/projects/'+projectId+'/traceability');
+      if (tResp.ok && tResp.traceability && tResp.traceability.length) {
+        html += `<div style="margin:8px 0;padding:8px;background:var(--bg);border:1px solid var(--grid);border-radius:4px;max-height:200px;overflow-y:auto">`;
+        html += `<div style="font-size:9px;font-weight:600;margin-bottom:4px">需求追溯表 (${tResp.conformance.passed?'✅全部通过':'⚠部分未达标'})</div>`;
+        for (const item of tResp.traceability) {
+          const icon = tResp.conformance.passed ? '✅' : '⚠';
+          html += `<div style="font-size:8px;padding:2px 0;border-bottom:1px solid var(--grid)">
+            ${icon} <b>${esc(item.requirement||'').slice(0,60)}</b> → ${esc(item.test_method||'').slice(0,40)}</div>`;
+        }
+        html += `<div style="font-size:8px;color:var(--text2);margin-top:4px">${esc(tResp.conformance.reason||'')}</div>`;
+        html += `</div>`;
+      }
+    } catch(e) { /* traceability fetch failed, skip */ }
   }
 
   // feedback textarea for rejection
