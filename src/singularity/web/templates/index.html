@@ -426,12 +426,12 @@
      Approval Modal
      ═══════════════════════════════════════════════════════ -->
 <div class="modal-overlay" id="approval-modal" style="display:none" onclick="if(event.target===this)closeApproval()">
-  <div class="modal-box" style="max-width:420px">
-    <div style="font-size:11px;font-weight:600;margin-bottom:8px;color:#f44747">⚠ 操作确认</div>
-    <div id="approval-body" style="font-size:10px;margin-bottom:12px;font-family:var(--mono);max-height:200px;overflow-y:auto"></div>
+  <div class="modal-box" style="max-width:480px">
+    <div style="font-size:11px;font-weight:600;margin-bottom:8px;color:var(--st-hold)" id="approval-title">⚠ GATE 审批</div>
+    <div id="approval-body" style="font-size:10px;margin-bottom:12px;font-family:var(--mono);max-height:300px;overflow-y:auto"></div>
     <div style="display:flex;gap:4px;justify-content:flex-end">
-      <button class="btn sm" onclick="respondApproval('reject')">拒绝</button>
-      <button class="btn cyan sm" id="approval-confirm-btn" onclick="respondApproval('approve')">批准执行</button>
+      <button class="btn sm" id="approval-reject-btn" onclick="respondApproval('rejected')" style="color:var(--st-fail);border-color:var(--st-fail)">✗ 打回</button>
+      <button class="btn cyan sm" id="approval-confirm-btn" onclick="respondApproval('approved')">✓ 批准通过</button>
     </div>
   </div>
 </div>

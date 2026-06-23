@@ -1,4 +1,5 @@
 // Singularity Agent 调度平台 — 前端逻辑
+var _approvalPending = null; // global: {task_id, action, resolve}
 
 async function startProject(id){
   const r=await api('/api/projects/'+id+'/start',{method:'POST'});

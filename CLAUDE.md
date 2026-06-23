@@ -24,3 +24,17 @@
 - 镜子模式 → `docs/context/mirror-mode.md`
 - 知识库 → `docs/knowledge/体系边疆.md`
 - Python教学 → 第一步 Skill("teach-me")
+
+## Agent skills
+
+### Issue tracker
+
+Local markdown under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CLAUDE.md` + `docs/adr/`. See `docs/agents/domain.md`.

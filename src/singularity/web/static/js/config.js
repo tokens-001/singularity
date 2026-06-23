@@ -525,9 +525,12 @@ async function renderLayerSwitch(){
         ? `if(confirm('重新启用 ${m.display||m.id} 到 ${t.label}？'))toggleLayerAgent('${t.id}','${esc(m.id)}',true)`
         : `toggleLayerAgent('${t.id}','${esc(m.id)}',${!active})`;
 
-      return `<div onclick="${clickAction}"
-        style="cursor:pointer;padding:8px 10px;border:1px solid ${border};background:${bg};display:flex;align-items:center;gap:8px;min-width:180px;transition:all .15s"
-        title="${disabled?'点击重新启用':'点击切换启用/禁用'}">
+      return `<div draggable="true"
+        ondragstart="event.dataTransfer.setData('text/plain','${esc(m.id)}|${t.id}');event.dataTransfer.effectAllowed='move'"
+        ondragend="event.target.style.opacity='1'"
+        onclick="${clickAction}"
+        style="cursor:grab;padding:8px 10px;border:1px solid ${border};background:${bg};display:flex;align-items:center;gap:8px;min-width:180px;transition:all .15s"
+        title="${disabled?'点击重新启用':'拖拽换层 · 点击切换启用/禁用'}">
         <span style="display:flex;align-items:center;gap:4px;min-width:50px">
           <span style="width:10px;text-align:center">${statusDot}</span>
           <span style="font-size:8px;font-family:var(--mono);text-transform:uppercase;color:${stateColor}">${stateLabel}</span>
@@ -547,9 +550,27 @@ async function renderLayerSwitch(){
         <span style="flex:1"></span>
         <span style="font-size:8px;color:var(--text3);font-family:var(--mono)">${tierAgents.length} active${disabledCount?' · '+disabledCount+' 禁用':''}</span>
       </div>
-      <div style="display:flex;gap:4px;flex-wrap:wrap">${cards||'<span style="color:var(--text3);font-size:9px">无可用模型</span>'}</div>
+      <div id="tier-drop-${t.id}" style="display:flex;gap:4px;flex-wrap:wrap;min-height:36px;padding:4px;border-radius:6px"
+        ondragover="event.preventDefault();event.currentTarget.style.background='var(--bg2)'"
+        ondragleave="event.currentTarget.style.background='transparent'"
+        ondragend="event.currentTarget.style.background='transparent'"
+        ondrop="onDropToTier(event,'${t.id}')"
+        >${cards||'<span style="color:var(--text3);font-size:9px">无可用模型</span>'}</div>
     </div>`;
   }).join('');
+}
+
+function onDropToTier(e, targetTier){
+  e.preventDefault();
+  e.currentTarget.style.background = 'transparent';
+  const data = e.dataTransfer.getData('text/plain');
+  if (!data) return;
+  const [modelId, sourceTier] = data.split('|');
+  if (!modelId || sourceTier === targetTier) return;
+  // 从源层级移除，添加到目标层级
+  toggleLayerAgent(sourceTier, modelId, false).then(() => {
+    toggleLayerAgent(targetTier, modelId, true);
+  });
 }
 
 async function toggleLayerAgent(tier, modelId, enable){
@@ -915,7 +936,6 @@ async function bindPerm(){
 // ═══════════════════════════════════════════════════════
 // Approval 确认
 // ═══════════════════════════════════════════════════════
-let _approvalPending = null; // {task_id, action, resolve}
 function showApproval(task_id, action, detail){
   const m = document.getElementById('approval-modal');
   const b = document.getElementById('approval-body');

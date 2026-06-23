@@ -215,6 +215,7 @@ async function loadProject(id){
   if (p.phase === 'template') {
     actions = `<button class="btn purple sm" onclick="startProject('${esc(p.id)}')">▶ 启动工作流</button>`;
   } else if (isGate) {
+    window._currentProject = p;
     actions = `<button class="btn green sm" onclick="gateConfirm('${esc(p.id)}','approved')">✓ 批准</button>
                <button class="btn red sm" onclick="gateConfirm('${esc(p.id)}','rejected')">✗ 打回</button>`;
   } else if (p.phase !== 'done') {
@@ -235,6 +236,12 @@ async function loadProject(id){
   document.getElementById('project-detail').style.display='block';
 
 async function gateConfirm(id, decision) {
+  const project = window._currentProject;
+  // GATE3 打回: 弹出带反馈的审批对话框
+  if (decision === 'rejected' && project && project.phase === 'gate3') {
+    showApprovalModal(id, decision, project);
+    return;
+  }
   const sure = decision==='approved' ? '批准进入下一阶段?' : `打回? 将回到上一阶段`;
   if (!confirm(sure)) return;
   const r = await api('/api/projects/'+id+'/gate-confirm', {
@@ -244,6 +251,56 @@ async function gateConfirm(id, decision) {
   });
   if (r.ok) { loadProject(id); loadProjects(); }
   else alert(r.error||'操作失败');
+}
+
+// ── GATE3 approval modal (enhanced) ──
+function showApprovalModal(projectId, decision, project) {
+  const m = document.getElementById('approval-modal');
+  const b = document.getElementById('approval-body');
+  const btn = document.getElementById('approval-confirm-btn');
+  const rejectBtn = document.getElementById('approval-reject-btn');
+  if (!m || !b) return;
+
+  const handoffs = project.handoffs || [];
+  const lastHandoff = handoffs.length ? handoffs[handoffs.length-1] : null;
+  const phaseLabel = {gate3:'最终交付审核',gate2:'方案审核',gate1:'调研审核'}[project.phase]||project.phase;
+
+  let html = `<div style="margin-bottom:8px"><b>${esc(project.name)}</b> · ${phaseLabel}</div>`;
+  html += `<div style="font-size:9px;color:var(--text2);margin-bottom:8px">${esc(project.description||'').slice(0,150)}</div>`;
+
+  if (lastHandoff) {
+    html += `<div style="font-size:9px;color:var(--text2);margin-bottom:4px">
+      最后执行: <b>${esc(lastHandoff.agent_model||'?')}</b> · ${esc(lastHandoff.phase||'?')} · ${lastHandoff.files_changed?esc(lastHandoff.files_changed.join(', ')):'无文件'}</div>`;
+  }
+
+  if (handoffs.length > 1) {
+    html += `<div style="font-size:8px;color:var(--text3);margin-bottom:8px">共 ${handoffs.length} 条交接记录</div>`;
+  }
+
+  // feedback textarea for rejection
+  html += `<textarea id="approval-feedback" placeholder="打回原因 (可选, 将发给D层)"
+    style="width:100%;height:60px;font-size:9px;padding:6px;background:var(--bg);color:var(--text);border:1px solid var(--grid);border-radius:4px;resize:vertical;box-sizing:border-box"></textarea>`;
+
+  b.innerHTML = html;
+  if (btn) { btn.textContent = '批准通过'; btn.onclick = () => respondApproval('approved'); }
+  if (rejectBtn) { rejectBtn.style.display = ''; rejectBtn.onclick = () => respondApproval('rejected'); }
+  m.style.display = 'flex';
+
+  // update global approval state
+  _approvalPending = {task_id: projectId, action: decision, resolve(r){
+    if (r === 'approved' || r === 'rejected') {
+      const fb = document.getElementById('approval-feedback');
+      const feedback = fb ? fb.value : '';
+      api('/api/projects/'+projectId+'/gate-confirm', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({decision: r, gate:'gate3', feedback})
+      }).then(rr => {
+        if (rr.ok) { loadProject(projectId); loadProjects(); }
+        else alert(rr.error||'操作失败');
+      });
+    }
+  }};
 }
 
 async function advanceWithCost(id) {
