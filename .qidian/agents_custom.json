@@ -121,21 +121,21 @@
         "daily"
       ],
       "sandbox": "worktree"
-    }
-  ],
-  "D": [
+    },
     {
       "model": "qwen3.7-max",
       "type": "openai-agent",
-      "entry": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-      "api_key_env": "DASHSCOPE_API_KEY",
+      "entry": "",
+      "api_key_env": "",
       "max_turns": 5,
-      "default": true,
+      "default": false,
       "roles": [
-        "architecture"
+        "daily"
       ],
       "sandbox": "worktree"
-    },
+    }
+  ],
+  "D": [
     {
       "model": "glm-5.2",
       "type": "openai-agent",
@@ -171,6 +171,18 @@
         "daily"
       ],
       "sandbox": "worktree"
+    },
+    {
+      "model": "qwen3.7-max",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 5,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
     }
   ],
   "_disabled": {
@@ -181,8 +193,7 @@
       "qwen3-flash"
     ],
     "E+": [
-      "kimi-k2.6",
-      "qwen3.7-max"
+      "kimi-k2.6"
     ],
     "D": [
       "claude-opus-4-8",
