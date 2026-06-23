@@ -12,7 +12,7 @@ import json
 from singularity.scheduler import config
 from singularity.scheduler import tracker
 from singularity.scheduler import dispatcher as disp_mod
-from singularity.scheduler.project import ProjectState, Phase, save
+from singularity.scheduler.project import ProjectState, Phase, save, _projects_dir
 from singularity.scheduler.tracker import TaskStatus
 
 from singularity.scheduler._io import try_parse_json
@@ -22,23 +22,34 @@ from singularity.scheduler._io import try_parse_json
 # Prompt 模板
 # ═══════════════════════════════════════════════════════════
 
-_RESEARCHER_PREAMBLE = """你是项目调研员。基于项目需求，搜集可借鉴的架构/方案/理论。
+_RESEARCHER_PREAMBLE = """你是项目调研员。基于项目需求，完成六维度调研报告。
 
 项目需求: {description}
 项目范围: {scope}
 原始约束: {constraints}
 
-请分析并输出结构化调研报告（JSON，不要调用工具，直接输出）:
+必须覆盖以下六个维度，缺一不可：
+
+1. **竞品分析**: 同类产品拆解、核心技术方案对比、可借鉴的技术点、竞品短板和本项目差异化机会
+2. **前沿理论**: 项目相关的学术/工业前沿进展、关键技术的成熟度评估、前沿理论在本项目中的可行性论证
+3. **用户研究**: 目标用户的痛点、交互需求和使用习惯、竞品无法满足的需求
+4. **需求澄清**: 核心功能/次要功能/不做功能的边界明确、用户故事的优先级排序
+5. **技术预研(PoC)**: 关键技术的原型验证结论、证明"能做"的证据（不是"理论上能做"）、可运行的 demo 或实验数据
+6. **约束识别**: 性能约束(响应时间/QPS)、安全约束(加密/权限/攻击面)、合规约束(隐私/行业规范)、兼容性约束(向后兼容/平台)
+
+输出格式 (JSON，```json 包裹):
 {{
-  "references": [
-    {{"name": "...", "source": "...", "core_idea": "...", "pros": [...], "cons": [...], "applicability": "high|medium|low"}}
-  ],
-  "comparison": "各方案对比",
-  "recommendation": "推荐方案及理由",
-  "pitfalls": ["注意的坑"]
+  "competitive_analysis": {{"products": [...], "comparison": "...", "differentiation": "..."}},
+  "frontier_theory": {{"papers": [...], "maturity": "...", "feasibility": "..."}},
+  "user_research": {{"pain_points": [...], "needs": [...], "unmet_needs": "..."}},
+  "scope_clarification": {{"core": [...], "secondary": [...], "out_of_scope": [...], "priorities": [...]}},
+  "technical_poc": {{"pocs": [{{"name": "...", "result": "...", "evidence": "..."}}], "conclusion": "..."}},
+  "constraints": {{"performance": [...], "security": [...], "compliance": [...], "compatibility": [...]}},
+  "recommendation": "综合推荐方案及理由",
+  "pitfalls": ["注意的坑和风险"]
 }}
 
-注意: 你只做调研，不写代码。输出必须严格 JSON。"""
+你只做调研，不写代码。输出必须完整覆盖六个维度。"""
 
 _ARCHITECT_PREAMBLE = """你是系统架构师。基于需求和调研报告，设计方案。
 
@@ -47,7 +58,7 @@ _ARCHITECT_PREAMBLE = """你是系统架构师。基于需求和调研报告，�
 原始约束: {constraints}
 调研报告: {research}
 
-你需要产出架构方案 + 任务分解清单 + 约束。不要调用工具，直接输出 JSON。必须符合以下 Schema:
+你需要产出四个部分：架构方案 + 任务分解清单 + 需求追溯表 + 测试方案。不要调用工具，直接输出 JSON。必须符合以下 Schema:
 
 {{
   "architecture": "主设计思路 + 模块划分 + 数据流 (必填, <500字)",
@@ -69,8 +80,24 @@ _ARCHITECT_PREAMBLE = """你是系统架构师。基于需求和调研报告，�
       "check": "如何验证: grep/diff/test命令"
     }}
   ],
-  "risks": ["风险1"],
-  "test_strategy": "如何测试整个方案 (必填, <200字)"
+  "traceability": [
+    {{
+      "requirement": "立项需求描述 (必填)",
+      "test_method": "如何验证该需求已实现 (必填)",
+      "owner": "E|E+|D (必填)",
+      "acceptance_criteria": "通过标准 (必填)",
+      "covered_by_tasks": ["T1", "T2"]
+    }}
+  ],
+  "test_plan": {{
+    "project_type": "web_app|cli|library|mobile|script",
+    "industry_tests": ["单元测试", "集成测试", "E2E"],
+    "test_cases": [
+      {{"name": "测试用例名", "what": "测什么", "how": "怎么测", "expected": "预期结果"}}
+    ],
+    "coverage_target": "80%"
+  }},
+  "risks": ["风险1"]
 }}
 
 Schema 规则:
@@ -79,6 +106,8 @@ Schema 规则:
 - depends_on 填其他任务的 id (T1,T2...), 可为空数组
 - 每个任务必须改不相交的文件 (并行 merge 的前提)
 - constraints 每条必须可机器检查 (type+check 字段)
+- **traceability 必须逐条映射立项需求**，每条需求对应一个测试方法和通过标准
+- test_plan.project_type 决定行业测试标准
 - 你只出方案和清单，不写代码。
 
 输出时用 ```json ... ``` 包裹。"""
@@ -258,6 +287,30 @@ def run_phase(project: ProjectState, agents: dict) -> str:
 
 
 # ═══════════════════════════════════════════════════════════
+# 阶段上下文传递: 读写阶段产出文件
+# ═══════════════════════════════════════════════════════════
+
+def _phase_output_path(project_id: str, filename: str) -> Path:
+    """项目阶段产出文件路径。存于 .qidian/projects/ 目录。"""
+    return _projects_dir() / f"{project_id}.{filename}"
+
+
+def _save_phase_output(project_id: str, filename: str, content: str) -> Path:
+    """保存阶段产出到文件。"""
+    p = _phase_output_path(project_id, filename)
+    p.write_text(content, encoding="utf-8")
+    return p
+
+
+def _read_phase_output(project_id: str, filename: str) -> str | None:
+    """读取阶段产出文件。不存在返回 None。"""
+    p = _phase_output_path(project_id, filename)
+    if p.exists():
+        return p.read_text(encoding="utf-8")
+    return None
+
+
+# ═══════════════════════════════════════════════════════════
 # GATE1: 调研
 # ═══════════════════════════════════════════════════════════
 
@@ -299,11 +352,13 @@ def _run_research(project: ProjectState, agents: dict) -> str:
 
     report = try_parse_json(raw)
     project.research_report = report
+    # ponytail: 保存结构化调研报告供后续阶段复用
+    _save_phase_output(project.id, "research.md", raw)
     project.add_lineage({"action": "research_complete",
                          "agent": disp_result.agent_cfg.get("model","?") if disp_result else "?"})
     project.phase = Phase.GATE1
     save(project)
-    return f"调研完成: {len(report.get('references', []))} 条引用"
+    return f"调研完成: {len(report.get('competitive_analysis', {}).get('products', []))} 竞品, {len(report.get('frontier_theory', {}).get('papers', []))} 论文引用"
 
 
 # ═══════════════════════════════════════════════════════════
@@ -317,14 +372,20 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
         save(project)
         return "规划已跳过"
 
-    research_json = json.dumps(project.research_report, ensure_ascii=False, indent=2) \
-        if project.research_report else "无调研报告"
+    # 阶段上下文: 优先从磁盘读 research.md
+    research_md = _read_phase_output(project.id, "research.md")
+    if research_md:
+        research_context = research_md[:5000]  # 截断避免 token 浪费
+    elif project.research_report:
+        research_context = json.dumps(project.research_report, ensure_ascii=False, indent=2)
+    else:
+        research_context = "无调研报告"
 
     prompt = _ARCHITECT_PREAMBLE.format(
         description=project.description,
         scope=project.scope,
         constraints=project.raw_constraints,
-        research=research_json,
+        research=research_context,
     )
 
     task_id = f"architect_{project.id}"
@@ -347,24 +408,35 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
         disp_result = disp_result2  # lineage 用重试结果
 
     project.architecture = arch
+    # ponytail: 保存阶段产出文件供后续阶段复用
+    _save_phase_output(project.id, "architecture.md", raw)
+    traceability = arch.get("traceability", [])
+    if traceability:
+        _save_phase_output(project.id, "traceability.json",
+                          json.dumps(traceability, ensure_ascii=False, indent=2))
+    test_plan = arch.get("test_plan", {})
+    if test_plan:
+        _save_phase_output(project.id, "test-plan.md",
+                          json.dumps(test_plan, ensure_ascii=False, indent=2))
     arch_issues = _validate_architecture(arch)
     blockers = [i for i in arch_issues if "缺少" in i or "无效" in i or "应为" in i]
     project.add_lineage({"action": "planning_complete",
                          "agent": disp_result.agent_cfg.get("model","?") if disp_result else "?",
                          "task_count": len(arch.get("tasks", [])),
+                         "traceability_items": len(traceability),
                          "validation_issues": len(arch_issues),
                          "blockers": len(blockers)})
 
     project.phase = Phase.GATE2
     save(project)
     block_warn = f" (⚠阻塞: {'; '.join(blockers[:2])})" if blockers else ""
-    return f"架构完成: {len(arch.get('tasks', []))} 个任务, {len(arch.get('constraints', []))} 条约束{block_warn}"
+    return f"架构完成: {len(arch.get('tasks', []))} 个任务, {len(arch.get('constraints', []))} 条约束, {len(traceability)} 条追溯{block_warn}"
 
 
 def _validate_architecture(arch: dict) -> list[str]:
     """校验架构产出完整性。"""
     issues = []
-    for key in ["architecture", "tasks", "constraints", "test_strategy"]:
+    for key in ["architecture", "tasks", "constraints", "traceability", "test_plan"]:
         if not arch.get(key):
             issues.append(f"缺少必填字段: {key}")
     tasks = arch.get("tasks", [])
