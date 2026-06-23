@@ -569,7 +569,7 @@ def _build_execution_report(project: ProjectState) -> str:
     """收集所有任务执行状态 + 改动文件 → 结构化报告。"""
     lines = []
     for tid in project.task_ids:
-        t = tracker._read(tid)
+        t = tracker.read_task(tid)
         if t is None:
             continue
         status_icon = {"done": "✅", "failed": "❌", "rolled_back": "↩️", "running": "⏳",

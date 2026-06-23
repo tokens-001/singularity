@@ -393,7 +393,7 @@ def _loop_worker():
                 except Exception:
                     pass
                 for tid, reason, validation in results:
-                    t = tracker._read(tid)
+                    t = tracker.read_task(tid)
                     level = t.route_level if t else "?"
                     verdict = getattr(validation, "action", "?")
                     _push_event("task", f"[{tid[:8]}] level={level} {verdict}: {reason}")
@@ -427,7 +427,7 @@ def _loop_worker():
                             # 检查是否所有子任务完成
                             all_done = True
                             for tid2 in proj.task_ids:
-                                t = tracker._read(tid2)
+                                t = tracker.read_task(tid2)
                                 if t and t.status not in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.ROLLED_BACK):
                                     all_done = False
                                     break

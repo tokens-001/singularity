@@ -29,7 +29,7 @@ def heartbeat(task_id: str, agent_level: str, status: str = "running", detail: s
 
 def _cleanup_terminal_heartbeat(p: Path, tid: str) -> bool:
     """清理终态任务的心跳文件。返回 True 表示已清理。"""
-    task_file = tracker._tasks_dir() / f"{tid}.json"
+    task_file = tracker.tasks_dir() / f"{tid}.json"
     if not task_file.exists():
         try: p.unlink()
         except OSError: pass
@@ -59,7 +59,7 @@ def force_cleanup_heartbeats() -> tuple[int, int]:
         tid = data.get("task_id", "")
         if tid and _cleanup_terminal_heartbeat(p, tid):
             n_hb += 1
-    n_tasks = len(list(tracker._tasks_dir().glob("*.json")))
+    n_tasks = len(list(tracker.tasks_dir().glob("*.json")))
     return n_hb, n_tasks
 
 
@@ -85,7 +85,7 @@ def check_stalled(timeout_seconds: float = 600) -> list[str]:
 
 def _count_by_status() -> dict[str, int]:
     counts: dict[str, int] = {}
-    for p in tracker._tasks_dir().glob("*.json"):
+    for p in tracker.tasks_dir().glob("*.json"):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
@@ -121,7 +121,7 @@ def _timing_stats() -> tuple[list[float], list[float]]:
     now = time.time()
     pending_waits: list[float] = []
     done_durations: list[float] = []
-    for p in tracker._tasks_dir().glob("*.json"):
+    for p in tracker.tasks_dir().glob("*.json"):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):

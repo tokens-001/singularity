@@ -375,7 +375,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     修复 #2: v3 路径用 commit_wt 拿到含改动的 commit, 再构造 MergeRequest。
     """
     # 修复 #5: 重读文件, 不信任传入的 task 内存对象
-    fresh = tracker._read(task.id)
+    fresh = tracker.read_task(task.id)
     if fresh is not None:
         task = fresh
 

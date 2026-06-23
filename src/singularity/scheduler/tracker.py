@@ -95,14 +95,14 @@ class Task:
         return self.starvation_score
 
 
-def _tasks_dir() -> Path:
+def tasks_dir() -> Path:
     d = config.QIDIAN_DIR / "tasks"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def _path(task_id: str) -> Path:
-    return _tasks_dir() / f"{task_id}.json"
+    return tasks_dir() / f"{task_id}.json"
 
 
 def _write(task: Task) -> None:
@@ -114,7 +114,7 @@ def _write(task: Task) -> None:
     os.replace(tmp, p)  # 同目录 rename 原子, crash 不损坏正式文件
 
 
-def _read(task_id: str) -> Optional[Task]:
+def read_task(task_id: str) -> Optional[Task]:
     p = _path(task_id)
     if not p.exists():
         return None
@@ -131,7 +131,7 @@ def _next_id() -> str:
         # 缓存过期时才扫一次全表 (时间戳进位或首次调用)
         if _NEXT_ID_CACHE <= base:
             max_existing = base
-            for p in _tasks_dir().glob("*.json"):
+            for p in tasks_dir().glob("*.json"):
                 try:
                     max_existing = max(max_existing, int(p.stem))
                 except ValueError:
@@ -152,13 +152,13 @@ def create(
     now = time.time()
     # 有父任务时, depth 从父继承 (parent.depth + 1), 防无限递归分解
     if parent_id:
-        parent = _read(parent_id)
+        parent = read_task(parent_id)
         if parent is not None:
             depth = parent.depth + 1
     # depends_on 校验: 过滤不存在的 task_id
     valid_deps = []
     for dep_id in (depends_on or []):
-        if _read(dep_id):
+        if read_task(dep_id):
             valid_deps.append(dep_id)
     task = Task(
         id=_next_id(),
@@ -176,7 +176,7 @@ def create(
 
 def transition(task_id: str, new_status: TaskStatus, **kwargs) -> Optional[Task]:
     with _LOCK:
-        task = _read(task_id)
+        task = read_task(task_id)
         if task is None:
             return None
         task.status = new_status
@@ -192,7 +192,7 @@ def transition(task_id: str, new_status: TaskStatus, **kwargs) -> Optional[Task]
 def _deps_satisfied(task: Task) -> bool:
     """depends_on 全部 DONE → True。"""
     for dep_id in task.depends_on:
-        dep = _read(dep_id)
+        dep = read_task(dep_id)
         if dep is None or dep.status != TaskStatus.DONE:
             return False
     return True
@@ -204,7 +204,7 @@ _DEAD_END = {TaskStatus.FAILED, TaskStatus.ROLLED_BACK, TaskStatus.CONFLICT_HELD
 def _any_dead_dep(task: Task) -> str:
     """检查是否有死路依赖 (建议 #7)。返回第一个死路 dep_id 或空串。"""
     for dep_id in task.depends_on:
-        dep = _read(dep_id)
+        dep = read_task(dep_id)
         if dep is not None and dep.status in _DEAD_END:
             return dep_id
     return ""
@@ -213,7 +213,7 @@ def _any_dead_dep(task: Task) -> str:
 def _collect_ready_pending() -> list[Task]:
     """扫所有 pending 且依赖已完成的任务, 刷新 starvation_score。"""
     candidates: list[Task] = []
-    for p in _tasks_dir().glob("*.json"):
+    for p in tasks_dir().glob("*.json"):
         try:
             task = Task.from_dict(json.loads(p.read_text(encoding="utf-8")))
         except (json.JSONDecodeError, TypeError, ValueError):
@@ -259,7 +259,7 @@ def cas(
     os.replace 原子写保证 crash 不损坏。返回是否抢占成功。
     """
     with _LOCK:
-        task = _read(task_id)
+        task = read_task(task_id)
         if task is None or task.status != expect_from:
             return False
         task.status = to
@@ -297,7 +297,7 @@ def ready_tasks(exclude: set[str] = None) -> list[Task]:
             all_tasks = _TASK_SCAN_CACHE["tasks"]
         else:
             all_tasks = []
-            for p in _tasks_dir().glob("*.json"):
+            for p in tasks_dir().glob("*.json"):
                 try:
                     all_tasks.append(Task.from_dict(json.loads(p.read_text(encoding="utf-8"))))
                 except (json.JSONDecodeError, TypeError, ValueError):
@@ -341,7 +341,7 @@ def ready_tasks(exclude: set[str] = None) -> list[Task]:
 def set_children(parent_id: str, child_ids: list[str]) -> None:
     """记录 parent 的子任务 id 列表 (DAG 分解后调)。"""
     with _LOCK:
-        task = _read(parent_id)
+        task = read_task(parent_id)
         if task is None:
             return
         task.children = list(child_ids)
@@ -355,12 +355,12 @@ def maybe_complete_parent(parent_id: str) -> bool:
     返回是否触发了 parent 终态转换。
     """
     with _LOCK:
-        parent = _read(parent_id)
+        parent = read_task(parent_id)
         if parent is None or not parent.children:
             return False
         statuses = []
         for cid in parent.children:
-            c = _read(cid)
+            c = read_task(cid)
             if c is None:
                 return False  # 子任务文件丢了, 不敢判
             statuses.append(c.status)
@@ -376,7 +376,7 @@ def maybe_complete_parent(parent_id: str) -> bool:
 def recover() -> int:
     count = 0
     with _LOCK:
-        for p in _tasks_dir().glob("*.json"):
+        for p in tasks_dir().glob("*.json"):
             try:
                 task = Task.from_dict(json.loads(p.read_text(encoding="utf-8")))
             except (json.JSONDecodeError, TypeError, ValueError):
@@ -503,7 +503,7 @@ def dag_metrics() -> dict:
 def _load_all_tasks() -> list[Task]:
     """加载所有任务 (供 DAG 分析)。"""
     tasks = []
-    for p in _tasks_dir().glob("*.json"):
+    for p in tasks_dir().glob("*.json"):
         try:
             tasks.append(Task.from_dict(json.loads(p.read_text(encoding="utf-8"))))
         except (json.JSONDecodeError, TypeError, ValueError):

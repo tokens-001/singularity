@@ -2,7 +2,7 @@
 import json
 import pytest
 from singularity.scheduler._exec import decompose
-from singularity.scheduler.tracker import dag_metrics, create, TaskStatus, _tasks_dir
+from singularity.scheduler.tracker import dag_metrics, create, TaskStatus, tasks_dir
 from singularity.scheduler import config
 
 

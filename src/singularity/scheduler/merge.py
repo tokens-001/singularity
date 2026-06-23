@@ -10,7 +10,7 @@ drain 二层冲突检测:
     干净 → merge_ref; 冲突 → park + tracker CONFLICT_HELD
 
 线程安全: submit 多线程可调 (Lock), drain 只主线程调。
-修复 #6: 依赖判定用 tracker._read(d).status==DONE, 不依赖 self._merged。
+修复 #6: 依赖判定用 tracker.read_task(d).status==DONE, 不依赖 self._merged。
 修复 #9: 结果在 drain 完成冲突判定后才生成。
 修复 #12: parked 状态持久化到 .qidian/parked/, 重启可恢复。
 """
@@ -126,7 +126,7 @@ class MergeQueue:
     def _deps_satisfied(self, req: MergeRequest) -> bool:
         """依赖的 task 全部 DONE (防御性检查, 正常由 ready_tasks 门控保证)。"""
         for d in req.depends_on:
-            t = tracker._read(d)
+            t = tracker.read_task(d)
             if t is None or t.status != TaskStatus.DONE:
                 return False
         return True

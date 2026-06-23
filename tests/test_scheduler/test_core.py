@@ -1,7 +1,7 @@
 """Remaining property tests — tracker, heartbeat, snapshot, worktree, token budget, model registry, dispatcher, critical fixes."""
 import json, time, hashlib
 from pathlib import Path
-from singularity.scheduler.tracker import _next_id, _invalidate_scan_cache, _read, TaskStatus, _TERMINAL
+from singularity.scheduler.tracker import _next_id, _invalidate_scan_cache, read_task, TaskStatus, _TERMINAL
 from singularity.scheduler.model_registry import load_models, for_tier
 from singularity.scheduler.dispatcher import load_agents
 from singularity.scheduler import tracker, config
@@ -105,7 +105,7 @@ class TestPropertyHeartbeat:
         from pathlib import Path
         from singularity.scheduler.witness import _hb_path, _heartbeat_dir, heartbeat, _cleanup_terminal_heartbeat
         tid = f"pt_{int(time.time())}"
-        task_dir = tracker._tasks_dir()
+        task_dir = tracker.tasks_dir()
         task_dir.mkdir(parents=True, exist_ok=True)
         task_file = task_dir / f"{tid}.json"
         task_file.write_text(json.dumps({"status": "done"}))

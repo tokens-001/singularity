@@ -74,7 +74,7 @@ class TestProjectWorkflow:
         _run_execution(self.p, {})
         assert len(self.p.task_ids) > 0
         for tid in self.p.task_ids:
-            t = tracker._read(tid)
+            t = tracker.read_task(tid)
             assert t is not None, f"task {tid[:8]} should exist on disk"
             assert t.route_locked
             assert t.project_id == self.p.id

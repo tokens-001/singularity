@@ -32,7 +32,7 @@ from singularity.scheduler import orchestrator
 # ═══════════════════════════════════════════════════════════════
 
 def _list_all_tasks() -> list[dict]:
-    tasks_dir = tracker._tasks_dir()
+    tasks_dir = tracker.tasks_dir()
     if not tasks_dir.exists(): return []
     result = []
     for f in sorted(tasks_dir.glob("*.json"), reverse=True):
@@ -87,7 +87,7 @@ def task_list(status_filter: str = "", level_filter: str = "") -> tuple[dict, in
 
 def task_detail(task_id: str) -> tuple[dict, int]:
     """GET /api/tasks/<id>"""
-    task_path = tracker._tasks_dir() / f"{task_id}.json"
+    task_path = tracker.tasks_dir() / f"{task_id}.json"
     if not task_path.exists():
         return {"error": "任务不存在"}, 404
     data = _read_task_file(task_path)
@@ -102,7 +102,7 @@ def task_detail(task_id: str) -> tuple[dict, int]:
     data["_dag_parents"] = []
     data["_dag_children"] = []
     for dep_id in data.get("depends_on", []):
-        dep_path = tracker._tasks_dir() / f"{dep_id}.json"
+        dep_path = tracker.tasks_dir() / f"{dep_id}.json"
         if dep_path.exists():
             dep_data = _read_task_file(dep_path)
             if dep_data:
@@ -112,7 +112,7 @@ def task_detail(task_id: str) -> tuple[dict, int]:
                     "status": dep_data.get("status", "unknown"),
                 })
     for child_id in data.get("children", []):
-        child_path = tracker._tasks_dir() / f"{child_id}.json"
+        child_path = tracker.tasks_dir() / f"{child_id}.json"
         if child_path.exists():
             child_data = _read_task_file(child_path)
             if child_data:
@@ -178,7 +178,7 @@ def task_trace(task_id: str, section: str = "", fmt: str = "") -> tuple:
 
 def task_timeline(task_id: str) -> tuple[dict, int]:
     """GET /api/tasks/<id>/timeline"""
-    task_path = tracker._tasks_dir() / f"{task_id}.json"
+    task_path = tracker.tasks_dir() / f"{task_id}.json"
     if not task_path.exists():
         return {"error": "任务不存在"}, 404
     task_data = _read_task_file(task_path)
@@ -232,7 +232,7 @@ def task_timeline(task_id: str) -> tuple[dict, int]:
 
 def task_hold(task_id: str, reason: str = "") -> tuple[dict, int]:
     """POST /api/tasks/<id>/hold"""
-    task = tracker._read(task_id)
+    task = tracker.read_task(task_id)
     if task is None:
         return {"error": "任务不存在"}, 404
     if task.status not in (TaskStatus.PENDING, TaskStatus.ROUTED):
@@ -243,7 +243,7 @@ def task_hold(task_id: str, reason: str = "") -> tuple[dict, int]:
 
 def task_release(task_id: str) -> tuple[dict, int]:
     """POST /api/tasks/<id>/release"""
-    task = tracker._read(task_id)
+    task = tracker.read_task(task_id)
     if task is None:
         return {"error": "任务不存在"}, 404
     if not task.held:
@@ -256,7 +256,7 @@ def task_override_route(task_id: str, level: str, locked: bool = True) -> tuple[
     """POST /api/tasks/<id>/override-route"""
     if level not in ("E", "D", "E+"):
         return {"error": "level 必须是 E / D / E+"}, 400
-    task = tracker._read(task_id)
+    task = tracker.read_task(task_id)
     if task is None:
         return {"error": "任务不存在"}, 404
     if task.status not in (TaskStatus.PENDING, TaskStatus.ROUTED):
@@ -267,7 +267,7 @@ def task_override_route(task_id: str, level: str, locked: bool = True) -> tuple[
 
 def task_cancel(task_id: str) -> tuple[dict, int]:
     """POST /api/tasks/<id>/cancel"""
-    task = tracker._read(task_id)
+    task = tracker.read_task(task_id)
     if task is None:
         return {"error": "任务不存在"}, 404
     if task.status in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.ROLLED_BACK, TaskStatus.DECOMPOSED):
@@ -286,7 +286,7 @@ def task_delete(task_id: str) -> tuple[dict, int]:
     """POST /api/tasks/<id>/delete"""
     config.ensure_dirs()
     deleted = 0
-    for d in [config.CANCEL_DIR, config.TRACE_DIR, tracker._tasks_dir()]:
+    for d in [config.CANCEL_DIR, config.TRACE_DIR, tracker.tasks_dir()]:
         p = d / f"{task_id}.json"
         try:
             if p.exists():
@@ -301,7 +301,7 @@ def task_delete(task_id: str) -> tuple[dict, int]:
 
 def task_retry(task_id: str) -> tuple[dict, int]:
     """POST /api/tasks/<id>/retry"""
-    task = tracker._read(task_id)
+    task = tracker.read_task(task_id)
     if task is None:
         return {"error": "任务不存在"}, 404
     if task.status not in (TaskStatus.FAILED, TaskStatus.ROLLED_BACK):
@@ -320,7 +320,7 @@ def task_approval(task_id: str, decision: str = "reject", action: str = "", push
 def task_apply(task_id: str, push_event=None) -> tuple[dict, int]:
     """POST /api/tasks/<id>/apply — 应用 E+ 智谱 patch 到工作区。"""
     from .executors.zhipu_api import ZhipuApiExecutor
-    task = tracker._read(task_id)
+    task = tracker.read_task(task_id)
     if task is None:
         return {"error": "任务不存在"}, 404
     result = ZhipuApiExecutor.apply_patch(task_id)
@@ -346,7 +346,7 @@ def task_rollback(task_id: str, push_event=None) -> tuple[dict, int]:
 def task_supervise(task_id: str, data: dict, push_event=None) -> tuple[dict, int]:
     """POST /api/tasks/<id>/supervise — 监督者介入。"""
     from .supervisor import supervise
-    task = tracker._read(task_id)
+    task = tracker.read_task(task_id)
     if task is None:
         return {"error": "任务不存在"}, 404
     verdict = supervise(
@@ -916,7 +916,7 @@ def _cleanup_orphan_worktrees() -> int:
         if not d.is_dir():
             continue
         tid = d.name.split("_")[0] if "_" in d.name else d.name
-        if not (tracker._tasks_dir() / f"{tid}.json").exists():
+        if not (tracker.tasks_dir() / f"{tid}.json").exists():
             try:
                 subprocess.run(["git", "worktree", "remove", "--force", str(d)],
                              cwd=str(config.PROJECT_ROOT), capture_output=True, timeout=10)

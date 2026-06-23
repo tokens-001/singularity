@@ -82,7 +82,7 @@ def install_stubs():
     _exec._inject_memory = lambda d: ""
     _exec._build_project_context = lambda t: ""
     _exec._save_planner_patch = lambda tid, c: None
-    _exec.tracker._read = lambda tid: S.task
+    _exec.tracker.read_task = lambda tid: S.task
 
     def fake_create(*a, **k):
         wt = FakeWT(); CREATED.append(wt.id); return wt

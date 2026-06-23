@@ -193,7 +193,7 @@ def _drain_queue(agents: dict, max_concurrent: int = 1) -> tuple[int, int]:
 
     exit_code = 0
     for tid, reason, validation in results:
-        t = tracker._read(tid)
+        t = tracker.read_task(tid)
         level = t.route_level if t else "?"
         icon = "✅" if validation.action == "pass" else "❌"
         print(f"  {icon} [{tid[:8]}] level={level} {reason}", file=sys.stderr)
@@ -260,7 +260,7 @@ def _cmd_merge(args: list) -> int:
     if sub == "list":
         # 扫所有 CONFLICT_HELD 任务
         held = []
-        for p in tracker._tasks_dir().glob("*.json"):
+        for p in tracker.tasks_dir().glob("*.json"):
             try:
                 import json as _json
                 task = tracker.Task.from_dict(_json.loads(p.read_text(encoding="utf-8")))
@@ -287,7 +287,7 @@ def _cmd_merge(args: list) -> int:
         for a in args[2:]:
             if a in ("--manual", "--abort"):
                 strategy = a[2:]
-        task = tracker._read(task_id)
+        task = tracker.read_task(task_id)
         if task is None:
             print(f"任务不存在: {task_id}", file=sys.stderr)
             return 1

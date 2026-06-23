@@ -88,8 +88,8 @@ class TestChaosResilience:
         assert r[0]["desc"] == "task1"
 
     def test_tracker_read_nonexistent(self):
-        from singularity.scheduler.tracker import _read
-        assert _read("nonexistent_99999") is None
+        from singularity.scheduler.tracker import read_task
+        assert read_task("nonexistent_99999") is None
 
     def test_schedule_policy_1k_under_50ms(self):
         tasks = [self._t(str(i), priority=i % 10, starvation=(1000 - i) * 0.1, level=["E", "E+", "D"][i % 3]) for i in range(1000)]

@@ -588,7 +588,7 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
             if proj.phase.value == "executing":
                 # 检查是否所有项目任务都已完成
                 pending = [tid for tid in proj.task_ids
-                          if tracker._read(tid) and tracker._read(tid).status not in (
+                          if tracker.read_task(tid) and tracker.read_task(tid).status not in (
                               tracker.TaskStatus.DONE, tracker.TaskStatus.ROLLED_BACK,
                               tracker.TaskStatus.FAILED, tracker.TaskStatus.DECOMPOSED)]
                 if not pending and proj.task_ids:
