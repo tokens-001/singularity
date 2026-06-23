@@ -492,6 +492,8 @@ async function saveLineup(){
   document.getElementById('lineup-status').style.color = 'var(--st-done)';
 }
 
+let _dragState = null; // {modelId, sourceTier} — 跟踪拖拽状态，防止拖拽后触发 click
+
 async function renderLayerSwitch(){
   const body = document.getElementById('layer-switch-body');
   const [agents, models] = await Promise.all([api('/api/agents'), api('/api/models')]);
@@ -521,16 +523,15 @@ async function renderLayerSwitch(){
       const costLabel = {budget:'$',standard:'$$',premium:'$$$'}[m.cost]||'$$';
       const stateLabel = active ? 'ON' : (disabled ? '禁用' : 'OFF');
       const stateColor = active ? t.color : (disabled ? 'var(--st-fail)' : 'var(--text3)');
+      const modelId = esc(m.id);
+      const tierId = t.id;
       const clickAction = disabled
-        ? `if(confirm('重新启用 ${m.display||m.id} 到 ${t.label}？'))toggleLayerAgent('${t.id}','${esc(m.id)}',true)`
-        : `toggleLayerAgent('${t.id}','${esc(m.id)}',${!active})`;
+        ? `if(!window._dragJustHappened&&confirm('重新启用 ${m.display||m.id} 到 ${t.label}？'))toggleLayerAgent('${tierId}','${modelId}',true);window._dragJustHappened=false`
+        : `if(!window._dragJustHappened)toggleLayerAgent('${tierId}','${modelId}',${!active});window._dragJustHappened=false`;
 
-      return `<div draggable="true"
-        ondragstart="event.dataTransfer.setData('text/plain','${esc(m.id)}|${t.id}');event.dataTransfer.effectAllowed='move'"
-        ondragend="event.target.style.opacity='1'"
-        onclick="${clickAction}"
+      return `<div draggable="true" class="agent-card" data-model="${modelId}" data-tier="${tierId}" data-active="${active?'1':'0'}" data-disabled="${disabled?'1':'0'}"
         style="cursor:grab;padding:8px 10px;border:1px solid ${border};background:${bg};display:flex;align-items:center;gap:8px;min-width:180px;transition:all .15s"
-        title="${disabled?'点击重新启用':'拖拽换层 · 点击切换启用/禁用'}">
+        title="${disabled?'点击重新启用':(active?'点击关闭 · 或拖拽换层':'点击启用 · 或拖拽换层')}">
         <span style="display:flex;align-items:center;gap:4px;min-width:50px">
           <span style="width:10px;text-align:center">${statusDot}</span>
           <span style="font-size:8px;font-family:var(--mono);text-transform:uppercase;color:${stateColor}">${stateLabel}</span>
@@ -550,27 +551,102 @@ async function renderLayerSwitch(){
         <span style="flex:1"></span>
         <span style="font-size:8px;color:var(--text3);font-family:var(--mono)">${tierAgents.length} active${disabledCount?' · '+disabledCount+' 禁用':''}</span>
       </div>
-      <div id="tier-drop-${t.id}" style="display:flex;gap:4px;flex-wrap:wrap;min-height:36px;padding:4px;border-radius:6px"
-        ondragover="event.preventDefault();event.currentTarget.style.background='var(--bg2)'"
-        ondragleave="event.currentTarget.style.background='transparent'"
-        ondragend="event.currentTarget.style.background='transparent'"
-        ondrop="onDropToTier(event,'${t.id}')"
+      <div class="tier-drop-zone" data-tier="${t.id}"
+        style="display:flex;gap:4px;flex-wrap:wrap;min-height:36px;padding:4px;border-radius:6px;transition:background .2s"
         >${cards||'<span style="color:var(--text3);font-size:9px">无可用模型</span>'}</div>
     </div>`;
   }).join('');
+
+  // ══ 事件委托: 拖拽 (JS 绑定, 比 inline ondrop 可靠) ══
+  _bindDragEvents(body);
 }
 
-function onDropToTier(e, targetTier){
-  e.preventDefault();
-  e.currentTarget.style.background = 'transparent';
+function _bindDragEvents(container){
+  // drag start — 卡片上
+  container.querySelectorAll('.agent-card').forEach(card => {
+    card.addEventListener('dragstart', e => {
+      const modelId = card.dataset.model;
+      const tier = card.dataset.tier;
+      if (!modelId) return;
+      e.dataTransfer.setData('text/plain', modelId + '|' + tier);
+      e.dataTransfer.effectAllowed = 'move';
+      card.style.opacity = '0.5';
+      _dragState = {modelId, sourceTier: tier};
+    });
+    card.addEventListener('dragend', e => {
+      card.style.opacity = '1';
+      // 拖拽结束后短暂抑制 click (dragend 在 click 前触发)
+      window._dragJustHappened = !!_dragState;
+      _dragState = null;
+    });
+    // click — toggle ON/OFF (或被拖拽抑制)
+    card.addEventListener('click', e => {
+      if (window._dragJustHappened) {
+        window._dragJustHappened = false;
+        return;
+      }
+      const modelId = card.dataset.model;
+      const tier = card.dataset.tier;
+      const isActive = card.dataset.active === '1';
+      const isDisabled = card.dataset.disabled === '1';
+      if (isDisabled) {
+        if (confirm('重新启用该模型到 ' + tier + ' 层？')) {
+          toggleLayerAgent(tier, modelId, true);
+        }
+      } else {
+        toggleLayerAgent(tier, modelId, !isActive);
+      }
+    });
+  });
+
+  // drop zones — 层级容器
+  container.querySelectorAll('.tier-drop-zone').forEach(zone => {
+    let _dragCounter = 0;
+    zone.addEventListener('dragenter', e => {
+      e.preventDefault();
+      _dragCounter++;
+      zone.style.background = 'var(--bg2)';
+      zone.style.outline = '1px dashed var(--accent)';
+    });
+    zone.addEventListener('dragleave', e => {
+      _dragCounter--;
+      if (_dragCounter <= 0) {
+        _dragCounter = 0;
+        zone.style.background = 'transparent';
+        zone.style.outline = '';
+      }
+    });
+    zone.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    });
+    zone.addEventListener('drop', e => {
+      e.preventDefault();
+      _dragCounter = 0;
+      zone.style.background = 'transparent';
+      zone.style.outline = '';
+      onDropToTier(e, zone.dataset.tier);
+    });
+  });
+}
+
+async function onDropToTier(e, targetTier){
   const data = e.dataTransfer.getData('text/plain');
   if (!data) return;
   const [modelId, sourceTier] = data.split('|');
   if (!modelId || sourceTier === targetTier) return;
-  // 从源层级移除，添加到目标层级
-  toggleLayerAgent(sourceTier, modelId, false).then(() => {
-    toggleLayerAgent(targetTier, modelId, true);
-  });
+  // ponytail: 先删后加, 两步 API。renderLayerSwitch 在各步内自动刷新
+  try {
+    await api('/api/agents/'+sourceTier+'/'+modelId, {method:'DELETE'});
+    await api('/api/agents', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({level:targetTier, model:modelId})});
+    renderLayerSwitch();
+    const s = await api('/api/status');
+    if (s && s.agents) { statusData = s; renderAgentRow(); }
+  } catch(e) {
+    toast('拖拽切换失败: ' + (e.message||e), 'error');
+    renderLayerSwitch(); // 恢复到已知状态
+  }
 }
 
 async function toggleLayerAgent(tier, modelId, enable){

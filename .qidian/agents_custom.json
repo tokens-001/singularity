@@ -47,6 +47,18 @@
         "daily"
       ],
       "sandbox": "worktree"
+    },
+    {
+      "model": "gpt-5.5",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 5,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
     }
   ],
   "E_plus": [
@@ -95,6 +107,18 @@
       "default": false,
       "roles": [
         "builder"
+      ],
+      "sandbox": "worktree"
+    },
+    {
+      "model": "gpt-5.5",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 5,
+      "default": false,
+      "roles": [
+        "daily"
       ],
       "sandbox": "worktree"
     }
