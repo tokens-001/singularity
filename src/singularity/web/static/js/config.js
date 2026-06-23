@@ -153,7 +153,7 @@ function renderScanResults(apiId){
   const newModels = models.filter(m => !_importedModelIds[m.id]);
   const oldModels = models.filter(m => _importedModelIds[m.id]);
   panel.style.display = 'block';
-  const ratingColor = {'SSS':'var(--st-hold)','SS':'var(--accent)','S':'var(--st-done)','A':'var(--text3)','?':'var(--text3)'};
+  const ratingColor = {'SSS+':'#ffd700','SSS':'var(--st-hold)','SS+':'#ff8c00','SS':'var(--accent)','S+':'#9acd32','S':'var(--st-done)','A+':'#5dade2','A':'var(--text3)','?':'var(--text3)'};
   const costLabel = {budget:'$',standard:'$$',premium:'$$$'};
 
   const renderCard = (m, alreadyImported) => {
@@ -308,6 +308,7 @@ async function setDefaultModel(id, tier){
     await api('/api/agents/'+tier+'/'+a.model, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   }
   renderModels();
+  refreshAll();
 }
 async function updateModel(id, field, value){
   const body = {};
@@ -351,7 +352,7 @@ async function saveModelEdit(id){
 async function removeModel(id){
   if(!confirm('删除模型 '+id+' ？')) return;
   const r=await api('/api/models/'+id,{method:'DELETE'});
-  if(r.error) alert(r.error); else renderModels();
+  if(r.error) alert(r.error); else { renderModels(); renderLayerSwitch(); refreshAll(); }
 }
 
 async function renderModels(){
@@ -394,7 +395,7 @@ async function renderModels(){
       html += '<span style="width:12px;text-align:center">'+dot+'</span>';
       html += '<span style="font-family:var(--mono);font-weight:500;min-width:80px;color:var(--text)">'+esc(m.display)+'</span>';
       html += '<span style="font-family:var(--mono);font-size:9px;color:var(--text3)">'+esc(m.id)+'</span>';
-      const ratingColors = {SSS:'var(--st-hold)',SS:'var(--accent)',S:'var(--st-done)',A:'var(--text3)'};
+      const ratingColors = {'SSS+':'#ffd700','SSS':'var(--st-hold)','SS+':'#ff8c00','SS':'var(--accent)','S+':'#9acd32','S':'var(--st-done)','A+':'#5dade2','A':'var(--text3)'};
       if (m.rating) html += '<span style="font-size:8px;font-weight:600;color:'+(ratingColors[m.rating]||'var(--text3)')+';font-family:var(--mono)">'+esc(m.rating)+'</span>';
       html += '<span style="font-size:9px;color:var(--text3);font-family:var(--mono)">'+cm+'</span>';
       html += '<span style="font-size:8px;color:var(--text3)">'+m.speed+'</span>';
@@ -532,13 +533,13 @@ async function renderLayerSwitch(){
           <span style="font-size:8px;font-family:var(--mono);text-transform:uppercase;color:${stateColor}">${stateLabel}</span>
         </span>
         <div style="min-width:0;flex:1">
-          <div style="font-size:10px;font-weight:500;color:${active?'var(--text)':(disabled?'var(--text3)':'var(--text)')}">${esc(m.display||m.id)}${m.rating?' <span style="font-size:8px;font-weight:600;color:'+({SSS:'var(--st-hold)',SS:'var(--accent)',S:'var(--st-done)',A:'var(--text3)'}[m.rating]||'var(--text3)')+'">'+esc(m.rating)+'</span>':''}</div>
+          <div style="font-size:10px;font-weight:500;color:${active?'var(--text)':(disabled?'var(--text3)':'var(--text)')}">${esc(m.display||m.id)}${m.rating?' <span style="font-size:8px;font-weight:600;color:'+({'SSS+':'#ffd700','SSS':'var(--st-hold)','SS+':'#ff8c00','SS':'var(--accent)','S+':'#9acd32','S':'var(--st-done)','A+':'#5dade2','A':'var(--text3)'}[m.rating]||'var(--text3)')+'">'+esc(m.rating)+'</span>':''}</div>
           <div style="font-size:8px;color:var(--text3);font-family:var(--mono)">${esc(m.provider)} · ${m.speed} · ${costLabel}</div>
         </div>
       </div>`;
     }).join('');
 
-    const disabledCount = disabledModels.size;
+    const disabledCount = available.filter(m => disabledModels.has(m.id)).length;
     return `<div style="margin-bottom:10px">
       <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:6px">
         <span style="font-size:10px;font-weight:600;color:${t.color};font-family:var(--mono)">${t.label}</span>
@@ -553,13 +554,15 @@ async function renderLayerSwitch(){
 
 async function toggleLayerAgent(tier, modelId, enable){
   if (enable) {
-    // Add to this layer: clone from existing config or create new
     await api('/api/agents', {method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({level:tier,model:modelId})});
   } else {
     await api('/api/agents/'+tier+'/'+modelId, {method:'DELETE'});
   }
   renderLayerSwitch();
+  // 直接拉 status 更新仪表盘 agent row
+  const s = await api('/api/status');
+  if (s && s.agents) { statusData = s; renderAgentRow(); }
 }
 
 async function populateLineupProjects(){
@@ -616,7 +619,7 @@ function connectSSE(){
           while (feed.children.length > 50) feed.removeChild(feed.lastChild);
         }
         // 数据面板自动刷新（debounce 2s，避免高频抖动）
-        if (d.kind === 'task' || d.kind === 'system' || d.kind === 'workflow' || d.kind === 'memory' || d.kind === 'turn') {
+        if (d.kind === 'task' || d.kind === 'system' || d.kind === 'workflow' || d.kind === 'memory' || d.kind === 'turn' || d.kind === 'agent_change') {
           _scheduleRefresh(2000);
         }
       }

@@ -40,11 +40,11 @@ class ModelEntry:
     @classmethod
     def from_dict(cls, d: dict) -> "ModelEntry":
         return cls(
-            id=d.get("id",""), provider=d.get("provider",""), display=d.get("display",""),
-            tiers=d.get("tiers",[]), speed=d.get("speed","medium"), cost=d.get("cost","standard"),
-            rating=d.get("rating",""), reasoning=d.get("reasoning",False),
-            max_turns=d.get("max_turns",5), strengths=d.get("strengths",[]),
-            notes=d.get("notes",""),
+            id=_safe_str(d.get("id")), provider=_safe_str(d.get("provider")), display=_safe_str(d.get("display"), _safe_str(d.get("id")) or ""),
+            tiers=_safe_list(d.get("tiers")), speed=_safe_str(d.get("speed"),"medium"), cost=_safe_str(d.get("cost"),"standard"),
+            rating=_safe_str(d.get("rating")), reasoning=_safe_bool(d.get("reasoning")),
+            max_turns=_safe_int(d.get("max_turns")), strengths=_safe_list(d.get("strengths")),
+            notes=_safe_str(d.get("notes")),
         )
 
 
@@ -101,19 +101,31 @@ def load_models() -> dict[str, ModelEntry]:
     return models
 
 
+def _safe_str(v, default=""):
+    return v if isinstance(v, str) else default
+
+def _safe_bool(v, default=False):
+    return v if isinstance(v, bool) else default
+
+def _safe_int(v, default=5):
+    return v if isinstance(v, int) else default
+
+def _safe_list(v, default=None):
+    return v if isinstance(v, list) else (default or [])
+
 def _entry_from_raw(mid: str, data: dict) -> ModelEntry:
     return ModelEntry(
         id=mid,
-        provider=data.get("provider", ""),
-        display=data.get("display", mid),
-        tiers=data.get("tiers", []),
-        speed=data.get("speed", "medium"),
-        cost=data.get("cost", "standard"),
-        rating=data.get("rating", ""),
-        reasoning=data.get("reasoning", False),
-        max_turns=data.get("max_turns", 5),
-        strengths=data.get("strengths", []),
-        notes=data.get("notes", ""),
+        provider=_safe_str(data.get("provider")),
+        display=_safe_str(data.get("display"), mid),
+        tiers=_safe_list(data.get("tiers")),
+        speed=_safe_str(data.get("speed"), "medium"),
+        cost=_safe_str(data.get("cost"), "standard"),
+        rating=_safe_str(data.get("rating")),
+        reasoning=_safe_bool(data.get("reasoning")),
+        max_turns=_safe_int(data.get("max_turns")),
+        strengths=_safe_list(data.get("strengths")),
+        notes=_safe_str(data.get("notes")),
     )
 
 

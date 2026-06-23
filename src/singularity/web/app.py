@@ -349,6 +349,17 @@ def _loop_worker():
     sched_config.ensure_dirs()
     agents = disp_mod.load_agents()
 
+    # ── API 可用性启动检测 ──
+    unavailable = []
+    for level, cfgs in agents.items():
+        for c in cfgs:
+            if not disp_mod.agent_api_available(c):
+                unavailable.append(f"{level}:{c.get('model','?')}")
+    if unavailable:
+        _push_event("system", f"API 不可用 ({len(unavailable)}): {', '.join(unavailable)}")
+    else:
+        _push_event("system", "全部 API 可用")
+
     recovered = tracker.recover()
     if recovered:
         _push_event("system", f"恢复 {recovered} 个中断任务")
@@ -359,6 +370,7 @@ def _loop_worker():
 
     while not _loop_stop.is_set():
         try:
+            agents = disp_mod.load_agents()  # 每轮刷新 agent 配置
             results = orchestrator.run_queue(agents, max_concurrent=_loop_concurrent)
             count = len(results) if results else 0
 
@@ -1029,6 +1041,7 @@ def api_agents_add():
     result, code = _api_handler.agent_add(level, model, agent_type, entry_url,
         data.get("api_key_env", ""), max_turns, data.get("roles", []), sandbox,
         data.get("mode", ""), data.get("request_template"))
+    _push_event("agent_change", f"{level}:+{model}")
     return jsonify(result), code
 
 @app.route("/api/agents/<level>/<model>", methods=["PUT"])
@@ -1053,6 +1066,7 @@ def api_agents_update(level, model):
 @app.route("/api/agents/<level>/<model>", methods=["DELETE"])
 def api_agents_remove(level, model):
     data, code = _api_handler.agent_remove(level, model)
+    _push_event("agent_change", f"{level}:-{model}")
     return jsonify(data), code
 
 # ═══════════════════════════════════════════════════════════
@@ -1429,7 +1443,7 @@ if __name__ == "__main__":
 
     def _graceful_shutdown(signum, frame):
         _startup_log.info("收到信号, 优雅关闭中...")
-        orchestrator.stop_loop()
+        stop_loop()
         ws_bridge.stop_ws_server()
         import singularity.scheduler.mcp as _mcp
         try:

@@ -1,74 +1,10 @@
 {
-  "D": [
+  "E": [
     {
-      "model": "glm-5.2",
-      "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
-      "max_turns": 8,
-      "default": true,
-      "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
-    },
-    {
-      "model": "qwen3.7-max",
-      "type": "openai-agent",
-      "entry": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-      "api_key_env": "DASHSCOPE_API_KEY",
-      "max_turns": 5,
-      "default": true,
-      "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
-    },
-    {
-      "model": "kimi-k2.6",
+      "model": "kimi-k2.7-code",
       "type": "openai-agent",
       "entry": "https://api.moonshot.cn/v1/chat/completions",
       "api_key_env": "KIMI_API_KEY",
-      "max_turns": 5,
-      "default": false,
-      "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
-    }
-  ],
-  "E_plus": [
-    {
-      "model": "gpt-5.5",
-      "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
-      "max_turns": 5,
-      "default": false,
-      "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
-    },
-    {
-      "model": "qwen3.7-max",
-      "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
-      "max_turns": 5,
-      "default": false,
-      "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
-    }
-  ],
-  "E": [
-    {
-      "model": "qwen3-coder-next",
-      "type": "openai-agent",
-      "entry": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-      "api_key_env": "DASHSCOPE_API_KEY",
       "max_turns": 8,
       "default": false,
       "roles": [
@@ -89,6 +25,56 @@
       "sandbox": "worktree"
     },
     {
+      "model": "kimi-k2.6",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 5,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
+    },
+    {
+      "model": "kimi-k2.7-code-highspeed",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 5,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
+    }
+  ],
+  "E_plus": [
+    {
+      "model": "deepseek-v4-pro",
+      "type": "openai-agent",
+      "entry": "https://api.deepseek.com/v1/chat/completions",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "max_turns": 3,
+      "default": true,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
+    },
+    {
+      "model": "kimi-k2.7-code",
+      "type": "openai-agent",
+      "entry": "https://api.moonshot.cn/v1/chat/completions",
+      "api_key_env": "KIMI_API_KEY",
+      "max_turns": 8,
+      "default": true,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
+    },
+    {
       "model": "qwen3.7-plus",
       "type": "openai-agent",
       "entry": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
@@ -99,81 +85,102 @@
         "daily"
       ],
       "sandbox": "worktree"
+    },
+    {
+      "model": "glm-5.2",
+      "type": "openai-agent",
+      "entry": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+      "api_key_env": "ZHIPU_API_KEY",
+      "max_turns": 8,
+      "default": false,
+      "roles": [
+        "builder"
+      ],
+      "sandbox": "worktree"
     }
   ],
-  "_disabled": {
-    "E": [
-      "deepseek-chat",
-      "glm-5-turbo",
-      "kimi-k2.7-code"
-    ],
-    "E+": [],
-    "D": [
-      "kimi-k2.7-code",
-      "claude-opus-4-8",
-      "gpt-5.5-pro",
-      "gpt-5.5"
-    ]
-  },
-  "_order": {
-    "D": [
-      "deepseek-v4-pro",
-      "glm-5.2",
-      "gpt-5.5-pro"
-    ],
-    "E+": [
-      "kimi-k2.7-code",
-      "deepseek-v4-pro",
-      "glm-5-turbo"
-    ],
-    "E": [
-      "deepseek-chat",
-      "glm-5-turbo",
-      "kimi-k2.7-code",
-      "deepseek-v4-pro"
-    ]
-  },
-  "_skills": {
-    "E": {
-      "deepseek-chat": [],
-      "glm-5-turbo": [],
-      "deepseek-v4-flash": []
+  "D": [
+    {
+      "model": "qwen3.7-max",
+      "type": "openai-agent",
+      "entry": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+      "api_key_env": "DASHSCOPE_API_KEY",
+      "max_turns": 5,
+      "default": true,
+      "roles": [
+        "architecture"
+      ],
+      "sandbox": "worktree"
     },
-    "D": {
-      "deepseek-v4-pro": [
-        "ddd"
-      ]
+    {
+      "model": "glm-5.2",
+      "type": "openai-agent",
+      "entry": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+      "api_key_env": "ZHIPU_API_KEY",
+      "max_turns": 8,
+      "default": false,
+      "roles": [
+        "architecture"
+      ],
+      "sandbox": "worktree"
     },
-    "E+": {
-      "glm-5-turbo": [
-        "ddd"
-      ]
-    }
-  },
-  "E+": [
+    {
+      "model": "kimi-k2.7-code",
+      "type": "openai-agent",
+      "entry": "https://api.moonshot.cn/v1/chat/completions",
+      "api_key_env": "KIMI_API_KEY",
+      "max_turns": 8,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
+    },
     {
       "model": "deepseek-v4-pro",
       "type": "openai-agent",
       "entry": "",
       "api_key_env": "",
-      "max_turns": 3,
-      "default": true,
-      "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
-    },
-    {
-      "model": "kimi-k2.6",
-      "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
       "max_turns": 5,
-      "default": true,
+      "default": false,
       "roles": [
         "daily"
       ],
       "sandbox": "worktree"
     }
-  ]
+  ],
+  "_disabled": {
+    "E": [
+      "qwen3.7-plus",
+      "deepseek-v4-pro",
+      "qwen3-coder-next",
+      "qwen3-flash"
+    ],
+    "E+": [
+      "kimi-k2.6",
+      "qwen3.7-max"
+    ],
+    "D": [
+      "claude-opus-4-8",
+      "gpt-5.5",
+      "gpt-5.5-pro"
+    ]
+  },
+  "_order": {
+    "D": [
+      "qwen3.7-max",
+      "glm-5.2",
+      "kimi-k2.7-code"
+    ],
+    "E+": [
+      "deepseek-v4-pro",
+      "kimi-k2.7-code",
+      "qwen3.7-plus",
+      "glm-5.2"
+    ],
+    "E": [
+      "kimi-k2.7-code",
+      "qwen3-coder-plus"
+    ]
+  }
 }

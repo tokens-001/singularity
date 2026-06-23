@@ -2,6 +2,19 @@
 from __future__ import annotations
 from singularity.scheduler import dispatcher as disp_mod
 
+# ── token 估算常量 ──
+_TOKEN_PER_CHAR = 0.6          # 估算: 1 英文字符 ≈ 0.25 token, 中文 ≈ 1.5, 平均 0.6
+_COST_PER_M_TOKEN = {           # $/M tokens (input), 按模型 tier
+    "E": 0.15,                  # deepseek-chat 级别
+    "E+": 0.50,                 # glm/sonnet 级别
+    "D": 1.50,                  # opus 级别 (多模型 committee)
+}
+_TASK_OVERHEAD_TOKENS = {       # 系统提示+工具+模板 固定开销
+    "E": 2000,
+    "E+": 3000,
+    "D": 8000,                  # D 层 committee 开销大
+}
+
 def agent_list() -> tuple[dict, int]:
     raw = disp_mod.load_agents()
     custom = disp_mod._load_custom_agents()

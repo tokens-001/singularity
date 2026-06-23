@@ -327,7 +327,7 @@ def _load_skills_for_agent(level: str, model: str, task_desc: str = "") -> tuple
                 prompt = "\n".join(s.body for s in skills.values() if s.type == "prompt" and s.body)
             return tools, prompt, skills
     try:
-        from skills.skill_loader import (
+        from singularity.skills.skill_loader import (
             load_skills, get_tool_definitions, get_prompt_additions, get_agent_skills,
         )
         skill_names = get_agent_skills(level, model)
@@ -620,6 +620,7 @@ def add_agent(level: str, model: str, agent_type: str = "openai-agent",
         disabled.remove(model)
         custom.setdefault("_disabled", {})[level] = disabled
         _save_custom_agents(custom)
+        _notify_agent_change()
         # 从 toml 找到原始配置返回
         agents = load_agents()
         for a in agents.get(level, []):
@@ -644,28 +645,39 @@ def add_agent(level: str, model: str, agent_type: str = "openai-agent",
         cfg["request_template"] = request_template
     custom[key].append(cfg)
     _save_custom_agents(custom)
+    _notify_agent_change()
     return cfg
 
 def remove_agent(level: str, model: str) -> bool:
-    """禁用 agent: 加入 _disabled 列表。支持 toml 内置和 custom 两种来源。"""
+    """禁用 agent: 从 custom 删 + 加入 _disabled (双保险, 防 toml/custom 重复激活)。"""
     custom = _load_custom_agents()
     key = "E_plus" if level == "E+" else level
 
-    # 1. 如果是 custom 里的，直接删
+    # 1. 从 custom 列表删除
     cfgs = custom.get(key, [])
     new_cfgs = [a for a in cfgs if a.get("model") != model]
-    if len(new_cfgs) != len(cfgs):
-        custom[key] = new_cfgs
-        _save_custom_agents(custom)
-        return True
+    custom[key] = new_cfgs
 
-    # 2. 如果是 toml 内置的，加入禁用列表
+    # 2. 加入禁用列表 (幂等, 无论来源是 toml 还是 custom)
     custom.setdefault("_disabled", {})
     custom["_disabled"].setdefault(level, [])
     if model not in custom["_disabled"][level]:
         custom["_disabled"][level].append(model)
-        _save_custom_agents(custom)
-    return True  # 幂等：已禁用也返回 True
+
+    _save_custom_agents(custom)
+    _notify_agent_change()
+    return True
+
+
+def _notify_agent_change():
+    """推送 agent 变更事件到待刷新队列。loop 运行时会广播; loop 未运行时由 API handler 直接推。"""
+    try:
+        from singularity.scheduler._types import _pending_sse_events
+        import time
+        _pending_sse_events.append({"kind": "agent_change", "msg": "agent config updated", "ts": time.time()})
+    except Exception:
+        pass
+
 
 def update_agent(level: str, model: str, updates: dict) -> dict:
     custom = _load_custom_agents()

@@ -319,6 +319,16 @@ def _finalize_result(task, batch, route, snap, results: list) -> str:
                 try:
                     subtasks = decompose(task.description)
                     if subtasks and len(subtasks) > 1:
+                        # ── Token 估算 ──
+                        try:
+                            from ._planner import estimate_tokens
+                            est = estimate_tokens(subtasks, task.description)
+                            _pending_sse_events.append({"kind": "token_estimate", "msg": (
+                                f"[{task.id[:8]}] 自动拆分: {est['task_count']}个子任务, "
+                                f"预估 ~{est['total_tokens']:,} tokens (${est['est_cost_usd']:.2f})"
+                            ), "ts": time.time(), "task_id": task.id, "estimate": est})
+                        except Exception:
+                            pass
                         child_ids = materialize_plan(task.id, subtasks)
                         tracker.transition(task.id, TaskStatus.DECOMPOSED,
                             error=f"重试{retry_count}次后自动拆分→{len(child_ids)}个子任务")

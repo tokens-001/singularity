@@ -34,13 +34,14 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "读取一个文件的完整内容。改代码前必须先读。",
+            "description": "读取文件内容。path=单文件, paths=批量读(一次返回所有文件内容)。研究/调研时用paths批量读，减少往返。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "相对于项目根目录的文件路径"}
+                    "path": {"type": "string", "description": "单文件路径"},
+                    "paths": {"type": "array", "items": {"type": "string"}, "description": "批量文件路径，一次读多个。调研/跨文件分析时批量传"}
                 },
-                "required": ["path"]
+                "required": []
             }
         }
     },
@@ -342,7 +343,10 @@ class OpenAIAgentExecutor(BaseExecutor):
                 return f"操作被拒绝: {reason}"
 
             if name == "read_file":
-                return self._tool_read(args.get("path", ""))
+                paths = args.get("paths", []) or []
+                if args.get("path"):
+                    paths.append(args["path"])
+                return self._tool_read_multi(paths) if paths else "请指定 path 或 paths"
             elif name == "write_file":
                 return self._tool_write(args.get("path", ""), args.get("content", ""))
             elif name == "run_command":
@@ -413,6 +417,33 @@ class OpenAIAgentExecutor(BaseExecutor):
         if len(content) > 8000:
             return content[:8000] + f"\n... (截断，共 {len(content)} 字符)"
         return content
+
+    def _tool_read_multi(self, paths: list[str]) -> str:
+        """批量读文件，一次返回所有内容。减少 API 往返次数。"""
+        if not paths:
+            return "未指定文件路径"
+        results = []
+        total_chars = 0
+        max_total = 16000
+        for path in paths:
+            blocked, reason = self._is_blocked_path(path)
+            if blocked:
+                results.append(f"### {path}\n访问被拒绝: {reason}\n")
+                continue
+            p = self._safe_path(path)
+            if not p.exists():
+                results.append(f"### {path}\n(不存在)\n")
+                continue
+            try:
+                content = p.read_text(encoding="utf-8")
+                if total_chars + len(content) > max_total:
+                    remain = max_total - total_chars
+                    content = content[:remain] + f"\n... (截断，共 {len(content)} 字符)"
+                results.append(f"### {path}\n{content}\n")
+                total_chars += len(content)
+            except Exception as e:
+                results.append(f"### {path}\n读取错误: {e}\n")
+        return "\n".join(results) if results else "未读取到任何文件"
 
     def _tool_write(self, path: str, content: str) -> str:
         blocked, reason = self._is_blocked_path(path)
@@ -532,6 +563,94 @@ def _get_http_client() -> httpx.Client:
         )
     return _HTTPX_CLIENT
 
+
+# ── 模块级工具函数 (给 AnthropicApiExecutor 复用, 避免代码重复) ──
+
+def _read_file(args: dict, cwd) -> str:
+    """模块级单文件读取。Anthropic executor 用。"""
+    path = args.get("path", "")
+    if not path:
+        return "请指定 path"
+    p = (cwd / path).resolve()
+    if not p.exists():
+        return f"文件不存在: {path}"
+    content = p.read_text(encoding="utf-8")
+    if len(content) > 8000:
+        return content[:8000] + f"\n... (截断，共 {len(content)} 字符)"
+    return content
+
+def _read_files(args: dict, cwd) -> str:
+    """模块级批量文件读取。支持 path(单文件) + paths(批量)。"""
+    paths = list(args.get("paths", []) or [])
+    if args.get("path"):
+        paths.append(args["path"])
+    if not paths:
+        return "请指定 path 或 paths"
+    results = []
+    for path in paths:
+        p = (cwd / path).resolve()
+        if not p.exists():
+            results.append(f"### {path}\n(不存在)\n")
+            continue
+        try:
+            content = p.read_text(encoding="utf-8")
+            if len(content) > 8000:
+                content = content[:8000] + f"\n... (截断，共 {len(content)} 字符)"
+            results.append(f"### {path}\n{content}\n")
+        except Exception as e:
+            results.append(f"### {path}\n错误: {e}\n")
+    return "\n".join(results) if results else "未读取到任何文件"
+
+def _write_file(args: dict, cwd, blocked_patterns) -> str:
+    """模块级写文件。"""
+    path = args.get("path", "")
+    content = args.get("content", "")
+    if not path:
+        return "请指定 path"
+    p = (cwd / path).resolve()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    return f"已写入 {path} ({len(content)} 字符)"
+
+def _run_command(args: dict, cwd) -> str:
+    """模块级命令执行。"""
+    import subprocess, shlex
+    cmd = args.get("command", "")
+    if not cmd:
+        return "请指定 command"
+    try:
+        argv = shlex.split(cmd)
+        r = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=30, cwd=str(cwd))
+        out = r.stdout[-4000:] if r.stdout else ""
+        err = r.stderr[-2000:] if r.stderr else ""
+        return f"exit={r.returncode}\nstdout:\n{out}\nstderr:\n{err}"
+    except Exception as e:
+        return f"命令错误: {e}"
+
+def _search_code(args: dict, cwd) -> str:
+    """模块级代码搜索。"""
+    import re
+    pattern = args.get("pattern", "")
+    path = args.get("path", "")
+    if not pattern:
+        return "请指定 pattern"
+    search_dir = (cwd / path).resolve() if path else cwd
+    try:
+        results = []
+        for f in search_dir.rglob("*.py"):
+            if ".qidian" in str(f) or "venv" in str(f) or "__pycache__" in str(f):
+                continue
+            try:
+                for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+                    if re.search(pattern, line):
+                        results.append(f"{f.relative_to(cwd)}:{i}: {line.strip()[:120]}")
+                        if len(results) > 20:
+                            return "\n".join(results) + "\n... (截断)"
+            except Exception:
+                pass
+        return "\n".join(results) if results else f"未找到匹配 '{pattern}' 的行"
+    except Exception as e:
+        return f"搜索错误: {e}"
 
 # ── 错误类型 ──
 

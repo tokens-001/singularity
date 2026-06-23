@@ -27,10 +27,21 @@ def _materialize_in_main(batch: BatchOutput, parent_task) -> None:
     """planner 分解后, 主线程 materialize (worker 不写 tracker)。
 
     parent 转 DECOMPOSED, materialize_plan 建 children。
+    同时推送 token 估算到前端。
     """
     tracker.transition(parent_task.id, TaskStatus.DECOMPOSED)
     subtasks = decompose(batch.dispatch_result.executor_result.raw_output)
     if subtasks:
+        try:
+            est = estimate_tokens(subtasks, parent_task.description)
+            from singularity.scheduler._types import _pending_sse_events
+            _pending_sse_events.append({"kind": "token_estimate", "msg": (
+                f"[{parent_task.id[:8]}] 方案: {est['task_count']}个子任务, "
+                f"预估 ~{est['total_tokens']:,} tokens (${est['est_cost_usd']:.2f}), "
+                f"拆分: " + ", ".join(f"{k}×{v['tokens']:,}" for k,v in est['level_breakdown'].items())
+            ), "ts": time.time(), "task_id": parent_task.id, "estimate": est})
+        except Exception:
+            pass
         materialize_plan(parent_task.id, subtasks)
 
 
@@ -355,6 +366,49 @@ def materialize_plan(parent_id: str, subtasks: list[dict]) -> list[str]:
         tracker.transition(parent_id, TaskStatus.FAILED,
                           error=f"materialize_plan 部分失败: {e}"[:200])
         return []
+
+
+def estimate_tokens(subtasks: list[dict], parent_desc: str = "") -> dict:
+    """估算子任务 token 消耗和费用。
+
+    返回前端可消费的格式:
+      {total_tokens, est_cost_usd, task_count, per_task: [{desc, level, tokens, cost}],
+       level_breakdown: {E: {tokens,cost}, ...}, parent_tokens}
+    """
+    # 估算参数
+    TOKENS_PER_CHAR = 0.6          # 中英混合平均
+    OVERHEAD = {"E": 2000, "E+": 3000, "D": 8000}
+    COST_PER_M = {"E": 0.15, "E+": 0.50, "D": 1.50}  # $/M tokens
+    RESPONSE_MULTIPLIER = 2.0      # prompt + completion + retry buffer
+
+    total = 0
+    per_task = []
+    breakdown = {}
+    for st in subtasks:
+        desc = st.get("desc", "")
+        level = st.get("suggested_level", "E")
+        chars = len(desc)
+        tokens = int(chars * TOKENS_PER_CHAR + OVERHEAD.get(level, 2000))
+        tokens = int(tokens * RESPONSE_MULTIPLIER)
+        cost = tokens / 1_000_000 * COST_PER_M.get(level, 0.15)
+        total += tokens
+        per_task.append({"desc": desc[:80], "level": level, "tokens": tokens, "cost": round(cost, 4)})
+        if level not in breakdown:
+            breakdown[level] = {"tokens": 0, "cost": 0.0}
+        breakdown[level]["tokens"] += tokens
+        breakdown[level]["cost"] += cost
+
+    # 父任务 tokens (调度开销)
+    parent_tokens = int(len(parent_desc) * TOKENS_PER_CHAR * RESPONSE_MULTIPLIER) if parent_desc else 0
+
+    return {
+        "total_tokens": total,
+        "est_cost_usd": round(total / 1_000_000 * 0.5, 4),  # 混合均价 ~$0.5/M
+        "task_count": len(subtasks),
+        "per_task": per_task,
+        "level_breakdown": {k: {"tokens": v["tokens"], "cost": round(v["cost"], 4)} for k, v in breakdown.items()},
+        "parent_tokens": parent_tokens,
+    }
 
 
 def _topo_sort(subtasks: list[dict]) -> "Optional[list[int]]":

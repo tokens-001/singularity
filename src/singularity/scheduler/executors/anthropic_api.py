@@ -165,10 +165,13 @@ class AnthropicApiExecutor(BaseExecutor):
         """Execute a tool call and return result text."""
         from singularity.scheduler.executors.base import _BLOCKED_PATTERNS
         from singularity.scheduler.executors.openai_agent import (
-            _read_file, _write_file, _run_command, _search_code,
+            _read_file, _read_files, _write_file, _run_command, _search_code,
         )
         try:
             if name == "read_file":
+                # 支持批量读 (paths参数)
+                if args.get("paths"):
+                    return _read_files(args, self.cwd)
                 return _read_file(args, self.cwd)
             elif name == "write_file":
                 return _write_file(args, self.cwd, _BLOCKED_PATTERNS)

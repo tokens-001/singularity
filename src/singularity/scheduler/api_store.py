@@ -308,18 +308,23 @@ def save_custom_model(model_id: str, provider: str, display: str = "",
     """保存一个扫描发现的模型到自定义注册表。已有条目保留原有字段。"""
     custom = load_custom_models()
     existing = custom.get(model_id, {})
+    # ── 类型安全防护 ──
+    def _safe_str(v, default=""): return v if isinstance(v, str) and v else default
+    def _safe_bool(v, default=False): return bool(v) if not isinstance(v, bool) else v
+    def _safe_int(v, default=5): return v if isinstance(v, int) else default
+    def _safe_list(v, default=None): return v if isinstance(v, list) else (default or [])
     custom[model_id] = {
         "id": model_id,
         "provider": provider,
-        "display": display or existing.get("display") or model_id,
-        "tiers": tiers or existing.get("tiers") or _guess_tiers(model_id),
-        "speed": speed or existing.get("speed", "medium"),
-        "cost": cost or existing.get("cost", _guess_cost(model_id)),
-        "rating": rating or existing.get("rating", ""),
-        "reasoning": existing.get("reasoning", False),
-        "max_turns": existing.get("max_turns", 5),
-        "strengths": strengths if strengths is not None else existing.get("strengths", []),
-        "notes": notes or existing.get("notes", ""),
+        "display": display or _safe_str(existing.get("display")) or model_id,
+        "tiers": tiers or _safe_list(existing.get("tiers")) or _guess_tiers(model_id),
+        "speed": speed or _safe_str(existing.get("speed"), "medium"),
+        "cost": cost or _safe_str(existing.get("cost"), _guess_cost(model_id)),
+        "rating": _safe_str(rating) or _safe_str(existing.get("rating")),
+        "reasoning": _safe_bool(existing.get("reasoning")),
+        "max_turns": _safe_int(existing.get("max_turns")),
+        "strengths": strengths if strengths is not None else _safe_list(existing.get("strengths")),
+        "notes": notes or _safe_str(existing.get("notes")),
     }
     _custom_models_path().parent.mkdir(parents=True, exist_ok=True)
     _custom_models_path().write_text(json.dumps(custom, ensure_ascii=False, indent=2))
