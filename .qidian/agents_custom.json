@@ -25,7 +25,7 @@
       "sandbox": "worktree"
     },
     {
-      "model": "kimi-k2.6",
+      "model": "kimi-k2.7-code-highspeed",
       "type": "openai-agent",
       "entry": "",
       "api_key_env": "",
@@ -37,7 +37,7 @@
       "sandbox": "worktree"
     },
     {
-      "model": "kimi-k2.7-code-highspeed",
+      "model": "kimi-k2.6",
       "type": "openai-agent",
       "entry": "",
       "api_key_env": "",

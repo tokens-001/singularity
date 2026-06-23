@@ -95,6 +95,14 @@ def load_models() -> dict[str, ModelEntry]:
     custom = _load_custom()
     for mid, m in custom.items():
         if m.tiers:  # 有层级 → 覆盖/新增
+            # 合并: custom 空字段不覆盖 toml 值 (防脏数据)
+            if mid in models:
+                toml = models[mid]
+                if not m.rating: m.rating = toml.rating
+                if not m.provider: m.provider = toml.provider
+                if not m.display or m.display == mid: m.display = toml.display
+                if not m.strengths: m.strengths = toml.strengths
+                if not m.notes: m.notes = toml.notes
             models[mid] = m
         elif mid in models:  # 空层级 → 删除标记
             del models[mid]
