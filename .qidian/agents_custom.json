@@ -147,42 +147,6 @@
         "daily"
       ],
       "sandbox": "worktree"
-    },
-    {
-      "model": "claude-opus-4-8",
-      "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
-      "max_turns": 5,
-      "default": false,
-      "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
-    },
-    {
-      "model": "gpt-5.5",
-      "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
-      "max_turns": 5,
-      "default": false,
-      "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
-    },
-    {
-      "model": "gpt-5.5-pro",
-      "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
-      "max_turns": 5,
-      "default": false,
-      "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
     }
   ],
   "_disabled": {
@@ -198,7 +162,11 @@
       "gpt-5.5",
       "qwen3.7-max"
     ],
-    "D": []
+    "D": [
+      "gpt-5.5-pro",
+      "claude-opus-4-8",
+      "gpt-5.5"
+    ]
   },
   "_order": {
     "D": [
