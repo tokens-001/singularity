@@ -30,7 +30,8 @@ def _materialize_in_main(batch: BatchOutput, parent_task) -> None:
     同时推送 token 估算到前端。
     """
     tracker.transition(parent_task.id, TaskStatus.DECOMPOSED)
-    subtasks = decompose(batch.dispatch_result.executor_result.raw_output)
+    # 优先用 worker 线程的分解结果 (避免二次解析导致发散)
+    subtasks = batch.planner_subtasks or decompose(batch.dispatch_result.executor_result.raw_output)
     if subtasks:
         try:
             est = estimate_tokens(subtasks, parent_task.description)

@@ -109,6 +109,7 @@ def _process_planner_or_merge(task, ctx, turn, level, is_planner, wt,
                     unverified=[f"planner 分解出 {len(subtasks)} 子任务"],
                 ),
                 planner_decomposed=True,
+                planner_subtasks=subtasks,  # 传给主线程, 避免二次解析
                 tool_events=all_tool_events, turn_count=turn,
             )
     elif wt:
@@ -627,6 +628,10 @@ def _read_planner_patch(task_id: str) -> str | None:
 def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
                 pre_search_skipped: bool = False, pre_search_reason: str = "",
                 pre_search_top_decisions: list = None, pre_search_memory: dict = None) -> None:
+    # ponytail: 幂等保护 — 终态路径互斥但防误调用
+    trace_path = config.TRACE_DIR / f"{task.id}.json"
+    if trace_path.exists():
+        return  # 已写过的 trace 不覆盖, 避免不一致
     try:
         report = nj_mod.build_report(
             task=task.description, route=route,

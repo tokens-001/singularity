@@ -41,6 +41,7 @@ class BatchOutput:
     validation: object = None
     merge_request: "Optional[MergeRequest]" = None
     planner_decomposed: bool = False
+    planner_subtasks: list = field(default_factory=list)  # worker 分解结果, 主线程直接用
     pre_search_skipped: bool = False
     pre_search_reason: str = ""
     pre_search_top_decisions: list = field(default_factory=list)
