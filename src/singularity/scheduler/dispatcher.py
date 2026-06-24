@@ -113,7 +113,10 @@ def _ensure_agent_type(agent_cfg: dict) -> dict:
         if not agent_cfg.get("entry"):
             agent_cfg["entry"] = api.base_url + "/chat/completions"
         agent_cfg.setdefault("request_template", {"model": model, "max_tokens": 8192})
-        agent_cfg.setdefault("max_turns", max(getattr(m, 'max_turns', 10) or 10, 15))  # ponytail: coding需≥15轮
+        # ponytail: coding任务需≥15轮，强制提升低于此值的配置
+        current_max = agent_cfg.get("max_turns", 0)
+        registry_max = getattr(m, 'max_turns', 10) or 10
+        agent_cfg["max_turns"] = max(current_max, registry_max, 15)
         agent_cfg.setdefault("max_tool_turns", 5)  # 工具调用轮次上限
     except Exception:
         pass
