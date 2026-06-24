@@ -16,14 +16,12 @@ from typing import Callable, Coroutine
 
 import websockets
 
-from observer.config import MAX_CONNECTIONS
+from observer.config import MAX_CONNECTIONS, PORT as DEFAULT_PORT
 from observer.session import SessionManager
 
 logger = logging.getLogger(__name__)
 
-# Default configuration
 DEFAULT_HOST = "0.0.0.0"
-DEFAULT_PORT = 5051
 
 # Type alias for an external message handler callback
 MessageHandler = Callable[[str, str | bytes], Coroutine[None, None, None]]
@@ -91,28 +89,29 @@ class ObserverServer:
         client_id = self._extract_client_id(websocket)
         logger.info("New connection from %s (assigned id: %s)", websocket.remote_address, client_id)
 
-        # Enforce the configured maximum connection limit before registering.
-        if self.max_connections is not None and self.client_count >= self.max_connections:
-            logger.warning(
-                "Connection rejected for %s: limit reached (%d/%d)",
-                client_id,
-                self.client_count,
-                self.max_connections,
-            )
-            try:
-                reject = json.dumps({
-                    "type": "error",
-                    "code": "connection_limit_exceeded",
-                    "message": f"Server connection limit reached ({self.max_connections}).",
-                })
-                await websocket.send(reject)
-                await websocket.close(
-                    code=1013,
-                    reason="Server connection limit reached",
+        # Atomic check-and-register: session manager lock prevents TOCTOU
+        async with self.session_manager._lock:
+            if self.max_connections is not None and self.client_count >= self.max_connections:
+                logger.warning(
+                    "Connection rejected for %s: limit reached (%d/%d)",
+                    client_id,
+                    self.client_count,
+                    self.max_connections,
                 )
-            except websockets.exceptions.ConnectionClosed:
-                pass
-            return
+                try:
+                    reject = json.dumps({
+                        "type": "error",
+                        "code": "connection_limit_exceeded",
+                        "message": f"Server connection limit reached ({self.max_connections}).",
+                    })
+                    await websocket.send(reject)
+                    await websocket.close(
+                        code=1013,
+                        reason="Server connection limit reached",
+                    )
+                except websockets.exceptions.ConnectionClosed:
+                    pass
+                return
 
         # Send a welcome message so the client knows the connection is live
         try:
