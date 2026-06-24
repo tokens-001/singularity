@@ -85,41 +85,41 @@ def _ensure_agent_type(agent_cfg: dict) -> dict:
 
     ponytail: agents_custom.json 可以只写 model，其余字段自动推断。
     """
-    if agent_cfg.get("type") and agent_cfg.get("api_key_env"):
-        return agent_cfg  # 已配置完整
-
+    # ponytail: 先补全缺失字段
     model = agent_cfg.get("model", "")
-    if not model:
-        return agent_cfg
+    need_fill = not agent_cfg.get("type") or not agent_cfg.get("api_key_env")
+    if need_fill and model:
+        try:
+            from . import model_registry as mr
+            from . import api_store
+            m = mr.get(model)
+            if m:
+                apis = api_store.list_all()
+                api = apis.get(m.provider)
+                if api:
+                    if not agent_cfg.get("type"):
+                        agent_cfg["type"] = "openai-agent"
+                    if not agent_cfg.get("provider"):
+                        agent_cfg["provider"] = m.provider
+                    if not agent_cfg.get("api_key_env"):
+                        agent_cfg["api_key_env"] = api.api_key_env
+                    if not agent_cfg.get("entry"):
+                        agent_cfg["entry"] = api.base_url + "/chat/completions"
+        except Exception:
+            pass
 
-    try:
-        from . import model_registry as mr
-        from . import api_store
-        m = mr.get(model)
-        if not m:
-            return agent_cfg
-        apis = api_store.list_all()
-        api = apis.get(m.provider)
-        if not api:
-            return agent_cfg
-
-        # 自动填充
-        if not agent_cfg.get("type"):
-            agent_cfg["type"] = "openai-agent"
-        if not agent_cfg.get("provider"):
-            agent_cfg["provider"] = m.provider
-        if not agent_cfg.get("api_key_env"):
-            agent_cfg["api_key_env"] = api.api_key_env
-        if not agent_cfg.get("entry"):
-            agent_cfg["entry"] = api.base_url + "/chat/completions"
-        agent_cfg.setdefault("request_template", {"model": model, "max_tokens": 8192})
-        # ponytail: coding任务需≥15轮，强制提升低于此值的配置
+    # ponytail: coding任务需≥15轮，不论是否已有配置都强制下限
+    if model:
+        try:
+            from . import model_registry as mr
+            m = mr.get(model)
+            registry_max = getattr(m, 'max_turns', 10) or 10 if m else 10
+        except Exception:
+            registry_max = 10
         current_max = agent_cfg.get("max_turns", 0)
-        registry_max = getattr(m, 'max_turns', 10) or 10
         agent_cfg["max_turns"] = max(current_max, registry_max, 15)
-        agent_cfg.setdefault("max_tool_turns", 5)  # 工具调用轮次上限
-    except Exception:
-        pass
+    agent_cfg.setdefault("max_tool_turns", 5)
+    agent_cfg.setdefault("request_template", {"model": model, "max_tokens": 8192})
     return agent_cfg
 
 
