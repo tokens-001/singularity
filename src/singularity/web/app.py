@@ -1480,6 +1480,11 @@ if __name__ == "__main__":
     def _graceful_shutdown(signum, frame):
         _startup_log.info("收到信号, 优雅关闭中...")
         stop_loop()
+        try:
+            from singularity.scheduler.observer_agent import stop_observer
+            stop_observer()
+        except Exception:
+            pass
         ws_bridge.stop_ws_server()
         import singularity.scheduler.mcp as _mcp
         try:
@@ -1523,4 +1528,17 @@ if __name__ == "__main__":
         _startup_log.info("WebSocket 服务器已启动 ws://127.0.0.1:5051")
     except Exception as e:
         _startup_log.warning("WebSocket 启动失败: %s", e)
+    # 自动启动调度循环
+    try:
+        start_loop(concurrent=2)
+        _startup_log.info("调度循环已自动启动 (concurrent=2)")
+    except Exception as e:
+        _startup_log.warning("调度循环启动失败: %s", e)
+    # 自动启动观察者智能体
+    try:
+        from singularity.scheduler.observer_agent import start_observer
+        start_observer()
+        _startup_log.info("观察者智能体已自动启动")
+    except Exception as e:
+        _startup_log.warning("观察者启动失败: %s", e)
     app.run(debug=False, host="127.0.0.1", port=5050)
