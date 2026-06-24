@@ -125,7 +125,8 @@ def _get_embed_model():
     if _EMBED_MODEL is None:
         import os, time
         # 检查是否在 CI/快速模式 — 跳过模型加载
-        if os.environ.get("QIDIAN_SKIP_EMBED"):
+        # ponytail: HuggingFace下载(~120MB)经常超时，默认跳过嵌入
+        if os.environ.get("QIDIAN_SKIP_EMBED", "1") == "1":
             _EMBED_MODEL = False
             return None
         import sys, io, logging as _log
