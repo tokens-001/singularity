@@ -31,7 +31,8 @@ singularity = "singularity.web.app:main"
 singularity-cli = "singularity.scheduler.__main__:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["src", "."]
+include = ["singularity*", "observer*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
