@@ -1,11 +1,12 @@
-"""Observer WebSocket server.
+"""Observer WebSocket Server — 实时事件推送与指令接收。
 
-A lightweight websocket server that:
-- listens on bridge.py:5051
-- accepts multiple concurrent clients
-- echoes incoming messages back to the sender
-- supports active broadcasts via :meth:`broadcast`
-- supports targeted pushes via :meth:`send`
+基于 websockets 库实现，与 bridge.py:5051 集成。
+支持：
+  - 多客户端并发连接管理
+  - 事件广播（供调度循环推送）
+  - 消息路由（客户端 → 服务端指令处理）
+  - 心跳保活
+  - 优雅关闭
 """
 
 from __future__ import annotations
@@ -13,158 +14,279 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable
+import time
+from dataclasses import dataclass, field
 from typing import Any
 
 import websockets
-from websockets.server import WebSocketServerProtocol
+from websockets.asyncio.server import ServerConnection, serve
 
 logger = logging.getLogger("observer.server")
 
-Handler = Callable[[WebSocketServerProtocol, dict[str, Any]], Awaitable[None]]
+
+# ── 配置常量 ────────────────────────────────────────────
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 5051  # 与 bridge.py 保持一致
+HEARTBEAT_INTERVAL = 30  # 秒
+HEARTBEAT_TIMEOUT = 60  # 秒
+MAX_MESSAGE_SIZE = 64 * 1024  # 64KB
+MAX_CLIENTS = 100
 
 
+# ── 客户端会话 ────────────────────────────────────────────
+@dataclass
+class ClientSession:
+    """单个 WebSocket 客户端的连接元数据。"""
+
+    ws: ServerConnection
+    connected_at: float = field(default_factory=time.time)
+    last_seen: float = field(default_factory=time.time)
+    client_id: str = ""
+    subscriptions: set[str] = field(default_factory=set)  # 订阅的事件频道
+
+    @property
+    def remote(self) -> str:
+        if self.ws.remote_address:
+            return f"{self.ws.remote_address[0]}:{self.ws.remote_address[1]}"
+        return "unknown"
+
+
+# ── 连接管理器 ────────────────────────────────────────────
+class ConnectionManager:
+    """管理所有活跃的 WebSocket 连接，提供广播与定向推送。"""
+
+    def __init__(self, max_clients: int = MAX_CLIENTS) -> None:
+        self._clients: dict[str, ClientSession] = {}
+        self._max_clients = max_clients
+        self._next_id = 0
+
+    @property
+    def count(self) -> int:
+        return len(self._clients)
+
+    def add(self, ws: ServerConnection) -> ClientSession:
+        """注册新连接，返回会话对象。"""
+        if len(self._clients) >= self._max_clients:
+            raise ConnectionError(f"已达最大连接数 {self._max_clients}")
+        self._next_id += 1
+        cid = f"ws-{self._next_id:04d}"
+        session = ClientSession(ws=ws, client_id=cid)
+        self._clients[cid] = session
+        logger.info("客户端连接: %s (总计 %d)", cid, len(self._clients))
+        return session
+
+    def remove(self, cid: str) -> None:
+        """移除已断开的连接。"""
+        session = self._clients.pop(cid, None)
+        if session:
+            logger.info("客户端断开: %s (总计 %d)", cid, len(self._clients))
+
+    def get(self, cid: str) -> ClientSession | None:
+        return self._clients.get(cid)
+
+    async def broadcast(self, event: str, data: Any, channels: set[str] | None = None) -> int:
+        """向所有（或指定频道的）客户端广播事件。返回成功推送数。"""
+        payload = json.dumps({"event": event, "data": data, "ts": time.time()}, ensure_ascii=False)
+        sent = 0
+        dead: list[str] = []
+        for cid, session in self._clients.items():
+            # 频道过滤：如果指定了 channels，只推给订阅了对应频道的客户端
+            if channels and not (channels & session.subscriptions):
+                continue
+            try:
+                await session.ws.send(payload)
+                session.last_seen = time.time()
+                sent += 1
+            except websockets.ConnectionClosed:
+                dead.append(cid)
+        # 清理已断开的连接
+        for cid in dead:
+            self.remove(cid)
+        return sent
+
+    async def send_to(self, cid: str, event: str, data: Any) -> bool:
+        """向指定客户端推送消息。"""
+        session = self._clients.get(cid)
+        if not session:
+            return False
+        payload = json.dumps({"event": event, "data": data, "ts": time.time()}, ensure_ascii=False)
+        try:
+            await session.ws.send(payload)
+            session.last_seen = time.time()
+            return True
+        except websockets.ConnectionClosed:
+            self.remove(cid)
+            return False
+
+
+# ── 消息处理 ──────────────────────────────────────────────
+async def _handle_message(session: ClientSession, raw: str) -> dict | None:
+    """解析并路由客户端发来的消息。返回响应 dict 或 None。"""
+    try:
+        msg = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"event": "error", "data": {"message": "无效的 JSON"}}
+
+    action = msg.get("action", "")
+
+    if action == "ping":
+        return {"event": "pong", "data": {"ts": time.time()}}
+
+    if action == "subscribe":
+        channels = msg.get("channels", [])
+        if isinstance(channels, list):
+            session.subscriptions.update(channels)
+        return {"event": "subscribed", "data": {"channels": list(session.subscriptions)}}
+
+    if action == "unsubscribe":
+        channels = msg.get("channels", [])
+        session.subscriptions -= set(channels)
+        return {"event": "unsubscribed", "data": {"channels": list(session.subscriptions)}}
+
+    if action == "whoami":
+        return {
+            "event": "identity",
+            "data": {"client_id": session.client_id, "remote": session.remote},
+        }
+
+    # 默认回显
+    return {"event": "echo", "data": {"action": action, "payload": msg}}
+
+
+# ── 单连接处理器 ──────────────────────────────────────────
+async def _handler(ws: ServerConnection, manager: ConnectionManager) -> None:
+    """单个 WebSocket 连接的生命周期处理。"""
+    session = manager.add(ws)
+
+    # 发送欢迎消息
+    await manager.send_to(
+        session.client_id,
+        "welcome",
+        {
+            "client_id": session.client_id,
+            "server": "singularity-observer",
+            "protocol": 1,
+        },
+    )
+
+    try:
+        async for raw in ws:
+            if not isinstance(raw, str):
+                await manager.send_to(
+                    session.client_id, "error", {"message": "仅支持文本消息"}
+                )
+                continue
+            response = await _handle_message(session, raw)
+            if response:
+                await manager.send_to(
+                    session.client_id, response["event"], response["data"]
+                )
+    except websockets.ConnectionClosed:
+        pass
+    finally:
+        manager.remove(session.client_id)
+
+
+# ── 服务端主体 ────────────────────────────────────────────
 class ObserverServer:
-    """WebSocket server singleton/dispatcher for agent observation bridge."""
+    """WebSocket 服务端，可独立运行或嵌入调度循环。"""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 5051) -> None:
+    def __init__(
+        self,
+        host: str = DEFAULT_HOST,
+        port: int = DEFAULT_PORT,
+        max_clients: int = MAX_CLIENTS,
+    ) -> None:
         self.host = host
         self.port = port
-        self.clients: set[WebSocketServerProtocol] = set()
-        self.handlers: dict[str, Handler] = {}
-        self._server: websockets.server.Serve | None = None
-        self._stop_event = asyncio.Event()
+        self.manager = ConnectionManager(max_clients=max_clients)
+        self._server = None
+        self._heartbeat_task: asyncio.Task | None = None
 
-    # ------------------------------------------------------------------ #
-    # Client lifecycle
-    # ------------------------------------------------------------------ #
-    async def _register(self, ws: WebSocketServerProtocol) -> None:
-        self.clients.add(ws)
-        logger.info("client connected: %s (total=%d)", ws.remote_address, len(self.clients))
+    async def _heartbeat_loop(self) -> None:
+        """定期心跳，清理死连接。"""
+        while True:
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
+            await self.manager.broadcast("heartbeat", {"ts": time.time()})
 
-    async def _unregister(self, ws: WebSocketServerProtocol) -> None:
-        self.clients.discard(ws)
-        logger.info("client disconnected: %s (total=%d)", ws.remote_address, len(self.clients))
-
-    async def _handle_client(self, ws: WebSocketServerProtocol, path: str) -> None:  # noqa: ARG002
-        await self._register(ws)
-        try:
-            async for raw in ws:
-                if not isinstance(raw, str):
-                    logger.warning("binary messages are not supported")
-                    continue
-                await self._on_message(ws, raw)
-        except websockets.exceptions.ConnectionClosed:
-            logger.debug("connection closed")
-        finally:
-            await self._unregister(ws)
-
-    # ------------------------------------------------------------------ #
-    # Message dispatch
-    # ------------------------------------------------------------------ #
-    async def _on_message(self, ws: WebSocketServerProtocol, raw: str) -> None:
-        logger.debug("received: %s", raw)
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            await self.send(ws, {"type": "error", "message": "invalid json"})
-            return
-
-        msg_type = payload.get("type")
-        handler = self.handlers.get(msg_type)
-        if handler:
-            await handler(ws, payload)
-        else:
-            # default echo behaviour for skeleton
-            await self.send(ws, {"type": "echo", "payload": payload})
-
-    def on(self, msg_type: str) -> Callable[[Handler], Handler]:
-        """Register a handler for a given message type."""
-
-        def decorator(fn: Handler) -> Handler:
-            self.handlers[msg_type] = fn
-            return fn
-
-        return decorator
-
-    # ------------------------------------------------------------------ #
-    # Active push / broadcast
-    # ------------------------------------------------------------------ #
-    async def send(self, ws: WebSocketServerProtocol, message: dict[str, Any]) -> None:
-        """Push a JSON message to a single client."""
-        if ws.closed:
-            return
-        try:
-            await ws.send(json.dumps(message))
-        except websockets.exceptions.ConnectionClosed:
-            self.clients.discard(ws)
-
-    async def broadcast(self, message: dict[str, Any]) -> int:
-        """Broadcast a JSON message to every connected client.
-
-        Returns the number of clients that received the message.
-        """
-        if not self.clients:
-            return 0
-        payload = json.dumps(message)
-        results = await asyncio.gather(
-            *[self._send_one(client, payload) for client in list(self.clients)],
-            return_exceptions=True,
-        )
-        return sum(1 for r in results if r is True)
-
-    async def _send_one(self, ws: WebSocketServerProtocol, payload: str) -> bool:
-        if ws.closed:
-            self.clients.discard(ws)
-            return False
-        try:
-            await ws.send(payload)
-        except websockets.exceptions.ConnectionClosed:
-            self.clients.discard(ws)
-            return False
-        return True
-
-    # ------------------------------------------------------------------ #
-    # Server lifecycle
-    # ------------------------------------------------------------------ #
     async def start(self) -> None:
-        """Start the server and block until :meth:`stop` is called."""
-        logger.info("starting observer server on ws://%s:%d", self.host, self.port)
-        self._server = websockets.serve(self._handle_client, self.host, self.port)
-        await self._server
-        await self._stop_event.wait()
+        """启动 WebSocket 服务。"""
+        self._server = await serve(
+            lambda ws: _handler(ws, self.manager),
+            self.host,
+            self.port,
+            max_size=MAX_MESSAGE_SIZE,
+            ping_interval=HEARTBEAT_INTERVAL,
+            ping_timeout=HEARTBEAT_TIMEOUT,
+        )
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        logger.info(
+            "Observer WebSocket 服务已启动: ws://%s:%d", self.host, self.port
+        )
 
     async def stop(self) -> None:
-        """Close all clients and stop the server."""
-        logger.info("stopping observer server")
-        # close existing connections gracefully
-        await asyncio.gather(
-            *[client.close() for client in list(self.clients)],
-            return_exceptions=True,
-        )
-        self.clients.clear()
-        self._stop_event.set()
+        """优雅关闭：停止接收新连接，等待现有连接结束。"""
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        if self._server:
+            self._server.close()
+            await self._server.wait_closed()
+            logger.info("Observer WebSocket 服务已关闭")
 
-    def run(self) -> None:
-        """Synchronous entry point."""
-        try:
-            asyncio.run(self.start())
-        except KeyboardInterrupt:
-            asyncio.run(self.stop())
+    async def broadcast(
+        self, event: str, data: Any, channels: set[str] | None = None
+    ) -> int:
+        """外部调用接口：向所有客户端广播事件。"""
+        return await self.manager.broadcast(event, data, channels)
+
+    @property
+    def client_count(self) -> int:
+        return self.manager.count
 
 
-# ---------------------------------------------------------------------- #
-# Optional thin bridge compatibility layer
-# ---------------------------------------------------------------------- #
-async def start_bridge(host: str = "127.0.0.1", port: int = 5051) -> ObserverServer:
-    """Create and start an observer server (non-blocking in running loop)."""
-    server = ObserverServer(host=host, port=port)
-    server._server = websockets.serve(server._handle_client, host, port)
-    await server._server
-    logger.info("bridge observer listening on ws://%s:%d", host, port)
-    return server
+# ── 全局单例（供调度循环直接调用）─────────────────────────
+_server: ObserverServer | None = None
+
+
+def get_server() -> ObserverServer | None:
+    """获取全局 ObserverServer 实例。"""
+    return _server
+
+
+def init_server(
+    host: str = DEFAULT_HOST, port: int = DEFAULT_PORT
+) -> ObserverServer:
+    """初始化全局 ObserverServer 单例。"""
+    global _server
+    _server = ObserverServer(host=host, port=port)
+    return _server
+
+
+# ── 独立运行入口 ──────────────────────────────────────────
+async def _standalone() -> None:
+    """独立模式：直接运行 WebSocket 服务。"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
+    )
+    server = ObserverServer()
+    await server.start()
+    try:
+        await asyncio.Future()  # 永久运行
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await server.stop()
+
+
+def main() -> None:
+    """CLI 入口。"""
+    asyncio.run(_standalone())
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    ObserverServer().run()
+    main()
