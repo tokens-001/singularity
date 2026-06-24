@@ -260,12 +260,17 @@ def create(
 
 def list_all() -> list[ProjectState]:
     projects = []
+    # ponytail: 跳过阶段产出文件 (traceability.json 等)
+    _OUTPUT_SUFFIXES = {".traceability.json", ".research.md", ".architecture.md", ".test-plan.md"}
     for p in sorted(_projects_dir().glob("*.json"), reverse=True):
+        if any(str(p).endswith(s) for s in _OUTPUT_SUFFIXES):
+            continue
         try:
-            projects.append(ProjectState.from_dict(
-                json.loads(p.read_text(encoding="utf-8"))
-            ))
-        except (json.JSONDecodeError, KeyError, TypeError):
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or "phase" not in data:
+                continue  # 非项目文件
+            projects.append(ProjectState.from_dict(data))
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             continue
     return projects
 
