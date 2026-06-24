@@ -15,7 +15,7 @@ class SessionManager:
     """Manages WebSocket client connections and supports broadcast/unicast."""
 
     def __init__(self) -> None:
-        self._connections: dict[str, websockets.ServerProtocol] = {}
+        self._connections: dict[str, websockets.ServerConnection] = {}
         self._lock = asyncio.Lock()
 
     @property
