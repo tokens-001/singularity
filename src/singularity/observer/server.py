@@ -21,14 +21,18 @@ from typing import Any
 import websockets
 from websockets.asyncio.server import ServerConnection, serve
 
+from . import config
+
 logger = logging.getLogger("singularity.observer")
 
-# ── 常量 ──────────────────────────────────────────────────
-DEFAULT_HOST = "0.0.0.0"
-DEFAULT_PORT = 8765
-HEARTBEAT_INTERVAL = 30  # 秒
-MAX_MESSAGE_SIZE = 64 * 1024  # 64KB
-MAX_CLIENTS = 100
+# ── 常量（集中由 observer/config.py 管理）──────────────────
+DEFAULT_HOST = config.DEFAULT_HOST
+DEFAULT_PORT = config.DEFAULT_PORT
+HEARTBEAT_INTERVAL = config.HEARTBEAT_INTERVAL
+HEARTBEAT_TIMEOUT = config.HEARTBEAT_TIMEOUT
+MAX_MESSAGE_SIZE = config.MAX_MESSAGE_SIZE
+MAX_CLIENTS = config.MAX_CLIENTS
+ALLOWED_EVENT_CHANNELS = config.ALLOWED_EVENT_CHANNELS
 
 
 # ── 客户端会话 ────────────────────────────────────────────
@@ -131,7 +135,9 @@ async def _handle_message(session: ClientSession, raw: str) -> dict | None:
     if action == "subscribe":
         channels = msg.get("channels", [])
         if isinstance(channels, list):
-            session.subscriptions.update(channels)
+            session.subscriptions.update(
+                ch for ch in channels if ch in ALLOWED_EVENT_CHANNELS
+            )
         return {"event": "subscribed", "data": {"channels": list(session.subscriptions)}}
 
     if action == "unsubscribe":
@@ -141,6 +147,9 @@ async def _handle_message(session: ClientSession, raw: str) -> dict | None:
 
     if action == "whoami":
         return {"event": "identity", "data": {"client_id": session.client_id, "remote": session.remote}}
+
+    if action == "config":
+        return {"event": "config", "data": config.as_dict()}
 
     return {"event": "error", "data": {"message": f"未知 action: {action}"}}
 
@@ -201,7 +210,7 @@ class ObserverServer:
             self.port,
             max_size=MAX_MESSAGE_SIZE,
             ping_interval=HEARTBEAT_INTERVAL,
-            ping_timeout=HEARTBEAT_INTERVAL * 2,
+            ping_timeout=HEARTBEAT_TIMEOUT,
         )
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         logger.info("Observer WebSocket 服务已启动: ws://%s:%d", self.host, self.port)
