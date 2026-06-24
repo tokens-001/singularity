@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -59,7 +59,7 @@ ALLOWED_EVENT_CHANNELS: frozenset[str] = frozenset({
     "heartbeat",
 })
 
-ALLOWED_ORIGINS: list[str] = field(default_factory=lambda: ["*"])
+ALLOWED_ORIGINS: list[str] = ["*"]
 
 
 # ── 日志与调试 ────────────────────────────────────────────
