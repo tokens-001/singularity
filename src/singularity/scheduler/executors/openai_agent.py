@@ -133,7 +133,7 @@ class OpenAIAgentExecutor(BaseExecutor):
         self._url = cfg.get("entry", "")
         self._is_responses_api = "/v1/responses" in self._url or "/responses" in self._url
         self._model = cfg.get("request_template", {}).get("model", cfg.get("model", ""))
-        self._max_turns = cfg.get("max_turns", 10)
+        self._max_turns = cfg.get("max_turns", 15)  # ponytail: coding任务需要足够轮次(读→写→测→修)
         self._cwd = Path(cwd) if cwd else config.PROJECT_ROOT
         self._changed_files: list[str] = []
         self._tool_events: list[dict] = []
