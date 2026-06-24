@@ -1,5 +1,19 @@
-"""Observer WebSocket server package."""
+from observer.executor_proxy import (
+    AuditRecord,
+    ConfirmationRequiredError,
+    ExecutorFailureError,
+    ExecutorProxy,
+    ExecutorProxyError,
+    NotWhitelistedError,
+    create_default_proxy,
+)
 
-from observer.server import ObserverServer
-
-__all__ = ["ObserverServer"]
+__all__ = [
+    "AuditRecord",
+    "ConfirmationRequiredError",
+    "ExecutorFailureError",
+    "ExecutorProxy",
+    "ExecutorProxyError",
+    "NotWhitelistedError",
+    "create_default_proxy",
+]
