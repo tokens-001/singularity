@@ -95,7 +95,22 @@
     ],
     "speed": "medium",
     "cost": "premium",
-    "rating": true,
+    "rating": "",
+    "reasoning": false,
+    "max_turns": 5,
+    "strengths": [],
+    "notes": ""
+  },
+  "qwen3.7-plus": {
+    "id": "qwen3.7-plus",
+    "provider": "qwen",
+    "display": "Qwen3.7 Plus",
+    "tiers": [
+      "E"
+    ],
+    "speed": "medium",
+    "cost": "standard",
+    "rating": false,
     "reasoning": 5,
     "max_turns": 5,
     "strengths": [],

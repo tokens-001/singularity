@@ -214,6 +214,39 @@ def _needs_research(project: ProjectState) -> bool:
     return any(t in desc for t in triggers)
 
 
+def _reassess_complexity(tdef: dict, arch_level: str) -> str:
+    """精准升层: 架构师可能低估复杂度，用关键词二次判断。
+
+    只升不降。E+ 变 D 的条件 (满足任一):
+    1. 需要读现有代码+写新代码 (跨文件集成)
+    2. 涉及协议/异步/服务端基础设施
+    3. 架构师已标 high
+    """
+    if arch_level == "D":
+        return "D"
+
+    title = tdef.get("title", "") + " " + tdef.get("description", "")
+    title_lower = title.lower()
+
+    # D 层触发词: 需要理解现有系统 + 写基础设施代码
+    d_triggers = [
+        # 集成/挂载
+        ("集成", "挂载"), ("bridge", "入口"), ("接入", "现有"),
+        # 协议/基础设施
+        ("websocket", "server"), ("async", "asyncio"), ("服务端", "server"),
+        ("event", "loop"), ("事件循环",),
+        # 跨文件复杂操作
+        ("安全执行", "代理"), ("白名单", "executor"),
+        # 架构师已标的 (trust the architect)
+    ]
+
+    for trigger_group in d_triggers:
+        if all(t in title_lower for t in trigger_group):
+            return "D"
+
+    # 单文件实现、纯功能模块 → 保持原层
+    return arch_level
+
 def _should_skip(project, key: str) -> bool:
     return project.owner_confirm.get(key) == "skip"
 
@@ -487,7 +520,10 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
     id_map = {}  # architecture task_id → tracker task_id
     for tdef in tasks:
         level_map = {"low": "E", "medium": "E+", "high": "D"}
-        level = level_map.get(tdef.get("complexity", "low"), "E")
+        architecture_level = level_map.get(tdef.get("complexity", "low"), "E")
+
+        # ── 精准升层: 检测架构师低估的复杂任务 ──
+        level = _reassess_complexity(tdef, architecture_level)
 
         # 解析真正的依赖关系 (架构中定义的 depends_on)
         arch_deps = tdef.get("depends_on", [])

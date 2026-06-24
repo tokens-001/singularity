@@ -47,6 +47,18 @@
         "daily"
       ],
       "sandbox": "worktree"
+    },
+    {
+      "model": "qwen3.7-plus",
+      "type": "openai-agent",
+      "entry": "",
+      "api_key_env": "",
+      "max_turns": 5,
+      "default": false,
+      "roles": [
+        "daily"
+      ],
+      "sandbox": "worktree"
     }
   ],
   "E_plus": [
@@ -69,18 +81,6 @@
       "api_key_env": "KIMI_API_KEY",
       "max_turns": 8,
       "default": true,
-      "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
-    },
-    {
-      "model": "qwen3.7-plus",
-      "type": "openai-agent",
-      "entry": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-      "api_key_env": "DASHSCOPE_API_KEY",
-      "max_turns": 5,
-      "default": false,
       "roles": [
         "daily"
       ],
@@ -151,7 +151,6 @@
   ],
   "_disabled": {
     "E": [
-      "qwen3.7-plus",
       "deepseek-v4-pro",
       "qwen3-coder-next",
       "qwen3-flash",
@@ -160,7 +159,8 @@
     "E+": [
       "kimi-k2.6",
       "gpt-5.5",
-      "qwen3.7-max"
+      "qwen3.7-max",
+      "qwen3.7-plus"
     ],
     "D": [
       "gpt-5.5-pro",
