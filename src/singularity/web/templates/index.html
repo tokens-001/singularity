@@ -448,11 +448,14 @@ var _obsWaiting = false;  // WS 模式下等待回答
     _obsWSRetries = 0;
     var log = document.getElementById('observer-chat-log');
     log.innerHTML += '<div style="color:var(--st-ok);font-size:9px">● WS 已连接</div>';
+    // 订阅实时事件频道
+    _obsWS.send(JSON.stringify({action:'subscribe',channels:['tasks','system','alerts']}));
   };
 
   _obsWS.onmessage = function(e){
     try {
       var m = JSON.parse(e.data);
+      // chat_answer: 对话回答
       if(m.event === 'chat_answer'){
         var text = (m.data||{}).text || '';
         if(_obsWaitEl) _obsWaitEl.remove();
@@ -462,8 +465,30 @@ var _obsWaiting = false;  // WS 模式下等待回答
         document.getElementById('observer-send-btn').disabled = false;
         _obsWaiting = false;
         _obsWaitEl = null;
+        return;
       }
-      // welcome / error 等忽略，连接即通道
+      // 系统事件: task/system/error — 压缩格式显示
+      if(m.event === 'task'){
+        var d = m.data||{}; var msg = d.msg||'';
+        var log = document.getElementById('observer-chat-log');
+        log.innerHTML += '<div style="color:var(--text3);font-size:9px;margin-bottom:2px">📋 ' + escH(msg) + '</div>';
+        log.scrollTop = log.scrollHeight;
+        return;
+      }
+      if(m.event === 'system' || m.event === 'idle' || m.event === 'workflow'){
+        var d = m.data||{}; var msg = d.msg||'';
+        var log = document.getElementById('observer-chat-log');
+        log.innerHTML += '<div style="color:var(--text2);font-size:9px;margin-bottom:2px">⚙ ' + escH(msg) + '</div>';
+        log.scrollTop = log.scrollHeight;
+        return;
+      }
+      if(m.event === 'error'){
+        var d = m.data||{}; var msg = d.msg||'';
+        var log = document.getElementById('observer-chat-log');
+        log.innerHTML += '<div style="color:var(--st-fail);font-size:9px;margin-bottom:2px">⚠ ' + escH(msg) + '</div>';
+        log.scrollTop = log.scrollHeight;
+        return;
+      }
     } catch(ex) {}
   };
 

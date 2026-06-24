@@ -465,11 +465,29 @@ def _loop_worker():
     _loop_running = False
 
 
+# Observer WS 频道映射：SSE kind → WS channels
+_WS_CHANNEL_MAP: dict[str, set[str]] = {
+    "task": {"tasks"},
+    "system": {"system"},
+    "idle": {"system"},
+    "error": {"alerts"},
+    "workflow": {"system"},
+    "agent_change": {"system"},
+    "observer_answer": {"system"},
+}
+
+
 def _push_event(kind: str, msg: str, ts: float = None):
     if ts is None:
         ts = time.time()
     _loop_events.appendleft({"kind": kind, "msg": msg, "ts": ts})
     _sse_broadcast(kind, msg, ts)
+    # T5: 同步推送到 Observer WS（前端 subscribe 后接收）
+    if kind in _WS_CHANNEL_MAP:
+        try:
+            ws_bridge.broadcast_observer(kind, {"msg": msg}, channels=_WS_CHANNEL_MAP[kind])
+        except Exception:
+            pass
 
 
 def _next_event_id():
