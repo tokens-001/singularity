@@ -23,7 +23,8 @@
      ═══════════════════════════════════════════════════════ -->
 <div class="toast-container" id="toast-container"></div>
 <div class="tab-bar" id="tab-bar">
-  <div class="tab active" data-tab="dashboard">仪表盘</div>
+  <div class="tab active" data-tab="observer">🤖 Observer</div>
+  <div class="tab" data-tab="dashboard">仪表盘</div>
   <div class="tab" data-tab="tasks">任务</div>
   <div class="tab" data-tab="project">项目</div>
   <div class="tab" data-tab="config">配置</div>
@@ -32,7 +33,7 @@
 <!-- ═══════════════════════════════════════════════════════
      Tab 1: 仪表盘 — 一眼看完的系统状态
      ═══════════════════════════════════════════════════════ -->
-<div class="tab-content active" id="tab-dashboard">
+<div class="tab-content" id="tab-dashboard">
 
   <div class="loop-bar">
     <span class="loop-indicator off" id="loop-dot"></span>
@@ -407,6 +408,79 @@
 
 <script src="/static/js/utils.js"></script>
 <script src="/static/js/dashboard.js"></script>
+<!-- ═══════════════════════════════════════════════════════
+     Observer 智能体聊天
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content active" id="tab-observer" style="display:flex;flex-direction:column;height:100%">
+  <div class="section" style="flex:1;display:flex;flex-direction:column">
+    <div class="section-title">🤖 Observer 智能体 — 只读系统查询</div>
+    <div class="section-body" id="observer-chat-log" style="flex:1;min-height:300px;max-height:calc(100vh - 240px);overflow-y:auto;font-size:10px;font-family:var(--mono);line-height:1.6;white-space:pre-wrap">
+      <div style="color:var(--text3)">Observer 已就绪。可以问我系统状态、任务详情、异常告警。</div>
+    </div>
+    <div style="display:flex;gap:4px;padding:6px 8px;border-top:1px solid var(--grid)">
+      <input id="observer-question" placeholder="例：有哪些卡住的任务？"
+        style="flex:1;font-size:10px;padding:4px 8px;background:var(--bg);border:1px solid var(--grid);color:var(--text)"
+        onkeydown="if(event.key==='Enter')askObserver()">
+      <button class="btn cyan sm" id="observer-send-btn" onclick="askObserver()">发送</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// Observer 智能体聊天
+// ═══════════════════════════════════════════════════════
+var _obsPolling = null;
+function askObserver(){
+  var inp = document.getElementById('observer-question');
+  var q = (inp.value||'').trim();
+  if(!q) return;
+  var log = document.getElementById('observer-chat-log');
+  var btn = document.getElementById('observer-send-btn');
+  log.innerHTML += '<div style="color:var(--cyan);margin-bottom:4px">▸ ' + escH(q) + '</div>';
+  inp.value = ''; btn.disabled = true;
+  fetch('/api/observer/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},body:JSON.stringify({question:q})})
+    .then(r=>r.json()).then(d=>{
+      if(!d.ok){ log.innerHTML += '<div style="color:var(--st-fail);margin-bottom:4px">✗ ' + escH(d.error||'unknown') + '</div>'; btn.disabled=false; log.scrollTop=log.scrollHeight; return; }
+      log.innerHTML += '<div style="color:var(--text3);margin-bottom:8px">⏳ 思考中...</div>';
+      log.scrollTop = log.scrollHeight;
+      var waitEl = log.lastElementChild;
+      // poll for answer
+      var attempts = 0;
+      function poll(){
+        fetch('/api/observer/chat/'+d.client_id).then(r=>r.json()).then(reply=>{
+          attempts++;
+          if(reply.answer){
+            if(waitEl) waitEl.remove();
+            log.innerHTML += '<div style="color:var(--text);margin-bottom:8px;padding:4px 8px;background:var(--surface);border-left:2px solid var(--cyan)">' + escH(reply.answer) + '</div>';
+            log.scrollTop = log.scrollHeight;
+            btn.disabled = false;
+            clearInterval(_obsPolling); _obsPolling = null;
+          } else if(attempts > 30){ // 30s timeout
+            if(waitEl) waitEl.remove();
+            log.innerHTML += '<div style="color:var(--st-fail)">✗ 超时，Observer 未响应</div>';
+            btn.disabled = false;
+            clearInterval(_obsPolling); _obsPolling = null;
+          }
+        }).catch(function(){
+          if(attempts > 30){ if(waitEl) waitEl.remove(); btn.disabled=false; clearInterval(_obsPolling); _obsPolling=null; }
+        });
+      }
+      poll(); // first poll immediately
+      _obsPolling = setInterval(poll, 1000);
+    }).catch(function(e){
+      log.innerHTML += '<div style="color:var(--st-fail);margin-bottom:4px">✗ 网络错误</div>';
+      btn.disabled = false;
+    });
+}
+
+function escH(s){
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+</script>
+
 <script src="/static/js/tasks.js"></script>
 <script src="/static/js/project.js"></script>
 <script src="/static/js/config.js?v=6"></script>

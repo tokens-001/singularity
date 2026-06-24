@@ -1003,6 +1003,39 @@ def api_project_autopilot_stop(project_id):
     data, code = _api_handler.project_autopilot_stop(project_id, _push_event)
     return jsonify(data), code
 
+# ═══════════════════════════════════════════════════════════
+# Observer 智能体聊天 API
+# ═══════════════════════════════════════════════════════════
+
+_observer_replies: dict[str, dict] = {}  # client_id → {answer, ts}
+
+@app.route("/api/observer/chat", methods=["POST"])
+def api_observer_chat():
+    """提交问题给观察者智能体，返回 client_id 用于轮询回答。"""
+    import uuid, time as _time
+    body = request.get_json(silent=True) or {}
+    question = (body.get("question") or "").strip()
+    if not question:
+        return jsonify({"ok": False, "error": "问题不能为空"}), 400
+    cid = uuid.uuid4().hex[:12]
+    def _on_reply(payload):
+        text = (payload.get("params") or {}).get("text", "")
+        _observer_replies[cid] = {"answer": text, "ts": _time.time()}
+    try:
+        from singularity.scheduler.observer_agent import submit_question
+        submit_question(cid, question, _on_reply)
+        return jsonify({"ok": True, "client_id": cid, "question": question})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/observer/chat/<client_id>", methods=["GET"])
+def api_observer_chat_poll(client_id):
+    """轮询观察者回答。"""
+    reply = _observer_replies.pop(client_id, None)
+    if reply:
+        return jsonify({"ok": True, "answer": reply["answer"], "ts": reply["ts"]})
+    return jsonify({"ok": True, "answer": None})
+
 @app.route("/api/projects/<project_id>/lineup")
 def api_project_lineup(project_id):
     data, code = _api_handler.project_lineup_get(project_id)
@@ -1485,6 +1518,7 @@ if __name__ == "__main__":
             stop_observer()
         except Exception:
             pass
+        ws_bridge.stop_observer_server()
         ws_bridge.stop_ws_server()
         import singularity.scheduler.mcp as _mcp
         try:
@@ -1528,6 +1562,12 @@ if __name__ == "__main__":
         _startup_log.info("WebSocket 服务器已启动 ws://127.0.0.1:5051")
     except Exception as e:
         _startup_log.warning("WebSocket 启动失败: %s", e)
+    # 启动 Observer WebSocket 服务器 (实时事件推送)
+    try:
+        ws_bridge.start_observer_server(host="127.0.0.1", port=8765)
+        _startup_log.info("Observer WebSocket 已启动 ws://127.0.0.1:8765")
+    except Exception as e:
+        _startup_log.warning("Observer WebSocket 启动失败: %s", e)
     # 自动启动调度循环
     try:
         start_loop(concurrent=2)
