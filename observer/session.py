@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 import websockets
+from websockets.protocol import State
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class SessionManager:
         async with self._lock:
             ws = self._connections.pop(client_id, None)
         if ws is not None:
-            if ws.open:
+            if ws.state == websockets.protocol.State.OPEN:
                 await ws.close()
             logger.info("Client unregistered: %s (total: %d)", client_id, len(self._connections))
 
@@ -51,7 +52,7 @@ class SessionManager:
         """Return the websocket for a given client ID if connected."""
         async with self._lock:
             ws = self._connections.get(client_id)
-            if ws is None or not ws.open:
+            if ws is None or not ws.state == websockets.protocol.State.OPEN:
                 return None
             return ws
 
@@ -102,7 +103,7 @@ class SessionManager:
             self._connections.clear()
         for client_id, ws in clients:
             try:
-                if ws.open:
+                if ws.state == websockets.protocol.State.OPEN:
                     await ws.close()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Error closing connection for %s: %s", client_id, exc)
