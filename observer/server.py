@@ -8,6 +8,7 @@ message routing between clients and an optional message handler.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import signal
@@ -101,11 +102,21 @@ class ObserverServer:
         logger.debug("Message from %s: %.200s", client_id, message)
         if self._message_handler is not None:
             await self._message_handler(client_id, message)
+            return
+
+        # Default echo behaviour: preserve binary payloads losslessly.
+        if isinstance(message, str):
+            data = message
+            encoding = "text"
         else:
-            # Default echo behaviour
-            data = message if isinstance(message, str) else message.decode(errors="replace")
-            echo = json.dumps({"type": "echo", "from": client_id, "data": data})
+            data = base64.b64encode(message).decode("ascii")
+            encoding = "base64"
+
+        echo = json.dumps({"type": "echo", "from": client_id, "data": data, "encoding": encoding})
+        try:
             await self.session_manager.send(client_id, echo)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to send echo to %s: %s", client_id, exc)
 
     # ------------------------------------------------------------------
     # Helpers
