@@ -529,8 +529,17 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
         arch_deps = tdef.get("depends_on", [])
         dep_ids = [id_map[d] for d in arch_deps if d in id_map]
 
+        # 注入项目上下文，让模型知道要做什么
+        task_desc = (
+            f"项目背景: {project.description[:300]}\n"
+            f"项目范围: {project.scope[:200]}\n"
+            f"你的任务: [{tdef.get('id', '?')}] {tdef.get('title', '')}\n"
+            f"具体要求: {tdef.get('description', '')}\n"
+            f"验收标准: {tdef.get('acceptance', '代码可运行，功能完整')}\n"
+            f"约束: {'; '.join([c.get('text','') for c in constraints[:3]]) if constraints else '无'}"
+        )
         child = tracker.create(
-            f"[{tdef.get('id', '?')}] {tdef.get('title', '')}: {tdef.get('description', '')}",
+            task_desc,
             depends_on=dep_ids,
             depth=2,
         )
