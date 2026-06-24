@@ -30,7 +30,7 @@ def check(name, condition, detail=""):
         FAIL += 1; print(f"  ❌ {name}" + (f" — {detail}" if detail else ""))
 
 def cleanup():
-    """清理所有测试残留。"""
+    """清理所有测试残留。只删除测试项目及其关联任务。"""
     from singularity.scheduler.project import list_all, _path
     for p in list_all():
         if '烟雾' in p.name or 'start测试' in p.name or '测试' in p.name or '压力' in p.name:
@@ -38,13 +38,6 @@ def cleanup():
                 tp = Path(f".qidian/tasks/{t}.json")
                 if tp.exists(): tp.unlink()
             _path(p.id).unlink()
-    for p in Path(".qidian/tasks").glob("*.json"):
-        try:
-            d = json.loads(p.read_text())
-            desc = d.get("description","")
-            if any(kw in desc for kw in ["烟雾","测试","压力"]):
-                p.unlink()
-        except Exception: pass
 
 def cli(args):
     return subprocess.run(["python3", "-m", "scheduler"] + args,
