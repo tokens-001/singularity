@@ -113,6 +113,8 @@ def _ensure_agent_type(agent_cfg: dict) -> dict:
         if not agent_cfg.get("entry"):
             agent_cfg["entry"] = api.base_url + "/chat/completions"
         agent_cfg.setdefault("request_template", {"model": model, "max_tokens": 8192})
+        agent_cfg.setdefault("max_turns", getattr(m, 'max_turns', 10) or 10)
+        agent_cfg.setdefault("max_tool_turns", 5)  # 工具调用轮次上限
     except Exception:
         pass
     return agent_cfg
