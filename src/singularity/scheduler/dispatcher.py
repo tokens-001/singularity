@@ -112,7 +112,7 @@ def _ensure_agent_type(agent_cfg: dict) -> dict:
             agent_cfg["api_key_env"] = api.api_key_env
         if not agent_cfg.get("entry"):
             agent_cfg["entry"] = api.base_url + "/chat/completions"
-        agent_cfg.setdefault("request_template", {"model": model, "max_tokens": 4096})
+        agent_cfg.setdefault("request_template", {"model": model, "max_tokens": 8192})
     except Exception:
         pass
     return agent_cfg
@@ -191,7 +191,7 @@ def _build_agent_from_registry(model_name: str) -> dict | None:
             "default": False,
             "roles": ["daily"],
             "sandbox": "worktree",
-            "request_template": {"model": model_name, "max_tokens": 4096},
+            "request_template": {"model": model_name, "max_tokens": 8192},
         }
     except Exception as e:
         from . import witness; witness.heartbeat("dispatch", "warn", status="error", detail=f"build_agent:{e}")

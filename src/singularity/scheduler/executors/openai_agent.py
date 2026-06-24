@@ -188,7 +188,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                     "input": [{"role": m.get("role","user"), "content": m.get("content","")} for m in messages],
                     "tools": resp_tools,
                     "tool_choice": "auto",
-                    "max_output_tokens": tmpl.get("max_output_tokens", tmpl.get("max_completion_tokens", tmpl.get("max_tokens", 4096))),
+                    "max_output_tokens": tmpl.get("max_output_tokens", tmpl.get("max_completion_tokens", tmpl.get("max_tokens", 8192))),
                 }
                 if "temperature" in tmpl:
                     body["temperature"] = tmpl["temperature"]
@@ -205,7 +205,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                 elif "max_tokens" in tmpl:
                     body["max_tokens"] = tmpl["max_tokens"]
                 else:
-                    body["max_tokens"] = 4096
+                    body["max_tokens"] = 8192
                 if "temperature" in tmpl:
                     body["temperature"] = tmpl["temperature"]
 
