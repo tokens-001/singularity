@@ -40,6 +40,7 @@ from singularity.scheduler import bridge as ws_bridge
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024  # 安全加固：拒绝 >2MB 的请求体
+app.config["TEMPLATES_AUTO_RELOAD"] = True           # ponytail: 开发时不缓存模板
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24).hex()
 
 _CSRF_TOKEN = os.environ.get("QIDIAN_CSRF_TOKEN") or os.urandom(16).hex()
@@ -1007,12 +1008,10 @@ def api_project_autopilot_stop(project_id):
 # Observer 智能体聊天 API
 # ═══════════════════════════════════════════════════════════
 
-_observer_replies: dict[str, dict] = {}  # client_id → {answer, ts}
-
 @app.route("/api/observer/chat", methods=["POST"])
 def api_observer_chat():
-    """提交问题给观察者智能体，返回 client_id 用于轮询回答。"""
-    import uuid, time as _time
+    """提交问题给观察者智能体，答案通过 SSE 推送。"""
+    import uuid
     body = request.get_json(silent=True) or {}
     question = (body.get("question") or "").strip()
     if not question:
@@ -1020,21 +1019,13 @@ def api_observer_chat():
     cid = uuid.uuid4().hex[:12]
     def _on_reply(payload):
         text = (payload.get("params") or {}).get("text", "")
-        _observer_replies[cid] = {"answer": text, "ts": _time.time()}
+        _push_event("observer_answer", json.dumps({"client_id": cid, "answer": text}))
     try:
         from singularity.scheduler.observer_agent import submit_question
         submit_question(cid, question, _on_reply)
         return jsonify({"ok": True, "client_id": cid, "question": question})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
-
-@app.route("/api/observer/chat/<client_id>", methods=["GET"])
-def api_observer_chat_poll(client_id):
-    """轮询观察者回答。"""
-    reply = _observer_replies.pop(client_id, None)
-    if reply:
-        return jsonify({"ok": True, "answer": reply["answer"], "ts": reply["ts"]})
-    return jsonify({"ok": True, "answer": None})
 
 @app.route("/api/projects/<project_id>/lineup")
 def api_project_lineup(project_id):

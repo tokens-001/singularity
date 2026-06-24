@@ -428,46 +428,51 @@
 
 <script>
 // ═══════════════════════════════════════════════════════
-// Observer 智能体聊天
+// Observer 智能体聊天 — SSE 实时推送
 // ═══════════════════════════════════════════════════════
-var _obsPolling = null;
+var _obsCid = null;
+var _obsWaitEl = null;
+
+// 监听 SSE 事件流中的 observer_answer
+var _obsEvtSource = new EventSource('/api/events');
+_obsEvtSource.onmessage = function(e){
+  try {
+    var d = JSON.parse(e.data);
+    if(d.kind !== 'observer_answer') return;
+    var a = JSON.parse(d.msg);
+    if(a.client_id !== _obsCid) return;
+    if(_obsWaitEl) _obsWaitEl.remove();
+    var log = document.getElementById('observer-chat-log');
+    log.innerHTML += '<div style="color:var(--text);margin-bottom:8px;padding:4px 8px;background:var(--surface);border-left:2px solid var(--cyan)">' + escH(a.answer) + '</div>';
+    log.scrollTop = log.scrollHeight;
+    document.getElementById('observer-send-btn').disabled = false;
+    _obsCid = null; _obsWaitEl = null;
+  } catch(ex) {}
+};
+
+// 30秒超时保护
+var _obsTimeout = null;
+
 function askObserver(){
   var inp = document.getElementById('observer-question');
   var q = (inp.value||'').trim();
-  if(!q) return;
+  if(!q || _obsCid) return;  // 正在等待回答，不重复发
   var log = document.getElementById('observer-chat-log');
   var btn = document.getElementById('observer-send-btn');
   log.innerHTML += '<div style="color:var(--cyan);margin-bottom:4px">▸ ' + escH(q) + '</div>';
   inp.value = ''; btn.disabled = true;
   fetch('/api/observer/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},body:JSON.stringify({question:q})})
-    .then(r=>r.json()).then(d=>{
-      if(!d.ok){ log.innerHTML += '<div style="color:var(--st-fail);margin-bottom:4px">✗ ' + escH(d.error||'unknown') + '</div>'; btn.disabled=false; log.scrollTop=log.scrollHeight; return; }
-      log.innerHTML += '<div style="color:var(--text3);margin-bottom:8px">⏳ 思考中...</div>';
+    .then(function(r){ return r.json(); }).then(function(d){
+      if(!d.ok){ log.innerHTML += '<div style="color:var(--st-fail);margin-bottom:4px">✗ ' + escH(d.error||'unknown') + '</div>'; btn.disabled=false; return; }
+      _obsCid = d.client_id;
+      log.innerHTML += '<div style="color:var(--text3);margin-bottom:8px" id="obs-wait">⏳ 思考中...</div>';
       log.scrollTop = log.scrollHeight;
-      var waitEl = log.lastElementChild;
-      // poll for answer
-      var attempts = 0;
-      function poll(){
-        fetch('/api/observer/chat/'+d.client_id).then(r=>r.json()).then(reply=>{
-          attempts++;
-          if(reply.answer){
-            if(waitEl) waitEl.remove();
-            log.innerHTML += '<div style="color:var(--text);margin-bottom:8px;padding:4px 8px;background:var(--surface);border-left:2px solid var(--cyan)">' + escH(reply.answer) + '</div>';
-            log.scrollTop = log.scrollHeight;
-            btn.disabled = false;
-            clearInterval(_obsPolling); _obsPolling = null;
-          } else if(attempts > 30){ // 30s timeout
-            if(waitEl) waitEl.remove();
-            log.innerHTML += '<div style="color:var(--st-fail)">✗ 超时，Observer 未响应</div>';
-            btn.disabled = false;
-            clearInterval(_obsPolling); _obsPolling = null;
-          }
-        }).catch(function(){
-          if(attempts > 30){ if(waitEl) waitEl.remove(); btn.disabled=false; clearInterval(_obsPolling); _obsPolling=null; }
-        });
-      }
-      poll(); // first poll immediately
-      _obsPolling = setInterval(poll, 1000);
+      _obsWaitEl = document.getElementById('obs-wait');
+      // 30秒超时
+      clearTimeout(_obsTimeout);
+      _obsTimeout = setTimeout(function(){
+        if(_obsCid && _obsWaitEl){ _obsWaitEl.remove(); log.innerHTML += '<div style="color:var(--st-fail)">✗ 超时，Observer 未响应</div>'; btn.disabled=false; _obsCid=null; _obsWaitEl=null; }
+      }, 30000);
     }).catch(function(e){
       log.innerHTML += '<div style="color:var(--st-fail);margin-bottom:4px">✗ 网络错误</div>';
       btn.disabled = false;
