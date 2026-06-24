@@ -254,8 +254,27 @@ async def start_server(
     session_manager: SessionManager | None = None,
     max_connections: int | None = MAX_CONNECTIONS,
 ) -> ObserverServer:
-    """Create, start, and return a new ObserverServer."""
+    """Create, start, and return the global ObserverServer.
+
+    If a server is already running, it is returned as-is (idempotent).
+    This prevents orphan server instances that cannot be stopped via
+    :func:`stop_server` and avoids port conflicts / resource leaks.
+    """
     global _server_instance
+    if _server_instance is not None and _server_instance.is_running:
+        logger.warning(
+            "start_server() called while a server is already running on %s:%d; reusing existing instance",
+            _server_instance.host,
+            _server_instance.port,
+        )
+        return _server_instance
+
+    # If a previous instance exists but is no longer running, clean it up
+    # before starting a new one so the global reference always points to a
+    # valid, live server.
+    if _server_instance is not None:
+        await _server_instance.stop()
+
     server = ObserverServer(
         host=host,
         port=port,
