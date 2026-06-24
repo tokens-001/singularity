@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import queue
 import threading
 import time
@@ -116,6 +117,42 @@ def _tool_get_recent_events(limit: int = 20) -> list[dict]:
 
 
 # ═══════════════════════════════════════════════════════════════
+# 写操作工具
+# ═══════════════════════════════════════════════════════════════
+
+def _tool_create_task(description: str, level: str = "E") -> dict:
+    """创建新任务。"""
+    try:
+        task = tracker.create(description)
+        if level:
+            tracker.transition(task.id, tracker.TaskStatus.PENDING, route_level=level, route_locked=True)
+        return {"ok": True, "task_id": task.id, "level": level, "description": description}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def _tool_control_loop(action: str) -> dict:
+    """控制调度循环：start/stop/status。"""
+    try:
+        from singularity.web.app import start_loop, stop_loop, _loop_running, _loop_concurrent
+        action = action.lower().strip()
+        if action == "start":
+            ok = start_loop(concurrent=2)
+            return {"ok": ok, "running": True, "message": "调度循环已启动"}
+        elif action == "stop":
+            ok = stop_loop()
+            return {"ok": ok, "running": _loop_running, "message": "调度循环已停止"}
+        else:
+            return {"ok": True, "running": _loop_running, "concurrent": _loop_concurrent}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def _tool_list_projects() -> list[dict]:
+    """列出所有项目及状态。"""
+    from singularity.scheduler.project import list_all
+    return [{"id": p.id, "name": p.name, "phase": p.phase, "task_count": len(p.task_ids)} for p in list_all()]
+
+
+# ═══════════════════════════════════════════════════════════════
 # OpenAI function calling 工具定义
 # ═══════════════════════════════════════════════════════════════
 
@@ -190,23 +227,67 @@ OBSERVER_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_task",
+            "description": "创建新任务。用户说'帮我做个xxx'时调用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string", "description": "任务描述"},
+                    "level": {"type": "string", "description": "任务层级：E/E+/D，默认E"},
+                },
+                "required": ["description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "control_loop",
+            "description": "控制调度循环：start启动/stop停止/status查看状态。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "start/stop/status"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_projects",
+            "description": "列出所有项目及当前阶段。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
-OBSERVER_SYSTEM_PROMPT = """你是 Singularity Dispatch 的观察者智能体，负责与用户进行自然语言交互，回答关于系统状态、任务详情、异常告警的问题。
+OBSERVER_SYSTEM_PROMPT = """你是 Singularity Dispatch 的主交互智能体，用户通过你管理系统的一切。
 
-你只能通过以下只读工具查询状态，绝不允许修改文件或执行命令：
+可用工具：
+查询类（只读）：
 - get_system_status: 系统整体状态
-- list_tasks: 任务列表
-- get_task_details: 单个任务详情
+- list_tasks: 任务列表，可按status/limit过滤
+- get_task_details: 单个任务详情+执行trace
 - list_stalled_tasks: 停滞任务
 - get_judge_stats: 裁判统计与异常
 - get_recent_events: 最近执行事件
+- list_projects: 项目列表及阶段
+
+操作类（写）：
+- create_task: 创建新任务。用户说"帮我做xxx"时调用
+- control_loop: 启动/停止调度循环
 
 回答要求：
 1. 简洁、准确，使用中文
-2. 不要编造数据，所有结论必须来自工具返回
-3. 异常检测时给出明确原因和建议
-4. 不要输出 [HANDOFF] 块
+2. 数据必须来自工具返回，不编造
+3. 异常时给出原因和建议
+4. 用户要求操作时主动执行（创建任务、控制循环等）
+5. 执行操作后报告结果
 """
 
 
@@ -228,6 +309,12 @@ def _execute_observer_tool(name: str, args: dict[str, Any]) -> str:
             result = _tool_get_judge_stats()
         elif name == "get_recent_events":
             result = _tool_get_recent_events(**args)
+        elif name == "create_task":
+            result = _tool_create_task(**args)
+        elif name == "control_loop":
+            result = _tool_control_loop(**args)
+        elif name == "list_projects":
+            result = _tool_list_projects()
         else:
             result = {"error": f"unknown tool {name}"}
         return json.dumps(result, ensure_ascii=False, indent=2)
@@ -240,37 +327,102 @@ def _execute_observer_tool(name: str, args: dict[str, Any]) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 def _get_observer_cfg() -> dict[str, Any]:
-    """优先复用配置中 observer / E 模型，默认 deepseek-chat。"""
+    """优先复用配置中 observer / E 模型，否则默认走本地 Ollama。"""
     agents = getattr(config, "AGENTS", {}) or {}
     observer_cfg = agents.get("observer") or agents.get("E") or {}
+    if observer_cfg.get("model"):
+        return {
+            "model": observer_cfg.get("model"),
+            "api_key": observer_cfg.get("api_key", ""),
+            "base_url": observer_cfg.get("base_url", "https://api.deepseek.com/v1"),
+            "temperature": observer_cfg.get("temperature", 0.3),
+            "max_tokens": observer_cfg.get("max_tokens", 1024),
+        }
+    # ponytail: 默认走 DeepSeek（已配置 DEEPSEEK_API_KEY）
     return {
-        "model": observer_cfg.get("model", "deepseek-chat"),
-        "api_key": observer_cfg.get("api_key", ""),
-        "base_url": observer_cfg.get("base_url", "https://api.deepseek.com/v1"),
-        "temperature": observer_cfg.get("temperature", 0.3),
-        "max_tokens": observer_cfg.get("max_tokens", 1024),
+        "model": "deepseek-chat",
+        "api_key": os.environ.get("DEEPSEEK_API_KEY", ""),
+        "base_url": "https://api.deepseek.com/v1",
+        "temperature": 0.3,
+        "max_tokens": 1024,
     }
+
+
+def _build_status_context() -> str:
+    """预取全量系统状态，注入 prompt，无需 function calling。"""
+    status = _tool_get_system_status()
+    tasks = _tool_list_tasks(limit=20)
+    stalled = _tool_list_stalled_tasks()
+    judge = _tool_get_judge_stats()
+    recent = _tool_get_recent_events(limit=10)
+    return json.dumps({
+        "系统状态": status,
+        "最近任务": tasks,
+        "卡住任务": stalled,
+        "裁判统计": judge,
+        "最近事件": recent,
+    }, ensure_ascii=False, indent=2)
+
+
+DIRECT_SYSTEM_PROMPT = """你是 Singularity Dispatch 的主交互智能体。下面是当前系统的实时状态数据。根据这些数据回答用户问题，用户可以要求你创建任务或控制调度循环。
+
+规则：
+1. 基于提供的数据回答，不编造
+2. 简洁准确，使用中文
+3. 异常情况给出原因和建议
+4. 数据中没有的信息，诚实说不知道
+5. 用户要求创建任务时，引导他们使用完整功能模式"""
 
 
 def _answer_question(question: str) -> str:
     cfg = _get_observer_cfg()
-    api_key = cfg.get("api_key")
-    if not api_key:
-        return "观察者智能体未配置 API key，无法调用 LLM。请在 AGENTS 配置中设置 observer 或 E 的 api_key。"
-
+    api_key = cfg.get("api_key", "")
     base_url = cfg.get("base_url", "https://api.deepseek.com/v1").rstrip("/")
     model = cfg.get("model", "deepseek-chat")
+
+    # ponytail: Ollama 本地模型默认无 api_key，用 direct 模式
+    use_direct = not api_key or "ollama" in base_url or "localhost" in base_url
+
+    if use_direct:
+        # Direct 模式：预取状态注入 prompt，一次调用出结果
+        try:
+            ctx = _build_status_context()
+        except Exception as e:
+            ctx = f"（状态获取失败：{e}）"
+        system = DIRECT_SYSTEM_PROMPT + "\n\n## 当前系统状态\n```json\n" + ctx + "\n```"
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": question},
+        ]
+        body: dict = {
+            "model": model,
+            "messages": messages,
+            "temperature": cfg.get("temperature", 0.3),
+            "max_tokens": cfg.get("max_tokens", 1024),
+        }
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        try:
+            with httpx.Client(timeout=60.0) as client:
+                resp = client.post(f"{base_url}/chat/completions", headers=headers, json=body)
+                resp.raise_for_status()
+                data = resp.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            return content.strip() if content else "（模型返回空内容）"
+        except Exception as e:
+            return f"调用 LLM 失败：{e}"
+
+    # Function calling 模式（有 API key 的云端模型）
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-
     messages = [
         {"role": "system", "content": OBSERVER_SYSTEM_PROMPT},
         {"role": "user", "content": question},
     ]
-    max_turns = 3
-
+    max_turns = 5
     with httpx.Client(timeout=60.0) as client:
         for _ in range(max_turns):
             try:
@@ -294,16 +446,17 @@ def _answer_question(question: str) -> str:
             choice = data.get("choices", [{}])[0]
             message = choice.get("message", {})
 
-            # 模型直接回答
+            tool_calls = message.get("tool_calls") or []
             content = message.get("content")
-            if content:
+
+            # ponytail: 如果只有文本没有工具调用，直接返回
+            if content and not tool_calls:
                 return content.strip()
 
-            tool_calls = message.get("tool_calls") or []
             if not tool_calls:
-                return "（模型未返回有效内容）"
+                # 纯文本回答
+                return content.strip() if content else "（模型未返回有效内容）"
 
-            # 执行工具并追加对话
             messages.append({
                 "role": "assistant",
                 "content": message.get("content") or "",
