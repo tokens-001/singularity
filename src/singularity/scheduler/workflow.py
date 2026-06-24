@@ -206,8 +206,11 @@ def _safe_dispatch(prompt: str, level: str, task_id: str, agents: dict,
 def _needs_research(project: ProjectState) -> bool:
     if project.template == "bug_fix":
         return False
+    # product_dev / agent_dev / refactor 默认需要调研
+    if project.template in ("product_dev", "agent_dev", "refactor"):
+        return True
     desc = project.description.lower()
-    triggers = ["调研", "参考", "借鉴", "调研", "架构", "设计", "方案", "重构"]
+    triggers = ["调研", "参考", "借鉴", "架构", "设计", "方案", "重构"]
     return any(t in desc for t in triggers)
 
 
