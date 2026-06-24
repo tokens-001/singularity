@@ -125,12 +125,13 @@ def post_execution_hook(exec_result, snap):
 
 def run_project_tests(cwd=None):
     """Run project test suite (pytest->unittest->npm). Returns {passed,total,failures,output,runner}."""
-    import re as _re
+    import sys, re as _re
     root = cwd or str(config.PROJECT_ROOT)
     result = {"passed":True,"total":0,"failures":0,"output":"","runner":""}
+    _py = sys.executable  # ponytail: 用当前Python，不用硬编码python3（uv run下python3可能没pytest）
     runners = [
-        (["python3","-m","pytest","-q","--tb=short"],"pytest"),
-        (["python3","-m","unittest","discover","-q"],"unittest"),
+        ([_py,"-m","pytest","-q","--tb=short"],"pytest"),
+        ([_py,"-m","unittest","discover","-q"],"unittest"),
         (["npm","test","--","--silent"],"npm"),
     ]
     for cmd, name in runners:
