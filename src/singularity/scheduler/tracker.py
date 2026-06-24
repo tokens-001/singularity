@@ -314,11 +314,14 @@ def ready_tasks(exclude: set[str] = None) -> list[Task]:
                 continue
             dead_dep = _any_dead_dep(task)
             if dead_dep:
-                # 上游死路 → 本级连带 FAILED (建议 #7)
-                task.status = TaskStatus.FAILED
-                task.error = f"上游依赖 {dead_dep} 已失败/冲突/回滚, 本级连带失败"
+                # 不级联失败 → 标记降级，任务继续跑。返工循环会修复。
+                task.error = f"上游依赖 {dead_dep} 已失败 (降级运行)"
                 task.updated_at = time.time()
-                _write(task)
+                if task.status == TaskStatus.BLOCKED:
+                    task.status = TaskStatus.ROUTED
+                    _write(task)
+                task.compute_starvation()
+                ready.append(task)
                 continue
             if _deps_satisfied(task):
                 # 就绪的 PENDING/BLOCKED 都转 ROUTED (修复 #1: PENDING 不转则 CAS 必失败)
@@ -364,9 +367,6 @@ def maybe_complete_parent(parent_id: str) -> bool:
             if c is None:
                 return False  # 子任务文件丢了, 不敢判
             statuses.append(c.status)
-        if TaskStatus.FAILED in statuses:
-            transition(parent_id, TaskStatus.FAILED, error="子任务失败, 父任务连带失败")
-            return True
         if all(s == TaskStatus.DONE for s in statuses):
             transition(parent_id, TaskStatus.DONE)
             return True

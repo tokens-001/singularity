@@ -107,9 +107,11 @@ def _build_judge_prompt(task_desc: str, output: str, task_type: str) -> str:
 {output_snippet}
 
 【判断标准】
-- 是否完成了需求描述中的所有要点？
-- 产出是否可以直接使用（不需要人工修补）？
-- 如果产出看起来正确但你不完全确定，标记 uncertain=true
+- 是否实质性推进了需求？（有实际代码/修改，不是空谈或纯计划）
+- 产出是否包含可用的代码或文本？（不必完美，能跑就行）
+- 如果产出了代码但有瑕疵，仍应判 pass=true，在 reason 中说明瑕疵
+- 只有空输出、纯方案描述、完全不相关时判 pass=false
+- 不确定时标记 uncertain=true 但倾向于 pass=true
 
 【输出格式】只输出 JSON：
 {{"pass": true/false, "score": 0.0-1.0, "reason": "一句话原因", "failure_mode": "semantic_error/context_insufficient/ok", "uncertain": true/false}}"""
