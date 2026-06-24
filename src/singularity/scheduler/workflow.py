@@ -484,22 +484,25 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
         return "架构方案无任务清单"
 
     created = 0
-    parent_id = ""
+    id_map = {}  # architecture task_id → tracker task_id
     for tdef in tasks:
         level_map = {"low": "E", "medium": "E+", "high": "D"}
         level = level_map.get(tdef.get("complexity", "low"), "E")
 
+        # 解析真正的依赖关系 (架构中定义的 depends_on)
+        arch_deps = tdef.get("depends_on", [])
+        dep_ids = [id_map[d] for d in arch_deps if d in id_map]
+
         child = tracker.create(
             f"[{tdef.get('id', '?')}] {tdef.get('title', '')}: {tdef.get('description', '')}",
-            depends_on=[parent_id] if parent_id else [],
+            depends_on=dep_ids,
             depth=2,
         )
         tracker.transition(child.id, TaskStatus.PENDING,
                            route_level=level, route_locked=True,
                            project_id=project.id)
         project.task_ids.append(child.id)
-        if not parent_id:
-            parent_id = child.id
+        id_map[tdef.get("id", "")] = child.id
         created += 1
 
     project.fix_round = 0
