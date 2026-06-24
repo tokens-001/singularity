@@ -16,6 +16,7 @@ from typing import Callable, Coroutine
 
 import websockets
 
+from observer.config import MAX_CONNECTIONS
 from observer.session import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,10 @@ class ObserverServer:
     session_manager : SessionManager | None
         A pre-existing SessionManager instance.  If *None* a new one is
         created internally.
+    max_connections : int | None
+        Maximum number of concurrent WebSocket connections.  Defaults to
+        :data:`observer.config.MAX_CONNECTIONS`.  When ``None`` the limit
+        is disabled.
     """
 
     def __init__(
@@ -56,11 +61,13 @@ class ObserverServer:
         port: int = DEFAULT_PORT,
         message_handler: MessageHandler | None = None,
         session_manager: SessionManager | None = None,
+        max_connections: int | None = MAX_CONNECTIONS,
     ) -> None:
         self.host = host
         self.port = port
         self.session_manager = session_manager or SessionManager()
         self._message_handler = message_handler
+        self.max_connections = max_connections
         self._server: websockets.WebSocketServer | None = None
         self._stop_event = asyncio.Event()
 
@@ -83,6 +90,29 @@ class ObserverServer:
         # Use the server-assigned UUID — never trust a client-supplied identifier.
         client_id = self._extract_client_id(websocket)
         logger.info("New connection from %s (assigned id: %s)", websocket.remote_address, client_id)
+
+        # Enforce the configured maximum connection limit before registering.
+        if self.max_connections is not None and self.client_count >= self.max_connections:
+            logger.warning(
+                "Connection rejected for %s: limit reached (%d/%d)",
+                client_id,
+                self.client_count,
+                self.max_connections,
+            )
+            try:
+                reject = json.dumps({
+                    "type": "error",
+                    "code": "connection_limit_exceeded",
+                    "message": f"Server connection limit reached ({self.max_connections}).",
+                })
+                await websocket.send(reject)
+                await websocket.close(
+                    code=1013,
+                    reason="Server connection limit reached",
+                )
+            except websockets.exceptions.ConnectionClosed:
+                pass
+            return
 
         # Send a welcome message so the client knows the connection is live
         try:
@@ -162,7 +192,12 @@ class ObserverServer:
             ping_interval=30,
             ping_timeout=10,
         )
-        logger.info("ObserverServer started on ws://%s:%d", self.host, self.port)
+        logger.info(
+            "ObserverServer started on ws://%s:%d (max_connections=%s)",
+            self.host,
+            self.port,
+            self.max_connections,
+        )
 
     async def stop(self) -> None:
         """Gracefully shut down the server and close all client connections."""
@@ -217,6 +252,7 @@ async def start_server(
     port: int = DEFAULT_PORT,
     message_handler: MessageHandler | None = None,
     session_manager: SessionManager | None = None,
+    max_connections: int | None = MAX_CONNECTIONS,
 ) -> ObserverServer:
     """Create, start, and return a new ObserverServer."""
     global _server_instance
@@ -225,6 +261,7 @@ async def start_server(
         port=port,
         message_handler=message_handler,
         session_manager=session_manager,
+        max_connections=max_connections,
     )
     await server.start()
     _server_instance = server
