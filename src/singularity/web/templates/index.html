@@ -428,14 +428,62 @@
 
 <script>
 // ═══════════════════════════════════════════════════════
-// Observer 智能体聊天 — SSE 实时推送
+// Observer 智能体聊天 — WebSocket 主通道 + SSE 后备
 // ═══════════════════════════════════════════════════════
 var _obsCid = null;
 var _obsWaitEl = null;
+var _obsWS = null;
+var _obsConnected = false;
+var _obsWSRetries = 0;
+var _obsWaiting = false;  // WS 模式下等待回答
 
-// 监听 SSE 事件流中的 observer_answer
+(function _connectObsWS(){
+  try {
+    _obsWS = new WebSocket('ws://127.0.0.1:8765');
+  } catch(e) { _obsWS = null; }
+  if(!_obsWS) return;
+
+  _obsWS.onopen = function(){
+    _obsConnected = true;
+    _obsWSRetries = 0;
+    var log = document.getElementById('observer-chat-log');
+    log.innerHTML += '<div style="color:var(--st-ok);font-size:9px">● WS 已连接</div>';
+  };
+
+  _obsWS.onmessage = function(e){
+    try {
+      var m = JSON.parse(e.data);
+      if(m.event === 'chat_answer'){
+        var text = (m.data||{}).text || '';
+        if(_obsWaitEl) _obsWaitEl.remove();
+        var log = document.getElementById('observer-chat-log');
+        log.innerHTML += '<div style="color:var(--text);margin-bottom:8px;padding:4px 8px;background:var(--surface);border-left:2px solid var(--cyan)">' + escH(text) + '</div>';
+        log.scrollTop = log.scrollHeight;
+        document.getElementById('observer-send-btn').disabled = false;
+        _obsWaiting = false;
+        _obsWaitEl = null;
+      }
+      // welcome / error 等忽略，连接即通道
+    } catch(ex) {}
+  };
+
+  _obsWS.onclose = function(){
+    _obsConnected = false;
+    if(_obsWSRetries < 5){
+      _obsWSRetries++;
+      setTimeout(_connectObsWS, 3000);
+    }
+  };
+
+  _obsWS.onerror = function(){
+    _obsConnected = false;
+  };
+})();
+
+// SSE 后备 — WS 活跃时跳过 observer_answer（避免重复渲染）
 var _obsEvtSource = new EventSource('/api/events');
 _obsEvtSource.onmessage = function(e){
+  if(_obsConnected) return;  // WS 活跃，跳过 SSE observer_answer
   try {
     var d = JSON.parse(e.data);
     if(d.kind !== 'observer_answer') return;
@@ -450,17 +498,32 @@ _obsEvtSource.onmessage = function(e){
   } catch(ex) {}
 };
 
-// 30秒超时保护
 var _obsTimeout = null;
 
 function askObserver(){
   var inp = document.getElementById('observer-question');
   var q = (inp.value||'').trim();
-  if(!q || _obsCid) return;  // 正在等待回答，不重复发
+  if(!q || _obsWaiting || _obsCid) return;
   var log = document.getElementById('observer-chat-log');
   var btn = document.getElementById('observer-send-btn');
   log.innerHTML += '<div style="color:var(--cyan);margin-bottom:4px">▸ ' + escH(q) + '</div>';
   inp.value = ''; btn.disabled = true;
+
+  // 主通道：WebSocket
+  if(_obsConnected && _obsWS && _obsWS.readyState === WebSocket.OPEN){
+    _obsWaiting = true;
+    _obsWS.send(JSON.stringify({action:'chat',question:q}));
+    log.innerHTML += '<div style="color:var(--text3);margin-bottom:8px" id="obs-wait">⏳ 思考中...</div>';
+    log.scrollTop = log.scrollHeight;
+    _obsWaitEl = document.getElementById('obs-wait');
+    clearTimeout(_obsTimeout);
+    _obsTimeout = setTimeout(function(){
+      if(_obsWaiting && _obsWaitEl){ _obsWaitEl.remove(); log.innerHTML += '<div style="color:var(--st-fail)">✗ 超时，Observer 未响应</div>'; btn.disabled=false; _obsWaiting=false; _obsWaitEl=null; }
+    }, 30000);
+    return;
+  }
+
+  // 后备：HTTP POST + SSE
   fetch('/api/observer/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},body:JSON.stringify({question:q})})
     .then(function(r){ return r.json(); }).then(function(d){
       if(!d.ok){ log.innerHTML += '<div style="color:var(--st-fail);margin-bottom:4px">✗ ' + escH(d.error||'unknown') + '</div>'; btn.disabled=false; return; }
@@ -468,7 +531,6 @@ function askObserver(){
       log.innerHTML += '<div style="color:var(--text3);margin-bottom:8px" id="obs-wait">⏳ 思考中...</div>';
       log.scrollTop = log.scrollHeight;
       _obsWaitEl = document.getElementById('obs-wait');
-      // 30秒超时
       clearTimeout(_obsTimeout);
       _obsTimeout = setTimeout(function(){
         if(_obsCid && _obsWaitEl){ _obsWaitEl.remove(); log.innerHTML += '<div style="color:var(--st-fail)">✗ 超时，Observer 未响应</div>'; btn.disabled=false; _obsCid=null; _obsWaitEl=null; }

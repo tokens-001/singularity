@@ -605,7 +605,7 @@ def _observer_worker() -> None:
                 # 如果没有注册 callback，用入参 callback
                 if client_id:
                     with _replies_lock:
-                        _pending_replies.setdefault(client_id, reply_callback)
+                        _pending_replies[client_id] = reply_callback
                 answer = _answer_question(question)
                 payload = {
                     "jsonrpc": "2.0",
