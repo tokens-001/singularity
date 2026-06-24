@@ -17,8 +17,13 @@ OBSERVER_HOST: str = "127.0.0.1"
 OBSERVER_PORT: int = 5051
 """Default TCP port the observer WebSocket server listens on."""
 
-BRIDGE_PORT: int = 5051
-"""Port exposed to bridge.py for backwards compatibility."""
+BRIDGE_PORT: int = OBSERVER_PORT
+"""Port exposed to bridge.py for backwards compatibility.
+
+This must remain identical to :data:`OBSERVER_PORT`; defining it as an
+alias ensures the two cannot drift apart when the observer port is
+changed.
+"""
 
 # --------------------------------------------------------------------------- #
 # Sampling and timing
@@ -93,4 +98,3 @@ DEFAULT_LOG_LEVEL: str = "INFO"
 
 JSON_INDENT: int | None = None
 """Indentation for JSON payloads; None produces compact output."""
-
