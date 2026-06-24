@@ -21,7 +21,7 @@ from datetime import datetime
 
 from ..scheduler.dispatcher import Dispatcher
 from ..scheduler.tracker import TaskTracker
-from ..scheduler.executor._base import BaseExecutor
+from ..scheduler.executors.base import BaseExecutor
 
 
 @dataclass
