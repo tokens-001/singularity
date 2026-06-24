@@ -1,10 +1,10 @@
-"""bridge.py — WebSocket 桥接层 (T1)
+"""bridge.py — WebSocket 桥接层 (T1 + T5)
 
 与 SSE 共存: 同样的 _sse_clients 推送逻辑, WebSocket 客户端也接收。
 协议: JSON-RPC 2.0 通知 (单向推送, 客户端通过 HTTP API 发送请求)
 认证: X-Qidian-Token 请求头
 
-T11: 集成 Observer Server，提供实时事件推送与指令接收能力。
+T5: 集成 Observer Server，提供统一启动入口与调度事件钩子。
 """
 from __future__ import annotations
 import asyncio
@@ -24,10 +24,13 @@ _ws_lock = threading.Lock()
 _observer_server = None
 _observer_thread: threading.Thread | None = None
 _observer_loop: asyncio.AbstractEventLoop | None = None
-_observer_stop_signal: asyncio.Event | None = None  # 用于优雅关闭信号
+_observer_stop_signal: asyncio.Event | None = None
 
 # 共享线程池（供 bridge 与 observer 复用）
 _executor: ThreadPoolExecutor | None = None
+
+# 启动状态标记
+_all_started = False
 
 
 class _WSClient:
@@ -114,7 +117,6 @@ async def _ws_handler(ws):
     add_client(client)
 
     try:
-        # 等待认证消息 (首条消息必须是 JSON-RPC auth)
         raw = await asyncio.wait_for(ws.recv(), timeout=10)
         msg = json.loads(raw)
         if msg.get("method") == "auth":
@@ -134,16 +136,14 @@ async def _ws_handler(ws):
                 )
                 return
         else:
-            # 也支持通过请求头认证
             await client.send_json({
                 "jsonrpc": "2.0", "method": "auth_error",
                 "params": {"message": "首条消息必须是 auth"}}
             )
             return
 
-        # 保持连接，等待客户端关闭
         async for _ in ws:
-            pass  # 客户端通过 HTTP API 交互，WS 仅用于推送
+            pass
     except asyncio.TimeoutError:
         pass
     except Exception:
@@ -161,7 +161,7 @@ def start_ws_server(host: str = "127.0.0.1", port: int = 5051):
         _WS_LOOP = asyncio.get_event_loop()
         async with websockets.serve(_ws_handler, host, port):
             _log.info("WebSocket server on ws://%s:%d", host, port)
-            await asyncio.Future()  # 永远运行
+            await asyncio.Future()
 
     def _run():
         loop = _get_loop()
@@ -189,7 +189,7 @@ def stop_ws_server():
             pass
 
 
-# ── Observer Server 集成 (T11) ─────────────────────────────────────────────
+# ── Observer Server 集成 (T5) ─────────────────────────────────────────────
 
 def start_observer_server(
     host: str = "0.0.0.0",
@@ -201,7 +201,7 @@ def start_observer_server(
     Args:
         host: 监听地址
         port: 监听端口
-        use_thread: True 使用独立线程，False 使用 asyncio.create_task（需已有事件循环）
+        use_thread: True 使用独立线程，False 使用 asyncio.create_task
     """
     global _observer_server, _observer_thread, _observer_loop, _observer_stop_signal
 
@@ -215,12 +215,9 @@ def start_observer_server(
     _observer_stop_signal = asyncio.Event()
 
     if use_thread:
-        # 独立线程模式（推荐，与现有 bridge 一致）
-
         async def _run_observer():
             await _observer_server.start()
             try:
-                # 等待停止信号（替代永不完成的 asyncio.Future()）
                 await _observer_stop_signal.wait()
             finally:
                 await _observer_server.stop()
@@ -228,7 +225,6 @@ def start_observer_server(
         def _thread_entry():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            # 在同步上下文中设置 _observer_loop，确保 start_observer_server 返回时已可用
             global _observer_loop
             _observer_loop = loop
             loop.run_until_complete(_run_observer())
@@ -241,7 +237,6 @@ def start_observer_server(
         _observer_thread.start()
         _log.info("Observer Server 已启动（线程模式）: ws://%s:%d", host, port)
     else:
-        # asyncio.create_task 模式（需调用方已有事件循环）
         async def _start_async():
             global _observer_loop
             _observer_loop = asyncio.get_running_loop()
@@ -258,20 +253,18 @@ def start_observer_server(
 
 
 def stop_observer_server() -> None:
-    """停止 Observer Server，包括优雅关闭 WebSocket 服务、停止事件循环、等待线程退出。"""
+    """停止 Observer Server，优雅关闭。"""
     global _observer_server, _observer_thread, _observer_loop, _observer_stop_signal
 
     if _observer_server is None:
         return
 
-    # 1. 通过 stop_signal 触发 _run_observer 中的 finally 块，调用 _observer_server.stop()
     if _observer_stop_signal is not None and _observer_loop is not None and not _observer_loop.is_closed():
         try:
             _observer_loop.call_soon_threadsafe(_observer_stop_signal.set)
         except Exception:
             pass
 
-    # 2. 兜底：显式调度 _observer_server.stop()（确保即使信号机制异常也能关闭）
     if _observer_loop is not None and not _observer_loop.is_closed():
         async def _explicit_stop():
             try:
@@ -285,14 +278,12 @@ def stop_observer_server() -> None:
         except Exception:
             pass
 
-    # 3. 停止事件循环（使 run_until_complete 返回）
     if _observer_loop is not None and not _observer_loop.is_closed():
         try:
             _observer_loop.call_soon_threadsafe(_observer_loop.stop)
         except Exception:
             pass
 
-    # 4. 等待线程退出
     if _observer_thread is not None and _observer_thread.is_alive():
         _observer_thread.join(timeout=5.0)
         if _observer_thread.is_alive():
@@ -335,8 +326,52 @@ def broadcast_observer(event: str, data: dict, channels: set[str] | None = None)
         return 0
 
 
+# ── T5: 统一启动入口与调度事件钩子 ─────────────────────────────────────────
+
+def start_all(
+    ws_host: str = "127.0.0.1",
+    ws_port: int = 5051,
+    observer_host: str = "0.0.0.0",
+    observer_port: int = 8765,
+) -> None:
+    """统一启动所有 WebSocket 服务（bridge WS + Observer）。
+
+    供 scheduler loop / 应用入口一键调用。
+    """
+    global _all_started
+    if _all_started:
+        _log.warning("bridge.start_all: 服务已在运行，跳过")
+        return
+
+    _log.info("bridge.start_all: 启动 WebSocket 桥接与 Observer 服务")
+
+    # 1) 启动 bridge WS（JSON-RPC 认证通道）
+    try:
+        start_ws_server(host=ws_host, port=ws_port)
+    except Exception as e:
+        _log.error("bridge WS 启动失败: %s", e)
+
+    # 2) 启动 Observer WS（实时事件推送通道）
+    try:
+        start_observer_server(host=observer_host, port=observer_port)
+    except Exception as e:
+        _log.error("Observer Server 启动失败: %s", e)
+
+    _all_started = True
+    _log.info(
+        "bridge.start_all: 完成 — bridge=ws://%s:%d  observer=ws://%s:%d",
+        ws_host, ws_port, observer_host, observer_port,
+    )
+
+
+def stop_all() -> None:
+    """统一停止所有 WebSocket 服务。shutdown_all 的别名。"""
+    shutdown_all()
+
+
 def shutdown_all() -> None:
     """关闭所有 WebSocket 服务（bridge + observer）。"""
+    global _all_started
     stop_ws_server()
     stop_observer_server()
 
@@ -345,4 +380,79 @@ def shutdown_all() -> None:
         _executor.shutdown(wait=False)
         _executor = None
 
+    _all_started = False
     _log.info("所有 WebSocket 服务已关闭")
+
+
+# ── 调度事件钩子 ──────────────────────────────────────────────────────────
+
+def emit_task_event(event: str, task_id: str, data: dict | None = None) -> int:
+    """发送任务生命周期事件到 Observer。
+
+    支持的 event: task_queued, task_started, task_done, task_failed, task_blocked
+
+    Args:
+        event: 事件名称
+        task_id: 任务 ID
+        data: 附加数据（可选）
+
+    Returns:
+        成功推送的客户端数
+    """
+    payload = {"task_id": task_id, "ts": time.time()}
+    if data:
+        payload.update(data)
+    return broadcast_observer(event, payload, channels={"tasks"})
+
+
+def emit_system_event(event: str, data: dict | None = None) -> int:
+    """发送系统级事件到 Observer。
+
+    Args:
+        event: 事件名称（如 loop_idle, loop_drain, scheduler_start）
+        data: 附加数据
+
+    Returns:
+        成功推送的客户端数
+    """
+    payload = {"ts": time.time()}
+    if data:
+        payload.update(data)
+    return broadcast_observer(event, payload, channels={"system"})
+
+
+def emit_metrics_event(data: dict) -> int:
+    """发送指标采样事件到 Observer。
+
+    Args:
+        data: 指标数据字典
+
+    Returns:
+        成功推送的客户端数
+    """
+    data["ts"] = time.time()
+    return broadcast_observer("metrics", data, channels={"metrics"})
+
+
+def is_observer_running() -> bool:
+    """Observer Server 是否正在运行。"""
+    return _observer_server is not None and _observer_thread is not None
+
+
+def is_ws_running() -> bool:
+    """Bridge WS Server 是否正在运行。"""
+    return _WS_THREAD is not None and _WS_THREAD.is_alive()
+
+
+def status() -> dict:
+    """返回所有 WebSocket 服务的运行状态。"""
+    return {
+        "bridge_ws": {
+            "running": is_ws_running(),
+            "clients": len(_ws_clients),
+        },
+        "observer": {
+            "running": is_observer_running(),
+            "clients": _observer_server.client_count if _observer_server else 0,
+        },
+    }
