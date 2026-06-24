@@ -422,7 +422,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
         is_planner = agent_cfg.get("mode") == "planner"
 
         wt = _maybe_create_worktree(task.id, level, agent_cfg, ctx.snapshot_ref)
-        cwd = str(wt.path) if wt else ""
+        cwd = str(wt.path) if wt else str(config.PROJECT_ROOT)  # ponytail: 无worktree时直接用项目根
 
         # 修复 P1-1: worktree 生命周期对称。
         # try/finally 套在 while 迭代体内（非函数级）——fallback 切 agent 会重建 wt,
