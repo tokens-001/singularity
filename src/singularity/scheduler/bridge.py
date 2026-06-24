@@ -24,6 +24,7 @@ _ws_lock = threading.Lock()
 _observer_server = None
 _observer_thread: threading.Thread | None = None
 _observer_loop: asyncio.AbstractEventLoop | None = None
+_observer_stop_signal: asyncio.Event | None = None  # 用于优雅关闭信号
 
 # 共享线程池（供 bridge 与 observer 复用）
 _executor: ThreadPoolExecutor | None = None
@@ -202,7 +203,7 @@ def start_observer_server(
         port: 监听端口
         use_thread: True 使用独立线程，False 使用 asyncio.create_task（需已有事件循环）
     """
-    global _observer_server, _observer_thread, _observer_loop
+    global _observer_server, _observer_thread, _observer_loop, _observer_stop_signal
 
     from singularity.observer.server import ObserverServer
 
@@ -211,22 +212,25 @@ def start_observer_server(
         return
 
     _observer_server = ObserverServer(host=host, port=port)
+    _observer_stop_signal = asyncio.Event()
 
     if use_thread:
         # 独立线程模式（推荐，与现有 bridge 一致）
+
         async def _run_observer():
-            _observer_loop = asyncio.get_event_loop()
             await _observer_server.start()
             try:
-                await asyncio.Future()  # 永久运行
-            except asyncio.CancelledError:
-                pass
+                # 等待停止信号（替代永不完成的 asyncio.Future()）
+                await _observer_stop_signal.wait()
             finally:
                 await _observer_server.stop()
 
         def _thread_entry():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
+            # 在同步上下文中设置 _observer_loop，确保 start_observer_server 返回时已可用
+            global _observer_loop
+            _observer_loop = loop
             loop.run_until_complete(_run_observer())
 
         _observer_thread = threading.Thread(
@@ -239,6 +243,8 @@ def start_observer_server(
     else:
         # asyncio.create_task 模式（需调用方已有事件循环）
         async def _start_async():
+            global _observer_loop
+            _observer_loop = asyncio.get_running_loop()
             await _observer_server.start()
 
         try:
@@ -248,25 +254,54 @@ def start_observer_server(
         except RuntimeError:
             _log.error("无法启动 Observer Server：无运行中的事件循环，请使用 use_thread=True")
             _observer_server = None
+            _observer_stop_signal = None
 
 
 def stop_observer_server() -> None:
-    """停止 Observer Server。"""
-    global _observer_server, _observer_thread, _observer_loop
+    """停止 Observer Server，包括优雅关闭 WebSocket 服务、停止事件循环、等待线程退出。"""
+    global _observer_server, _observer_thread, _observer_loop, _observer_stop_signal
 
     if _observer_server is None:
         return
 
-    if _observer_loop is not None:
-        # 线程模式：停止事件循环
+    # 1. 通过 stop_signal 触发 _run_observer 中的 finally 块，调用 _observer_server.stop()
+    if _observer_stop_signal is not None and _observer_loop is not None and not _observer_loop.is_closed():
+        try:
+            _observer_loop.call_soon_threadsafe(_observer_stop_signal.set)
+        except Exception:
+            pass
+
+    # 2. 兜底：显式调度 _observer_server.stop()（确保即使信号机制异常也能关闭）
+    if _observer_loop is not None and not _observer_loop.is_closed():
+        async def _explicit_stop():
+            try:
+                await _observer_server.stop()
+            except Exception:
+                pass
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(_explicit_stop(), _observer_loop)
+            future.result(timeout=5.0)
+        except Exception:
+            pass
+
+    # 3. 停止事件循环（使 run_until_complete 返回）
+    if _observer_loop is not None and not _observer_loop.is_closed():
         try:
             _observer_loop.call_soon_threadsafe(_observer_loop.stop)
         except Exception:
             pass
 
+    # 4. 等待线程退出
+    if _observer_thread is not None and _observer_thread.is_alive():
+        _observer_thread.join(timeout=5.0)
+        if _observer_thread.is_alive():
+            _log.warning("Observer Server 线程未能在超时内退出")
+
     _observer_server = None
     _observer_thread = None
     _observer_loop = None
+    _observer_stop_signal = None
     _log.info("Observer Server 已停止")
 
 
