@@ -1,3 +1,11 @@
+from observer.alert_manager import (
+    Alert,
+    AlertLevel,
+    AlertManager,
+    get_alert_manager,
+    init_alert_manager,
+    reset_alert_manager,
+)
 from observer.executor_proxy import (
     AuditRecord,
     ConfirmationRequiredError,
@@ -9,6 +17,14 @@ from observer.executor_proxy import (
 )
 
 __all__ = [
+    # alert_manager
+    "Alert",
+    "AlertLevel",
+    "AlertManager",
+    "get_alert_manager",
+    "init_alert_manager",
+    "reset_alert_manager",
+    # executor_proxy
     "AuditRecord",
     "ConfirmationRequiredError",
     "ExecutorFailureError",
