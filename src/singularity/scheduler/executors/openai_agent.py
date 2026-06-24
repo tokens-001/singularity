@@ -295,8 +295,15 @@ class OpenAIAgentExecutor(BaseExecutor):
                 call_fingerprint = str([(tc.get("function", {}).get("name", ""),
                                         tc.get("function", {}).get("arguments", "")[:80])
                                         for tc in tool_calls])
-                if tool_turns >= max_tool_turns or (call_fingerprint == last_tool_calls and tool_turns >= 2):
-                    # 强制完成: 注入系统消息，下一轮必须输出
+                if tool_turns >= max_tool_turns + 2:
+                    # 强制输出: 撤掉工具，注入系统消息要求模型直接回答
+                    tools = []
+                    messages.append({
+                        "role": "system",
+                        "content": "[系统] 已达最大工具调用轮次。现在必须直接输出最终答案，禁止再调用工具。"
+                    })
+                elif tool_turns >= max_tool_turns or (call_fingerprint == last_tool_calls and tool_turns >= 2):
+                    # 警告: 注入系统消息，建议停止工具
                     messages.append({
                         "role": "system",
                         "content": "[系统] 已收集足够信息。停止使用工具，直接输出最终答案。"

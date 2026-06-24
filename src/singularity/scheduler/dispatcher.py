@@ -503,7 +503,8 @@ def dispatch(
                     level=level, agent_cfg=agent_cfg,
                     executor_result=result, attempts=attempt + 1,
                 )
-            last_error = f"{agent_cfg.get('model', '?')}: 空输出"
+            exec_error = getattr(result, 'error', '') if result else 'no result'
+            last_error = f"{agent_cfg.get('model', '?')}: 空输出" + (f" [{exec_error}]" if exec_error else "")
         except Exception as e:
             last_error = f"{agent_cfg.get('model', '?')}: {type(e).__name__}: {e}"[:200]
 
