@@ -120,7 +120,12 @@ class ConnectionManager:
 
 
 # ── 消息处理 ──────────────────────────────────────────────
-async def _handle_message(session: ClientSession, raw: str) -> dict | None:
+async def _handle_message(
+    session: ClientSession,
+    raw: str,
+    manager: ConnectionManager,
+    loop: asyncio.AbstractEventLoop,
+) -> dict | None:
     """解析并路由客户端发来的消息。返回响应 dict 或 None。"""
     try:
         msg = json.loads(raw)
@@ -151,6 +156,27 @@ async def _handle_message(session: ClientSession, raw: str) -> dict | None:
     if action == "config":
         return {"event": "config", "data": config.as_dict()}
 
+    if action == "chat":
+        question = (msg.get("question") or "").strip()
+        if not question:
+            return {"event": "error", "data": {"message": "问题不能为空"}}
+
+        def _on_answer(payload: dict) -> None:
+            text = (payload.get("params") or {}).get("text", "")
+            asyncio.run_coroutine_threadsafe(
+                manager.send_to(session.client_id, "chat_answer",
+                                {"text": text, "ts": time.time()}),
+                loop,
+            )
+
+        try:
+            from singularity.scheduler.observer_agent import submit_question
+            submit_question(session.client_id, question, _on_answer)
+        except Exception as e:
+            return {"event": "error", "data": {"message": f"Observer 提交失败: {e}"}}
+
+        return {"event": "chat_received", "data": {"question": question, "ts": time.time()}}
+
     return {"event": "error", "data": {"message": f"未知 action: {action}"}}
 
 
@@ -166,12 +192,13 @@ async def _handler(ws: ServerConnection, manager: ConnectionManager) -> None:
         "protocol": 1,
     })
 
+    loop = asyncio.get_running_loop()
     try:
         async for raw in ws:
             if not isinstance(raw, str):
                 await manager.send_to(session.client_id, "error", {"message": "仅支持文本消息"})
                 continue
-            response = await _handle_message(session, raw)
+            response = await _handle_message(session, raw, manager, loop)
             if response:
                 await manager.send_to(session.client_id, response["event"], response["data"])
     except websockets.ConnectionClosed:
