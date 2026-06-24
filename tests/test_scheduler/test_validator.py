@@ -19,7 +19,9 @@ class TestValidatorV2:
 
     def test_run_tests_pytest_pass(self):
         self._write("test_ok.py", "def test_ok(): assert True")
+        import os; print("CWD:", os.getcwd()); print("ROOT:", self.root); print("FILES:", os.listdir(self.root))
         r = run_project_tests(cwd=self.root)
+        print("RESULT:", r)
         assert r["passed"]
         assert r["runner"] == "pytest"
 
