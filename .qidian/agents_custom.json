@@ -101,6 +101,18 @@
   ],
   "D": [
     {
+      "model": "gpt-5.5",
+      "type": "openai-agent",
+      "entry": "https://api.openai.com/v1/chat/completions",
+      "api_key_env": "OPENAI_API_KEY",
+      "max_turns": 5,
+      "default": true,
+      "roles": [
+        "architecture"
+      ],
+      "sandbox": "worktree"
+    },
+    {
       "model": "kimi-k2.7-code",
       "type": "openai-agent",
       "entry": "https://api.moonshot.cn/v1/chat/completions",
@@ -123,18 +135,6 @@
         "architecture"
       ],
       "sandbox": "worktree"
-    },
-    {
-      "model": "qwen3.7-max",
-      "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
-      "max_turns": 5,
-      "default": false,
-      "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
     }
   ],
   "_disabled": {
@@ -154,8 +154,7 @@
     "D": [
       "deepseek-v4-pro",
       "gpt-5.5-pro",
-      "claude-opus-4-8",
-      "gpt-5.5"
+      "claude-opus-4-8"
     ]
   },
   "_order": {
