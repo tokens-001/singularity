@@ -77,6 +77,13 @@ def _dispatch_ready(dispatched: set, pool, agents, runner: TaskRunner,
             route = router_mod.route(t.description)
         pre = pre_mod.pre_search(t.description, route)
         pre_mod.apply_escalation(route, pre)
+        # PENDING → ROUTED (若尚未路由)
+        if t.status == TaskStatus.PENDING:
+            if not tracker.cas(t.id, TaskStatus.PENDING, TaskStatus.ROUTED,
+                               route_level=route.level, route_gate=route.gate_required,
+                               route_type=route.task_type):
+                continue  # CAS 失败，下一轮重试
+            t.status = TaskStatus.ROUTED
         if tracker.cas(t.id, TaskStatus.ROUTED, TaskStatus.DISPATCHED,
                        route_level=route.level, route_gate=route.gate_required,
                        route_type=route.task_type):
