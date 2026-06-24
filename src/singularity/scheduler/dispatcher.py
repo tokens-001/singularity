@@ -80,6 +80,44 @@ def load_agents() -> dict:
     return agents
 
 
+def _ensure_agent_type(agent_cfg: dict) -> dict:
+    """自动补全 agent 配置：缺 type/provider/api_key_env 时从 model_registry + api_store 填充。
+
+    ponytail: agents_custom.json 可以只写 model，其余字段自动推断。
+    """
+    if agent_cfg.get("type") and agent_cfg.get("api_key_env"):
+        return agent_cfg  # 已配置完整
+
+    model = agent_cfg.get("model", "")
+    if not model:
+        return agent_cfg
+
+    try:
+        from . import model_registry as mr
+        from . import api_store
+        m = mr.get(model)
+        if not m:
+            return agent_cfg
+        apis = api_store.list_all()
+        api = apis.get(m.provider)
+        if not api:
+            return agent_cfg
+
+        # 自动填充
+        if not agent_cfg.get("type"):
+            agent_cfg["type"] = "openai-agent"
+        if not agent_cfg.get("provider"):
+            agent_cfg["provider"] = m.provider
+        if not agent_cfg.get("api_key_env"):
+            agent_cfg["api_key_env"] = api.api_key_env
+        if not agent_cfg.get("entry"):
+            agent_cfg["entry"] = api.base_url + "/chat/completions"
+        agent_cfg.setdefault("request_template", {"model": model, "max_tokens": 4096})
+    except Exception:
+        pass
+    return agent_cfg
+
+
 def agent_api_available(agent_cfg: dict) -> bool:
     """检查 agent 的 API 是否可用。
 
@@ -89,6 +127,8 @@ def agent_api_available(agent_cfg: dict) -> bool:
     硬限制：OpenAI 模型必须在 _order 里显式列出才会被选中，
     防止误烧 GPT 额度。
     """
+    # 自动补全缺失的 type/provider
+    agent_cfg = _ensure_agent_type(agent_cfg)
     model = agent_cfg.get("model", "")
     agent_type = agent_cfg.get("type", "")
 
@@ -439,6 +479,7 @@ def dispatch(
     # ── 单模型 fallback 链 ──
     last_error = ""
     for attempt, agent_cfg in enumerate(chain[:3]):
+        agent_cfg = _ensure_agent_type(agent_cfg)
         etype = agent_cfg.get("type", "claude-cli")
         executor_cls = _EXECUTOR_BY_TYPE.get(etype)
         if not executor_cls:
@@ -494,6 +535,7 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
     import concurrent.futures
 
     def _run_one(agent_cfg):
+        agent_cfg = _ensure_agent_type(agent_cfg)
         etype = agent_cfg.get("type", "claude-cli")
         executor_cls = _EXECUTOR_BY_TYPE.get(etype)
         if not executor_cls:
