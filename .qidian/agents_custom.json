@@ -63,11 +63,11 @@
   ],
   "E_plus": [
     {
-      "model": "deepseek-v4-pro",
+      "model": "qwen3-coder-plus",
       "type": "openai-agent",
-      "entry": "https://api.deepseek.com/v1/chat/completions",
-      "api_key_env": "DEEPSEEK_API_KEY",
-      "max_turns": 3,
+      "entry": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+      "api_key_env": "DASHSCOPE_API_KEY",
+      "max_turns": 8,
       "default": true,
       "roles": [
         "daily"
@@ -101,12 +101,12 @@
   ],
   "D": [
     {
-      "model": "glm-5.2",
+      "model": "gpt-5.5",
       "type": "openai-agent",
-      "entry": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-      "api_key_env": "ZHIPU_API_KEY",
-      "max_turns": 8,
-      "default": false,
+      "entry": "https://api.openai.com/v1/chat/completions",
+      "api_key_env": "OPENAI_API_KEY",
+      "max_turns": 5,
+      "default": true,
       "roles": [
         "architecture"
       ],
@@ -125,26 +125,14 @@
       "sandbox": "worktree"
     },
     {
-      "model": "deepseek-v4-pro",
+      "model": "glm-5.2",
       "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
-      "max_turns": 5,
+      "entry": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+      "api_key_env": "ZHIPU_API_KEY",
+      "max_turns": 8,
       "default": false,
       "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
-    },
-    {
-      "model": "qwen3.7-max",
-      "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
-      "max_turns": 5,
-      "default": false,
-      "roles": [
-        "daily"
+        "architecture"
       ],
       "sandbox": "worktree"
     }
@@ -157,27 +145,27 @@
       "gpt-5.5"
     ],
     "E+": [
+      "deepseek-v4-pro",
       "kimi-k2.6",
       "gpt-5.5",
       "qwen3.7-max",
       "qwen3.7-plus"
     ],
     "D": [
+      "deepseek-v4-pro",
       "gpt-5.5-pro",
-      "claude-opus-4-8",
-      "gpt-5.5"
+      "claude-opus-4-8"
     ]
   },
   "_order": {
     "D": [
-      "qwen3.7-max",
-      "glm-5.2",
-      "kimi-k2.7-code"
+      "gpt-5.5",
+      "kimi-k2.7-code",
+      "glm-5.2"
     ],
     "E+": [
-      "deepseek-v4-pro",
+      "qwen3-coder-plus",
       "kimi-k2.7-code",
-      "qwen3.7-plus",
       "glm-5.2"
     ],
     "E": [
