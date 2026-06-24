@@ -468,6 +468,7 @@ def _loop_worker():
 # Observer WS 频道映射：SSE kind → WS channels
 _WS_CHANNEL_MAP: dict[str, set[str]] = {
     "task": {"tasks"},
+    "task_create": {"tasks"},
     "system": {"system"},
     "idle": {"system"},
     "error": {"alerts"},
