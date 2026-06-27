@@ -9,6 +9,8 @@ export default function ModelManagement() {
   const [scanning, setScanning] = useState('')
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set())
   const [providerFilter, setProviderFilter] = useState('')
+  const [editingTiers, setEditingTiers] = useState<string | null>(null)
+  const [editTiers, setEditTiers] = useState<string[]>([])
   const [tierFilter, setTierFilter] = useState('')
   const [showAdd, setShowAdd] = useState(false)
   const [addForm, setAddForm] = useState<any>({ id: '', provider: '', tiers: [], context_window: '', cost_1k_input: '', cost_1k_output: '' })
@@ -148,7 +150,17 @@ export default function ModelManagement() {
                   <Cpu size={12} color='var(--accent)' style={{display:'inline',marginRight:6,verticalAlign:'middle'}}/>{m.id||m.model}</td>
                 <td style={{padding:'7px 10px',color:'var(--text-secondary)'}}>{m.provider||'-'}</td>
                 <td style={{padding:'7px 10px'}}>
-                  {m.tiers&&m.tiers.length>0 ? m.tiers.map((t:string)=><span key={t} style={{background:'var(--bg-tertiary)',padding:'1px 5px',borderRadius:3,fontSize:9,fontWeight:600,color:t==='D'?'#f0883e':t==='E+'?'#a371f7':'#58a6ff',marginRight:2}}>{t}</span>) : '-'}
+                  {editingTiers===(m.id||m.model) ? (
+                    <div style={{display:'flex',gap:4,alignItems:'center'}} onClick={e=>e.stopPropagation()}>
+                      {tiers.map(t=><label key={t} style={{fontSize:10,display:'flex',alignItems:'center',gap:2}}><input type="checkbox" checked={editTiers.includes(t)} onChange={e=>{setEditTiers(e.target.checked?[...editTiers,t]:editTiers.filter((x:string)=>x!==t))}}/>{t}</label>)}
+                      <button onClick={async()=>{await api.updateModel(m.id||m.model,{tiers:editTiers});setEditingTiers(null);fetch()}} style={{...iconBtn,color:'var(--accent-green)'}}>✓</button>
+                      <button onClick={()=>setEditingTiers(null)} style={iconBtn}>✕</button>
+                    </div>
+                  ) : (
+                    <span onClick={(e)=>{e.stopPropagation();setEditingTiers(m.id||m.model);setEditTiers(m.tiers||[])}} style={{cursor:'pointer'}}>
+                      {m.tiers&&m.tiers.length>0 ? m.tiers.map((t:string)=><span key={t} style={{background:'var(--bg-tertiary)',padding:'1px 5px',borderRadius:3,fontSize:9,fontWeight:600,color:t==='D'?'#f0883e':t==='E+'?'#a371f7':'#58a6ff',marginRight:2}}>{t}</span>) : <span style={{color:'var(--text-muted)',fontSize:10}}>点击设置</span>}
+                    </span>
+                  )}
                 </td>
                 <td style={{padding:'7px 10px',color:'var(--text-secondary)',fontFamily:'var(--font-mono)',fontSize:11}}>{m.context_window ? m.context_window.toLocaleString() : '-'}</td>
                 <td style={{padding:'7px 10px',color:'var(--text-secondary)',fontSize:10}}>{m.cost_1k_input ? <>${m.cost_1k_input} / ${m.cost_1k_output}</> : '-'}</td>
@@ -166,3 +178,4 @@ export default function ModelManagement() {
 
 const inp = { background:'var(--bg-tertiary)',border:'1px solid var(--border)',borderRadius:3,padding:'3px 6px',color:'var(--text-primary)',fontSize:11 } as const
 const filterBtn = (active: boolean) => ({ background:active?'var(--accent)':'var(--bg-tertiary)',color:active?'#fff':'var(--text-secondary)',border:'1px solid var(--border)',borderRadius:4,padding:'3px 10px',cursor:'pointer',fontSize:11 })
+const iconBtn = { background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',padding:2 } as const

@@ -1,6 +1,6 @@
-import { Outlet, NavLink, useLocation } from 'react-router-dom'
+import { Outlet, NavLink, Link, useLocation } from 'react-router-dom'
 import { useAppStore } from '../stores/app'
-import { LayoutDashboard, ListTodo, MessageSquare, Bot, FolderKanban, Cpu, PanelLeftClose, PanelLeft } from 'lucide-react'
+import { LayoutDashboard, ListTodo, MessageSquare, Bot, FolderKanban, Cpu, Settings2, PanelLeftClose, PanelLeft } from 'lucide-react'
 
 const NAV = [
   { to: '/', icon: LayoutDashboard, label: '总览' },
@@ -44,8 +44,15 @@ export default function AppLayout() {
             </NavLink>
           ))}
         </nav>
-        <div style={{ padding: '6px 10px', borderTop: '1px solid var(--border)', fontSize: 10, color: 'var(--text-muted)' }}>
-          <a href="/settings" style={{ color: 'var(--text-muted)', textDecoration: 'none' }}>配置</a>
+        <div style={{ padding: 0, borderTop: '1px solid var(--border)' }}>
+          <NavLink to="/settings" style={({ isActive }) => ({
+            display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px',
+            color: isActive ? 'var(--text-primary)' : 'var(--text-muted)',
+            background: isActive ? 'var(--bg-tertiary)' : 'transparent',
+            textDecoration: 'none', fontSize: 13, fontWeight: isActive ? 600 : 400,
+          })}>
+            <Settings2 size={18} />{!sidebarCollapsed && '配置'}
+          </NavLink>
         </div>
       </aside>
       <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
