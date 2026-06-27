@@ -404,6 +404,18 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     project.architecture = arch
     # ponytail: 保存阶段产出文件供后续阶段复用
     _save_phase_output(project.id, "architecture.md", raw)
+    # Step 2: 多模型碰撞 → 保存各模型原始输出
+    import json as _json
+    fusion_meta_path = sched_config.QIDIAN_DIR / ".last_fusion.json"
+    if fusion_meta_path.exists():
+        try:
+            fm = _json.loads(fusion_meta_path.read_text())
+            _save_phase_output(project.id, "fusion-models.md",
+                "\n\n---\n".join(f"## 模型: {fm['models'][i]}\n\n{fm['outputs'][i][:3000]}" for i in range(len(fm['models']))))
+            _save_phase_output(project.id, "fusion-meta.json",
+                _json.dumps({"models": fm["models"], "count": fm["count"]}, ensure_ascii=False))
+            fusion_meta_path.unlink()
+        except Exception: pass
     traceability = arch.get("traceability", [])
     if traceability:
         _save_phase_output(project.id, "traceability.json",

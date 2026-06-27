@@ -59,7 +59,14 @@ export default function ProjectPipeline() {
           <div>模板: {project.template || '-'}</div>
           <div>阶段: {project.phase}</div>
           <div>任务数: {project.task_ids?.length || 0}</div>
-          {project.architecture && <div>架构方案: 已产出 ({project.architecture.tasks?.length || 0} 个任务)</div>}
+          {project.architecture && <div>
+            架构方案: 已产出 ({project.architecture.tasks?.length || 0} 个任务)
+            {project.architecture.fusion_notes && (
+              <span style={{marginLeft:8,fontSize:10,color:'var(--accent-purple)',fontWeight:600}}>
+                多模型碰撞 · 解决{project.architecture.fusion_notes.resolved_contradictions||0}个矛盾
+              </span>
+            )}
+          </div>}
         </div>
       </div>
     </div>

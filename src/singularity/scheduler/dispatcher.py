@@ -596,6 +596,20 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
         try:
             fused = fuse_architecture(task, raw_outputs, judge_model="deepseek-chat")
             if fused:
+                # Save individual model outputs for display
+                from singularity.scheduler.config import QIDIAN_DIR
+                import json as _json
+                proj_dir = QIDIAN_DIR / "projects"
+                # Store in fusion metadata that the workflow can pick up
+                fusion_meta = {
+                    "models": [m for m, _ in outputs],
+                    "outputs": raw_outputs,
+                    "fused": fused,
+                    "count": len(outputs),
+                }
+                # Write to a temp file that workflow can read
+                meta_path = QIDIAN_DIR / ".last_fusion.json"
+                meta_path.write_text(_json.dumps(fusion_meta, ensure_ascii=False, indent=2))
                 # 包装成 ExecutorResult 兼容格式
                 class _FusionResult:
                     raw_output = fused
@@ -605,7 +619,7 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
                     level=level,
                     agent_cfg={"model": f"fusion({','.join(m for m,_ in outputs)})"},
                     executor_result=_FusionResult(),
-                    attempts=len(outputs) + 2,  # N 并行 + 1 judge + 1 synthesize
+                    attempts=len(outputs) + 2,
                 )
         except Exception:
             pass  # fusion 失败 → fallback 到通用合成
