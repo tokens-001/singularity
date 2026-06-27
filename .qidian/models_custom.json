@@ -126,7 +126,7 @@
     "speed": "slow",
     "cost": "premium",
     "rating": false,
-    "reasoning": 2,
+    "reasoning": 5,
     "max_turns": 5,
     "strengths": [],
     "notes": ""

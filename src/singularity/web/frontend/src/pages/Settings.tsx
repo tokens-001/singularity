@@ -10,10 +10,20 @@ export default function Settings() {
   const [apiStore, setApiStore] = useState<any[]>([])
   const [tokens, setTokens] = useState<any>(null)
   const [budget, setBudget] = useState('')
+  const [showApiForm, setShowApiForm] = useState(false)
+  const [apiForm, setApiForm] = useState({id:'', base_url:'', api_key_env:'', provider:''})
+
+  const refresh = () => { api.apiStore().then(setApiStore) }
+
+  const addApi = async () => {
+    if (!apiForm.id || !apiForm.base_url) return
+    await api.addApiStore(apiForm)
+    setApiForm({id:'',base_url:'',api_key_env:'',provider:''}); setShowApiForm(false); refresh()
+  }
 
   useEffect(() => {
     if (tab === 'fusion') api.fusionConfig().then(setFusion)
-    if (tab === 'apistore') api.apiStore().then(setApiStore)
+    if (tab === 'apistore') refresh()
     if (tab === 'token') api.tokenUsage().then(setTokens)
   }, [tab])
 
@@ -49,7 +59,23 @@ export default function Settings() {
 
       {tab === 'apistore' && (
         <div style={{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:14}}>
-          <div style={{fontSize:13,fontWeight:600,marginBottom:8}}>API Store ({apiStore.length})</div>
+          <div style={{display:'flex',alignItems:'center',marginBottom:8}}>
+            <span style={{fontSize:13,fontWeight:600}}>API Store ({apiStore.length})</span>
+            <button onClick={()=>setShowApiForm(!showApiForm)}
+              style={{marginLeft:'auto',background:'var(--accent)',color:'#fff',border:'none',borderRadius:4,padding:'4px 10px',cursor:'pointer',fontSize:11,display:'flex',alignItems:'center',gap:4}}><Plus size={12}/> 添加</button>
+          </div>
+
+          {showApiForm && (
+            <div style={{display:'flex',gap:8,marginBottom:10,flexWrap:'wrap',alignItems:'center',padding:10,background:'var(--bg-tertiary)',borderRadius:4}}>
+              <input placeholder="ID (如 openai)" value={apiForm.id} onChange={e=>setApiForm({...apiForm,id:e.target.value})} style={{...inp,width:120}}/>
+              <input placeholder="Base URL" value={apiForm.base_url} onChange={e=>setApiForm({...apiForm,base_url:e.target.value})} style={{...inp,width:240}}/>
+              <input placeholder="环境变量" value={apiForm.api_key_env} onChange={e=>setApiForm({...apiForm,api_key_env:e.target.value})} style={{...inp,width:140}}/>
+              <input placeholder="Provider 名" value={apiForm.provider} onChange={e=>setApiForm({...apiForm,provider:e.target.value})} style={{...inp,width:120}}/>
+              <button onClick={addApi} style={{background:'var(--accent-green)',color:'#fff',border:'none',borderRadius:4,padding:'6px 14px',cursor:'pointer',fontSize:12}}>添加</button>
+              <button onClick={()=>setShowApiForm(false)} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:16}}>✕</button>
+            </div>
+          )}
+
           {apiStore.map((a:any)=>(
             <div key={a.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:'var(--bg-tertiary)',borderRadius:4,marginBottom:4}}>
               <div>
@@ -58,8 +84,8 @@ export default function Settings() {
               </div>
               <div style={{display:'flex',gap:4,alignItems:'center'}}>
                 <span style={{fontSize:10,color:a.status==='active'?'var(--accent-green)':'var(--text-muted)'}}>{a.status||'?'}</span>
-                <button onClick={()=>api.scanApiStore(a.id).then(()=>api.apiStore().then(setApiStore))} style={{background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',padding:2}}><RefreshCw size={12}/></button>
-                <button onClick={()=>api.deleteApiStore(a.id).then(()=>api.apiStore().then(setApiStore))} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',padding:2}}><Trash2 size={12}/></button>
+                <button onClick={()=>api.scanApiStore(a.id).then(refresh)} style={{background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',padding:2}}><RefreshCw size={12}/></button>
+                <button onClick={()=>api.deleteApiStore(a.id).then(refresh)} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',padding:2}}><Trash2 size={12}/></button>
               </div>
             </div>
           ))}
@@ -81,3 +107,4 @@ export default function Settings() {
     </div>
   )
 }
+const inp = { background:'var(--bg-tertiary)',border:'1px solid var(--border)',borderRadius:3,padding:'5px 8px',color:'var(--text-primary)',fontSize:12 } as const
