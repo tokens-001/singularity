@@ -8,6 +8,7 @@ import ProjectPipeline from './pages/ProjectPipeline'
 import AgentDashboard from './pages/AgentDashboard'
 import ModelManagement from './pages/ModelManagement'
 import Settings from './pages/Settings'
+import SkillManagement from './pages/SkillManagement'
 import Monitor from './pages/Monitor'
 import Dashboard from './pages/Dashboard'
 
@@ -24,6 +25,7 @@ export default function App() {
         <Route path="/observer" element={<ObserverChat />} />
         <Route path="/agents" element={<AgentDashboard />} />
         <Route path="/models" element={<ModelManagement />} />
+        <Route path="/skills" element={<SkillManagement />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
     </Routes>
