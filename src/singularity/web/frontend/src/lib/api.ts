@@ -46,7 +46,7 @@ export const api = {
   deleteModel: (id: string) => request(`/api/models/${id}`,{method:'DELETE'}),
   importModels: (data: any) => request('/api/models/import',{method:'POST',body:JSON.stringify(data)}),
 
-  apiStore: () => request<any[]>('/api/api-store'),
+  apiStore: async () => { const d = await request<any>('/api/api-store'); return Object.values(d||{}) as any[] },
   addApiStore: (data: any) => request('/api/api-store',{method:'POST',body:JSON.stringify(data)}),
   deleteApiStore: (id: string) => request(`/api/api-store/${id}`,{method:'DELETE'}),
   scanApiStore: (id: string) => request(`/api/api-store/${id}/scan`,{method:'POST'}),
