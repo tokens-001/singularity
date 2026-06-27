@@ -36,7 +36,8 @@ export default function AgentDashboard() {
       const any = list.find((a:any)=>(a.roles||[]).includes(r.key))
       const model = match?.model||any?.model||list.find((a:any)=>a.default)?.model||list[0]?.model||'无'
       const tc = taskCounts[r.key]||{running:0,pending:0,done:0,failed:0}
-      return { key:r.key, name:r.name, level, description:r.description, persona:r.persona||'', model, available_models:list.map((a:any)=>a.model), system_prompt:r.system_prompt||'', tasks:{...tc,total:tc.running+tc.pending+tc.done+tc.failed}, skills:[] }
+      const available_models = list.filter((a:any)=>a.type!=='claude-cli').map((a:any)=>a.model)
+      return { key:r.key, name:r.name, level, description:r.description, persona:r.persona||'', model, available_models, system_prompt:r.system_prompt||'', tasks:{...tc,total:tc.running+tc.pending+tc.done+tc.failed}, skills:[] }
     })
 
     // Load skills per role
