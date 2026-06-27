@@ -14,3 +14,7 @@ data/knowledge/data/index/corpus.json
 .qidian/
 .codegraph/
 *.egg-info/
+
+# Frontend
+src/singularity/web/frontend/node_modules/
+src/singularity/web/static/dist/
