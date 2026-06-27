@@ -20,13 +20,41 @@ export default function AgentDashboard() {
 
   const isCLI = (a: any) => a.type === 'claude-cli'
 
+  // Infer API key env from model name
+  const inferKey = (model: string) => {
+    const m = model.toLowerCase()
+    if (m.includes('gpt') || m.includes('openai')) return 'OPENAI_API_KEY'
+    if (m.includes('deepseek')) return 'DEEPSEEK_API_KEY'
+    if (m.includes('kimi') || m.includes('moonshot')) return 'KIMI_API_KEY'
+    if (m.includes('glm') || m.includes('zhipu')) return 'ZHIPU_API_KEY'
+    if (m.includes('qwen') || m.includes('dashscope')) return 'DASHSCOPE_API_KEY'
+    if (m.includes('claude') || m.includes('anthropic')) return 'ANTHROPIC_API_KEY'
+    return ''
+  }
+
   if (loading) return <div style={{color:'var(--text-muted)'}}>加载中...</div>
 
   // Group agents by endpoint (entry URL), deduplicate
   const groupByEndpoint = (list: any[]) => {
     const groups: Record<string, any[]> = {}
     for (const a of list) {
-      const key = isCLI(a) ? `cli:${a.entry||a.model}` : (a.entry || '默认')
+      // Infer endpoint label: prefer explicit entry, fallback to api_key hint
+      let key: string
+      if (isCLI(a)) {
+        key = `cli:${a.model}`
+      } else if (a.entry) {
+        key = a.entry
+      } else {
+        // Infer from api_key_env or model name
+        const env = a.api_key_env || ''
+        if (env.includes('OPENAI')) key = 'OpenAI API'
+        else if (env.includes('DEEPSEEK')) key = 'DeepSeek API'
+        else if (env.includes('KIMI') || env.includes('MOONSHOT')) key = 'Kimi API'
+        else if (env.includes('ZHIPU') || env.includes('GLM')) key = '智谱 API'
+        else if (env.includes('DASHSCOPE') || env.includes('QWEN')) key = '通义千问 API'
+        else if (env.includes('ANTHROPIC')) key = 'Anthropic API'
+        else key = `默认连接 (${env||a.model})`
+      }
       if (!groups[key]) groups[key] = []
       groups[key].push(a)
     }
@@ -159,7 +187,7 @@ export default function AgentDashboard() {
             })}
 
             {(disabledMap[lvl]||[]).length > 0 && <div style={{marginTop:8,fontSize:11,color:'var(--text-muted)'}}>
-              已禁用: {(disabledMap[lvl]||[]).map((m:string)=><span key={m} style={{display:'inline-flex',alignItems:'center',gap:4,background:'var(--bg-tertiary)',color:'var(--text-muted)',padding:'2px 8px',borderRadius:3,margin:'2px 4px',fontFamily:'var(--font-mono)',fontSize:10}}>{m} <button onClick={()=>api.addAgent({level:lvl,model:m,type:'openai-agent',max_turns:5,roles:[],sandbox:'worktree'}).then(fetch)} style={{background:'none',border:'none',color:'var(--accent-green)',cursor:'pointer',fontSize:10,padding:0}}>启用</button></span>)}
+              已禁用: {(disabledMap[lvl]||[]).map((m:string)=><span key={m} style={{display:'inline-flex',alignItems:'center',gap:4,background:'var(--bg-tertiary)',color:'var(--text-muted)',padding:'2px 8px',borderRadius:3,margin:'2px 4px',fontFamily:'var(--font-mono)',fontSize:10}}>{m} <button onClick={()=>api.addAgent({level:lvl,model:m,type:'openai-agent',max_turns:5,roles:[],sandbox:'worktree',api_key_env:inferKey(m)}).then(fetch)} style={{background:'none',border:'none',color:'var(--accent-green)',cursor:'pointer',fontSize:10,padding:0}}>启用</button></span>)}
             </div>}
           </div>
         )
