@@ -9,7 +9,6 @@ export default function SkillManagement() {
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ name: '', description: '', type: 'prompt', content: '' })
   const [selectedSkill, setSelectedSkill] = useState<any>(null)
-  const [loadingMatrix, setLoadingMatrix] = useState<Record<string, boolean>>({})
 
   const fetch = async () => {
     const [s, a] = await Promise.all([api.skills(), api.agents()])
@@ -37,13 +36,13 @@ export default function SkillManagement() {
   }
 
   const toggleSkill = async (model: string, level: string, skillName: string) => {
-    const key = `${level}/${model}`
-    setLoadingMatrix(prev => ({...prev, [key]: true}))
-    const cur = matrix[model] || []
-    const next = cur.includes(skillName) ? cur.filter(s => s !== skillName) : [...cur, skillName]
+    // ponytail: read cur inside functional updater to avoid stale closure under rapid clicks
+    let before: string[] = []
+    const next = matrix[model]?.includes(skillName)
+      ? (before = matrix[model]||[], matrix[model].filter(s => s !== skillName))
+      : (before = matrix[model]||[], [...(matrix[model]||[]), skillName])
     setMatrix(prev => ({...prev, [model]: next}))
-    try { await api.updateAgentSkills(level, model, next) } catch { setMatrix(prev => ({...prev, [model]: cur})) }
-    setLoadingMatrix(prev => ({...prev, [key]: false}))
+    try { await api.updateAgentSkills(level, model, next) } catch { setMatrix(prev => ({...prev, [model]: before})) }
   }
 
   return (

@@ -9,6 +9,7 @@ export default function ObserverChat() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [wsConnected, setWsConnected] = useState(false)
+  const wsConnectedRef = useRef(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const retriesRef = useRef(0)
@@ -18,7 +19,7 @@ export default function ObserverChat() {
     try { wsRef.current = new WebSocket('ws://127.0.0.1:8765') } catch { return }
 
     wsRef.current.onopen = () => {
-      setWsConnected(true); retriesRef.current = 0
+      setWsConnected(true); wsConnectedRef.current = true; retriesRef.current = 0
       wsRef.current!.send(JSON.stringify({action:'subscribe',channels:['tasks','system','alerts']}))
     }
 
@@ -44,16 +45,16 @@ export default function ObserverChat() {
     }
 
     wsRef.current.onclose = () => {
-      setWsConnected(false)
+      setWsConnected(false); wsConnectedRef.current = false
       if (retriesRef.current < 5) { retriesRef.current++; setTimeout(connectWS, 3000) }
     }
 
-    wsRef.current.onerror = () => { setWsConnected(false) }
+    wsRef.current.onerror = () => { setWsConnected(false); wsConnectedRef.current = false }
   }, [])
 
   // SSE fallback — only processes observer_answer when WS is down
   const handleSSE = useCallback((e: MessageEvent) => {
-    if (wsConnected) return // WS active, skip SSE
+    if (wsConnectedRef.current) return // WS active, skip SSE (ref avoids stale closure)
     try {
       const d = JSON.parse(e.data)
       if (d.kind !== 'observer_answer') return
@@ -64,13 +65,13 @@ export default function ObserverChat() {
         setLoading(false)
       }
     } catch {}
-  }, [wsConnected])
+  }, []) // ponytail: refs are stable, no deps needed
 
   useEffect(() => {
     connectWS()
     const es = new EventSource('/api/events')
     es.onmessage = handleSSE
-    return () => { es.close(); wsRef.current?.close() }
+    return () => { es.close(); wsRef.current?.close(); if (timeoutRef.current != null) { clearTimeout(timeoutRef.current); timeoutRef.current = null } }
   }, [])
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs])

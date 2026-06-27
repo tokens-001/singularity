@@ -1,4 +1,4 @@
-import { Outlet, NavLink, Link, useLocation } from 'react-router-dom'
+import { Outlet, NavLink, useLocation } from 'react-router-dom'
 import { useAppStore } from '../stores/app'
 import { LayoutDashboard, ListTodo, MessageSquare, Bot, FolderKanban, Cpu, Settings2, Activity, PanelLeftClose, PanelLeft, Wrench } from 'lucide-react'
 
