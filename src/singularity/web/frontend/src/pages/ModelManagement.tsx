@@ -7,6 +7,7 @@ export default function ModelManagement() {
   const [apiStore, setApiStore] = useState<any[]>([])
   const [scanResults, setScanResults] = useState<any>(null)
   const [scanning, setScanning] = useState('')
+  const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set())
   const [tierFilter, setTierFilter] = useState('')
   const [showAdd, setShowAdd] = useState(false)
   const [addForm, setAddForm] = useState<any>({ id: '', provider: '', tier: '', context_window: '', cost_1k_input: '', cost_1k_output: '' })
@@ -22,12 +23,21 @@ export default function ModelManagement() {
     try {
       const result = await api.scanApiStore(apiId)
       setScanResults(Object.assign({ apiId }, result))
+      setSelectedModels(new Set())
     } catch (e) { setScanResults({ apiId, error: String(e) }) }
     setScanning('')
   }
 
-  const handleImport = async (modelsToImport: any[]) => {
-    await api.importModels(modelsToImport)
+  const toggleModel = (modelId: string) => {
+    const next = new Set(selectedModels)
+    if (next.has(modelId)) { next.delete(modelId) } else { next.add(modelId) }
+    setSelectedModels(next)
+  }
+
+  const handleImport = async () => {
+    const toImport = (scanResults?.models||[]).filter((m:any)=>selectedModels.has(m.id))
+    if (toImport.length === 0) return
+    await api.importModels(toImport)
     setScanResults(null); fetch()
   }
 
@@ -90,15 +100,22 @@ export default function ModelManagement() {
                 : <>{scanResults.provider} — 发现 {scanResults.total} 个模型</>}
             </span>
             <div style={{display:'flex',gap:6}}>
-              {scanResults.models && <button onClick={()=>handleImport(scanResults.models.map((m:any)=>(Object.assign({},m,{provider:scanResults.provider}))))} style={{background:'var(--accent-green)',color:'#fff',border:'none',borderRadius:4,padding:'4px 10px',cursor:'pointer',fontSize:11,display:'flex',alignItems:'center',gap:3}}><Download size={12}/> 全部导入</button>}
+              <button onClick={()=>{const all=new Set<string>((scanResults.models||[]).map((m:any)=>m.id));setSelectedModels(all)}} style={{background:'var(--bg-tertiary)',color:'var(--text-secondary)',border:'1px solid var(--border)',borderRadius:4,padding:'4px 10px',cursor:'pointer',fontSize:11}}>全选</button>
+              {scanResults.models && <button onClick={handleImport} disabled={selectedModels.size===0} style={{background:selectedModels.size>0?'var(--accent-green)':'var(--bg-tertiary)',color:selectedModels.size>0?'#fff':'var(--text-muted)',border:'none',borderRadius:4,padding:'4px 10px',cursor:'pointer',fontSize:11,display:'flex',alignItems:'center',gap:3}}><Download size={12}/> 导入选中 ({selectedModels.size})</button>}
               <button onClick={()=>setScanResults(null)} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:16}}>✕</button>
             </div>
           </div>
           {scanResults.models && (
             <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
               {scanResults.models.map((m:any)=>(
-                <span key={m.id} style={{background:'var(--bg-tertiary)',padding:'3px 8px',borderRadius:3,fontSize:11,fontFamily:'var(--font-mono)',color:'var(--text-primary)'}}>
-                  {m.id} {m.display && <span style={{color:'var(--text-muted)'}}>({m.display})</span>}
+                <span key={m.id} onClick={()=>toggleModel(m.id)} style={{
+                  background:selectedModels.has(m.id)?'var(--accent)':'var(--bg-tertiary)',
+                  color:selectedModels.has(m.id)?'#fff':'var(--text-primary)',
+                  padding:'3px 8px',borderRadius:3,fontSize:11,fontFamily:'var(--font-mono)',cursor:'pointer',
+                  border:selectedModels.has(m.id)?'1px solid var(--accent)':'1px solid transparent',
+                }}>
+                  {selectedModels.has(m.id)?'✓ ':''}{m.id}
+                  {m.display && <span style={{color:selectedModels.has(m.id)?'rgba(255,255,255,0.7)':'var(--text-muted)',marginLeft:4}}>({m.display})</span>}
                 </span>
               ))}
             </div>

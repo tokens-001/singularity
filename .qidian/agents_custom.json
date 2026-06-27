@@ -108,7 +108,8 @@
       "max_turns": 5,
       "default": true,
       "roles": [
-        "architecture"
+        "architecture",
+        "ai_architect"
       ],
       "sandbox": "worktree"
     },
