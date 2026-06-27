@@ -82,7 +82,12 @@
       "max_turns": 8,
       "default": false,
       "roles": [
-        "builder"
+        "builder",
+        "architect",
+        "ai_architect",
+        "qa_engineer",
+        "security_auditor",
+        "reviewer"
       ],
       "sandbox": "worktree"
     }
@@ -96,9 +101,7 @@
       "max_turns": 5,
       "default": true,
       "roles": [
-        "architecture",
-        "ai_architect",
-        "architect"
+        "architecture"
       ],
       "sandbox": "worktree"
     },
@@ -122,7 +125,12 @@
       "max_turns": 8,
       "default": false,
       "roles": [
-        "architecture"
+        "architecture",
+        "architect",
+        "ai_architect",
+        "qa_engineer",
+        "security_auditor",
+        "reviewer"
       ],
       "sandbox": "worktree"
     },
