@@ -99,7 +99,8 @@
     "reasoning": false,
     "max_turns": 5,
     "strengths": [],
-    "notes": ""
+    "notes": "",
+    "tier": "E"
   },
   "qwen3.7-plus": {
     "id": "qwen3.7-plus",
@@ -114,7 +115,8 @@
     "reasoning": false,
     "max_turns": 5,
     "strengths": [],
-    "notes": ""
+    "notes": "",
+    "tier": "E"
   },
   "claude-opus-4-8": {
     "id": "claude-opus-4-8",
@@ -129,7 +131,8 @@
     "reasoning": false,
     "max_turns": 5,
     "strengths": [],
-    "notes": ""
+    "notes": "",
+    "tier": "D"
   },
   "kimi-k2.7-code-highspeed": {
     "id": "kimi-k2.7-code-highspeed",

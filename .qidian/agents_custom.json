@@ -97,7 +97,8 @@
       "default": true,
       "roles": [
         "architecture",
-        "ai_architect"
+        "ai_architect",
+        "architect"
       ],
       "sandbox": "worktree"
     },

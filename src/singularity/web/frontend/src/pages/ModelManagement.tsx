@@ -11,7 +11,7 @@ export default function ModelManagement() {
   const [providerFilter, setProviderFilter] = useState('')
   const [tierFilter, setTierFilter] = useState('')
   const [showAdd, setShowAdd] = useState(false)
-  const [addForm, setAddForm] = useState<any>({ id: '', provider: '', tier: '', context_window: '', cost_1k_input: '', cost_1k_output: '' })
+  const [addForm, setAddForm] = useState<any>({ id: '', provider: '', tiers: [], context_window: '', cost_1k_input: '', cost_1k_output: '' })
 
   const fetch = async () => {
     const [m, a] = await Promise.all([api.models(), api.apiStore()])
@@ -46,7 +46,7 @@ export default function ModelManagement() {
     await api.deleteModel(id); fetch()
   }
 
-  const filtered = tierFilter ? models.filter((m:any) => m.tier === tierFilter) : models
+  const filtered = tierFilter ? models.filter((m:any) => (m.tiers||[]).includes(tierFilter)) : models
   const tiers = ['D', 'E+', 'E']
 
   return (
@@ -67,7 +67,9 @@ export default function ModelManagement() {
         <div style={{background:'var(--bg-secondary)',border:'1px solid var(--accent)',borderRadius:'var(--radius)',padding:'10px 14px',marginBottom:14,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
           <input placeholder="模型 ID" value={addForm.id} onChange={e=>setAddForm({...addForm,id:e.target.value})} style={{...inp,width:160}}/>
           <input placeholder="Provider" value={addForm.provider} onChange={e=>setAddForm({...addForm,provider:e.target.value})} style={{...inp,width:100}}/>
-          <select value={addForm.tier} onChange={e=>setAddForm({...addForm,tier:e.target.value})} style={{...inp,width:80}}><option value="">层级</option>{tiers.map(t=><option key={t}>{t}</option>)}</select>
+          <div style={{display:'flex',gap:4,alignItems:'center'}}>
+            {tiers.map(t=><label key={t} style={{fontSize:10,display:'flex',alignItems:'center',gap:2}}><input type="checkbox" checked={(addForm.tiers||[]).includes(t)} onChange={e=>{const nt=e.target.checked?[...(addForm.tiers||[]),t]:(addForm.tiers||[]).filter((x:string)=>x!==t);setAddForm({...addForm,tiers:nt})}}/>{t}</label>)}
+          </div>
           <input placeholder="上下文窗口" type="number" value={addForm.context_window} onChange={e=>setAddForm({...addForm,context_window:e.target.value})} style={{...inp,width:100}}/>
           <input placeholder="输入$/1k" type="number" step="0.001" value={addForm.cost_1k_input} onChange={e=>setAddForm({...addForm,cost_1k_input:e.target.value})} style={{...inp,width:90}}/>
           <input placeholder="输出$/1k" type="number" step="0.001" value={addForm.cost_1k_output} onChange={e=>setAddForm({...addForm,cost_1k_output:e.target.value})} style={{...inp,width:90}}/>
@@ -146,7 +148,7 @@ export default function ModelManagement() {
                   <Cpu size={12} color='var(--accent)' style={{display:'inline',marginRight:6,verticalAlign:'middle'}}/>{m.id||m.model}</td>
                 <td style={{padding:'7px 10px',color:'var(--text-secondary)'}}>{m.provider||'-'}</td>
                 <td style={{padding:'7px 10px'}}>
-                  {m.tier ? <span style={{background:'var(--bg-tertiary)',padding:'1px 6px',borderRadius:3,fontSize:10,fontWeight:600,color:m.tier==='D'?'#f0883e':m.tier==='E+'?'#a371f7':'#58a6ff'}}>{m.tier}</span> : '-'}
+                  {m.tiers&&m.tiers.length>0 ? m.tiers.map((t:string)=><span key={t} style={{background:'var(--bg-tertiary)',padding:'1px 5px',borderRadius:3,fontSize:9,fontWeight:600,color:t==='D'?'#f0883e':t==='E+'?'#a371f7':'#58a6ff',marginRight:2}}>{t}</span>) : '-'}
                 </td>
                 <td style={{padding:'7px 10px',color:'var(--text-secondary)',fontFamily:'var(--font-mono)',fontSize:11}}>{m.context_window ? m.context_window.toLocaleString() : '-'}</td>
                 <td style={{padding:'7px 10px',color:'var(--text-secondary)',fontSize:10}}>{m.cost_1k_input ? <>${m.cost_1k_input} / ${m.cost_1k_output}</> : '-'}</td>
