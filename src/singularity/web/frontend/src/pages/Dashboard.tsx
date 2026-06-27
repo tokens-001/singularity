@@ -41,9 +41,9 @@ export default function Dashboard() {
         {[
           {label:'总任务',v:Object.values(counts).reduce((a:any,b:any)=>a+b,0),icon:Activity,color:'var(--text-primary)'},
           {label:'运行中',v:counts.running||0,icon:Play,color:'var(--accent)'},
-          {label:'完成',v:counts.done||0,icon:CheckCircle,color:'var(--accent-green)'},
+          {label:'已完成',v:counts.done||0,icon:CheckCircle,color:'var(--accent-green)'},
           {label:'失败',v:counts.failed||0,icon:AlertCircle,color:'var(--accent-red)'},
-          {label:'阻塞',v:counts.blocked||0,icon:Clock,color:'var(--accent-yellow)'},
+          {label:'已暂停',v:counts.blocked||0,icon:Clock,color:'var(--accent-yellow)'},
           {label:'Agent',v:totalAgents,icon:Zap,color:'var(--accent-purple)'},
         ].map(s=>(
           <div key={s.label} style={{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:'12px 14px'}}>

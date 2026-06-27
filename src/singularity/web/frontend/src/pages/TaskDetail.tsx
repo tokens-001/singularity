@@ -36,9 +36,9 @@ export default function TaskDetail() {
 
       {/* Actions */}
       <div style={{display:'flex',gap:6,marginBottom:12}}>
-        {task.status === 'failed' && <button onClick={()=>api.retryTask(task.id).then(()=>location.reload())} style={btnStyle('var(--accent)')}><RotateCcw size={14}/> 重试</button>}
-        {['pending','running'].includes(task.status) && <button onClick={()=>api.cancelTask(task.id).then(()=>location.reload())} style={btnStyle('var(--accent-red)')}><XCircle size={14}/> 取消</button>}
-        {task.status === 'running' && <button onClick={()=>api.holdTask(task.id).then(()=>location.reload())} style={btnStyle('var(--accent-yellow)')}>暂停</button>}
+        {task.status === '失败' && <button onClick={()=>api.retryTask(task.id).then(()=>location.reload())} style={btnStyle('var(--accent)')}><RotateCcw size={14}/> 重试</button>}
+        {['待处理','运行中'].includes(task.status) && <button onClick={()=>api.cancelTask(task.id).then(()=>location.reload())} style={btnStyle('var(--accent-red)')}><XCircle size={14}/> 取消</button>}
+        {task.status === '运行中' && <button onClick={()=>api.holdTask(task.id).then(()=>location.reload())} style={btnStyle('var(--accent-yellow)')}>暂停</button>}
         <button onClick={()=>api.deleteTask(task.id).then(()=>nav('/tasks'))} style={btnStyle('var(--text-muted)')}>删除</button>
       </div>
 

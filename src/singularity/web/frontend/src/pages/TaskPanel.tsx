@@ -4,12 +4,15 @@ import { api, Task } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
 import { Play, Square, RotateCcw, XCircle, Plus, RefreshCw, ChevronRight, CheckCircle, Pause } from 'lucide-react'
 
+const STATUS_CN: Record<string, string> = {
+  pending: '待处理', running: '运行中', done: '已完成', failed: '失败', cancelled: '已取消', blocked: '已暂停', needs_approval: '待审批',
+}
+const LEVEL_TAGS: Record<string, string> = { E: '#58a6ff', 'E+': '#a371f7', D: '#f0883e' }
 const STATUS_COLORS: Record<string, string> = {
   pending: 'var(--text-muted)', running: 'var(--accent)',
   done: 'var(--accent-green)', failed: 'var(--accent-red)', cancelled: 'var(--accent-yellow)',
   blocked: '#f0883e', needs_approval: 'var(--accent-purple)',
 }
-const LEVEL_TAGS: Record<string, string> = { E: '#58a6ff', 'E+': '#a371f7', D: '#f0883e' }
 
 export default function TaskPanel() {
   const nav = useNavigate()
@@ -89,8 +92,8 @@ export default function TaskPanel() {
       {/* Filters */}
       <div style={{display:'flex',gap:8,marginBottom:10}}>
         <button onClick={fetchTasks} style={{background:'var(--bg-tertiary)',border:'1px solid var(--border)',borderRadius:4,padding:'4px 8px',cursor:'pointer',color:'var(--text-secondary)'}}><RefreshCw size={14}/></button>
-        {['','pending','running','done','failed','cancelled','blocked'].map(s=>(
-          <button key={s} onClick={()=>setStatusFilter(s)} style={{background:statusFilter===s?'var(--accent)':'var(--bg-tertiary)',color:statusFilter===s?'#fff':'var(--text-secondary)',border:'1px solid var(--border)',borderRadius:4,padding:'3px 8px',cursor:'pointer',fontSize:11}}>{s||'全部'}</button>
+        {[{v:'',l:'全部'},{v:'pending',l:'待处理'},{v:'running',l:'运行中'},{v:'done',l:'已完成'},{v:'failed',l:'失败'},{v:'cancelled',l:'已取消'},{v:'blocked',l:'已暂停'}].map(({v,l})=>(
+          <button key={v} onClick={()=>setStatusFilter(v)} style={{background:statusFilter===v?"var(--accent)":"var(--bg-tertiary)",color:statusFilter===v?"#fff":"var(--text-secondary)",border:"1px solid var(--border)",borderRadius:4,padding:"3px 8px",cursor:"pointer",fontSize:11}}>{l}</button>
         ))}
       </div>
 
@@ -101,7 +104,7 @@ export default function TaskPanel() {
         {!loading && filtered.length > 0 && (
           <table style={{width:'100%',borderCollapse:'collapse'}}>
             <thead><tr style={{borderBottom:'1px solid var(--border)',fontSize:11,color:'var(--text-muted)',textAlign:'left'}}>
-              <th style={{padding:'7px 10px',width:80}}>ID</th><th style={{padding:'7px 10px'}}>描述</th><th style={{padding:'7px 10px',width:60}}>层级</th><th style={{padding:'7px 10px',width:80}}>状态</th><th style={{padding:'7px 10px',width:100}}>操作</th>
+              <th style={{padding:"7px 10px"}}>描述</th><th style={{padding:'7px 10px',width:60}}>层级</th><th style={{padding:'7px 10px',width:80}}>状态</th><th style={{padding:'7px 10px',width:100}}>操作</th>
             </tr></thead>
             <tbody>
               {filtered.slice(0, 50).map(t=>(
@@ -110,7 +113,7 @@ export default function TaskPanel() {
                   <td style={{padding:'7px 10px',fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text-muted)'}}>{t.id.slice(0,8)}</td>
                   <td style={{padding:'7px 10px',maxWidth:400,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.description}</td>
                   <td style={{padding:'7px 10px'}}><span style={{background:(LEVEL_TAGS[t.route_level]||'#666')+'22',color:LEVEL_TAGS[t.route_level]||'#666',padding:'1px 5px',borderRadius:3,fontSize:10,fontWeight:600}}>{t.route_level}</span></td>
-                  <td style={{padding:'7px 10px'}}><span style={{display:'flex',alignItems:'center',gap:4,color:STATUS_COLORS[t.status]||'var(--text-secondary)'}}><span style={{width:6,height:6,borderRadius:'50%',background:STATUS_COLORS[t.status]||'var(--text-secondary)',display:'inline-block'}}/>{t.status}</span></td>
+                  <td style={{padding:'7px 10px'}}><span style={{display:'flex',alignItems:'center',gap:4,color:STATUS_COLORS[t.status]||'var(--text-secondary)'}}><span style={{width:6,height:6,borderRadius:'50%',background:STATUS_COLORS[t.status]||'var(--text-secondary)',display:'inline-block'}}/>{STATUS_CN[t.status]||t.status}</span></td>
                   <td style={{padding:'7px 10px'}} onClick={e=>e.stopPropagation()}>
                     <div style={{display:'flex',gap:2}}>
                       {actions.filter(a=>a.show(t)).map(a=>(<button key={a.label} onClick={()=>a.fn(t)} title={a.label} style={{background:'transparent',border:'none',color:'var(--text-secondary)',cursor:'pointer',padding:2}}><a.icon size={14}/></button>))}
