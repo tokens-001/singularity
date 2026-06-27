@@ -8,6 +8,7 @@ import ProjectPipeline from './pages/ProjectPipeline'
 import AgentDashboard from './pages/AgentDashboard'
 import ModelManagement from './pages/ModelManagement'
 import Settings from './pages/Settings'
+import Monitor from './pages/Monitor'
 import Dashboard from './pages/Dashboard'
 
 export default function App() {
@@ -15,6 +16,7 @@ export default function App() {
     <Routes>
       <Route element={<AppLayout />}>
         <Route path="/" element={<Dashboard />} />
+        <Route path="/monitor" element={<Monitor />} />
         <Route path="/tasks" element={<TaskPanel />} />
         <Route path="/tasks/:id" element={<TaskDetail />} />
         <Route path="/projects" element={<ProjectList />} />
