@@ -33,7 +33,7 @@ export const api = {
   rollbackTask: (id: string) => request(`/api/tasks/${id}/rollback`, { method: 'POST' }),
   approveTask: (id: string) => request(`/api/tasks/${id}/approval`, { method: 'POST' }),
 
-  projects: () => request<any[]>('/api/projects'),
+  projects: async () => { const d = await request<any>('/api/projects'); return (d?.projects || d) as any[] },
   project: (id: string) => request<any>(`/api/projects/${id}`),
   createProject: (data: any) => request('/api/projects', { method: 'POST', body: JSON.stringify(data) }),
   runPhase: (id: string) => request(`/api/projects/${id}/run-phase`, { method: 'POST' }),
@@ -48,10 +48,10 @@ export const api = {
   deleteAgent: (level: string, model: string) =>
     request(`/api/agents/${level}/${model}`, { method: 'DELETE' }),
 
-  models: () => request<any[]>('/api/models'),
+  models: async () => { const d = await request<any>('/api/models'); return Object.values(d || {}) as any[] },
 
-  mcpServers: () => request<any[]>('/api/mcp/servers'),
-  mcpTools: () => request<any[]>('/api/mcp/tools'),
+  mcpServers: async () => { const d = await request<any>('/api/mcp/servers'); return (d?.servers || d || []) as any[] },
+  mcpTools: async () => { const d = await request<any>('/api/mcp/tools'); return (d?.tools || d || []) as any[] },
 
   startLoop: () => request('/api/loop/start', { method: 'POST' }),
   stopLoop: () => request('/api/loop/stop', { method: 'POST' }),
