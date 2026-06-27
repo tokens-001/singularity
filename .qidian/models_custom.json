@@ -125,10 +125,27 @@
     ],
     "speed": "slow",
     "cost": "premium",
-    "rating": false,
-    "reasoning": 5,
+    "rating": "",
+    "reasoning": false,
     "max_turns": 5,
     "strengths": [],
     "notes": ""
+  },
+  "kimi-k2.7-code-highspeed": {
+    "id": "kimi-k2.7-code-highspeed",
+    "provider": "kimi",
+    "display": "Kimi K2.7 Code HS",
+    "tiers": [],
+    "speed": "fast",
+    "cost": "standard",
+    "rating": "S",
+    "reasoning": false,
+    "max_turns": 8,
+    "strengths": [
+      "快速编码",
+      "简单任务",
+      "高吞吐"
+    ],
+    "notes": "K2.7高速版。~180 tok/s。适合E层批量快速执行。"
   }
 }

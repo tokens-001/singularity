@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useLocation } from 'react-router-dom'
 import { useAppStore } from '../stores/app'
-import { LayoutDashboard, ListTodo, MessageSquare, Bot, FolderKanban, Cpu, Server, Settings2, PanelLeftClose, PanelLeft } from 'lucide-react'
+import { LayoutDashboard, ListTodo, MessageSquare, Bot, FolderKanban, Cpu, PanelLeftClose, PanelLeft } from 'lucide-react'
 
 const NAV = [
   { to: '/', icon: LayoutDashboard, label: '总览' },
@@ -9,8 +9,6 @@ const NAV = [
   { to: '/observer', icon: MessageSquare, label: '对话' },
   { to: '/agents', icon: Bot, label: '智能体' },
   { to: '/models', icon: Cpu, label: '模型' },
-  { to: '/mcp', icon: Server, label: 'MCP' },
-  { to: '/settings', icon: Settings2, label: '配置' },
 ]
 
 export default function AppLayout() {
@@ -20,7 +18,7 @@ export default function AppLayout() {
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
       <aside style={{
-        width: sidebarCollapsed ? 48 : 180, transition: 'width 0.15s',
+        width: sidebarCollapsed ? 48 : 160, transition: 'width 0.15s',
         background: 'var(--bg-secondary)', borderRight: '1px solid var(--border)',
         display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0,
       }}>
@@ -46,6 +44,9 @@ export default function AppLayout() {
             </NavLink>
           ))}
         </nav>
+        <div style={{ padding: '6px 10px', borderTop: '1px solid var(--border)', fontSize: 10, color: 'var(--text-muted)' }}>
+          <a href="/settings" style={{ color: 'var(--text-muted)', textDecoration: 'none' }}>配置</a>
+        </div>
       </aside>
       <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <header style={{
