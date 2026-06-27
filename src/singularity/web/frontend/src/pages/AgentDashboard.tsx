@@ -11,7 +11,7 @@ export default function AgentDashboard() {
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<{level:string;model:string}|null>(null)
   const [form, setForm] = useState<any>({level:'E', model:'', type:'openai-agent', entry:'', api_key_env:'', max_turns:5, roles:[], default:false, sandbox:'worktree'})
-  const [selectedSkills, setSelectedSkills] = useState<{level:string;model:string;skills:string[]}|null>(null)
+  const [selectedSkills, setSelectedSkills] = useState<{level:string;model:string;skills:string[];available:string[]}|null>(null)
 
   const fetch = () => { setLoading(true); api.agents().then(setAgents).finally(()=>setLoading(false)) }
   useEffect(() => { fetch() }, [])
@@ -41,8 +41,8 @@ export default function AgentDashboard() {
   const handleSkills = async (level: string, model: string) => {
     try {
       const d = await api.agentSkills(level, model)
-      setSelectedSkills({level, model, skills: d?.skills || d || []})
-    } catch { setSelectedSkills({level, model, skills: []}) }
+      setSelectedSkills({level, model, skills: d.skills || [], available: d.available || []})
+    } catch { setSelectedSkills({level, model, skills: [], available: []}) }
   }
 
   const handleSaveSkills = async () => {
@@ -86,8 +86,14 @@ export default function AgentDashboard() {
       {selectedSkills && (
         <div style={{background:'var(--bg-secondary)',border:'1px solid var(--accent-purple)',borderRadius:'var(--radius)',padding:16,marginBottom:16}}>
           <div style={{fontSize:14,fontWeight:600,marginBottom:8}}>Skills — {selectedSkills.model}</div>
+          <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:4}}>已分配:</div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
+            {selectedSkills.skills.length===0 && <span style={{fontSize:11,color:'var(--text-muted)'}}>无</span>}
+            {selectedSkills.skills.map((s:string)=><span key={s} onClick={()=>setSelectedSkills({...selectedSkills,skills:selectedSkills.skills.filter((x:string)=>x!==s)})} style={{background:'var(--accent-purple)',color:'#fff',padding:'4px 8px',borderRadius:4,fontSize:11,cursor:'pointer'}}>{s} ✕</span>)}
+          </div>
+          <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:4}}>可用 (点击添加):</div>
           <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-            {selectedSkills.skills.map((s:string)=><span key={s} style={{background:'var(--bg-tertiary)',padding:'4px 8px',borderRadius:4,fontSize:11,color:'var(--accent-purple)'}}>{s}</span>)}
+            {(selectedSkills.available||[]).filter((s:string)=>!selectedSkills.skills.includes(s)).map((s:string)=><span key={s} onClick={()=>setSelectedSkills({...selectedSkills,skills:[...selectedSkills.skills,s]})} style={{background:'var(--bg-tertiary)',padding:'4px 8px',borderRadius:4,fontSize:11,cursor:'pointer',color:'var(--text-secondary)'}}>+ {s}</span>)}
           </div>
           <div style={{display:'flex',gap:8,marginTop:10}}>
             <button onClick={handleSaveSkills} style={btn('var(--accent-green)')}>保存</button>

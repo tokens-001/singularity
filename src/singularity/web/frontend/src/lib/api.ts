@@ -54,7 +54,7 @@ export const api = {
   skills: async () => { const d = await request<any>('/api/skills'); return (d?.skills||d||[]) as any[] },
   addSkill: (data: any) => request('/api/skills',{method:'POST',body:JSON.stringify(data)}),
   deleteSkill: (name: string) => request(`/api/skills/${name}`,{method:'DELETE'}),
-  agentSkills: (level: string, model: string) => request<any>(`/api/agents/${level}/${model}/skills`),
+  agentSkills: async (level: string, model: string) => { const d = await request<any>(`/api/agents/${level}/${model}/skills`); return { skills: d?.skill_names || d?.skills || [], available: d?.available || [] } },
   updateAgentSkills: (level: string, model: string, skills: string[]) =>
     request(`/api/agents/${level}/${model}/skills`,{method:'PUT',body:JSON.stringify({skills})}),
 
