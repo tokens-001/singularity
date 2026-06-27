@@ -38,14 +38,7 @@ from singularity.scheduler.goal_loop import GoalLoop
 
 _GOAL_RE = _re.compile(r'^\[Goal\]\s*(.+?)\n', _re.ASCII)
 
-# ── 裁判 + 画像 ──────────────────────────────────────────
-from singularity.scheduler.execution_judge import (
-    judge, should_retry, build_reflexion_feedback,
-)
-from singularity.scheduler.model_profile import ProfileStore as _ProfileStore
-from singularity.scheduler.task_templates import (
-    get as _get_template, guess_template as _guess_template,
-)
+# ── 画像 ──────────────────────────────────────────
 from singularity.scheduler._token_budget import record_tokens, get_usage_stats
 from singularity.scheduler._profiler import record_perf, get_perf_stats
 
@@ -70,30 +63,6 @@ from singularity.scheduler.tracker import TaskStatus
 
 # ── 单例 ─────────────────────────────────────────────────
 
-_profile_store: _ProfileStore | None = None
-
-
-def _get_profile() -> _ProfileStore:
-    global _profile_store
-    if _profile_store is None:
-        _profile_store = _ProfileStore(config.QIDIAN_DIR / "model_profile.json")
-        _profile_store.load()
-    return _profile_store
-
-
-_judge_monitor = None
-
-
-def _get_judge_monitor():
-    """返回 JudgeMonitorStore 单例（lazy import 避免循环依赖）。"""
-    global _judge_monitor
-    if _judge_monitor is None:
-        from . import judge_monitor as jm
-        _judge_monitor = jm.JudgeMonitorStore(config.QIDIAN_DIR / "judge_monitor.json")
-        _judge_monitor.load()
-    return _judge_monitor
-
-
 def _reorder_agents_by_rank(agents_list: list, ranked_models: list[str]) -> list:
     """按画像排名重排 agent 列表：排名靠前的模型优先。"""
     rank_map = {m: i for i, m in enumerate(ranked_models)}
@@ -103,83 +72,15 @@ def _reorder_agents_by_rank(agents_list: list, ranked_models: list[str]) -> list
     )
 
 
-def _judge_and_profile(task, batch: BatchOutput) -> None:
-    """执行裁判钩子：判分 + 画像更新 + Reflexion 重试。"""
-    disp = batch.dispatch_result
-    if disp is None or disp.executor_result is None:
-        return
-
-    output = disp.executor_result.raw_output or ""
-    agent_cfg = disp.agent_cfg or {}
-
-    # 1. 模板推断 + 注入（下次路由时参考）
-    task_type = _guess_template(task.description)
-
-    # 2. 裁判判分
-    verdict = judge(task.description, output, task_type)
-
-    model = agent_cfg.get("model", "unknown")
-
-    # 2b. Judge Monitor: 记录裁判自身表现
-    try:
-        _jm = _get_judge_monitor()
-        _jm.record(task_type=task_type, model=model, verdict=verdict,
-                   template_id=task_type)
-    except Exception as e:
-        witness.heartbeat('orch', f'warn:{e}')
-
-    # 3. 更新画像
-    store = _get_profile()
-    elapsed = getattr(disp.executor_result, "elapsed", 0) or 0
-    tokens = getattr(disp.executor_result, "tokens", 0) or 0
-    store.record(model, task_type, verdict.pass_, elapsed, tokens, verdict.failure_mode,
-                 template_id=task_type)
-
-    # 4. 失败 + 可重试 → Reflexion 注入（写到 batch，让上层重试）
-    if not verdict.pass_ and should_retry(verdict, getattr(task, "retry_count", 0)):
-        feedback = build_reflexion_feedback(verdict)
-        batch.term_reason = f"judge_fail: {verdict.reason}"
-        batch.judge_verdict = verdict
-        batch.reflexion_feedback = feedback
-        # 改判：validator 说 pass 但 judge 说 fail → 覆盖
-        if batch.validation.action == "pass":
-            batch.validation = batch.validation.__class__(
-                verdict="fail", action="abort",
-                unverified=[verdict.reason],
-            )
-    else:
-        batch.judge_verdict = verdict
-
-    # 5. 持久化画像
-    try:
-        store.save()
-    except Exception as e:
-        witness.heartbeat('orch', f'warn:{e}')
-    # 5b. 持久化 judge monitor
-    try:
-        _jm = _get_judge_monitor()
-        _jm.save()
-    except Exception as e:
-        witness.heartbeat('orch', f'warn:{e}')
-
-    # 6. 交接记录
-    try:
-        from . import handoff as _hf
-        h = _hf.create_handoff(task, batch)
-        if h and getattr(task, "project_id", ""):
-            _hf.append_to_project(task.project_id, h)
-    except Exception as e:
-        witness.heartbeat('orch', f'warn:{e}')
-
 
 # ═══════════════════════════════════════════════════════════════
 # TaskRunner
 # ═══════════════════════════════════════════════════════════════
 
 class TaskRunner:
-    """单任务生命周期 (架构 #1.1)。
+    """单任务生命周期。
 
-    封装: route → pre_search → execute → judge → profile → trace → QA → chancellor。
+    封装: route → pre_search → execute → trace → QA。
     orchestrator 只需 import 这一个类。
     """
 
@@ -244,13 +145,9 @@ class TaskRunner:
         else:
             d_agents = effective_agents.get("D", [])
             use_committee = route.level == "D" and len(d_agents) >= 2
-            use_fusion = route.task_type == "fusion"
+            # ponytail: fusion 执行层已移除，仅保留 D 层委员会（多模型出方案）
             if use_committee:
                 batch = _run_committee(task, ctx, effective_agents, d_agents)
-            elif use_fusion:
-                from ._exec import _run_fusion
-                tier = "super" if route.level == "D" else ("triple" if route.level == "E+" else "dual")
-                batch = _run_fusion(task, route.level, effective_agents, ctx=ctx, tier=tier)
             else:
                 batch = _run_with_retry(task, ctx, effective_agents)
         batch.pre_search_skipped = pre.skipped
@@ -264,8 +161,7 @@ class TaskRunner:
         return batch, route, snap
 
     def finalize(self, task, batch, route, snap, results: list) -> str:
-        """后处理: 裁判/写终态/trace/QA gate/Chancellor/escalation。返回 reason。"""
-        _judge_and_profile(task, batch)
+        """后处理: 写终态/trace/QA gate/Chancellor/escalation。返回 reason。"""
         validation = batch.validation
         term_reason = batch.term_reason
         disp_result = batch.dispatch_result

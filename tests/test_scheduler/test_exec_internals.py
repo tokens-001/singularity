@@ -12,8 +12,6 @@ from singularity.scheduler._exec import (
     _build_effective_task,
     _check_cancelled,
     _decide_cascade,
-    _extract_findings,
-    _needs_human_confirm,
 )
 from singularity.scheduler._types import RunContext, BatchOutput
 
@@ -210,55 +208,6 @@ class TestCheckCancelled:
         assert result.term_reason == "cancelled_by_user"
         assert result.ok is False
         assert not (tmp / "will_cancel.json").exists(), "取消文件应被删除"
-
-
-# ═══════════════════════════════════════════════════════════════
-# _extract_findings — 从文本提取发现列表
-# ═══════════════════════════════════════════════════════════════
-
-class TestExtractFindings:
-    def test_dash_list(self):
-        text = "- 发现1\n- 发现2\n普通文本\n- 发现3"
-        assert _extract_findings(text) == ["发现1", "发现2", "发现3"]
-
-    def test_bullet_list(self):
-        text = "• 问题A\n• 问题B"
-        assert _extract_findings(text) == ["问题A", "问题B"]
-
-    def test_numbered_list(self):
-        text = "1. 第一点\n2. 第二点"
-        assert _extract_findings(text) == ["第一点", "第二点"]
-
-    def test_empty(self):
-        assert _extract_findings("") == []
-        assert _extract_findings("没有列表项的普通文本。") == []
-
-    def test_capped_at_10(self):
-        text = "\n".join(f"- 发现{i}" for i in range(20))
-        assert len(_extract_findings(text)) == 10
-
-
-# ═══════════════════════════════════════════════════════════════
-# _needs_human_confirm — 安全/架构关键词检测
-# ═══════════════════════════════════════════════════════════════
-
-class TestNeedsHumanConfirm:
-    def test_safety_keyword_triggers(self):
-        assert _needs_human_confirm("删除数据库操作", "") is True
-        assert _needs_human_confirm("", "SQL注入漏洞") is True
-        assert _needs_human_confirm("sudo rm -rf /", "") is True
-
-    def test_arch_keyword_triggers(self):
-        assert _needs_human_confirm("数据库迁移方案", "") is True
-        assert _needs_human_confirm("", "API破坏性变更") is True
-
-    def test_normal_task_no_trigger(self):
-        assert _needs_human_confirm("添加日志输出", "优化了性能瓶颈") is False
-        assert _needs_human_confirm("修复 CSS 样式", "") is False
-
-    def test_case_insensitive(self):
-        assert _needs_human_confirm("修复 xss 漏洞", "") is True
-        assert _needs_human_confirm("fix sql注入 here", "") is True
 
 
 # ═══════════════════════════════════════════════════════════════

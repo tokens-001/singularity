@@ -534,28 +534,6 @@ def project_auto(project_id: str) -> tuple[dict, int]:
     return {"ok": True, "phase": next_phase.value if hasattr(next_phase, 'value') else str(next_phase)}, 200
 
 
-def project_autopilot_start(project_id: str, push_event=None) -> tuple[dict, int]:
-    """POST /api/projects/<id>/autopilot — 启动自驾模式。"""
-    from . import project as proj_mod
-    from . import conductor as _conductor
-    proj = proj_mod.load(project_id)
-    if proj is None:
-        return {"error": "项目不存在"}, 404
-    result = _conductor.start_autopilot(project_id)
-    if push_event:
-        push_event("system", f"[{project_id[:8]}] autopilot 已启动")
-    return {"ok": True, "result": result}, 200
-
-
-def project_autopilot_stop(project_id: str, push_event=None) -> tuple[dict, int]:
-    """DELETE /api/projects/<id>/autopilot"""
-    from . import conductor as _conductor
-    _conductor.stop_autopilot(project_id)
-    if push_event:
-        push_event("system", f"[{project_id[:8]}] autopilot 已停止")
-    return {"ok": True}, 200
-
-
 def project_lineup_get(project_id: str) -> tuple[dict, int]:
     """GET /api/projects/<id>/lineup"""
     from . import project as proj_mod
@@ -940,11 +918,6 @@ def perf_stats():
 
 def dag_metrics():
     return tracker.dag_metrics(), 200
-
-
-def judge_monitor_status():
-    from .judge_monitor import JudgeMonitorStore
-    jm = JudgeMonitorStore(config.QIDIAN_DIR / "judge_monitor.json"); jm.load(); return jm.get_stats(), 200
 
 
 def model_profile_status():

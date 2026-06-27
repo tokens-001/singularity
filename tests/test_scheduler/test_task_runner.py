@@ -109,9 +109,7 @@ def _setup(monkeypatch, **overrides):
     _o7 = NS()
     _o7.time = lambda: 1782000000.0
     monkeypatch.setattr(tr, "time", _o7)
-    # _run_fusion 在 execute() 内 inline import, 需桩源模块
-    monkeypatch.setattr("singularity.scheduler._exec._run_fusion",
-        lambda t, level, agents, ctx, tier: batch)
+    # ponytail: _run_fusion 已移除，不再需要桩
 
     _pending_sse_events.clear()
 
@@ -292,46 +290,8 @@ class TestTaskRunnerExecute:
 
         assert retry_called == [1]
 
-    def test_fusion_path(self, monkeypatch):
-        """fusion 任务类型 → _run_fusion。"""
-        tr, batch, pre, route, snap = _setup(monkeypatch)
-
-        monkeypatch.setattr(tr.router_mod, "route",
-            lambda d: _make_route_stub(level="E", task_type="fusion"))
-
-        fusion_calls = []
-        monkeypatch.setattr("singularity.scheduler._exec._run_fusion",
-            lambda t, level, agents, ctx, tier: fusion_calls.append(tier) or batch)
-
-        from singularity.scheduler._task_runner import TaskRunner
-        task = _make_task(description="融合分析多个方案")
-        runner = TaskRunner()
-        runner.execute(task, _make_agents())
-
-        assert fusion_calls == ["dual"]  # E层 fusion → dual tier
-
-    def test_fusion_d_level_super_tier(self, monkeypatch):
-        """D 层 fusion → super tier（1个D agent 避免 committee 先触发）。"""
-        tr, batch, pre, route, snap = _setup(monkeypatch)
-
-        monkeypatch.setattr(tr.router_mod, "route",
-            lambda d: _make_route_stub(level="D", task_type="fusion"))
-
-        fusion_calls = []
-        monkeypatch.setattr("singularity.scheduler._exec._run_fusion",
-            lambda t, level, agents, ctx, tier: fusion_calls.append(tier) or batch)
-
-        from singularity.scheduler._task_runner import TaskRunner
-        task = _make_task()
-        runner = TaskRunner()
-        # 只有1个D agent → 不触发 committee, 走 fusion 路径
-        agents = {"D": [{"model": "claude-opus"}]}
-        runner.execute(task, agents)
-
-        assert fusion_calls == ["super"]
-
     def test_default_retry_path(self, monkeypatch):
-        """普通任务非 Goal/委员会/fusion → _run_with_retry。"""
+        """普通任务非 Goal/委员会 → _run_with_retry。"""
         tr, batch, pre, route, snap = _setup(monkeypatch)
 
         retry_calls = []

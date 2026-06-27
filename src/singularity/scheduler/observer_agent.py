@@ -16,7 +16,6 @@ from typing import Any, Callable
 import httpx
 
 from singularity.scheduler import config, tracker, witness
-from singularity.scheduler import judge_monitor
 
 _log = logging.getLogger("observer")
 
@@ -94,13 +93,8 @@ def _tool_list_stalled_tasks(timeout_seconds: float = 600) -> list[str]:
 
 
 def _tool_get_judge_stats() -> dict[str, Any]:
-    store = judge_monitor.JudgeMonitorStore()
-    qidian_dir = getattr(config, "QIDIAN_DIR", None)
-    if qidian_dir:
-        path = qidian_dir / "judge_monitor.json"
-        if path.exists():
-            store.load(path)
-    return store.get_stats()
+    # ponytail: judge_monitor 已移除
+    return {"models": {}, "anomalies": [], "note": "judge_monitor removed"}
 
 
 def _tool_get_recent_events(limit: int = 20) -> list[dict]:
@@ -539,31 +533,7 @@ def _check_anomalies() -> list[dict]:
     except Exception:
         _log.exception("stalled check failed")
 
-    # 裁判异常
-    try:
-        store = judge_monitor.JudgeMonitorStore()
-        qidian_dir = getattr(config, "QIDIAN_DIR", None)
-        if qidian_dir:
-            path = qidian_dir / "judge_monitor.json"
-            if path.exists():
-                store.load(path)
-        stats = store.get_stats()
-        for anomaly in stats.get("anomalies", []):
-            kind = anomaly.get("kind", "")
-            detail = anomaly.get("detail", "")
-            key = f"judge:{kind}:{detail}"
-            with _alert_lock:
-                last = _alert_history.get(key, 0)
-            if now - last > 3600:
-                alerts.append({
-                    "kind": f"judge_anomaly:{kind}",
-                    "message": detail,
-                    "ts": now,
-                })
-                with _alert_lock:
-                    _alert_history[key] = now
-    except Exception:
-        _log.exception("judge anomaly check failed")
+    # ponytail: judge_monitor 已移除，裁判异常检查不再需要
 
     # 心跳文件积压（超过 200 个）
     try:

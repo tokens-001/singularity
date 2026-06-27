@@ -954,14 +954,9 @@ def api_cost():
 
 @app.route("/api/quality/trends")
 def api_quality_trends():
-    from singularity.scheduler.judge_monitor import JudgeMonitorStore
-    jm = JudgeMonitorStore(sched_config.QIDIAN_DIR / "judge_monitor.json")
-    jm.load()
-    stats = jm.get_stats()
-    # 补充模型画像数据
+    # ponytail: judge_monitor 已移除，仅返回模型画像成本数据
     from singularity.scheduler.model_profile import get_cost_summary
-    stats["cost"] = get_cost_summary()
-    return jsonify(stats)
+    return jsonify({"cost": get_cost_summary()})
 
 @app.route("/api/projects/<project_id>/lineage")
 def api_project_lineage(project_id):
@@ -1013,15 +1008,7 @@ def api_project_auto(project_id):
     data, code = _api_handler.project_auto(project_id)
     return jsonify(data), code
 
-@app.route("/api/projects/<project_id>/autopilot", methods=["POST"])
-def api_project_autopilot_start(project_id):
-    data, code = _api_handler.project_autopilot_start(project_id, _push_event)
-    return jsonify(data), code
-
-@app.route("/api/projects/<project_id>/autopilot", methods=["DELETE"])
-def api_project_autopilot_stop(project_id):
-    data, code = _api_handler.project_autopilot_stop(project_id, _push_event)
-    return jsonify(data), code
+# ponytail: autopilot 已移除，人控流程通过 gate confirm API
 
 # ═══════════════════════════════════════════════════════════
 # Observer 智能体聊天 API
@@ -1433,10 +1420,7 @@ def api_sse_events():
     return Response(generate(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-@app.route("/api/judge-monitor")
-def api_judge_monitor():
-    data, code = _api_handler.judge_monitor_status()
-    return jsonify(data), code
+# ponytail: judge-monitor 已移除
 
 @app.route("/api/model-profile")
 def api_model_profile():

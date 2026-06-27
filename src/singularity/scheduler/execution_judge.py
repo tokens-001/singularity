@@ -1,218 +1,29 @@
-"""execution_judge.py — 执行裁判模块
+"""execution_judge.py — Fusion 多模型合成模块
 
-每个 Agent 执行完成后，裁判用便宜的 E 层模型快速判断：
-- 任务是否真的完成了？（对比描述和实际产出）
-- 质量是否可接受？
-不合格的自动打回重试，最多 3 次，每次换不同的模型。
-
-依赖：scheduler 通用 LLM 调用、tracker 状态读写。
+ponytail: AI裁判已移除。仅保留 fuse_outputs() 用于规划阶段多模型并行出方案。
+架构方案阶段可以多个模型各出一份，fuse_outputs 交叉合成一份最优方案。
 """
 
 import fcntl
 import json
 import logging
-from dataclasses import dataclass, field
+import os
 from typing import Optional
 
-from singularity.scheduler import config
+from singularity.scheduler import config, witness
 from singularity.scheduler._io import try_parse_json
 
 _log = logging.getLogger(__name__)
 
 
-@dataclass
-class JudgeVerdict:
-    """裁判判定结果。"""
-    pass_: bool                    # 是否通过
-    score: float = 0.0            # 0-1 质量分
-    reason: str = ""              # 失败原因（注入下一轮 Reflexion）
-    failure_mode: str = ""        # 失败模式分类：tool_loop / empty_output / json_error / semantic_error / context_insufficient / unknown
-    uncertain: bool = False       # 不确定时给 pass=true 但标记 uncertain，宁可放过不冤杀
-
-    def to_dict(self) -> dict:
-        return {
-            "pass": self.pass_, "score": self.score, "reason": self.reason,
-            "failure_mode": self.failure_mode, "uncertain": self.uncertain,
-        }
-
-
-def judge(task_description: str, agent_output: str, task_type: str = "default") -> JudgeVerdict:
-    """裁判入口：对比任务描述和 Agent 产出，返回结构化判定。
-
-    先做低成本预检（空输出、不合法 JSON 等），预检不通过直接返回 fail，
-    省掉一次 LLM 调用。
-    """
-    # ── 预检层：低成本拦截明显失败 ──
-    pre = _pre_check(agent_output)
-    if pre:
-        return pre
-
-    # ── LLM 裁判层 ──
-    return _llm_judge(task_description, agent_output, task_type)
-
-
-def _pre_check(output: str) -> Optional[JudgeVerdict]:
-    """低成本预检：空输出、非法 JSON、tool-loop 残留检测。"""
-    if not output or not output.strip():
-        return JudgeVerdict(
-            pass_=False, score=0.0, reason="空输出",
-            failure_mode="empty_output",
-        )
-
-    # 检测 tool-loop 残留（Agent 输出中包含未完成的工具调用标记）
-    tool_loop_markers = [
-        '{"tool_calls"', '"function_call"', '```json\n{"name":',
-        'I need to read', 'Let me search', 'Let me check the file',
-    ]
-    loop_count = sum(1 for m in tool_loop_markers if m.lower() in output.lower())
-    if loop_count >= 3:
-        return JudgeVerdict(
-            pass_=False, score=0.1, reason=f"检测到 tool-loop 残留({loop_count}处)",
-            failure_mode="tool_loop",
-        )
-
-    # 检测 JSON 格式错误（输出中包含未闭合的括号）
-    if output.strip().startswith("{") or output.strip().startswith("["):
-        try:
-            json.loads(output.strip())
-        except json.JSONDecodeError:
-            return JudgeVerdict(
-                pass_=False, score=0.2, reason="输出 JSON 格式不合法",
-                failure_mode="json_error",
-            )
-
-    return None
-
-
-def _llm_judge(task_desc: str, output: str, task_type: str) -> JudgeVerdict:
-    """调用 E 层模型做语义判断。"""
-    prompt = _build_judge_prompt(task_desc, output, task_type)
-    raw = _call_e_layer(prompt)
-
-    return _parse_verdict(raw)
-
-
-def _build_judge_prompt(task_desc: str, output: str, task_type: str) -> str:
-    """构建裁判 prompt——防偏见：不说'这是 Agent 的输出请打分'，
-    改为'请判断这段代码修改是否完成了以下需求'。"""
-    output_snippet = output[:3000]  # 截断避免 token 浪费
-    return f"""请判断以下代码/文本修改是否完成了所述需求。
-
-【需求描述】
-{task_desc}
-
-【任务类型】{task_type}
-
-【实际产出】
-{output_snippet}
-
-【判断标准】
-- 是否实质性推进了需求？（有实际代码/修改，不是空谈或纯计划）
-- 产出是否包含可用的代码或文本？（不必完美，能跑就行）
-- 如果产出了代码但有瑕疵，仍应判 pass=true，在 reason 中说明瑕疵
-- 只有空输出、纯方案描述、完全不相关时判 pass=false
-- 不确定时标记 uncertain=true 但倾向于 pass=true
-
-【输出格式】只输出 JSON：
-{{"pass": true/false, "score": 0.0-1.0, "reason": "一句话原因", "failure_mode": "semantic_error/context_insufficient/ok", "uncertain": true/false}}"""
-
-
-def _parse_verdict(raw: str) -> JudgeVerdict:
-    """解析 LLM 返回的 JSON verdict。"""
-    if not raw:
-        return JudgeVerdict(pass_=False, score=0.0, reason="裁判未返回结果，安全阻断",
-                            failure_mode="unknown", uncertain=True)
-
-    # 用 _io.try_parse_json 统一提取 JSON
-    result = try_parse_json(raw)
-    if not result.get("parse_error"):
-        return JudgeVerdict(
-            pass_=bool(result.get("pass", True)),
-            score=float(result.get("score", 0.5)),
-            reason=str(result.get("reason", "")),
-            failure_mode=str(result.get("failure_mode", "unknown")),
-            uncertain=bool(result.get("uncertain", False)),
-        )
-
-    return JudgeVerdict(pass_=False, score=0.0, reason="裁判结果解析失败，安全阻断",
-                        failure_mode="unknown", uncertain=True)
-
-
-def _call_e_layer(prompt: str) -> str:
-    """调 E 层最便宜模型。"""
-    import os
-    try:
-        import httpx
-        # 从环境获取第一个可用的 E 层 API
-        for env_var, base_url, model in [
-            ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/chat/completions", "deepseek-chat"),
-            ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-5-turbo"),
-            ("KIMI_API_KEY", "https://api.moonshot.cn/v1/chat/completions", "kimi-k2.7-code"),
-        ]:
-            api_key = os.environ.get(env_var, "")
-            if api_key:
-                with httpx.Client(timeout=httpx.Timeout(30)) as client:
-                    r = client.post(
-                        base_url,
-                        headers={
-                            "Authorization": f"Bearer {api_key}",
-                            "Content-Type": "application/json",
-                        },
-                        json={
-                            "model": model,
-                            "messages": [
-                                {"role": "system", "content": "你是代码审查裁判。只输出要求的 JSON。"},
-                                {"role": "user", "content": prompt},
-                            ],
-                            "max_tokens": 256,
-                            "temperature": 0.1,
-                        },
-                    )
-                    if r.status_code == 200:
-                        data = r.json()
-                        return data["choices"][0]["message"]["content"]
-                    else:
-                        _log.warning(f"Judge LLM {env_var} returned {r.status_code}")
-        return ""
-    except Exception as e:
-        _log.warning(f"Judge LLM call failed: {e}")
-        return ""
-
-
 # ═══════════════════════════════════════════════
-# 重试策略
-# ═══════════════════════════════════════════════
-
-def should_retry(verdict: JudgeVerdict, retry_count: int, max_retries: int = 3) -> bool:
-    """判断是否应该重试。信息不足不重试。"""
-    if verdict.pass_:
-        return False
-    if retry_count >= max_retries:
-        return False
-    if verdict.failure_mode == "context_insufficient":
-        return False  # 缺少上下文，重试无意义
-    return True
-
-
-def build_reflexion_feedback(verdict: JudgeVerdict) -> str:
-    """构建下一轮的 Reflexion 提示。"""
-    return (
-        f"[上一轮结果不合格]\n"
-        f"原因: {verdict.reason}\n"
-        f"失败模式: {verdict.failure_mode}\n"
-        f"请修正后重新输出。"
-    )
-
-
-# ═══════════════════════════════════════════════
-# Self-Fusion — 多模型并行 + 合成裁判 (model-fusion 论文)
+# Fusion 配置 & 角色
 # ═══════════════════════════════════════════════
 
 def _load_fusion_config() -> dict:
-    """加载 fusion.toml 配置。HermesFusion: 模型无关，换模型只改配置不改代码。"""
+    """加载 fusion.toml 配置。"""
     try:
         from ._io import load_toml
-        from . import config
         path = config.SCHEDULER_DIR / "fusion.toml"
         return load_toml(path)
     except Exception:
@@ -260,13 +71,45 @@ _STAGE1_PROMPT = """你是 Fusion 裁判分析器。以下 N 个模型对同一�
 - 如果某个维度确实为空，用空数组 []"""
 
 
+def _call_model(prompt: str, model: str) -> str:
+    """调用单个模型（用于合成阶段）。"""
+    api_map = {
+        "deepseek-chat": ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/chat/completions"),
+        "deepseek-v4-pro": ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/chat/completions"),
+        "glm-5-turbo": ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4/chat/completions"),
+        "glm-5.2": ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4/chat/completions"),
+        "kimi-k2.7-code": ("KIMI_API_KEY", "https://api.moonshot.cn/v1/chat/completions"),
+        "gpt-5.5": ("OPENAI_API_KEY", "https://api.openai.com/v1/chat/completions"),
+        "gpt-5.5-pro": ("OPENAI_API_KEY", "https://api.openai.com/v1/chat/completions"),
+        "claude-opus-4-8": ("ANTHROPIC_API_KEY", "https://api.anthropic.com/v1/messages"),
+    }
+    env_var, base_url = api_map.get(model, ("", ""))
+    api_key = os.environ.get(env_var, "")
+    if not api_key:
+        return ""
+    try:
+        import httpx
+        with httpx.Client(timeout=httpx.Timeout(60)) as client:
+            r = client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"model": model, "messages": [{"role": "user", "content": prompt}],
+                      "max_tokens": 2000, "temperature": 0.3},
+            )
+            if r.status_code == 200:
+                return r.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        witness.heartbeat('execution_judge', f'warn:{e}')
+    return ""
+
+
 def _stage1_analyze(task: str, outputs: list[str], judge_model: str = "deepseek-chat") -> dict:
     """阶段一：裁判模型输出结构化五维 JSON。"""
     outputs_text = "\n\n---\n".join(
         f"[模型{i+1}]\n{o[:1500]}" for i, o in enumerate(outputs)
     )
     prompt = _STAGE1_PROMPT.format(task=task, outputs=outputs_text)
-    raw = _call_e_layer(prompt)
+    raw = _call_model(prompt, judge_model)
     return try_parse_json(raw) if raw else {}
 
 
@@ -305,7 +148,6 @@ def fuse_outputs(task_desc: str, output_a: str, output_b: str,
     防递归: FUSION_CHILD=1 环境变量防止融合模型再调融合
     tier: budget|self|standard
     """
-    import os
     all_outputs = outputs or [output_a, output_b]
     if len(all_outputs) < 2:
         return all_outputs[0] if all_outputs else ""
@@ -332,7 +174,7 @@ def fuse_outputs(task_desc: str, output_a: str, output_b: str,
     # 标记子进程防递归
     os.environ["FUSION_CHILD"] = "1"
     try:
-        fused = _call_single_model(prompt, call_model)
+        fused = _call_model(prompt, call_model)
     finally:
         os.environ.pop("FUSION_CHILD", None)
     return fused if fused else f"{output_a}\n\n---\n{output_b}"
@@ -365,9 +207,11 @@ FUSION_TOOL_DEF = {
     }
 }
 
+
 def get_fusion_tool_def() -> dict:
     """返回 Fusion 工具定义，注册给 executor 的 function calling。"""
     return FUSION_TOOL_DEF
+
 
 def execute_fusion_tool(question: str, tier: str = "budget") -> str:
     """执行跨模型第二意见。由 executor 在 tool_call 时调用。"""
@@ -375,78 +219,6 @@ def execute_fusion_tool(question: str, tier: str = "budget") -> str:
     if len(outputs) < 2:
         return outputs[0] if outputs else "Fusion 不可用: 模型不足"
     return fuse_outputs(question, outputs[0], outputs[1], outputs=outputs, tier=tier)
-
-
-def _call_single_model(prompt: str, model: str) -> str:
-    """直接调单个模型（用于合成阶段）。"""
-    import os
-    api_map = {
-        "deepseek-chat": ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/chat/completions"),
-        "deepseek-v4-pro": ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/chat/completions"),
-        "glm-5-turbo": ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4/chat/completions"),
-        "glm-5.2": ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4/chat/completions"),
-        "kimi-k2.7-code": ("KIMI_API_KEY", "https://api.moonshot.cn/v1/chat/completions"),
-        "gpt-5.5": ("OPENAI_API_KEY", "https://api.openai.com/v1/chat/completions"),
-        "gpt-5.5-pro": ("OPENAI_API_KEY", "https://api.openai.com/v1/chat/completions"),
-        "claude-opus-4-8": ("ANTHROPIC_API_KEY", "https://api.anthropic.com/v1/messages"),
-    }
-    env_var, base_url = api_map.get(model, ("", ""))
-    api_key = os.environ.get(env_var, "")
-    if not api_key:
-        return ""
-    try:
-        import httpx
-        with httpx.Client(timeout=httpx.Timeout(60)) as client:
-            r = client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": model, "messages": [{"role": "user", "content": prompt}],
-                      "max_tokens": 2000, "temperature": 0.3},
-            )
-            if r.status_code == 200:
-                return r.json()["choices"][0]["message"]["content"]
-    except Exception as e:
-        witness.heartbeat('execution_judge', f'warn:{e}')
-    return ""
-
-# ═══════════════════════════════════════════════
-# Fusion 进阶机制
-# ═══════════════════════════════════════════════
-
-_CROSS_MODEL_PROMPT = """[跨模型第二意见]
-单模型审查完毕。以下是另一个模型对同一任务的独立分析。
-请对比你的结论和以下第二意见，找出:
-1. 你同意但第二意见反对的点
-2. 你反对但第二意见坚持的点
-3. 第二意见发现但你遗漏的点
-4. 综合判断: 是否需要修正你的结论？
-
-第二意见:
-{other_output}"""
-
-_FINDING_CLASSES = {
-    "contract_misread": "误读需求 — 模型误解了任务要求，产出偏离原始意图",
-    "valid_actionable": "有效可操作 — 真实问题，有明确的修复方案",
-    "valid_tradeoff": "有效但可接受 — 方案合理但非唯一，属于风格或取舍差异",
-    "noise": "噪音 — 误报或不影响实际功能的细枝末节",
-}
-
-def classify_finding(finding: str) -> str:
-    """用 cheap-model 对发现做 4 类分类。
-    返回: contract_misread | valid_actionable | valid_tradeoff | noise
-    ponytail: 单次 LLM 调用。需要时上训练分类器。
-    """
-    classes_desc = "\n".join(f"- {k}: {v}" for k, v in _FINDING_CLASSES.items())
-    prompt = f"将以下代码审查发现归入4类之一:\n{classes_desc}\n\n发现: {finding}\n\n只输出类别名。"
-    raw = _call_e_layer(prompt)
-    for k in _FINDING_CLASSES:
-        if k in raw:
-            return k
-    return "valid_actionable"  # 默认归为有效
-
-def build_cross_model_prompt(other_output: str) -> str:
-    """生成跨模型第二意见提示。"""
-    return _CROSS_MODEL_PROMPT.format(other_output=other_output[:1500])
 
 
 def run_parallel_models(task_desc: str, level: str = "E", tier: str = "budget") -> list[str]:
@@ -459,7 +231,6 @@ def run_parallel_models(task_desc: str, level: str = "E", tier: str = "budget") 
     配置: fusion.toml tiers.<tier> (HermesFusion格式)。
     文件锁: flock 防并发跑两次。
     """
-    import os
     import concurrent.futures
     from .model_registry import provider_for_model
 
@@ -477,7 +248,6 @@ def run_parallel_models(task_desc: str, level: str = "E", tier: str = "budget") 
     timeout = tier_cfg.get("timeout_sec", 60)
 
     # 文件锁: 防并发跑两次 (借鉴 HermesFusion flock)
-    import fcntl
     lock_path = config.QIDIAN_DIR / ".fusion.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_fd = None
