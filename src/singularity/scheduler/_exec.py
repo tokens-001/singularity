@@ -41,15 +41,17 @@ from singularity.scheduler._exec_context import (
 
 
 def _build_effective_task(task, turn: int, feedback: str, is_planner: bool,
-                          tool_events: list = None) -> str:
-    """拼接最终 prompt: 记忆注入 + planner preamble + 项目上下文。
+                          tool_events: list = None, route_role: str = "") -> str:
+    """拼接最终 prompt: 记忆注入 + 角色上下文 + planner preamble + 项目上下文。
 
-    顺序 (与原 run() 内一致):
-      turn==1 且无 feedback → 前置 MAGMA 记忆
-      is_planner → 前置 planner preamble
-      末尾前置 项目上下文 (proj_ctx + 分隔线)
+    Step 4: route_role 非空时注入角色 system_prompt。
     """
     effective_task = task.description
+    # ── Step 4: 角色上下文注入 (首轮) ──
+    if turn == 1 and route_role:
+        role_ctx = _inject_role_context(route_role)
+        if role_ctx:
+            effective_task = role_ctx + "\n\n---\n" + effective_task
     # ── MAGMA 记忆注入 (仅首轮、无打回反馈时) ──
     if turn == 1 and feedback == "":
         mem_ctx = _inject_memory(task.description)
@@ -67,6 +69,18 @@ def _build_effective_task(task, turn: int, feedback: str, is_planner: bool,
     if proj_ctx:
         effective_task = proj_ctx + "\n\n---\n" + effective_task
     return effective_task
+
+
+def _inject_role_context(route_role: str) -> str:
+    """Step 4: 从 roles.toml 加载角色 system_prompt 作为执行上下文。"""
+    try:
+        from singularity.scheduler.roles import get_role
+        role = get_role(route_role)
+        if role and role.system_prompt:
+            return role.system_prompt
+    except Exception:
+        pass
+    return ""
 
 
 def _check_cancelled(task, all_tool_events: list) -> "BatchOutput | None":
@@ -194,6 +208,8 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     level = task.route_level
     route_gate = task.route_gate
     route_type = task.route_type
+    # Step 4: 读取 layer→角色路由
+    route_role = getattr(task, 'route_role', None) or ""
 
     feedback = ""
     last_validation = val_mod.ValidationReport(
@@ -254,7 +270,8 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     return cancelled
 
                 effective_task = _build_effective_task(task, turn, feedback, is_planner,
-                                                        tool_events=all_tool_events)
+                                                        tool_events=all_tool_events,
+                                                        route_role=route_role)
 
                 disp_result = disp_mod.dispatch(
                     effective_task, level, task.id, agents,
