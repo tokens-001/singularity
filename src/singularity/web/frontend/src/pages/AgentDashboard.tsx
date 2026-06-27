@@ -1,28 +1,32 @@
 import { useState, useEffect } from 'react'
 import { api } from '../lib/api'
-import { Bot, Edit3, Wrench, Check, X, Activity, Circle } from 'lucide-react'
+import { Bot, Edit3, Wrench, Check, X, User, Circle, FileText } from 'lucide-react'
 
 interface RoleInfo {
-  key: string; name: string; level: string; description: string
-  model: string; available_models: string[]
+  key: string; name: string; level: string; description: string; persona: string
+  model: string; available_models: string[]; system_prompt: string
   tasks: { running: number; pending: number; done: number; failed: number; total: number }
 }
 
+interface PersonaInfo { key: string; name: string; description: string; style_prompt: string; voice: string }
+
 export default function AgentDashboard() {
   const [roles, setRoles] = useState<RoleInfo[]>([])
+  const [personas, setPersonas] = useState<Record<string,PersonaInfo>>({})
   const [agents, setAgents] = useState<any>({})
   const [loading, setLoading] = useState(true)
   const [editingRole, setEditingRole] = useState<string | null>(null)
+  const [editingPersona, setEditingPersona] = useState<string | null>(null)
   const [editModel, setEditModel] = useState('')
   const [skillModal, setSkillModal] = useState<{role:string;model:string;skills:string[];available:string[]}|null>(null)
-  const [expandedRole, setExpandedRole] = useState<string | null>(null)
+  const [promptModal, setPromptModal] = useState<RoleInfo | null>(null)
 
   const fetch = async () => {
     setLoading(true)
-    const [agtData, taskData] = await Promise.all([api.agents(), api.tasks()])
+    const [agtData, taskData, roleData] = await Promise.all([api.agents(), api.tasks(), api.roles()])
     setAgents(agtData)
+    setPersonas(roleData?.personas || {})
 
-    // Count tasks by route_role (or by level if no route_role)
     const taskCounts: Record<string, {running:number;pending:number;done:number;failed:number}> = {}
     for (const t of taskData) {
       const r = t.route_role || ''
@@ -34,51 +38,32 @@ export default function AgentDashboard() {
       else if (s === 'failed') taskCounts[r].failed++
     }
 
-    const systemRoles = [
-      { key: 'researcher', name: '研究员', level: 'E', desc: '搜集可借鉴方案、理论、替代品' },
-      { key: 'system_architect', name: '系统架构师', level: 'D', desc: '模块划分·数据模型·API契约' },
-      { key: 'ai_architect', name: 'AI架构师', level: 'D', desc: '模型选型·Prompt体系·Agent拓扑' },
-      { key: 'frontend_architect', name: '前端架构师', level: 'D', desc: '组件树·状态管理·路由·性能' },
-      { key: 'frontend_engineer', name: '前端工程师', level: 'E', desc: 'UI实现·交互逻辑·可访问性' },
-      { key: 'backend_engineer', name: '后端工程师', level: 'E', desc: 'API·数据库·业务逻辑' },
-      { key: 'data_engineer', name: '数据工程师', level: 'E+', desc: '向量库·RAG·模型集成' },
-      { key: 'devops_engineer', name: 'DevOps工程师', level: 'E', desc: 'CI/CD·容器化·部署' },
-      { key: 'qa_engineer', name: 'QA工程师', level: 'D', desc: '验收验证·回归测试' },
-      { key: 'security_auditor', name: '安全审计师', level: 'D', desc: '权限·注入·密钥·依赖' },
-      { key: 'implementer', name: '执行者', level: 'E', desc: '领单一任务，快进快出' },
-      { key: 'debugger', name: '调试者', level: 'E', desc: '定位根因·出补丁·验证' },
-      { key: 'builder', name: '构建者', level: 'E+', desc: '复杂模块，多文件改动' },
-    ]
-
-    const getModel = (roleKey: string, level: string) => {
+    const rd = roleData?.roles || {}
+    const systemRoles: RoleInfo[] = Object.values(rd).map((r: any) => {
+      const level = r.level || 'E'
       const list = agtData?.[level] || []
-      const match = list.find((a:any) => a.default && (a.roles||[]).includes(roleKey))
-      if (match) return match.model
-      const any = list.find((a:any) => (a.roles||[]).includes(roleKey))
-      if (any) return any.model
-      return list.find((a:any) => a.default)?.model || list[0]?.model || '无'
-    }
+      const match = list.find((a:any) => a.default && (a.roles||[]).includes(r.key))
+      const any = list.find((a:any) => (a.roles||[]).includes(r.key))
+      const model = match?.model || any?.model || list.find((a:any)=>a.default)?.model || list[0]?.model || '无'
+      const tc = taskCounts[r.key] || { running:0,pending:0,done:0,failed:0 }
+      return {
+        key: r.key, name: r.name, level, description: r.description,
+        persona: r.persona || '', model,
+        available_models: list.map((a:any) => a.model),
+        system_prompt: r.system_prompt || '',
+        tasks: { ...tc, total: tc.running+tc.pending+tc.done+tc.failed },
+      }
+    })
 
-    const result: RoleInfo[] = systemRoles.map(sr => ({
-      key: sr.key, name: sr.name, level: sr.level, description: sr.desc,
-      model: getModel(sr.key, sr.level),
-      available_models: (agtData?.[sr.level] || []).map((a:any) => a.model),
-      tasks: { ...(taskCounts[sr.key] || { running:0,pending:0,done:0,failed:0 }), total: 0 },
-    }))
-
-    // Calculate total for each role
-    result.forEach(r => { r.tasks.total = r.tasks.running + r.tasks.pending + r.tasks.done + r.tasks.failed })
-
-    setRoles(result)
+    setRoles(systemRoles)
     setLoading(false)
   }
 
   useEffect(() => { fetch() }, [])
-  useEffect(() => { const t = setInterval(fetch, 10000); return () => clearInterval(t) }, [])
+  useEffect(() => { const t = setInterval(fetch, 15000); return () => clearInterval(t) }, [])
 
   const handleSwitchModel = async (roleKey: string, newModel: string) => {
-    const role = roles.find(r => r.key === roleKey)
-    if (!role) return
+    const role = roles.find(r => r.key === roleKey); if (!role) return
     for (const lvl of ['D','E+','E']) {
       for (const a of (agents?.[lvl] || [])) {
         if (a.model === newModel) {
@@ -101,21 +86,19 @@ export default function AgentDashboard() {
   }
 
   const levelColor = (l: string) => l==='D'?'#f0883e':l==='E+'?'#a371f7':'#58a6ff'
-  const statusColor = (s: string) => s==='running'?'var(--accent)':s==='done'?'var(--accent-green)':s==='failed'?'var(--accent-red)':'var(--text-muted)'
+  const totalActive = roles.reduce((s,r)=>s+r.tasks.running+r.tasks.pending,0)
 
   if (loading) return <div style={{color:'var(--text-muted)'}}>加载中...</div>
-
-  // Count total task activity
-  const totalActive = roles.reduce((s,r)=>s+r.tasks.running+r.tasks.pending,0)
 
   return (
     <div>
       <div style={{display:'flex',alignItems:'center',marginBottom:14}}>
         <h2 style={{fontSize:16,fontWeight:600}}>智能体</h2>
         <span style={{marginLeft:8,fontSize:12,color:'var(--text-muted)'}}>
-          13 个角色 · {totalActive>0?<span style={{color:'var(--accent)'}}>{totalActive} 个活跃任务</span>:'空闲'}</span>
+          {roles.length} 个角色 · {totalActive>0?<span style={{color:'var(--accent)'}}>{totalActive} 个活跃任务</span>:'空闲'}</span>
       </div>
 
+      {/* Skill Modal */}
       {skillModal && (
         <div style={{background:'var(--bg-secondary)',border:'1px solid var(--accent-purple)',borderRadius:'var(--radius)',padding:16,marginBottom:16}}>
           <div style={{fontSize:14,fontWeight:600,marginBottom:8}}>Skills — {roles.find(r=>r.key===skillModal!.role)?.name} · {skillModal.model}</div>
@@ -138,24 +121,38 @@ export default function AgentDashboard() {
         </div>
       )}
 
+      {/* Prompt Modal */}
+      {promptModal && (
+        <div style={{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:16,marginBottom:16}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+            <span style={{fontWeight:600,fontSize:14}}>系统提示词 — {promptModal.name}</span>
+            <button onClick={()=>setPromptModal(null)} style={{...iconBtn,fontSize:16}}>✕</button>
+          </div>
+          <pre style={{fontSize:10,color:'var(--text-secondary)',whiteSpace:'pre-wrap',maxHeight:300,overflow:'auto',fontFamily:'var(--font-mono)',background:'var(--bg-primary)',padding:10,borderRadius:4}}>
+            {promptModal.system_prompt || '(空)'}</pre>
+          <div style={{fontSize:10,color:'var(--text-muted)',marginTop:4}}>编辑请直接修改 roles.toml，重启后生效</div>
+        </div>
+      )}
+
+      {/* Role Table */}
       <div style={{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:'var(--radius)',overflow:'hidden'}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr style={{borderBottom:'1px solid var(--border)',fontSize:11,color:'var(--text-muted)',textAlign:'left'}}>
             <th style={{padding:'8px 10px',width:30}}></th>
-            <th style={{padding:'8px 10px',width:150}}>角色</th>
+            <th style={{padding:'8px 10px',width:120}}>角色</th>
             <th style={{padding:'8px 10px',width:60}}>层级</th>
-            <th style={{padding:'8px 10px',width:140}}>模型</th>
-            <th style={{padding:'8px 10px',width:140}}>任务活动</th>
+            <th style={{padding:'8px 10px',width:90}}>人格</th>
+            <th style={{padding:'8px 10px',width:120}}>模型</th>
+            <th style={{padding:'8px 10px',width:50}}>Skill</th>
+            <th style={{padding:'8px 10px',width:120}}>任务活动</th>
             <th style={{padding:'8px 10px'}}>描述</th>
-            <th style={{padding:'8px 10px',width:50}}></th>
           </tr></thead>
           <tbody>
             {roles.map(r=>{
-              const isExpanded = expandedRole === r.key
               const isBusy = r.tasks.running > 0 || r.tasks.pending > 0
+              const p = personas[r.persona]
               return (
-                <tr key={r.key} style={{borderBottom:'1px solid var(--border)',fontSize:12,background:isBusy?'rgba(88,166,255,0.05)':'transparent'}}
-                  onClick={()=>setExpandedRole(isExpanded?null:r.key)}>
+                <tr key={r.key} style={{borderBottom:'1px solid var(--border)',fontSize:12,background:isBusy?'rgba(88,166,255,0.05)':'transparent'}}>
                   <td style={{padding:'8px 6px',textAlign:'center'}}>
                     <Circle size={10} fill={isBusy?'var(--accent)':'transparent'} color={isBusy?'var(--accent)':'var(--border)'}/>
                   </td>
@@ -166,11 +163,27 @@ export default function AgentDashboard() {
                   <td style={{padding:'8px 10px'}}>
                     <span style={{background:levelColor(r.level)+'22',color:levelColor(r.level),padding:'1px 6px',borderRadius:3,fontSize:10,fontWeight:600}}>{r.level}</span>
                   </td>
+                  <td style={{padding:'8px 10px'}} onClick={e=>e.stopPropagation()}>
+                    {editingPersona === r.key ? (
+                      <div style={{display:'flex',gap:4,alignItems:'center'}}>
+                        <select value={r.persona} onChange={e=>{/* personas are read-only from web */}} style={{...inp,width:80}}>
+                          {Object.keys(personas).map(pk=><option key={pk} value={pk}>{personas[pk]?.name||pk}</option>)}
+                        </select>
+                        <button onClick={()=>setEditingPersona(null)} style={iconBtn}><X size={12}/></button>
+                        <span style={{fontSize:9,color:'var(--text-muted)'}}>编辑roles.toml</span>
+                      </div>
+                    ) : (
+                      <span onClick={()=>setEditingPersona(r.key)} style={{cursor:'pointer',display:'flex',alignItems:'center',gap:4}}>
+                        <User size={12} color={p?'var(--accent-purple)':'var(--text-muted)'}/>
+                        <span style={{fontSize:11,color:p?'var(--text-primary)':'var(--text-muted)'}}>{p?.name || r.persona || '未设置'}</span>
+                        <Edit3 size={10} color='var(--text-muted)'/>
+                      </span>
+                    )}
+                  </td>
                   <td style={{padding:'8px 10px'}} onClick={e=>{e.stopPropagation();setEditingRole(editingRole===r.key?null:r.key);setEditModel(r.model)}}>
                     {editingRole === r.key ? (
-                      <div style={{display:'flex',gap:4,alignItems:'center'}} onClick={e=>e.stopPropagation()}>
-                        <select value={editModel} onChange={e=>setEditModel(e.target.value)}
-                          style={{background:'var(--bg-tertiary)',border:'1px solid var(--border)',borderRadius:3,padding:'2px 4px',color:'var(--text-primary)',fontSize:11,width:110}}>
+                      <div style={{display:'flex',gap:4,alignItems:'center'}}>
+                        <select value={editModel} onChange={e=>setEditModel(e.target.value)} style={{...inp,width:100}}>
                           {r.available_models.map((m:string)=><option key={m} value={m}>{m}</option>)}
                         </select>
                         <button onClick={()=>handleSwitchModel(r.key,editModel)} style={{...iconBtn,color:'var(--accent-green)'}}><Check size={12}/></button>
@@ -180,18 +193,23 @@ export default function AgentDashboard() {
                       <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--accent)',cursor:'pointer'}}>{r.model}</span>
                     )}
                   </td>
+                  <td style={{padding:'8px 10px'}} onClick={e=>e.stopPropagation()}>
+                    <button onClick={()=>handleSkills(r.key,r.model)} title="Skill" style={iconBtn}><Wrench size={14}/></button>
+                  </td>
                   <td style={{padding:'8px 10px'}}>
-                    <div style={{display:'flex',gap:8,fontSize:11}}>
-                      {r.tasks.running>0 && <span style={{color:'var(--accent)'}}>⏳{r.tasks.running}</span>}
-                      {r.tasks.pending>0 && <span style={{color:'var(--text-muted)'}}>待{r.tasks.pending}</span>}
-                      {r.tasks.done>0 && <span style={{color:'var(--accent-green)'}}>✓{r.tasks.done}</span>}
-                      {r.tasks.failed>0 && <span style={{color:'var(--accent-red)'}}>✗{r.tasks.failed}</span>}
-                      {r.tasks.total===0 && <span style={{color:'var(--text-muted)'}}>—</span>}
+                    <div style={{display:'flex',gap:6,fontSize:11}}>
+                      {r.tasks.running>0&&<span style={{color:'var(--accent)'}}>⏳{r.tasks.running}</span>}
+                      {r.tasks.pending>0&&<span style={{color:'var(--text-muted)'}}>待{r.tasks.pending}</span>}
+                      {r.tasks.done>0&&<span style={{color:'var(--accent-green)'}}>✓{r.tasks.done}</span>}
+                      {r.tasks.failed>0&&<span style={{color:'var(--accent-red)'}}>✗{r.tasks.failed}</span>}
+                      {r.tasks.total===0&&<span style={{color:'var(--text-muted)'}}>—</span>}
                     </div>
                   </td>
-                  <td style={{padding:'8px 10px',color:'var(--text-secondary)',fontSize:11}}>{r.description}</td>
-                  <td style={{padding:'8px 6px'}} onClick={e=>e.stopPropagation()}>
-                    <button onClick={()=>handleSkills(r.key,r.model)} title="Skill" style={iconBtn}><Wrench size={14}/></button>
+                  <td style={{padding:'8px 10px'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:6}}>
+                      <span style={{fontSize:11,color:'var(--text-secondary)'}}>{r.description}</span>
+                      <button onClick={(e)=>{e.stopPropagation();setPromptModal(r)}} title="提示词" style={iconBtn}><FileText size={14}/></button>
+                    </div>
                   </td>
                 </tr>
               )
@@ -203,5 +221,6 @@ export default function AgentDashboard() {
   )
 }
 
+const inp = { background:'var(--bg-tertiary)',border:'1px solid var(--border)',borderRadius:3,padding:'2px 4px',color:'var(--text-primary)',fontSize:11 } as const
 const btn = (bg:string) => ({ background:bg, color:'#fff', border:'none', borderRadius:4, padding:'6px 14px', cursor:'pointer', fontSize:12 })
 const iconBtn = { background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',padding:2 } as const

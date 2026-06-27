@@ -71,4 +71,6 @@ export const api = {
   mcpServers: async () => { const d = await request<any>('/api/mcp/servers'); return (d?.servers||d||[]) as any[] },
   mcpTools: async () => { const d = await request<any>('/api/mcp/tools'); return (d?.tools||d||[]) as any[] },
   addMcpServer: (data: any) => request('/api/mcp/servers',{method:'POST',body:JSON.stringify(data)}),
+
+  roles: () => request<any>('/api/roles'),
 }

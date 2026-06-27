@@ -1293,6 +1293,28 @@ def api_models_update(model_id):
 # Skill 管理
 # ═══════════════════════════════════════════════════════════
 
+@app.route("/api/roles")
+def api_roles():
+    """返回所有角色定义 + 人格面具列表。"""
+    from singularity.scheduler.roles import ROLES, PERSONAS
+    roles = {}
+    for k, r in ROLES.items():
+        roles[k] = {
+            "key": r.key, "name": r.name, "level": r.level,
+            "description": r.description, "persona": r.persona,
+            "capabilities": r.capabilities,
+            "system_prompt": r.system_prompt[:500],  # 截断，完整版单独取
+        }
+    personas = {}
+    for k, p in PERSONAS.items():
+        personas[k] = {
+            "key": p.key, "name": p.name, "description": p.description,
+            "style_prompt": p.style_prompt[:300], "philosophy": p.philosophy,
+            "voice": p.voice,
+        }
+    return jsonify({"roles": roles, "personas": personas}), 200
+
+
 @app.route("/api/skills")
 def api_skills():
     data, code = _api_handler.skill_list()
