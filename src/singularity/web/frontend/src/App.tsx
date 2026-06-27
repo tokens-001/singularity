@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route } from 'react-router-dom'
 import AppLayout from './components/AppLayout'
 import TaskPanel from './pages/TaskPanel'
 import TaskDetail from './pages/TaskDetail'
@@ -7,7 +7,9 @@ import ProjectList from './pages/ProjectList'
 import ProjectPipeline from './pages/ProjectPipeline'
 import AgentDashboard from './pages/AgentDashboard'
 import ModelManagement from './pages/ModelManagement'
+import SkillManagement from './pages/SkillManagement'
 import McpManagement from './pages/McpManagement'
+import Settings from './pages/Settings'
 import Dashboard from './pages/Dashboard'
 
 export default function App() {
@@ -22,7 +24,9 @@ export default function App() {
         <Route path="/observer" element={<ObserverChat />} />
         <Route path="/agents" element={<AgentDashboard />} />
         <Route path="/models" element={<ModelManagement />} />
+        <Route path="/skills" element={<SkillManagement />} />
         <Route path="/mcp" element={<McpManagement />} />
+        <Route path="/settings" element={<Settings />} />
       </Route>
     </Routes>
   )

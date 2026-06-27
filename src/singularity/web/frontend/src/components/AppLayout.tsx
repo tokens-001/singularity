@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useLocation } from 'react-router-dom'
 import { useAppStore } from '../stores/app'
-import { LayoutDashboard, ListTodo, MessageSquare, Bot, FolderKanban, Cpu, Server, PanelLeftClose, PanelLeft } from 'lucide-react'
+import { LayoutDashboard, ListTodo, MessageSquare, Bot, FolderKanban, Cpu, Server, Wrench, Settings2, PanelLeftClose, PanelLeft } from 'lucide-react'
 
 const NAV = [
   { to: '/', icon: LayoutDashboard, label: '总览' },
@@ -9,7 +9,9 @@ const NAV = [
   { to: '/observer', icon: MessageSquare, label: '对话' },
   { to: '/agents', icon: Bot, label: 'Agent' },
   { to: '/models', icon: Cpu, label: '模型' },
+  { to: '/skills', icon: Wrench, label: 'Skill' },
   { to: '/mcp', icon: Server, label: 'MCP' },
+  { to: '/settings', icon: Settings2, label: '配置' },
 ]
 
 export default function AppLayout() {
