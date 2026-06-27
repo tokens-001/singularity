@@ -334,7 +334,14 @@ def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
             result = _collect(fl)
             if result:
                 break
-    return result
+    # ponytail: dedup across tiers (same model may appear in multiple levels)
+    seen = set()
+    deduped = []
+    for a in result:
+        k = a.get("model", "")
+        if k not in seen:
+            deduped.append(a); seen.add(k)
+    return deduped
 
 
 def _ntilc_filter(task_desc: str, skills: dict) -> dict:

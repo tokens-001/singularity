@@ -185,7 +185,8 @@ def _do_merge(src_ref: str, onto: str, merge_msg: str) -> MergeResult:
 
         commit_r = _run(["commit", "-m", merge_msg], config.PROJECT_ROOT)
         if commit_r.returncode != 0:
-            return MergeResult(ok=True, merged_ref=_head_ref(), reason="空 merge, 无新增改动")
+            # ponytail: git commit 非零可能因为 nothing-to-commit，HEAD 未变
+            return MergeResult(ok=False, reason=f"commit 失败: {commit_r.stderr.strip()[:120]}")
         return MergeResult(ok=True, merged_ref=_head_ref())
     finally:
         if stashed:

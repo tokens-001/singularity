@@ -260,11 +260,8 @@ def _guard_rate_limit():
 
         _RATE_BUCKETS[ip].append(now)
 
-        # 定期清理（每 100 请求触发一次）
-        trigger_cleanup = sum(len(v) for v in _RATE_BUCKETS.values()) % 100 == 0
-
-    if trigger_cleanup:
-        with _RATE_LOCK:
+        # 定期清理（每 100 请求触发一次，同一把锁内执行防竞态）
+        if sum(len(v) for v in _RATE_BUCKETS.values()) % 100 == 0:
             _cleanup_rate_buckets()
 
     return None
