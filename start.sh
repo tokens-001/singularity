@@ -46,7 +46,7 @@ fi
 echo "本地启动..."
 echo "  Web:   http://127.0.0.1:5050"
 echo "  看板:  python3 tools/dash.py"
-echo "  停止:  pkill -f 'python.*app.py'"
+echo "  停止:  pkill -f 'python.*singularity.web.app'"
 echo ""
 
 if [ "$1" = "-d" ] || [ "$1" = "--daemon" ]; then
