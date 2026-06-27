@@ -640,8 +640,14 @@ from singularity.scheduler import _api as _api_handler
 # 页面
 # ═══════════════════════════════════════════════════════════
 
-@app.route("/")
-def index():
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def index(path=""):
+    """SPA: 返回 React index.html。API路由优先匹配，其他全部fallback到前端。"""
+    dist_index = Path(__file__).parent / "static" / "dist" / "index.html"
+    if dist_index.exists():
+        return dist_index.read_text(encoding="utf-8")
+    # fallback: 开发时用旧模板
     return render_template("index.html")
 
 
