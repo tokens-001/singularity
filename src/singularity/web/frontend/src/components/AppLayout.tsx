@@ -4,9 +4,9 @@ import { LayoutDashboard, ListTodo, MessageSquare, Bot, FolderKanban, Cpu, Setti
 
 const NAV = [
   { to: '/', icon: LayoutDashboard, label: '总览' },
+  { to: '/observer', icon: MessageSquare, label: '对话' },
   { to: '/tasks', icon: ListTodo, label: '任务' },
   { to: '/projects', icon: FolderKanban, label: '项目' },
-  { to: '/observer', icon: MessageSquare, label: '对话' },
   { to: '/agents', icon: Bot, label: '智能体' },
   { to: '/models', icon: Cpu, label: '模型' },
 ]
