@@ -131,16 +131,16 @@ def _tool_create_task(description: str, level: str = "E") -> dict:
 def _tool_control_loop(action: str) -> dict:
     """控制调度循环：start/stop/status。"""
     try:
-        from singularity.web.app import start_loop, stop_loop, _loop_running, _loop_concurrent
+        import singularity.web.app as app_mod
         action = action.lower().strip()
         if action == "start":
-            ok = start_loop(concurrent=2)
+            ok = app_mod.start_loop(concurrent=2)
             return {"ok": ok, "running": True, "message": "调度循环已启动"}
         elif action == "stop":
-            ok = stop_loop()
-            return {"ok": ok, "running": _loop_running, "message": "调度循环已停止"}
+            ok = app_mod.stop_loop()
+            return {"ok": ok, "running": app_mod._loop_running, "message": "调度循环已停止"}
         else:
-            return {"ok": True, "running": _loop_running, "concurrent": _loop_concurrent}
+            return {"ok": True, "running": app_mod._loop_running, "concurrent": app_mod._loop_concurrent}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

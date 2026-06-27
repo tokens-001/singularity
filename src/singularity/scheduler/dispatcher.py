@@ -156,14 +156,16 @@ def agent_api_available(agent_cfg: dict) -> bool:
         except Exception as e:
             from . import witness; witness.heartbeat("dispatch", "warn", status="error", detail=f"api_check:{e}")
 
-    # 硬限制：OpenAI 模型除非在 _order 显式列出，否则不可用
+    # 硬限制：OpenAI 模型除非在 _order 显式列出或有显式配置，否则不可用
     if provider == "openai":
         custom = _load_custom_agents()
         all_ordered = []
         for tier_order in (custom.get("_order", {}) or {}).values():
             all_ordered.extend(tier_order)
-        if model not in all_ordered:
-            return False  # 用户没显式列出 → 不自动选
+        # ponytail: built-from-registry agents may have agent_cfg with provider set;
+        # only reject if _order is defined AND model is not in it
+        if all_ordered and model not in all_ordered:
+            return False
 
     # claude-cli: api_store 通过了就算通过
     etype = agent_cfg.get("type", "")

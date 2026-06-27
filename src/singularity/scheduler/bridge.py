@@ -77,11 +77,8 @@ def broadcast_json(data: dict) -> int:
         if not c.authenticated:
             continue
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(c.send_json(data))
-            else:
-                asyncio.run_coroutine_threadsafe(c.send_json(data), _get_loop())
+            # ponytail: always use cross-thread path — Flask threads have no running loop
+            asyncio.run_coroutine_threadsafe(c.send_json(data), _get_loop())
             count += 1
         except Exception:
             dead.append(c)

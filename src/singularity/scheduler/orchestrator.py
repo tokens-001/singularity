@@ -213,6 +213,8 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                 remaining = tracker.ready_tasks(exclude=dispatched)
                 if not remaining:
                     break
+                # ponytail: avoid busy-wait when queue drains mid-loop
+                import time as _time; _time.sleep(0.5)
                 continue
 
             _reap_futures(running_futures, pending_batches, mq, runner, results)

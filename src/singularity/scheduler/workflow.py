@@ -406,7 +406,7 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     _save_phase_output(project.id, "architecture.md", raw)
     # Step 2: 多模型碰撞 → 保存各模型原始输出
     import json as _json
-    fusion_meta_path = sched_config.QIDIAN_DIR / ".last_fusion.json"
+    fusion_meta_path = config.QIDIAN_DIR / ".last_fusion.json"
     if fusion_meta_path.exists():
         try:
             fm = _json.loads(fusion_meta_path.read_text())

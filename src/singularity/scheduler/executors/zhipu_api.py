@@ -23,6 +23,7 @@ import time
 import urllib.request
 import urllib.error
 
+import builtins
 from singularity.scheduler.executors.base import (BaseExecutor, ExecutorResult,
     _BLOCKED_PATTERNS, RateLimitError, FormatError, TimeoutError, ExecError)
 from singularity.scheduler import config
@@ -108,7 +109,7 @@ class ZhipuApiExecutor(BaseExecutor):
             raise ExecError(f"网络不可达: {e.reason}")
         except ssl.SSLError as e:
             raise ExecError(f"SSL错误: {e}")
-        except TimeoutError:
+        except (TimeoutError, builtins.TimeoutError):
             raise TimeoutError()
 
         try:
@@ -191,7 +192,7 @@ class ZhipuApiExecutor(BaseExecutor):
             # 安全加固：路径穿越检查
             root = config.PROJECT_ROOT.resolve()
             dest = (config.PROJECT_ROOT / target_file).resolve()
-            if not str(dest).startswith(str(root)):
+            if not str(dest).startswith(str(root) + os.sep):
                 failed.append({"file": target_file, "error": "路径逃逸被拒绝"})
                 continue
             # 安全加固：敏感文件 blocklist

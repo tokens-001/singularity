@@ -95,7 +95,10 @@ class BaseExecutor:
         self.task_id = task_id
         self.baseline_ref = baseline_ref
         self.cwd = cwd
-        self.agent_level = agent_level  # 由 dispatcher 注入, 避免 executor 反向查
+        self.agent_level = agent_level
+        # ponytail: store injected kwargs for subclasses (skills, mcp_tools, etc.)
+        for k, v in kwargs.items():
+            setattr(self, f"_{k}", v)
 
     def run(self) -> ExecutorResult:
         raise NotImplementedError

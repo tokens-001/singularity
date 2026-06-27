@@ -220,7 +220,7 @@ class StateSampler:
 
         # 磁盘使用情况
         disk_usage = psutil.disk_usage('/')
-        disk_percent = (disk_usage.used / disk_usage.total) * 100
+        disk_percent = disk_usage.percent
 
         # 网络使用情况
         net_io = psutil.net_io_counters()

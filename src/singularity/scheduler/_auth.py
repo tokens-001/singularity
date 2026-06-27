@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
-from singularity.scheduler import config
+from singularity.scheduler import config, witness
 
 _TOKEN_TTL = 30 * 86400  # 30 天过期
 

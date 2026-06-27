@@ -1082,8 +1082,18 @@ def prune_expired() -> int:
         if tid in expired_ids:
             del events[tid]
     for edge_type in list(edges.keys()):
-        edges[edge_type] = [(s, d, src) for s, d, src in edges[edge_type]
-                           if s not in expired_ids and d not in expired_ids]
+        # ponytail: temporal/entity edges are 2-tuples, causal/experience are 3-tuples
+        filtered = []
+        for e in edges[edge_type]:
+            if len(e) == 3:
+                s, d, src = e
+                if s not in expired_ids and d not in expired_ids:
+                    filtered.append(e)
+            else:
+                s, d = e[0], e[1]
+                if s not in expired_ids and d not in expired_ids:
+                    filtered.append(e)
+        edges[edge_type] = filtered
     _save_events(events)
     _save_edges(edges)
     entity_idx = _read_json(_ENTITY_IDX_PATH) or {}

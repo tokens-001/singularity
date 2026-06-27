@@ -488,7 +488,7 @@ def _push_event(kind: str, msg: str, ts: float = None):
         try:
             count = ws_bridge.broadcast_observer(kind, {"msg": msg}, channels=_WS_CHANNEL_MAP[kind])
         except Exception as e:
-            _logging.getLogger("ws").warning("broadcast_observer failed for %s: %s", kind, e)
+            _al.getLogger("ws").warning("broadcast_observer failed for %s: %s", kind, e)
 
 
 def _next_event_id():
@@ -992,7 +992,7 @@ def api_project_traceability(project_id):
     test_plan = None
     if testp.exists():
         try:
-            test_plan = _json.loads(testp.read_text(encoding="utf-8"))
+            test_plan = testp.read_text(encoding="utf-8")
         except Exception:
             pass
     # 需求符合性

@@ -370,6 +370,9 @@ def maybe_complete_parent(parent_id: str) -> bool:
         if all(s == TaskStatus.DONE for s in statuses):
             transition(parent_id, TaskStatus.DONE)
             return True
+        if any(s == TaskStatus.FAILED for s in statuses):
+            transition(parent_id, TaskStatus.FAILED)
+            return True
         return False
 
 

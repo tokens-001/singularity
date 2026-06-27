@@ -949,7 +949,7 @@ def template_list():
 def health_check(loop_running, sse_clients):
     disk = shutil.disk_usage(str(config.QIDIAN_DIR))
     return {"status": "ok", "disk_free_mb": disk.free // (1024*1024),
-        "loop_running": loop_running, "sse_clients": sse_clients, "projects": len({})}, 200
+        "loop_running": loop_running, "sse_clients": sse_clients, "projects": -1}, 200  # ponytail: caller (app.py) overwrites with real count
 
 
 # ═══════════════════════════════════════════════════════════════

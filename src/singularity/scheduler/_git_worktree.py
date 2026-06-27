@@ -169,6 +169,8 @@ def _do_merge(src_ref: str, onto: str, merge_msg: str) -> MergeResult:
 
     target_ref = _run(["rev-parse", onto], config.PROJECT_ROOT)
     if target_ref.returncode != 0:
+        if stashed:
+            _run(["stash", "pop"], config.PROJECT_ROOT)
         return MergeResult(ok=False, reason=f"目标分支不存在: {onto}")
 
     try:

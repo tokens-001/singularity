@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from singularity.scheduler import config
+from singularity.scheduler import config, witness
 
 
 @dataclass

@@ -21,6 +21,7 @@ from singularity.scheduler import tracker
 from singularity.scheduler import dispatcher as disp_mod
 from singularity.scheduler import validator as val_mod
 from singularity.scheduler.tracker import TaskStatus
+from singularity.scheduler import witness
 
 
 def _materialize_in_main(batch: BatchOutput, parent_task) -> None:
@@ -304,8 +305,8 @@ def _llm_synthesize(task_desc: str, summary_text: str, models: list) -> str | No
         try:
             import logging
             logging.getLogger("qidian").warning("llm_synthesize: %s", e)
-        except Exception as e:
-            witness.heartbeat('_planner', f'warn:{e}')
+        except Exception as ex:
+            witness.heartbeat('_planner', f'warn:{ex}')
         return None
 
 

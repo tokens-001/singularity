@@ -99,7 +99,7 @@ def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True) ->
             res.skipped = True
             res.reason = f"超时 {config.PRE_SEARCH_TIMEOUT}s"
             try:
-                proc.kill()
+                if 'proc' in dir(): proc.kill()
             except Exception as e:
                 witness.heartbeat('pre_search', f'warn:{e}')
         except (json.JSONDecodeError, KeyError) as e:

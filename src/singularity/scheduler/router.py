@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from singularity.scheduler.log import timed
+from singularity.scheduler import witness
 
 
 @dataclass
@@ -235,8 +236,8 @@ def rank_models_for_task(task_desc: str, task_type: str = "",
                 k = f"{ttype}::{r['model']}"
                 if k in lr_stats:
                     hedge = lr_stats[k].get("hedge", 1.0)
-                    r["score"] = r.get("score", 0.5) * hedge
-            scored.sort(key=lambda x: -x.get("score", 0))
+                    r["_score"] = r.get("_score", r.get("_hydra", 0.5)) * hedge
+            scored.sort(key=lambda x: -(x.get("_score") or x.get("_hydra") or 0))
     except Exception:
         pass
     if phase:
