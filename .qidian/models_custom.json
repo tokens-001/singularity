@@ -110,8 +110,23 @@
     ],
     "speed": "medium",
     "cost": "standard",
+    "rating": "",
+    "reasoning": false,
+    "max_turns": 5,
+    "strengths": [],
+    "notes": ""
+  },
+  "claude-opus-4-8": {
+    "id": "claude-opus-4-8",
+    "provider": "anthropic",
+    "display": "Claude Opus 4.8",
+    "tiers": [
+      "D"
+    ],
+    "speed": "slow",
+    "cost": "premium",
     "rating": false,
-    "reasoning": 5,
+    "reasoning": 2,
     "max_turns": 5,
     "strengths": [],
     "notes": ""
