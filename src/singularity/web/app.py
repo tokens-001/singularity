@@ -1107,7 +1107,7 @@ def api_agents_add():
     except (TypeError, ValueError):
         return jsonify({"error": "max_turns 必须是整数"}), 400
     entry_url = data.get("entry", "")
-    if entry_url and not _is_safe_api_url(entry_url):
+    if entry_url and agent_type != "claude-cli" and not _is_safe_api_url(entry_url):
         return jsonify({"error": "不允许的 entry URL（仅支持已知 API 厂商域名）"}), 400
     result, code = _api_handler.agent_add(level, model, agent_type, entry_url,
         data.get("api_key_env", ""), max_turns, data.get("roles", []), sandbox,
