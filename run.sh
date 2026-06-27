@@ -1,8 +1,8 @@
 #!/bin/bash
-# 判例助手本地测试启动脚本
+# Singularity 本地启动脚本
 # 用法: bash run.sh
 
-cd "$(dirname "$0")/python"
+cd "$(dirname "$0")"
 
 # 检查 .env 文件
 if [ ! -f .env ]; then
@@ -14,5 +14,5 @@ if [ ! -f .env ]; then
     echo ".env 已创建"
 fi
 
-echo "判例助手本地测试版启动 → http://127.0.0.1:5050"
-python3 app.py
+echo "Singularity 启动 → http://127.0.0.1:5050"
+python3 -m singularity.web.app

@@ -13,7 +13,8 @@ import sys
 from pathlib import Path
 
 APP_DIR = Path(__file__).parent
-ROOT = APP_DIR.parent
+# ponytail: PyInstaller cwd must be project root so singularity package is importable
+sys.path.insert(0, str(APP_DIR / "src"))
 DIST_DIR = APP_DIR / "dist"
 APP_NAME = "Singularity Dispatch"
 
@@ -26,20 +27,21 @@ def build() -> None:
         "--name", APP_NAME,
         "--onefile",
         "--windowed",  # 无终端窗口
-        "--add-data", f"templates:templates",
-        "--hidden-import", "scheduler",
-        "--hidden-import", "scheduler.memory",
-        "--hidden-import", "scheduler.orchestrator",
-        "--hidden-import", "scheduler.pre_search",
-        "--hidden-import", "scheduler.tracker",
-        "--hidden-import", "scheduler.config",
-        "--hidden-import", "scheduler.router",
-        "--hidden-import", "scheduler.dispatcher",
-        "--hidden-import", "scheduler.validator",
-        "--hidden-import", "scheduler.neijinglu",
-        "--hidden-import", "scheduler.merge",
-        "--hidden-import", "scheduler.witness",
-        "--hidden-import", "scheduler.snapshot",
+        "--add-data", f"{APP_DIR}/src/singularity/web/templates:templates",
+        "--hidden-import", "singularity",
+        "--hidden-import", "singularity.scheduler",
+        "--hidden-import", "singularity.scheduler.memory",
+        "--hidden-import", "singularity.scheduler.orchestrator",
+        "--hidden-import", "singularity.scheduler.pre_search",
+        "--hidden-import", "singularity.scheduler.tracker",
+        "--hidden-import", "singularity.scheduler.config",
+        "--hidden-import", "singularity.scheduler.router",
+        "--hidden-import", "singularity.scheduler.dispatcher",
+        "--hidden-import", "singularity.scheduler.validator",
+        "--hidden-import", "singularity.scheduler.neijinglu",
+        "--hidden-import", "singularity.scheduler.merge",
+        "--hidden-import", "singularity.scheduler.witness",
+        "--hidden-import", "singularity.scheduler.snapshot",
         "--hidden-import", "flask",
         "--hidden-import", "webview",
         "--distpath", str(DIST_DIR),
@@ -47,7 +49,7 @@ def build() -> None:
         str(APP_DIR / "desktop.py"),
     ]
 
-    subprocess.run(cmd, cwd=str(ROOT), check=True)
+    subprocess.run(cmd, cwd=str(APP_DIR), check=True)
 
     app_path = DIST_DIR / f"{APP_NAME}.app"
     if app_path.exists():
