@@ -1,8 +1,10 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { api } from '../lib/api'
 import { Send, Bot, User } from 'lucide-react'
 
 interface Msg { role: 'user' | 'assistant'; content: string }
+
+let _clientId = ''
 
 export default function ObserverChat() {
   const [msgs, setMsgs] = useState<Msg[]>([{role:'assistant',content:'你好！我是 Observer。可以问我系统状态、任务详情，或者帮你创建任务。'}])
@@ -10,16 +12,37 @@ export default function ObserverChat() {
   const [loading, setLoading] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
 
+  // Listen for SSE observer_answer events
+  useEffect(() => {
+    const es = new EventSource('/api/events')
+    es.onmessage = (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        if (d.kind === 'observer_answer') {
+          const inner = JSON.parse(d.msg)
+          const answer = inner.answer || inner.text || ''
+          if (answer) {
+            setMsgs(prev => [...prev, { role: 'assistant', content: answer }])
+            setLoading(false)
+          }
+        }
+      } catch {}
+    }
+    return () => es.close()
+  }, [])
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs])
+
   const send = async () => {
     if (!input.trim() || loading) return
     const q = input; setInput(''); setMsgs(prev=>[...prev,{role:'user',content:q}]); setLoading(true)
     try {
       const data = await api.observerChat(q)
-      const answer = data?.answer || data?.text || JSON.stringify(data)
-      setMsgs(prev=>[...prev,{role:'assistant',content:answer}])
+      _clientId = data?.client_id || ''
     } catch {
-      setMsgs(prev=>[...prev,{role:'assistant',content:'调用失败，请检查 Observer 是否运行中'}])
-    } finally { setLoading(false) }
+      setMsgs(prev=>[...prev,{role:'assistant',content:'Observer 暂时不可用'}])
+      setLoading(false)
+    }
   }
 
   return (
@@ -34,7 +57,7 @@ export default function ObserverChat() {
             {m.role==='user' && <User size={20} color='var(--text-muted)' style={{marginTop:4,flexShrink:0}}/>}
           </div>
         ))}
-        {loading && <div style={{color:'var(--text-muted)',fontSize:12}}>思考中...</div>}
+        {loading && <div style={{color:'var(--text-muted)',fontSize:12,padding:8}}>Observer 思考中...</div>}
         <div ref={bottomRef}/>
       </div>
       <div style={{display:'flex',gap:8}}>

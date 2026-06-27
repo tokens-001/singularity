@@ -1315,6 +1315,23 @@ def api_roles():
     return jsonify({"roles": roles, "personas": personas}), 200
 
 
+@app.route("/api/roles/<key>", methods=["PATCH"])
+def api_roles_update(key):
+    """更新角色配置（人格、层级等）。写入 roles_custom.json 覆盖。"""
+    data = request.get_json(silent=True) or {}
+    overrides_path = sched_config.QIDIAN_DIR / "roles_custom.json"
+    overrides = {}
+    if overrides_path.exists():
+        try: overrides = json.loads(overrides_path.read_text())
+        except Exception: pass
+    overrides[key] = {k: v for k, v in data.items() if v}
+    overrides_path.write_text(json.dumps(overrides, ensure_ascii=False, indent=2))
+    # Reload roles
+    from singularity.scheduler.roles import _init
+    _init()
+    return jsonify({"ok": True, "key": key, "updated": list(data.keys())}), 200
+
+
 @app.route("/api/skills")
 def api_skills():
     data, code = _api_handler.skill_list()

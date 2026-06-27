@@ -73,4 +73,5 @@ export const api = {
   addMcpServer: (data: any) => request('/api/mcp/servers',{method:'POST',body:JSON.stringify(data)}),
 
   roles: () => request<any>('/api/roles'),
+  updateRole: (key: string, data: any) => request(`/api/roles/${key}`, { method: 'PATCH', body: JSON.stringify(data) }),
 }

@@ -295,5 +295,20 @@ def _init():
     global PERSONAS, ROLES
     PERSONAS = _load_personas()
     ROLES = _load_roles()
+    # Apply Web UI overrides (persona, level changes)
+    try:
+        from .config import QIDIAN_DIR
+        overrides_path = QIDIAN_DIR / "roles_custom.json"
+        if overrides_path.exists():
+            overrides = json.loads(overrides_path.read_text())
+            for key, vals in overrides.items():
+                if key in ROLES:
+                    r = ROLES[key]
+                    if "persona" in vals and vals["persona"] in PERSONAS:
+                        r.persona = vals["persona"]
+                    if "level" in vals:
+                        r.level = vals["level"]
+    except Exception:
+        pass
 
 _init()

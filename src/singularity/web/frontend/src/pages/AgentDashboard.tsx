@@ -16,6 +16,7 @@ export default function AgentDashboard() {
   const [agents, setAgents] = useState<any>({})
   const [loading, setLoading] = useState(true)
   const [editingModel, setEditingModel] = useState<string | null>(null)
+  const [editingPersona, setEditingPersona] = useState<string | null>(null)
   const [editModel, setEditModel] = useState('')
   const [skillModal, setSkillModal] = useState<{role:string;model:string;skills:string[];available:string[]}|null>(null)
   const [promptModal, setPromptModal] = useState<RoleInfo | null>(null)
@@ -130,11 +131,21 @@ export default function AgentDashboard() {
                     </div>
                     <div style={{fontSize:10,color:'var(--text-muted)',marginTop:1}}>{r.key} · {r.description.slice(0,24)}</div>
                   </td>
-                  <td style={{padding:'8px 10px'}}>
-                    <span style={{display:'flex',alignItems:'center',gap:4,fontSize:11}}>
-                      <User size={12} color={p?'var(--accent-purple)':'var(--text-muted)'}/>
-                      {p?.name || r.persona || '—'}
-                    </span>
+                  <td style={{padding:'8px 10px'}} onClick={e=>e.stopPropagation()}>
+                    {editingPersona===r.key ? (
+                      <div style={{display:'flex',gap:4,alignItems:'center'}}>
+                        <select value={r.persona} onChange={async(e)=>{const v=e.target.value;await api.updateRole(r.key,{persona:v});setEditingPersona(null);fetch()}} style={inp}>
+                          {Object.entries(personas).map(([pk,pv])=><option key={pk} value={pk}>{pv.name}</option>)}
+                        </select>
+                        <button onClick={()=>setEditingPersona(null)} style={iconBtn}><X size={12}/></button>
+                      </div>
+                    ) : (
+                      <span onClick={()=>setEditingPersona(r.key)} style={{cursor:'pointer',display:'flex',alignItems:'center',gap:4,fontSize:11}}>
+                        <User size={12} color={p?'var(--accent-purple)':'var(--text-muted)'}/>
+                        {p?.name || r.persona || '—'}
+                        <Edit3 size={10} color='var(--text-muted)'/>
+                      </span>
+                    )}
                   </td>
                   <td style={{padding:'8px 10px'}} onClick={e=>e.stopPropagation()}>
                     {editingModel===r.key?(
