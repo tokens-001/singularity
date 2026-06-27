@@ -217,6 +217,19 @@ def available_apis() -> list[APIEntry]:
     return [e for e in _load().values() if is_available(e.id)]
 
 
+def _infer_model_provider(model_id: str, fallback: str = "") -> str:
+    """从模型 ID 推断真实 provider（处理模型网关代理多家的情况）。"""
+    m = model_id.lower().replace("_", "").replace("/", "")
+    if "qwen" in m: return "阿里通义千问"
+    if "glm" in m or "zhipu" in m: return "智谱"
+    if "kimi" in m or "moonshot" in m: return "Moonshot/Kimi"
+    if "deepseek" in m or "vanchin" in m: return "DeepSeek"
+    if "siliconflow" in m: return "SiliconFlow"
+    if "gpt" in m or "openai" in m or model_id.startswith("o") and model_id[1:].isdigit(): return "OpenAI"
+    if "claude" in m or "anthropic" in m: return "Anthropic"
+    return fallback
+
+
 def scan_models(api_id: str, include_capabilities: bool = True) -> list[dict]:
     """扫描 API 厂商的 /models 接口，返回可用模型列表。
 
@@ -263,13 +276,20 @@ def scan_models(api_id: str, include_capabilities: bool = True) -> list[dict]:
             models = []
             for item in items:
                 mid = item.get("id", "")
-                if mid and not mid.startswith("o1-") and "audio" not in mid.lower() and "embedding" not in mid.lower() and "tts" not in mid.lower() and "dall-e" not in mid.lower() and "whisper" not in mid.lower() and "moderation" not in mid.lower():
+                # Filter: exclude non-text models + test/dev garbage
+                skip_prefixes = ("o1-", "test-", "sre-", "vanchin/", "_")
+                skip_keywords = ("audio", "embedding", "tts", "dall-e", "whisper", "moderation",
+                                "livetranslate", "ocr", "image", "asr", "fun-asr", "auto-handle")
+                skip = any(mid.startswith(p) for p in skip_prefixes) or any(k in mid.lower() for k in skip_keywords)
+                if mid and not skip:
                     # 从已知模型库查能力数据
                     cap = known.get(mid) if isinstance(known, dict) else None
+                    # 推断真实 provider（处理模型网关情况, 如 DashScope 代理多家模型）
+                    provider = _infer_model_provider(mid, entry.provider)
                     models.append({
                         "id": mid,
                         "display": item.get("id", mid),
-                        "provider": entry.provider,
+                        "provider": provider,
                         "rating": cap.rating if cap else "?",
                         "speed": cap.speed if cap else "medium",
                         "cost": cap.cost if cap else "standard",
