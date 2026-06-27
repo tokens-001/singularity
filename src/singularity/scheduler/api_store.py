@@ -217,6 +217,26 @@ def available_apis() -> list[APIEntry]:
     return [e for e in _load().values() if is_available(e.id)]
 
 
+def _is_major_model(model_id: str) -> bool:
+    """判断是否为当前代主力模型（缩小扫描结果到可管理的范围）。"""
+    import re
+    m = model_id.lower()
+    # Well-known current-gen model patterns
+    patterns = [
+        r'^gpt-5', r'^gpt-4', r'^o[34]',  # OpenAI
+        r'^claude-opus', r'^claude-sonnet', r'^claude-haiku',  # Anthropic
+        r'^deepseek-v[34]', r'^deepseek-r1$',  # DeepSeek
+        r'^glm-[45]', r'^glm-5',  # Zhipu
+        r'^kimi-k2',  # Kimi
+        r'^qwen3\.\d+-(max|plus)$', r'^qwen3-coder', r'^qwen-(max|plus|turbo|coder)',  # Qwen major
+        r'^qwen3\.\d+-\d+b',  # Qwen 3.X with explicit params
+    ]
+    for p in patterns:
+        if re.match(p, m):
+            return True
+    return False
+
+
 def _infer_model_provider(model_id: str, fallback: str = "") -> str:
     """从模型 ID 推断真实 provider（处理模型网关代理多家的情况）。"""
     m = model_id.lower().replace("_", "").replace("/", "")
@@ -276,15 +296,23 @@ def scan_models(api_id: str, include_capabilities: bool = True) -> list[dict]:
             models = []
             for item in items:
                 mid = item.get("id", "")
-                # Filter: exclude non-text models + test/dev garbage
-                skip_prefixes = ("o1-", "test-", "sre-", "vanchin/", "_", "siliconflow/")
+                # Filter: only keep text generation models suitable for agent use
+                skip_prefixes = ("o1-", "test-", "sre-", "vanchin/", "_", "siliconflow/", "MiniMax", "ZHIPU/")
                 skip_keywords = ("audio", "embedding", "tts", "dall-e", "whisper", "moderation",
                                 "livetranslate", "ocr", "image", "asr", "fun-asr", "auto-handle",
-                                "distill", "-preview")
+                                "distill", "-preview", "-thinking", "-vl-", "-omni-", "-omi-",
+                                "speech", "mt-", "math-", "xvq", "qvq", "qwq", "gui-",
+                                "-0.5b", "-1.5b", "-1.8b", "-7b-chat", "-14b-chat",
+                                "qwen1.5-", "qwen2-", "qwen-mt", "tongyi-",
+                                "-longcontext", "-long", "-flash-character", "-s2s-",
+                                "-realtime", "-deep-research", "-deep-search", "-1201", "-0107", "-0919", "-latest")
                 skip = any(mid.startswith(p) for p in skip_prefixes) or any(k in mid.lower() for k in skip_keywords)
                 if mid and not skip:
                     # 从已知模型库查能力数据
                     cap = known.get(mid) if isinstance(known, dict) else None
+                    # Only show: known models OR major/current-generation models
+                    if not cap and not _is_major_model(mid):
+                        continue
                     # 推断真实 provider（处理模型网关情况, 如 DashScope 代理多家模型）
                     provider = _infer_model_provider(mid, entry.provider)
                     models.append({
