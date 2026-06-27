@@ -471,7 +471,10 @@ def _validate_architecture(arch: dict) -> list[str]:
 # ═══════════════════════════════════════════════════════════
 
 def _run_execution(project: ProjectState, agents: dict) -> str:
-    """分发架构任务到 tracker。不调 LLM, 只创建任务。"""
+    """分发架构任务到 tracker。不调 LLM, 只创建任务。
+
+    Step 4: 按 layer 路由到对应工程师角色。
+    """
     if not project.architecture:
         return "无架构方案"
     tasks = project.architecture.get("tasks", [])
@@ -479,26 +482,47 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
     if not tasks:
         return "架构方案无任务清单"
 
+    #  layer → (level, role_key) 映射
+    LAYER_ROLE_MAP = {
+        "frontend": ("E", "frontend_engineer"),
+        "backend": ("E", "backend_engineer"),
+        "data": ("E+", "data_engineer"),
+        "devops": ("E", "devops_engineer"),
+    }
+
     created = 0
     id_map = {}  # architecture task_id → tracker task_id
     for tdef in tasks:
         level_map = {"low": "E", "medium": "E+", "high": "D"}
         architecture_level = level_map.get(tdef.get("complexity", "low"), "E")
 
+        # ── Step 4: 按 layer 路由到对应角色 ──
+        layer = tdef.get("layer", "")
+        if layer in LAYER_ROLE_MAP:
+            level, role_key = LAYER_ROLE_MAP[layer]
+            # 架构师标的 complexity 如果更高，尊重架构师判断
+            if architecture_level == "D":
+                level = "D"
+                role_key = "system_architect"
+        else:
+            level = _reassess_complexity(tdef, architecture_level)
+            role_key = "implementer"
+
         # ── 精准升层: 检测架构师低估的复杂任务 ──
-        level = _reassess_complexity(tdef, architecture_level)
+        level = _reassess_complexity(tdef, level)
 
         # 解析真正的依赖关系 (架构中定义的 depends_on)
         arch_deps = tdef.get("depends_on", [])
         dep_ids = [id_map[d] for d in arch_deps if d in id_map]
 
-        # 注入项目上下文，让模型知道要做什么
+        # 注入项目上下文 + 角色信息
         task_desc = (
             f"项目背景: {project.description[:300]}\n"
             f"项目范围: {project.scope[:200]}\n"
             f"你的任务: [{tdef.get('id', '?')}] {tdef.get('title', '')}\n"
             f"具体要求: {tdef.get('description', '')}\n"
             f"验收标准: {tdef.get('acceptance', '代码可运行，功能完整')}\n"
+            f"角色: {role_key}\n"
             f"约束: {'; '.join([c.get('rule', c.get('text','')) for c in constraints[:3]]) if constraints else '无'}"
         )
         child = tracker.create(
@@ -508,6 +532,7 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
         )
         tracker.transition(child.id, TaskStatus.PENDING,
                            route_level=level, route_locked=True,
+                           route_role=role_key,  # Step 4: 绑定角色
                            project_id=project.id)
         project.task_ids.append(child.id)
         id_map[tdef.get("id", "")] = child.id
@@ -517,7 +542,7 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
     project.constraints_checklist = constraints
     project.phase = Phase.EXECUTING
     save(project)
-    return f"已分发 {created} 个子任务"
+    return f"已分发 {created} 个子任务 (按 layer 路由到对应工程师)"
 
 
 # ═══════════════════════════════════════════════════════════
@@ -525,16 +550,74 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
 # ═══════════════════════════════════════════════════════════
 
 def run_test_fix_loop(project: ProjectState, agents: dict) -> str:
-    """EXECUTING 任务全部完成后 → 直接交 GATE3 等人审。
+    """EXECUTING 任务全部完成后 → Step 5 验收 → GATE3。
 
-    ponytail: AI内审已移除。人工在GATE3审核交付物。
+    ponytail: AI内审已移除。QA+安全审计师并行出报告，人工在GATE3审核。
     """
     changed = _collect_changed_files(project)
+    file_count = len(changed)
+    msgs = [f"执行完成 ({file_count} 个文件改动)"]
+
+    # Step 5: 验收层 (QA + 安全审计师并行)
+    verify_msgs = _run_verification(project, agents)
+    if verify_msgs:
+        msgs.extend(verify_msgs)
+
     project.phase = Phase.GATE3
     project.issues = []
     save(project)
-    file_count = len(changed)
-    return f"执行完成 ({file_count} 个文件改动) → GATE3 等待人工审核"
+    return "\n".join(msgs) + "\n→ GATE3 等待人工审核"
+
+
+def _run_verification(project: ProjectState, agents: dict) -> list[str]:
+    """Step 5: QA工程师 + 安全审计师并行出验收报告。
+
+    不调 LLM 写代码，只出验证报告供人工 GATE3 判断。
+    """
+    if not project.constraints_checklist:
+        return ["验收跳过 (无约束清单)"]
+
+    msgs = []
+    constraints = project.constraints_checklist
+    changed_files = _collect_changed_files(project)
+
+    # 构建验收上下文
+    ctx = (
+        f"项目: {project.description[:300]}\n"
+        f"约束清单:\n" +
+        "\n".join(f"- [{c.get('type','?')}] {c.get('rule', c.get('text',''))} (验证: {c.get('check','?')})"
+                  for c in constraints) +
+        f"\n\n改动文件 ({len(changed_files)}):\n" +
+        "\n".join(f"- {f}" for f in sorted(changed_files)[:30])
+    )
+
+    # ── QA 验收 ──
+    qa_prompt = (
+        f"你是 QA 工程师。做验收验证，不写代码，只出报告。\n\n{ctx}\n\n"
+        "逐条检查约束是否满足，给出 evidence。输出 JSON。"
+    )
+    disp_result, err = _safe_dispatch(qa_prompt, "D", f"qa_{project.id}", agents, project)
+    if disp_result and disp_result.executor_result:
+        raw = disp_result.executor_result.raw_output
+        _save_phase_output(project.id, "qa-report.md", raw)
+        msgs.append(f"QA报告完成 ({len(raw)} chars)")
+    elif err:
+        msgs.append(f"QA验收失败: {err}")
+
+    # ── 安全审计 ──
+    sec_prompt = (
+        f"你是安全审计师。做安全审计，不写代码，只出报告。\n\n{ctx}\n\n"
+        "审计: 权限/注入/密钥/依赖漏洞/隐私合规。输出 JSON。"
+    )
+    disp_result2, err2 = _safe_dispatch(sec_prompt, "D", f"sec_{project.id}", agents, project)
+    if disp_result2 and disp_result2.executor_result:
+        raw2 = disp_result2.executor_result.raw_output
+        _save_phase_output(project.id, "security-report.md", raw2)
+        msgs.append(f"安全报告完成 ({len(raw2)} chars)")
+    elif err2:
+        msgs.append(f"安全审计失败: {err2}")
+
+    return msgs
 
 
 # ═══════════════════════════════════════════════════════════

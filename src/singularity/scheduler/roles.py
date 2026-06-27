@@ -186,12 +186,23 @@ _DEFAULT_AGENTS: dict[str, Agent] = {
 }
 
 _DEFAULT_ASSIGNMENTS: dict[str, RoleAssignment] = {
+    # ── 定义层 (Observer) ──
     "researcher":       RoleAssignment(role_key="researcher", agents=["DeepSeek-E"], active="DeepSeek-E"),
+    # ── 架构层 (D) ──
     "architect":        RoleAssignment(role_key="architect", agents=["Opus-D"], active="Opus-D"),
     "system_architect": RoleAssignment(role_key="system_architect", agents=["Opus-D"], active="Opus-D"),
+    # ── 实现层 (E/E+) ──
     "implementer":      RoleAssignment(role_key="implementer", agents=["DeepSeek-E"], active="DeepSeek-E"),
     "debugger":         RoleAssignment(role_key="debugger", agents=["DeepSeek-E"], active="DeepSeek-E"),
     "builder":          RoleAssignment(role_key="builder", agents=["GLM-E+"], active="GLM-E+"),
+    "frontend_engineer": RoleAssignment(role_key="frontend_engineer", agents=["DeepSeek-E"], active="DeepSeek-E"),
+    "backend_engineer":  RoleAssignment(role_key="backend_engineer", agents=["DeepSeek-E"], active="DeepSeek-E"),
+    "data_engineer":     RoleAssignment(role_key="data_engineer", agents=["GLM-E+"], active="GLM-E+"),
+    "devops_engineer":   RoleAssignment(role_key="devops_engineer", agents=["DeepSeek-E"], active="DeepSeek-E"),
+    # ── 验收层 (D) ──
+    "qa_engineer":      RoleAssignment(role_key="qa_engineer", agents=["Opus-D"], active="Opus-D"),
+    "security_auditor": RoleAssignment(role_key="security_auditor", agents=["Opus-D"], active="Opus-D"),
+    # ── 监督/审查 ──
     "supervisor":       RoleAssignment(role_key="supervisor", agents=[], active=""),
     "reviewer":         RoleAssignment(role_key="reviewer", agents=["Opus-D"], active="Opus-D"),
 }
