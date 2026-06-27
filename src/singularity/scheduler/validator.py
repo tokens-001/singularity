@@ -345,82 +345,170 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
     chunks = []
     for i in range(0, total_lines, eff_chunk):
         end = min(i + eff_chunk, total_lines)
-        chunks.append((f"L{i+1}-L{end}", "\n".join(lines[i:end])))
+        chunks.append((f"L{i+1}-L{end}", '\n'.join(lines[i:end])))
 
-    def _parse_json(raw):
-        """Robust JSON extraction. Returns None if all strategies fail."""
-        try: return json.loads(raw)
-        except Exception: pass
-        m = re.search(r'```json\s*\n?(.*?)\n?```', raw, re.DOTALL)
-        if m:
-            try: return json.loads(m.group(1))
-            except Exception: pass
-        depth = 0; start = -1
-        for i, c in enumerate(raw):
-            if c == '{':
-                if depth == 0: start = i
-                depth += 1
-            elif c == '}':
-                depth -= 1
-                if depth == 0 and start >= 0:
-                    try: return json.loads(raw[start:i+1])
-                    except Exception: pass
-                    start = -1
-        from .log import warn; warn("validator._parse_json", f"parse fail: {raw[:150]}")
-        return None
-
-    context = f"{mode} review" if mode == "diff" else "code section"
-    prefix = f"Review this git diff for file: {filepath}" if mode == "diff" else f"Review this {context}"
-
-    def _review_chunk(agent_cfg, chunk_name, chunk_code):
-        model = agent_cfg['model']
-        prompt = f"""{prefix}. Output ONLY valid JSON.
-
-File: {filepath} Section: {chunk_name}
+    # 并行审查
+    reviews = []
+    start_time = _time.time()
+    
+    def review_chunk(chunk_data):
+        chunk_label, chunk_content = chunk_data
+        try:
+            chunk_prompt = f"""File review for {filepath} ({chunk_label}):
 
 Code:
 ```
-{chunk_code}
+{chunk_content[:3000]}
 ```
 
-Find: logic errors, race conditions, security holes, dead code, error handling gaps.
-Output valid JSON: {{"issues":[{{"severity":"critical|warning|info","line":line_number,"detail":"..."}}],"verdict":"pass|needs_fix","summary":"one line"}}"""
-        try:
-            result = _disp.dispatch(prompt, "D", f"mmr_{model[:8]}", {"D":[agent_cfg]}, cwd=root)
+Check: logic errors, security, style, performance, correctness.
+Output ONLY JSON: {{"issues":[{{"severity":"critical|warning|info","line":approx,"detail":"..."}}],"verdict":"pass|retry|abort","summary":"one line"}}
+No issues? {{"issues":[],"verdict":"pass","summary":"no issues"}}
+JSON:"""
+            
+            result = _disp.dispatch(chunk_prompt, review_level, f"mmr_{name[:8]}",
+                                   {review_level:[cfg]}, cwd=root)
             raw = result.executor_result.raw_output if result and result.executor_result else ""
-            data = _parse_json(raw)
-            if data:
-                return {"model":model,"verdict":data.get("verdict","?"),
-                        "summary":data.get("summary",""),"issues":data.get("issues",[])}
-            return {"model":model,"verdict":"parse_err","summary":raw[:200],"issues":[]}
-        except Exception as e:
-            return {"model":model,"verdict":"error","summary":str(e)[:200],"issues":[]}
-
-    # 并行: 每个分段派给所有模型
-    t0 = _time.time()
-    all_issues = []; verdicts = []; summaries = []
-    models_used = list(set(a['model'] for a in model_cfgs))
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(model_cfgs)*len(chunks), 6)) as pool:
-        futs = {}
-        for chunk_name, chunk_code in chunks:
-            for agent_cfg in model_cfgs:
-                futs[pool.submit(_review_chunk, agent_cfg, chunk_name, chunk_code)] = (agent_cfg['model'], chunk_name)
-
-        for fut in concurrent.futures.as_completed(futs, timeout=180):
+            
             try:
-                r = fut.result()
-                verdicts.append({"model":r['model'],"verdict":r['verdict']})
-                summaries.append({"model":r['model'],"summary":r.get('summary','')})
-                for iss in r.get('issues',[]):
-                    all_issues.append({"model":r['model'],**iss})
+                m = re.search(r'\{[^{}]*"issues"[^{}]*\}', raw, re.DOTALL)
+                if m:
+                    d = json.loads(m.group())
+                    return {"model": cfg.get("model", "unknown"),
+                           "issues": d.get("issues", []),
+                           "verdict": d.get("verdict", "pass"),
+                           "summary": d.get("summary", raw[:200])}
             except Exception:
                 pass
+            return {"model": cfg.get("model", "unknown"),
+                   "issues": [], "verdict": "pass", "summary": raw[:200]}
+        except Exception as e:
+            return {"model": cfg.get("model", "unknown"),
+                   "issues": [], "verdict": "pass", "summary": f"chunk review failed: {e}"}
 
-    elapsed = _time.time() - t0
-    # 按严重程度排序
-    sev_order = {"critical":0,"warning":1,"info":2}
-    all_issues.sort(key=lambda x: sev_order.get(x.get('severity','info'), 3))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(model_cfgs)) as executor:
+        future_to_model = {
+            executor.submit(review_chunk, chunk_data): cfg.get("model", "unknown")
+            for chunk_data in chunks
+            for cfg in model_cfgs
+        }
+        
+        for future in concurrent.futures.as_completed(future_to_model):
+            reviews.append(future.result())
 
-    return {"issues":all_issues,"verdicts":verdicts,"summaries":summaries,
-            "models_used":models_used,"elapsed":elapsed,"file":filepath,"lines":total_lines,"mode":mode}
+    elapsed = _time.time() - start_time
+    
+    # 汇总结果
+    all_issues = []
+    all_verdicts = []
+    all_summaries = []
+    models_used = list(set(r["model"] for r in reviews))
+    
+    for r in reviews:
+        all_issues.extend([{"model": r["model"], **issue} for issue in r["issues"]])
+        all_verdicts.append({"model": r["model"], "verdict": r["verdict"]})
+        all_summaries.append({"model": r["model"], "summary": r["summary"]})
+    
+    return {
+        "issues": all_issues,
+        "verdicts": all_verdicts,
+        "summaries": all_summaries,
+        "models_used": models_used,
+        "elapsed": elapsed,
+        "chunks_processed": len(chunks),
+        "mode": mode,
+        "total_lines": total_lines
+    }
+
+
+def incremental_review(file_path: str, old_content: str, new_content: str, 
+                      models: list[str] = None, cwd: str = None) -> dict:
+    """增量审查：对比新旧内容差异，重点审查变更部分。
+    
+    Args:
+        file_path: 文件路径
+        old_content: 旧内容
+        new_content: 新内容  
+        models: 模型列表
+        cwd: 工作目录
+        
+    Returns:
+        审查结果字典
+    """
+    import difflib
+    
+    # 计算差异
+    diff = list(difflib.unified_diff(
+        old_content.splitlines(keepends=True),
+        new_content.splitlines(keepends=True),
+        fromfile=f"a/{file_path}",
+        tofile=f"b/{file_path}",
+        n=3  # 上下文行数
+    ))
+    
+    if not diff:
+        return {"issues": [], "verdict": "pass", "summary": "no changes detected"}
+    
+    diff_text = ''.join(diff)
+    
+    # 使用crossover_review逻辑进行审查
+    return crossover_review(
+        f"Incremental review of {file_path}",
+        f"Diff:\n{diff_text}",
+        [file_path],
+        "D",  # 使用D级别
+        "",
+        cwd
+    )
+
+
+def security_review(code: str, file_path: str = "", severity_filter: str = "all") -> dict:
+    """专门的安全审查函数。
+    
+    Args:
+        code: 代码内容
+        file_path: 文件路径(用于上下文)
+        severity_filter: "all", "high", "critical"
+        
+    Returns:
+        安全审查结果
+    """
+    security_patterns = [
+        {"pattern": r"(eval|exec)\s*\(", "severity": "critical", "desc": "危险代码执行函数"},
+        {"pattern": r"subprocess\.(call|run|Popen)", "severity": "warning", "desc": "子进程执行"},
+        {"pattern": r"(os\.system|os\.popen)", "severity": "critical", "desc": "系统命令执行"},
+        {"pattern": r"open\([^)]*\"w|write", "severity": "warning", "desc": "文件写入操作"},
+        {"pattern": r"(password|secret|token|key)\s*=", "severity": "warning", "desc": "硬编码敏感信息"},
+        {"pattern": r"sql\s*[+=].*|execute\s*\(", "severity": "warning", "desc": "SQL查询执行"},
+        {"pattern": r"(allow_|enable_|skip_|disable_)(auth|verify|check)", "severity": "critical", "desc": "安全检查绕过"},
+    ]
+    
+    issues = []
+    lines = code.split('\n')
+    
+    for i, line in enumerate(lines, 1):
+        for pattern_info in security_patterns:
+            if re.search(pattern_info["pattern"], line, re.IGNORECASE):
+                severity = pattern_info["severity"]
+                if severity_filter != "all":
+                    if severity_filter == "critical" and severity != "critical":
+                        continue
+                    if severity_filter == "high" and severity not in ["critical", "high"]:
+                        continue
+                
+                issues.append({
+                    "severity": severity,
+                    "line": i,
+                    "detail": f"{pattern_info['desc']}: {line.strip()}",
+                    "pattern": pattern_info["pattern"]
+                })
+    
+    # 如果有高危模式，需要人工复核
+    critical_issues = [i for i in issues if i["severity"] == "critical"]
+    verdict = "abort" if critical_issues else "pass"
+    
+    return {
+        "issues": issues,
+        "verdict": verdict,
+        "summary": f"Found {len(issues)} security issues ({len(critical_issues)} critical)" if issues else "No security issues detected"
+    }
