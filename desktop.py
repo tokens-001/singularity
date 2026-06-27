@@ -20,11 +20,11 @@ from pathlib import Path
 
 import webview
 
-# ── 确保 app.py 可导入 ──────────────────────────────────
+# ── 确保 singularity 可导入 ──────────────────────────────────
 APP_DIR = Path(__file__).parent
-sys.path.insert(0, str(APP_DIR))
+sys.path.insert(0, str(APP_DIR / "src"))
 
-from app import app as flask_app
+from singularity.web.app import app as flask_app
 
 HOST = "127.0.0.1"
 PORT = 5050
