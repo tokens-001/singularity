@@ -13,7 +13,12 @@ export default function AgentDashboard() {
   const [form, setForm] = useState<any>({level:'E', model:'', type:'openai-agent', entry:'', api_key_env:'', max_turns:5, roles:[], default:false, sandbox:'worktree'})
   const [selectedSkills, setSelectedSkills] = useState<{level:string;model:string;skills:string[];available:string[]}|null>(null)
 
-  const fetch = () => { setLoading(true); api.agents().then(setAgents).finally(()=>setLoading(false)) }
+  const [disabledMap, setDisabledMap] = useState<Record<string,string[]>>({})
+
+  const fetch = () => { setLoading(true); api.agents().then(d => {
+    setDisabledMap(d?._disabled || {})
+    setAgents(d)
+  }).finally(()=>setLoading(false)) }
   useEffect(() => { fetch() }, [])
 
   const handleSave = async () => {
@@ -133,6 +138,10 @@ export default function AgentDashboard() {
                 </div>
               ))}
             </div>
+            {/* Disabled agents */}
+            {(disabledMap[lvl]||[]).length > 0 && <div style={{marginTop:10,fontSize:11,color:'var(--text-muted)'}}>
+              已禁用: {(disabledMap[lvl]||[]).map((m:string)=><span key={m} style={{display:'inline-flex',alignItems:'center',gap:4,background:'var(--bg-tertiary)',color:'var(--text-muted)',padding:'2px 8px',borderRadius:3,margin:'2px 4px',fontFamily:'var(--font-mono)',fontSize:10}}>{m} <button onClick={()=>api.addAgent({level:lvl,model:m,type:'openai-agent',max_turns:5,roles:[],sandbox:'worktree'}).then(fetch)} style={{background:'none',border:'none',color:'var(--accent-green)',cursor:'pointer',fontSize:10,padding:0}}>启用</button></span>)}
+            </div>}
           </div>
         )
       })}
