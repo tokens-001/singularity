@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, Task } from '../lib/api'
+import { useSSE } from '../lib/useSSE'
 import { Play, Square, RotateCcw, XCircle, Plus, RefreshCw, ChevronRight, CheckCircle, Pause } from 'lucide-react'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -29,8 +30,18 @@ export default function TaskPanel() {
   }, [statusFilter])
 
   useEffect(() => { fetchTasks() }, [fetchTasks])
+
+  // SSE 实时更新: 任务状态变化时立即刷新
+  useSSE((event) => {
+    if (event.kind === 'init' || event.kind === 'task_start' || event.kind === 'task_done' ||
+        event.kind === 'task_fail' || event.kind === 'task_cancel' || event.kind === 'system') {
+      fetchTasks()
+    }
+  })
+
+  // 兜底: 每 30s 轮询一次 (SSE 中断时也能更新)
   useEffect(() => {
-    const t = setInterval(fetchTasks, 5000)
+    const t = setInterval(fetchTasks, 30000)
     return () => clearInterval(t)
   }, [fetchTasks])
 

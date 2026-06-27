@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { api } from '../lib/api'
+import { useSSE } from '../lib/useSSE'
 import { Play, Square, Activity, Zap, AlertCircle, CheckCircle, Clock } from 'lucide-react'
 
 export default function Dashboard() {
@@ -8,11 +9,22 @@ export default function Dashboard() {
   const [tokens, setTokens] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
+  const refresh = () => {
     Promise.all([api.status(), api.loopStatus(), api.tokenUsage()]).then(([s, l, t]) => {
       setStatus(s); setLoop(l); setTokens(t); setLoading(false)
     }).catch(() => setLoading(false))
-  }, [])
+  }
+
+  useEffect(() => { refresh() }, [])
+
+  // SSE 实时更新
+  useSSE((event) => {
+    if (event.kind === 'init' && event.counts) {
+      setStatus((prev: any) => prev ? { ...prev, counts: event.counts } : prev)
+    } else if (event.kind !== 'ping' && event.kind !== 'heartbeat') {
+      refresh()
+    }
+  })
 
   if (loading) return <div style={{color:'var(--text-muted)'}}>加载中...</div>
 
