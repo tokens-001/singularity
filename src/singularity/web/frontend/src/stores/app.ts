@@ -2,28 +2,22 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
 export interface Task {
-  id: string; title: string; status: string; level: string;
-  agent: string; updated_at: number; project_id?: string;
+  id: string; description: string; status: string; route_level: string;
+  route_gate: string; route_role: string; project_id: string;
+  updated_at: number; created_at: number;
 }
+export interface TaskDetail extends Task { trace?: any; timeline?: any }
 
 interface AppState {
   sidebarCollapsed: boolean
-  tasks: Task[]
-  taskFilters: { status: string; level: string }
   toggleSidebar: () => void
-  setTasks: (tasks: Task[]) => void
-  setTaskFilters: (filters: Partial<AppState['taskFilters']>) => void
 }
 
 export const useAppStore = create<AppState>()(
   persist(
     (set) => ({
       sidebarCollapsed: false,
-      tasks: [],
-      taskFilters: { status: '', level: '' },
       toggleSidebar: () => set(s => ({ sidebarCollapsed: !s.sidebarCollapsed })),
-      setTasks: (tasks) => set({ tasks }),
-      setTaskFilters: (f) => set(s => ({ taskFilters: { ...s.taskFilters, ...f } })),
     }),
     { name: 'qidian-app', partialize: (s) => ({ sidebarCollapsed: s.sidebarCollapsed }) }
   )

@@ -646,7 +646,8 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/app", defaults={"path": ""})
+@app.route("/app", defaults={"path": ""}, strict_slashes=False)
+@app.route("/app/", defaults={"path": ""}, strict_slashes=False)
 @app.route("/app/<path:path>")
 def spa(path=""):
     """新版 React SPA（开发中）。"""
