@@ -640,21 +640,14 @@ from singularity.scheduler import _api as _api_handler
 # 页面
 # ═══════════════════════════════════════════════════════════
 
-@app.route("/")
-def index():
-    """旧版控制台（主力）。新版 React SPA 在 /app。"""
-    return render_template("index.html")
-
-
-@app.route("/app", defaults={"path": ""}, strict_slashes=False)
-@app.route("/app/", defaults={"path": ""}, strict_slashes=False)
-@app.route("/app/<path:path>")
+@app.route("/", defaults={"path": ""}, strict_slashes=False)
+@app.route("/<path:path>")
 def spa(path=""):
-    """新版 React SPA（开发中）。"""
+    """React SPA。API 路由优先匹配，其他全部 fallback。"""
     dist_index = Path(__file__).parent / "static" / "dist" / "index.html"
     if dist_index.exists():
         return dist_index.read_text(encoding="utf-8")
-    return "React frontend not built. Run: cd src/singularity/web/frontend && npm run build", 404
+    return render_template("index.html")
 
 
 # ═══════════════════════════════════════════════════════════
