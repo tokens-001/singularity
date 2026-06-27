@@ -8,8 +8,6 @@ export default function Dashboard() {
   const [loop, setLoop] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [lastEvent, setLastEvent] = useState('')
-  const [showMonitor, setShowMonitor] = useState(false)
-  const [events, setEvents] = useState<{ts:number;text:string;color:string}[]>([])
 
   const refresh = () => {
     Promise.all([api.status(), api.loopStatus()]).then(([s, l]) => {
@@ -19,19 +17,11 @@ export default function Dashboard() {
 
   useEffect(() => { refresh() }, [])
 
-  const addEvt = (text: string, color: string) => {
-    setEvents(prev => [{ ts: Date.now(), text, color }, ...prev].slice(0, 100))
-    setLastEvent(text)
-  }
-
   useSSE((event) => {
     if (event.kind === 'init' && event.counts) {
       setStatus((prev: any) => prev ? { ...prev, counts: event.counts } : prev)
-    } else if (event.kind === 'task_start') addEvt(`任务启动: ${(event.msg||'').slice(0,60)}`, 'var(--accent)')
-    else if (event.kind === 'task_done') addEvt(`任务完成: ${(event.msg||'').slice(0,60)}`, 'var(--accent-green)')
-    else if (event.kind === 'task_fail') addEvt(`任务失败: ${(event.msg||'').slice(0,60)}`, 'var(--accent-red)')
-    else if (event.kind === 'task_cancel') addEvt(`任务取消: ${(event.msg||'').slice(0,60)}`, 'var(--accent-yellow)')
-    else if (event.kind === 'system') addEvt(`系统: ${(event.msg||'').slice(0,80)}`, 'var(--text-muted)')
+    } else if (event.kind === 'task_start') setLastEvent(`任务启动: ${(event.msg||'').slice(0,40)}`)
+    else if (event.kind === 'task_done') setLastEvent(`任务完成: ${(event.msg||'').slice(0,40)}`)
     else if (event.kind !== 'ping' && event.kind !== 'heartbeat') refresh()
   })
 
@@ -49,14 +39,10 @@ export default function Dashboard() {
   ]
 
   return (
-    <div style={{maxWidth:900}}>
-      <div style={{display:'flex',alignItems:'center',marginBottom:20}}>
-        <h2 style={{fontSize:18,fontWeight:600}}>总览</h2>
-        <button onClick={()=>setShowMonitor(!showMonitor)}
-          style={{marginLeft:'auto',background:showMonitor?'var(--accent)':'var(--bg-tertiary)',color:showMonitor?'#fff':'var(--text-secondary)',border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:'5px 12px',cursor:'pointer',fontSize:11}}>
-          {showMonitor?'收起监控':'实时监控'} {events.length>0&&`(${events.length})`}</button>
-      </div>
+    <div style={{maxWidth:800}}>
+      <h2 style={{fontSize:18,fontWeight:600,marginBottom:20}}>总览</h2>
 
+      {/* Stats row */}
       <div style={{display:'flex',gap:16,marginBottom:28}}>
         {statCards.map(s => (
           <div key={s.label} style={{textAlign:'center'}}>
@@ -66,6 +52,7 @@ export default function Dashboard() {
         ))}
       </div>
 
+      {/* Agent tiers */}
       <div style={{marginBottom:28}}>
         <div style={{fontSize:13,fontWeight:600,marginBottom:10,color:'var(--text-secondary)'}}>Agent</div>
         <div style={{display:'flex',gap:24}}>
@@ -82,25 +69,15 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div style={{display:'flex',alignItems:'center',gap:16,padding:'12px 16px',background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:'var(--radius)',marginBottom:showMonitor?14:0}}>
+      {/* Loop + last event */}
+      <div style={{display:'flex',alignItems:'center',gap:16,padding:'12px 16px',background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:'var(--radius)'}}>
         <span style={{fontSize:13,fontWeight:600}}>调度</span>
         <span style={{fontSize:12,color:loop?.running?'var(--accent-green)':'var(--text-muted)'}}>{loop?.running?'运行中':'已停止'}</span>
         <button onClick={()=>(loop?.running?api.stopLoop():api.startLoop()).then(()=>location.reload())}
           style={{background:loop?.running?'var(--accent-red)':'var(--accent-green)',color:'#fff',border:'none',borderRadius:4,padding:'4px 14px',cursor:'pointer',fontSize:12}}>
           {loop?.running?'停止':'启动'}</button>
-        {!showMonitor && lastEvent && <span style={{marginLeft:'auto',fontSize:11,color:'var(--text-muted)',fontFamily:'var(--font-mono)'}}>{lastEvent}</span>}
+        {lastEvent && <span style={{marginLeft:'auto',fontSize:11,color:'var(--text-muted)',fontFamily:'var(--font-mono)'}}>{lastEvent}</span>}
       </div>
-
-      {showMonitor && (
-        <div style={{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:'var(--radius)',overflow:'hidden'}}>
-          <div style={{fontSize:10,fontFamily:'var(--font-mono)',lineHeight:2,maxHeight:400,overflow:'auto',padding:'8px 12px'}}>
-            {events.length===0 && <span style={{color:'var(--text-muted)'}}>等待事件...</span>}
-            {events.map((e,i)=><div key={i} style={{color:e.color,borderBottom:'1px solid var(--border)',padding:'2px 0'}}>
-              <span style={{color:'var(--text-muted)',fontSize:8}}>{new Date(e.ts).toLocaleTimeString()}</span> {e.text}
-            </div>)}
-          </div>
-        </div>
-      )}
     </div>
   )
 }
