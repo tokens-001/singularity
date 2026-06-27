@@ -277,9 +277,10 @@ def scan_models(api_id: str, include_capabilities: bool = True) -> list[dict]:
             for item in items:
                 mid = item.get("id", "")
                 # Filter: exclude non-text models + test/dev garbage
-                skip_prefixes = ("o1-", "test-", "sre-", "vanchin/", "_")
+                skip_prefixes = ("o1-", "test-", "sre-", "vanchin/", "_", "siliconflow/")
                 skip_keywords = ("audio", "embedding", "tts", "dall-e", "whisper", "moderation",
-                                "livetranslate", "ocr", "image", "asr", "fun-asr", "auto-handle")
+                                "livetranslate", "ocr", "image", "asr", "fun-asr", "auto-handle",
+                                "distill", "-preview")
                 skip = any(mid.startswith(p) for p in skip_prefixes) or any(k in mid.lower() for k in skip_keywords)
                 if mid and not skip:
                     # 从已知模型库查能力数据
@@ -297,7 +298,27 @@ def scan_models(api_id: str, include_capabilities: bool = True) -> list[dict]:
                         "notes": cap.notes if cap else "",
                         "known": cap is not None,
                     })
-            return models
+            # Dedup 1: remove dated snapshots if base version exists
+            # Dedup 2: remove prefixed dups like 'kimi/kimi-k2.7-code' if 'kimi-k2.7-code' exists
+            import re
+            model_ids = {m["id"] for m in models}
+            date_pattern = re.compile(r"-\d{4}-\d{2}-\d{2}$")
+            filtered = []
+            for m in models:
+                mid = m["id"]
+                # Dedup 1: dated snapshot whose base version exists → skip
+                m2 = date_pattern.search(mid)
+                if m2:
+                    base = mid[:m2.start()]
+                    if base in model_ids:
+                        continue
+                # Dedup 2: 'provider/model' where 'model' also exists → skip
+                if "/" in mid:
+                    short = mid.split("/")[-1]
+                    if short in model_ids and short != mid:
+                        continue
+                filtered.append(m)
+            return filtered
     except Exception:
         return []
 
