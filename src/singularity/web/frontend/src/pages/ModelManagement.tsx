@@ -8,6 +8,7 @@ export default function ModelManagement() {
   const [scanResults, setScanResults] = useState<any>(null)
   const [scanning, setScanning] = useState('')
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set())
+  const [providerFilter, setProviderFilter] = useState('')
   const [tierFilter, setTierFilter] = useState('')
   const [showAdd, setShowAdd] = useState(false)
   const [addForm, setAddForm] = useState<any>({ id: '', provider: '', tier: '', context_window: '', cost_1k_input: '', cost_1k_output: '' })
@@ -106,8 +107,11 @@ export default function ModelManagement() {
             </div>
           </div>
           {scanResults.models && (
-            <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
-              {scanResults.models.map((m:any)=>(
+            <div>
+              {/* Provider filter */}
+              {(()=>{const providers=(Array.from(new Set((scanResults.models||[]).map((m:any)=>String(m.provider||'未知')))) as string[]);return providers.length>1?<div style={{display:'flex',gap:4,marginBottom:6}}><button onClick={()=>setProviderFilter('')} style={filterBtn(providerFilter==='')}>全部</button>{providers.map((p:string)=><button key={p} onClick={()=>setProviderFilter(p)} style={filterBtn(providerFilter===p)}>{p}</button>)}</div>:null})()}
+              <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
+              {(providerFilter?scanResults.models.filter((m:any)=>(m.provider||'未知')===providerFilter):scanResults.models).map((m:any)=>(
                 <span key={m.id} onClick={()=>toggleModel(m.id)} style={{
                   background:selectedModels.has(m.id)?'var(--accent)':'var(--bg-tertiary)',
                   color:selectedModels.has(m.id)?'#fff':'var(--text-primary)',
@@ -118,6 +122,7 @@ export default function ModelManagement() {
                   {m.display && <span style={{color:selectedModels.has(m.id)?'rgba(255,255,255,0.7)':'var(--text-muted)',marginLeft:4}}>({m.display})</span>}
                 </span>
               ))}
+              </div>
             </div>
           )}
         </div>
