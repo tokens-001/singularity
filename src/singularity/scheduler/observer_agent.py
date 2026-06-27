@@ -2,6 +2,9 @@
 
 旁路守护线程，通过只读工具查询系统状态并回答用户自然语言问题。
 不修改 scheduler / dispatcher / executor 的任何执行逻辑。
+
+Step 3: 支持定义层4角色 (产品经理/交互设计师/UI设计师/研究员)。
+Observer 负责搞清楚用户要什么，不做设计决策。
 """
 from __future__ import annotations
 
@@ -11,6 +14,7 @@ import os
 import queue
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 import httpx
@@ -284,6 +288,130 @@ OBSERVER_SYSTEM_PROMPT = """你是 Singularity Dispatch 的主交互智能体，
 5. 执行操作后报告结果
 """
 
+# ═══════════════════════════════════════════════════════════════
+# Step 3: 定义层 4 角色 (Observer → 搞清楚用户要什么)
+# ═══════════════════════════════════════════════════════════════
+
+_OBSERVER_DEFINITION_ROLES: dict[str, dict] = {}
+
+def _load_observer_skills() -> dict[str, dict]:
+    """加载 observer 下的 4 个定义层角色 skill。"""
+    import re
+    skills_dir = Path(__file__).resolve().parent.parent / "skills" / "observer"
+    roles = {}
+    for d in skills_dir.iterdir() if skills_dir.exists() else []:
+        if not d.is_dir():
+            continue
+        skill_md = d / "SKILL.md"
+        if not skill_md.exists():
+            continue
+        text = skill_md.read_text(encoding="utf-8")
+        # 解析 frontmatter
+        fm = {}
+        if text.startswith("---"):
+            parts = text.split("---", 2)
+            if len(parts) >= 3:
+                for line in parts[1].strip().split("\n"):
+                    if ":" in line:
+                        k, v = line.split(":", 1)
+                        fm[k.strip()] = v.strip()
+                body = parts[2].strip()
+            else:
+                body = text
+        else:
+            body = text
+        roles[fm.get("name", d.name)] = {
+            "key": d.name,
+            "name": fm.get("description", fm.get("name", d.name)),
+            "system_prompt": body,
+        }
+    return roles
+
+
+def _definition_role_prompt(role_key: str) -> str:
+    """获取定义层角色 prompt。"""
+    global _OBSERVER_DEFINITION_ROLES
+    if not _OBSERVER_DEFINITION_ROLES:
+        _OBSERVER_DEFINITION_ROLES = _load_observer_skills()
+    # 精确匹配
+    role = _OBSERVER_DEFINITION_ROLES.get(role_key, {})
+    if role:
+        return role.get("system_prompt", "")
+    # 模糊匹配: 按 key 后缀
+    for k, v in _OBSERVER_DEFINITION_ROLES.items():
+        if k.endswith(role_key) or role_key in k:
+            return v.get("system_prompt", "")
+    return ""
+
+
+DEFINITION_SYSTEM_PROMPT = """你是 Singularity 的定义层对话智能体。你的职责是搞清楚用户要什么，产出结构化文档交人确认（GATE1）。
+
+你有 4 个角色帽子，根据对话阶段切换：
+
+1. **产品经理** (product-manager) — 用户刚描述想法时启动
+   问需求、出 PRD（功能/范围/竞品/成功标准）
+   触发: 用户说"我要做xxx" "帮我设计xxx" "做一个xxx产品"
+
+2. **交互设计师** (interaction-designer) — PRD 确认后启动
+   设计用户流程、信息架构、页面结构、状态流转
+   触发: 用户确认了 PRD
+
+3. **UI 设计师** (ui-designer) — 与交互设计并行
+   收集视觉偏好、风格参考、品牌调性，给出方向建议
+   触发: 用户开始描述喜欢的风格/参考
+
+4. **研究员** (researcher) — PRD 出来后并行启动
+   市场调研、技术调研、可行性分析
+   触发: PRD 确认后自动启动，或用户要求调研
+
+工作流:
+1. 用户说想法 → 自动切换到产品经理角色，问清楚需求，写 PRD
+2. PRD 完成 → 提示用户在 GATE1 确认
+3. 用户确认 → 同时启动 交互/UI/研究员（并行），产出 3 份文档
+4. 4 份文档齐全 → 提示用户可以进入 GATE1，通过后开始架构设计
+
+规则:
+- 不问技术选型问题（那是架构师的事）
+- 不做设计决策，给选项让用户选
+- 每个角色输出必须是结构化 JSON
+- 信息不足时追问，不编造
+- GATE1 必须人确认，不自作主张通过"""
+
+
+def _get_definition_context(role_key: str = "") -> str:
+    """构建定义层角色上下文。"""
+    prompt = DEFINITION_SYSTEM_PROMPT
+    if role_key:
+        role_prompt = _definition_role_prompt(role_key)
+        if role_prompt:
+            prompt = role_prompt + "\n\n---\n\n" + prompt
+    return prompt
+
+
+def _detect_definition_intent(question: str) -> str:
+    """检测用户意图是否为定义层需求。返回角色 key 或空字符串。"""
+    q = question.lower()
+    # 产品/项目定义意图
+    pm_triggers = ["我要做", "帮我设计", "做一个", "开发一个", "新产品", "新项目",
+                   "立项", "prd", "产品方案", "需求分析", "功能设计"]
+    if any(t in q for t in pm_triggers):
+        return "product-manager"
+    # UI/视觉意图
+    ui_triggers = ["风格", "颜色", "好看", "设计感", "ui", "界面", "视觉", "品牌",
+                   "参考图", "暗色", "亮色", "极简", "华丽"]
+    if any(t in q for t in ui_triggers):
+        return "ui-designer"
+    # 交互意图
+    ix_triggers = ["流程", "页面", "导航", "交互", "操作步骤", "用户体验", "ux",
+                   "信息架构", "跳转"]
+    if any(t in q for t in ix_triggers):
+        return "interaction-designer"
+    # 调研意图
+    rs_triggers = ["调研", "竞品", "市场", "可行性", "有哪些", "对比", "参考方案"]
+    if any(t in q for t in rs_triggers):
+        return "researcher"
+    return ""
+
 
 # ═══════════════════════════════════════════════════════════════
 # 工具执行分发
@@ -412,25 +540,35 @@ def _answer_question(question: str) -> str:
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+
+    # Step 3: 检测定义层意图，注入角色 prompt
+    def_role = _detect_definition_intent(question)
+    system_prompt = _get_definition_context(def_role) if def_role else OBSERVER_SYSTEM_PROMPT
+
     messages = [
-        {"role": "system", "content": OBSERVER_SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": question},
     ]
     max_turns = 5
+    # 定义层模式不需要工具调用，简化对话
+    use_tools = not def_role
     with httpx.Client(timeout=60.0) as client:
         for _ in range(max_turns):
+            body = {
+                "model": model,
+                "messages": messages,
+                "temperature": cfg.get("temperature", 0.3),
+                "max_tokens": cfg.get("max_tokens", 2048 if def_role else 1024),
+            }
+            if use_tools:
+                body["tools"] = OBSERVER_TOOLS
+                body["tool_choice"] = "auto"
+
             try:
                 resp = client.post(
                     f"{base_url}/chat/completions",
                     headers=headers,
-                    json={
-                        "model": model,
-                        "messages": messages,
-                        "tools": OBSERVER_TOOLS,
-                        "tool_choice": "auto",
-                        "temperature": cfg.get("temperature", 0.3),
-                        "max_tokens": cfg.get("max_tokens", 1024),
-                    },
+                    json=body,
                 )
                 resp.raise_for_status()
                 data = resp.json()
@@ -442,6 +580,10 @@ def _answer_question(question: str) -> str:
 
             tool_calls = message.get("tool_calls") or []
             content = message.get("content")
+
+            # 定义层模式：直接返回文本
+            if def_role:
+                return content.strip() if content else "（模型返回空内容）"
 
             # ponytail: 如果只有文本没有工具调用，直接返回
             if content and not tool_calls:
