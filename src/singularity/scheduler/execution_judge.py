@@ -71,17 +71,17 @@ _STAGE1_PROMPT = """你是 Fusion 裁判分析器。以下 N 个模型对同一�
 - 如果某个维度确实为空，用空数组 []"""
 
 
-def _call_model(prompt: str, model: str) -> str:
+def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:
     """调用单个模型（用于合成阶段）。"""
     api_map = {
-        "deepseek-chat": ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/chat/completions"),
-        "deepseek-v4-pro": ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/chat/completions"),
-        "glm-5-turbo": ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4/chat/completions"),
-        "glm-5.2": ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4/chat/completions"),
-        "kimi-k2.7-code": ("KIMI_API_KEY", "https://api.moonshot.cn/v1/chat/completions"),
-        "gpt-5.5": ("OPENAI_API_KEY", "https://api.openai.com/v1/chat/completions"),
-        "gpt-5.5-pro": ("OPENAI_API_KEY", "https://api.openai.com/v1/chat/completions"),
-        "claude-opus-4-8": ("ANTHROPIC_API_KEY", "https://api.anthropic.com/v1/messages"),
+        "deepseek-chat": ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1"),
+        "deepseek-v4-pro": ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1"),
+        "glm-5-turbo": ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4"),
+        "glm-5.2": ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4"),
+        "kimi-k2.7-code": ("KIMI_API_KEY", "https://api.moonshot.cn/v1"),
+        "gpt-5.5": ("OPENAI_API_KEY", "https://api.openai.com/v1"),
+        "gpt-5.5-pro": ("OPENAI_API_KEY", "https://api.openai.com/v1"),
+        "claude-opus-4-8": ("ANTHROPIC_API_KEY", "https://api.anthropic.com/v1"),
     }
     env_var, base_url = api_map.get(model, ("", ""))
     api_key = os.environ.get(env_var, "")
@@ -89,12 +89,12 @@ def _call_model(prompt: str, model: str) -> str:
         return ""
     try:
         import httpx
-        with httpx.Client(timeout=httpx.Timeout(60)) as client:
+        with httpx.Client(timeout=httpx.Timeout(120)) as client:
             r = client.post(
                 f"{base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={"model": model, "messages": [{"role": "user", "content": prompt}],
-                      "max_tokens": 2000, "temperature": 0.3},
+                      "max_tokens": max_tokens, "temperature": 0.3},
             )
             if r.status_code == 200:
                 return r.json()["choices"][0]["message"]["content"]
@@ -311,3 +311,131 @@ def run_parallel_models(task_desc: str, level: str = "E", tier: str = "budget") 
         if lock_fd:
             fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
             lock_fd.close()
+
+
+# ═══════════════════════════════════════════════════
+# 架构方案专用 Fusion (Step 2: 3模型碰撞)
+# ═══════════════════════════════════════════════════
+
+_ARCH_FUSION_STAGE1 = """你是架构合成裁判。以下 {n} 个模型对同一需求独立产出了架构方案。
+
+【原始需求】
+{task}
+
+【各模型架构方案】
+{outputs}
+
+请输出五维差异分析 JSON:
+
+{{
+  "consensus": [
+    {{"point": "所有模型一致的点", "confidence": "high"}}
+  ],
+  "contradictions": [
+    {{
+      "dimension": "modules/data_model/api/tech_stack/tasks",
+      "point": "矛盾点",
+      "positions": {{"model_1": "观点", "model_2": "观点"}},
+      "resolution": "你的裁决及理由",
+      "winner": "model_1|model_2|merge"
+    }}
+  ],
+  "unique_insights": [
+    {{"point": "只有一个模型提出的好想法", "source": "model_name", "adopt": true}}
+  ],
+  "blind_spots": [
+    {{"what": "所有模型都遗漏的需求点", "suggestion": "补充建议"}}
+  ]
+}}
+
+分析原则:
+- contradictions 必须给出明确裁决，不能"两者都对"
+- modules 维度: 对比模块划分粒度、命名、依赖关系
+- data_model 维度: 对比实体设计、字段、关系、索引
+- api_contracts 维度: 对比接口定义、错误处理
+- tech_stack 维度: 对比技术选型及理由
+- tasks 维度: 对比任务拆解、复杂度评定、依赖关系
+- blind_spots 对照原始需求逐条检查"""
+
+_ARCH_FUSION_STAGE2 = """你是架构合成定稿人。基于五维分析，产出一份统一的架构方案。
+
+【原始需求】
+{task}
+
+【五维分析】
+{analysis}
+
+【各模型原始方案（参考）】
+{outputs}
+
+合成规则:
+1. consensus → 直接锁定，写入最终方案
+2. contradictions → 按裁决采用 winner 的观点
+3. unique_insights (adopt=true) → 补充进最终方案
+4. blind_spots → 补充缺失部分
+5. 模块名/实体名去重: 同名合并，异名同义选更清晰的名字
+6. API 去重: 同路径同方法 → 保留更完整的 spec
+7. 任务去重: 同描述 → 合并，保留更详细的那个
+8. 约束去重: 同含义 → 保留更严格的验证方式
+9. 风险去重: 同风险 → 合并缓解措施取并集
+
+输出必须严格遵循以下 JSON schema:
+
+{{
+  "architecture": "综述 (<500字)",
+  "modules": [{{"name":"","responsibility":"","depends_on":[],"interfaces":[]}}],
+  "data_model": {{"database":"","entities":[],"relationships":[]}},
+  "api_contracts": [{{"method":"","path":"","description":"","input":{{}},"output":{{}},"errors":[]}}],
+  "tech_stack": {{"language":"","framework":"","database":"","cache":"","mq":""}},
+  "constraints": [{{"type":"","rule":"","check":""}}],
+  "tasks": [{{"id":"","title":"","description":"","complexity":"","layer":"","depends_on":[],"acceptance":""}}],
+  "risks": [{{"risk":"","impact":"","mitigation":""}}],
+  "fusion_notes": {{
+    "resolved_contradictions": 0,
+    "adopted_insights": 0,
+    "filled_blind_spots": 0,
+    "dedup_stats": "模块/实体/API/任务/约束 各项去重数量",
+    "confidence": "high/medium/low — 合成结果的可信度"
+  }}
+}}
+
+只输出 JSON，用 ```json ... ``` 包裹。"""
+
+
+def fuse_architecture(task_desc: str, outputs: list[str],
+                      judge_model: str = "deepseek-chat",
+                      synthesizer_model: str = "") -> str:
+    """架构方案专用两阶段融合。
+
+    阶段一: 五维差异分析 (consensus/contradictions/insights/blind_spots)
+    阶段二: 基于分析定稿，schema 去重合并
+    """
+    if not outputs or len(outputs) < 2:
+        return outputs[0] if outputs else ""
+
+    # 阶段一: 五维分析
+    outputs_text = "\n\n---\n".join(
+        f"[模型{i+1}]\n{o[:2000]}" for i, o in enumerate(outputs)
+    )
+    stage1_prompt = _ARCH_FUSION_STAGE1.format(
+        n=len(outputs), task=task_desc[:1500], outputs=outputs_text
+    )
+    analysis_raw = _call_model(stage1_prompt, judge_model, max_tokens=4000)
+    analysis = try_parse_json(analysis_raw) if analysis_raw else {}
+
+    # 阶段二: 基于分析定稿
+    if not synthesizer_model:
+        synthesizer_model = judge_model  # ponytail: 复用裁判模型
+    analysis_text = json.dumps(analysis, ensure_ascii=False, indent=2) if analysis else "分析不可用"
+    stage2_prompt = _ARCH_FUSION_STAGE2.format(
+        task=task_desc[:1500], analysis=analysis_text, outputs=outputs_text
+    )
+    fused = _call_model(stage2_prompt, synthesizer_model, max_tokens=8000)
+    return fused if fused else outputs[0]
+
+
+def _is_architecture_task(task: str) -> bool:
+    """检测是否为架构设计任务。"""
+    arch_keywords = ["模块划分", "数据模型", "API契约", "技术栈", "架构方案",
+                     "architecture", "system_architect", "模块", "entity"]
+    return any(kw in task for kw in arch_keywords)

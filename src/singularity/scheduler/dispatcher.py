@@ -587,7 +587,30 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
             attempts=1,
         )
 
-    # 合成: 用第一个有产出的模型做 synthesizer
+    # 合成: 架构任务用专用 fusion，其他用通用委员会合成
+    from .execution_judge import _is_architecture_task, fuse_architecture
+
+    if _is_architecture_task(task):
+        # 架构方案: 两阶段 fusion (Step 2)
+        raw_outputs = [r.raw_output for _, r in outputs]
+        try:
+            fused = fuse_architecture(task, raw_outputs, judge_model="deepseek-chat")
+            if fused:
+                # 包装成 ExecutorResult 兼容格式
+                class _FusionResult:
+                    raw_output = fused
+                    success = True
+                    error = ""
+                return DispatchResult(
+                    level=level,
+                    agent_cfg={"model": f"fusion({','.join(m for m,_ in outputs)})"},
+                    executor_result=_FusionResult(),
+                    attempts=len(outputs) + 2,  # N 并行 + 1 judge + 1 synthesize
+                )
+        except Exception:
+            pass  # fusion 失败 → fallback 到通用合成
+
+    # 通用委员会合成
     synthesizer = chain[0]
     synthesis_prompt = _build_synthesis_prompt(task, outputs)
     try:
