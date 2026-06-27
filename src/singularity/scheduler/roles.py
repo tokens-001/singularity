@@ -186,13 +186,14 @@ _DEFAULT_AGENTS: dict[str, Agent] = {
 }
 
 _DEFAULT_ASSIGNMENTS: dict[str, RoleAssignment] = {
-    "researcher":   RoleAssignment(role_key="researcher", agents=["DeepSeek-E"], active="DeepSeek-E"),
-    "architect":    RoleAssignment(role_key="architect", agents=["Opus-D"], active="Opus-D"),
-    "implementer":  RoleAssignment(role_key="implementer", agents=["DeepSeek-E"], active="DeepSeek-E"),
-    "debugger":     RoleAssignment(role_key="debugger", agents=["DeepSeek-E"], active="DeepSeek-E"),
-    "builder":      RoleAssignment(role_key="builder", agents=["GLM-E+"], active="GLM-E+"),
-    "supervisor":   RoleAssignment(role_key="supervisor", agents=[], active=""),
-    "reviewer":     RoleAssignment(role_key="reviewer", agents=["Opus-D"], active="Opus-D"),
+    "researcher":       RoleAssignment(role_key="researcher", agents=["DeepSeek-E"], active="DeepSeek-E"),
+    "architect":        RoleAssignment(role_key="architect", agents=["Opus-D"], active="Opus-D"),
+    "system_architect": RoleAssignment(role_key="system_architect", agents=["Opus-D"], active="Opus-D"),
+    "implementer":      RoleAssignment(role_key="implementer", agents=["DeepSeek-E"], active="DeepSeek-E"),
+    "debugger":         RoleAssignment(role_key="debugger", agents=["DeepSeek-E"], active="DeepSeek-E"),
+    "builder":          RoleAssignment(role_key="builder", agents=["GLM-E+"], active="GLM-E+"),
+    "supervisor":       RoleAssignment(role_key="supervisor", agents=[], active=""),
+    "reviewer":         RoleAssignment(role_key="reviewer", agents=["Opus-D"], active="Opus-D"),
 }
 
 

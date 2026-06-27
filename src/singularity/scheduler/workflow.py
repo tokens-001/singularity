@@ -51,64 +51,89 @@ _RESEARCHER_PREAMBLE = """你是项目调研员。基于项目需求，完成六
 
 你只做调研，不写代码。输出必须完整覆盖六个维度。"""
 
-_ARCHITECT_PREAMBLE = """你是系统架构师。基于需求和调研报告，设计方案。
+_ARCHITECT_PREAMBLE = """你是资深系统架构师。基于 PRD + 交互/UI方案 + 调研报告，产出可执行的系统架构方案。
 
 项目需求: {description}
 项目范围: {scope}
 原始约束: {constraints}
 调研报告: {research}
 
-你需要产出四个部分：架构方案 + 任务分解清单 + 需求追溯表 + 测试方案。不要调用工具，直接输出 JSON。必须符合以下 Schema:
+设计原则:
+1. 简单优先 — 选成熟技术，不为假想规模过度设计
+2. 边界清晰 — 模块间通过接口契约通信
+3. 可验证 — 每个约束有明确的验证方式
+4. 任务可拆 — 架构必须能拆成独立可并行的实现任务
+
+你需要产出: 模块划分 + 数据模型 + API契约 + 技术栈 + 约束清单 + 任务清单。不要调用工具，直接输出 JSON。必须符合以下 Schema:
 
 {{
-  "architecture": "主设计思路 + 模块划分 + 数据流 (必填, <500字)",
+  "architecture": "主设计思路综述 (<500字)",
+  "modules": [
+    {{
+      "name": "模块名 (必填)",
+      "responsibility": "单一职责描述 (必填)",
+      "depends_on": ["依赖模块名"],
+      "interfaces": ["对外提供的能力"]
+    }}
+  ],
+  "data_model": {{
+    "database": "选型及理由 (必填)",
+    "entities": [
+      {{"name": "实体名", "fields": [{{"name": "字段", "type": "类型", "constraints": ["约束"]}}], "indexes": ["索引"]}}
+    ],
+    "relationships": [
+      {{"from": "实体A", "to": "实体B", "type": "1:1/1:N/N:M", "via": "关联字段"}}
+    ]
+  }},
+  "api_contracts": [
+    {{
+      "method": "GET/POST/PUT/DELETE",
+      "path": "/api/...",
+      "description": "用途",
+      "input": {{}},
+      "output": {{}},
+      "errors": [{{"code": 400, "meaning": "..."}}]
+    }}
+  ],
+  "tech_stack": {{
+    "language": "选型及理由",
+    "framework": "选型及理由",
+    "database": "选型及理由",
+    "cache": "选型及理由",
+    "mq": "选型及理由"
+  }},
+  "constraints": [
+    {{
+      "type": "security/performance/reliability/maintainability (必填)",
+      "rule": "具体约束 (必填)",
+      "check": "如何验证 (必填)"
+    }}
+  ],
   "tasks": [
     {{
       "id": "T1",
       "title": "任务标题 (必填, <50字)",
       "description": "任务详细描述 (必填, <200字)",
       "complexity": "low|medium|high (必填)",
+      "layer": "frontend/backend/data/devops (必填)",
       "depends_on": ["T0"],
-      "acceptance": "验收标准: 完成后怎么验证? (必填, <100字)",
+      "acceptance": "验收标准 (必填, <100字)",
       "estimated_files": ["涉及文件路径"]
     }}
   ],
-  "constraints": [
-    {{
-      "text": "不改 xx 接口",
-      "type": "api_surface|test_green|no_new_deps|compat|perf|other",
-      "check": "如何验证: grep/diff/test命令"
-    }}
-  ],
-  "traceability": [
-    {{
-      "requirement": "立项需求描述 (必填)",
-      "test_method": "如何验证该需求已实现 (必填)",
-      "owner": "E|E+|D (必填)",
-      "acceptance_criteria": "通过标准 (必填)",
-      "covered_by_tasks": ["T1", "T2"]
-    }}
-  ],
-  "test_plan": {{
-    "project_type": "web_app|cli|library|mobile|script",
-    "industry_tests": ["单元测试", "集成测试", "E2E"],
-    "test_cases": [
-      {{"name": "测试用例名", "what": "测什么", "how": "怎么测", "expected": "预期结果"}}
-    ],
-    "coverage_target": "80%"
-  }},
-  "risks": ["风险1"]
+  "risks": [
+    {{"risk": "风险描述", "impact": "high/medium/low", "mitigation": "缓解措施"}}
+  ]
 }}
 
 Schema 规则:
 - tasks 至少 1 个, 最多 20 个
 - complexity: low→E层, medium→E+层, high→D层
-- depends_on 填其他任务的 id (T1,T2...), 可为空数组
-- 每个任务必须改不相交的文件 (并行 merge 的前提)
-- constraints 每条必须可机器检查 (type+check 字段)
-- **traceability 必须逐条映射立项需求**，每条需求对应一个测试方法和通过标准
-- test_plan.project_type 决定行业测试标准
-- 你只出方案和清单，不写代码。
+- layer 标注任务所属层: frontend/backend/data/devops
+- depends_on 填其他任务的 id, 可为空数组
+- 每个任务改不相交的文件 (并行 merge 的前提)
+- constraints 每条必须可机器检查 (type+rule+check)
+- 你只出方案和清单，不写代码。不做 AI 架构，不做前端架构。
 
 输出时用 ```json ... ``` 包裹。"""
 
@@ -405,16 +430,20 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
 def _validate_architecture(arch: dict) -> list[str]:
     """校验架构产出完整性。"""
     issues = []
-    for key in ["architecture", "tasks", "constraints", "traceability", "test_plan"]:
+    for key in ["architecture", "modules", "data_model", "tech_stack", "tasks", "constraints"]:
         if not arch.get(key):
             issues.append(f"缺少必填字段: {key}")
+    # 可选字段 (后续步骤逐步启用)
+    for key in ["api_contracts", "risks"]:
+        if key not in arch:
+            issues.append(f"建议补充字段: {key}")
     tasks = arch.get("tasks", [])
     if not isinstance(tasks, list) or len(tasks) == 0:
         issues.append("tasks 为空或格式错误")
     else:
         for i, t in enumerate(tasks):
             tid = t.get("id", f"?")
-            for f in ["id", "title", "description", "complexity", "acceptance"]:
+            for f in ["id", "title", "description", "complexity", "layer", "acceptance"]:
                 if not t.get(f):
                     issues.append(f"任务 {tid}: 缺少 {f}")
             if t.get("complexity") not in ("low", "medium", "high"):
@@ -425,14 +454,15 @@ def _validate_architecture(arch: dict) -> list[str]:
     if isinstance(constraints, list):
         for i, c in enumerate(constraints):
             if isinstance(c, dict):
-                if not c.get("text"):
-                    issues.append(f"约束 {i}: 缺少 text")
-                if c.get("type") not in ("api_surface", "test_green", "no_new_deps", "compat", "perf", "other"):
-                    issues.append(f"约束 {i}: type 无效")
+                if not c.get("rule"):
+                    issues.append(f"约束 {i}: 缺少 rule")
             elif isinstance(c, str):
                 issues.append(f"约束 {i}: 应为对象格式")
-    if "risks" not in arch:
-        issues.append("缺少 risks 字段")
+    modules = arch.get("modules", [])
+    if isinstance(modules, list):
+        for i, m in enumerate(modules):
+            if isinstance(m, dict) and not m.get("name"):
+                issues.append(f"模块 {i}: 缺少 name")
     return issues
 
 
@@ -469,7 +499,7 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
             f"你的任务: [{tdef.get('id', '?')}] {tdef.get('title', '')}\n"
             f"具体要求: {tdef.get('description', '')}\n"
             f"验收标准: {tdef.get('acceptance', '代码可运行，功能完整')}\n"
-            f"约束: {'; '.join([c.get('text','') for c in constraints[:3]]) if constraints else '无'}"
+            f"约束: {'; '.join([c.get('rule', c.get('text','')) for c in constraints[:3]]) if constraints else '无'}"
         )
         child = tracker.create(
             task_desc,
