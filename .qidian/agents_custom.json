@@ -140,7 +140,7 @@
       "model": "deepseek-v4-pro",
       "type": "openai-agent",
       "entry": "",
-      "api_key_env": "",
+      "api_key_env": "DEEPSEEK_API_KEY",
       "max_turns": 5,
       "default": false,
       "roles": [
