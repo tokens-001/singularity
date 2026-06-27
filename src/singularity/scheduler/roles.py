@@ -191,6 +191,8 @@ _DEFAULT_ASSIGNMENTS: dict[str, RoleAssignment] = {
     # ── 架构层 (D) ──
     "architect":        RoleAssignment(role_key="architect", agents=["Opus-D"], active="Opus-D"),
     "system_architect": RoleAssignment(role_key="system_architect", agents=["Opus-D"], active="Opus-D"),
+    "ai_architect":     RoleAssignment(role_key="ai_architect", agents=["Opus-D"], active="Opus-D"),
+    "frontend_architect": RoleAssignment(role_key="frontend_architect", agents=["Opus-D"], active="Opus-D"),
     # ── 实现层 (E/E+) ──
     "implementer":      RoleAssignment(role_key="implementer", agents=["DeepSeek-E"], active="DeepSeek-E"),
     "debugger":         RoleAssignment(role_key="debugger", agents=["DeepSeek-E"], active="DeepSeek-E"),
