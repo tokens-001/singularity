@@ -16,9 +16,9 @@ repos:
 
   - repo: local
     hooks:
-      - id: pytest
-        name: pytest
-        entry: python3 -m pytest tests/unit_tests.py -q
+      - id: ruff-check
+        name: ruff check
+        entry: ruff check src/ --select=E,F
         language: system
         types: [python]
         pass_filenames: false
