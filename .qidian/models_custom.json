@@ -95,12 +95,11 @@
     ],
     "speed": "medium",
     "cost": "premium",
-    "rating": "",
+    "rating": "S",
     "reasoning": false,
     "max_turns": 5,
     "strengths": [],
-    "notes": "",
-    "tier": "E"
+    "notes": "SWE-bench Pro 58.6% | OJBench 60.6% | Terminal-Bench 66.7% | 300agent并行 | 12h自主编码。$0.6/$2.5(便宜!)。长程任务首选。"
   },
   "qwen3.7-plus": {
     "id": "qwen3.7-plus",
@@ -115,8 +114,7 @@
     "reasoning": false,
     "max_turns": 5,
     "strengths": [],
-    "notes": "",
-    "tier": "E"
+    "notes": ""
   },
   "claude-opus-4-8": {
     "id": "claude-opus-4-8",
@@ -131,8 +129,7 @@
     "reasoning": false,
     "max_turns": 5,
     "strengths": [],
-    "notes": "",
-    "tier": "D"
+    "notes": ""
   },
   "kimi-k2.7-code-highspeed": {
     "id": "kimi-k2.7-code-highspeed",
@@ -150,5 +147,21 @@
       "高吞吐"
     ],
     "notes": "K2.7高速版。~180 tok/s。适合E层批量快速执行。"
+  },
+  "deepseek-v4-pro": {
+    "id": "deepseek-v4-pro",
+    "provider": "deepseek",
+    "display": "DeepSeek V4 Pro",
+    "tiers": [
+      "E",
+      "E+"
+    ],
+    "speed": "medium",
+    "cost": "standard",
+    "rating": "",
+    "reasoning": false,
+    "max_turns": 5,
+    "strengths": [],
+    "notes": ""
   }
 }

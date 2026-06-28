@@ -31,6 +31,8 @@ class ValidationReport:
     evidence: dict = field(default_factory=dict)
     turns_used: int = 0; confidence: float = 0.0
     quality_signals: dict = field(default_factory=dict)
+    # D3: GATE3 分级路由 (QA 建议, Observer 裁定)
+    fix_route: str = ""  # impl|design|note
 
 def validate(candidate, gate_required, task_type, changed_files, snap, turn, max_turns):
     report = ValidationReport(turns_used=turn)
@@ -511,4 +513,57 @@ def security_review(code: str, file_path: str = "", severity_filter: str = "all"
         "issues": issues,
         "verdict": verdict,
         "summary": f"Found {len(issues)} security issues ({len(critical_issues)} critical)" if issues else "No security issues detected"
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+# D3: GATE3 分级路由 (按 issue.fix_route 决定打回去哪)
+# ═══════════════════════════════════════════════════════════════
+
+def grade_fix_route(issues: list[dict], overall_verdict: str) -> str:
+    """D3: 按 issues 严重度计算 fix_route.
+
+    - 有架构级缺陷 (severity=critical + fix_route=design) → "design"
+    - 多数为实现级 bug (severity=warning/bug) → "impl"
+    - 仅有 suggestion → "note"
+    - 综合 overall_verdict: no_go → 默认 "impl" (不轻易升 GATE2)
+    """
+    has_design = any(
+        i.get("fix_route") == "design" or i.get("severity") == "critical"
+        for i in issues)
+    has_bugs = any(
+        i.get("fix_route") == "impl" or i.get("severity") in ("bug", "warning")
+        for i in issues)
+    only_notes = all(
+        i.get("fix_route") == "note" or i.get("severity") == "info"
+        for i in issues)
+
+    if has_design:
+        return "design"
+    if only_notes and overall_verdict != "no_go":
+        return "note"
+    if has_bugs or overall_verdict == "no_go":
+        return "impl"
+    return "note"
+
+
+def build_qa_report(passed: list, issues: list, verdict: str, verdict_reason: str) -> dict:
+    """D3: 构建 QA 报告 (符合修订案 schema)。"""
+    return {
+        "passed": passed,
+        "issues": [{
+            "id": i.get("id", f"Q{idx:03d}"),
+            "severity": i.get("severity", "warning"),
+            "fix_route": i.get("fix_route", grade_fix_route([i], verdict)),
+            "file": i.get("file", ""),
+            "description": i.get("detail", i.get("description", "")),
+            "suggested_fix": i.get("suggested_fix", ""),
+        } for idx, i in enumerate(issues)],
+        "summary": {
+            "total_checks": len(passed) + len(issues),
+            "passed": len(passed),
+            "failed": len(issues),
+            "verdict": verdict,
+            "verdict_reason": verdict_reason,
+        },
     }

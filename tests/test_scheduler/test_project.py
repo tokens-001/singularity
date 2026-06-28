@@ -108,7 +108,7 @@ class TestProjectWorkflow:
         tests = [
             (Phase.GATE1, Phase.PLANNING),
             (Phase.GATE2, Phase.EXECUTING),
-            (Phase.GATE3, Phase.DONE),
+            (Phase.GATE3, Phase.DELIVERING),  # S1: GATE3→交付打包→DONE
         ]
         for gate, expected in tests:
             self.p.phase = gate

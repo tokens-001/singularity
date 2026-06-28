@@ -22,9 +22,11 @@ class Phase(str, Enum):
     PLANNING = "planning"
     GATE2 = "gate2"          # 用户审架构+任务分配
     EXECUTING = "executing"
-    REVIEWING = "reviewing"  # 内部: D层审查(非用户门)
-    FIXING = "fixing"        # 内部: 修复任务(非用户门)
-    GATE3 = "gate3"          # 用户最终交付审核
+    INTEGRATING = "integrating"  # D2: 多路worktree合并+集成测试(非用户门)
+    REVIEWING = "reviewing"      # 内部: D层审查(非用户门)
+    FIXING = "fixing"            # 内部: 修复任务(非用户门)
+    GATE3 = "gate3"              # 用户最终交付审核
+    DELIVERING = "delivering"    # S1: 打包归档 (GATE3通过后)
     DONE = "done"
 
 
@@ -36,14 +38,17 @@ _REJECT_FALLBACK: dict[Phase, Phase] = {
 }
 
 # 架构级返工: 可从这些阶段直接回 planning
-_ARCHITECTURE_REDO = {Phase.EXECUTING, Phase.GATE3, Phase.REVIEWING, Phase.FIXING}
+_ARCHITECTURE_REDO = {Phase.EXECUTING, Phase.INTEGRATING, Phase.GATE3, Phase.REVIEWING, Phase.FIXING}
 
 # Gate 确认→下一个 phase
 _GATE_NEXT: dict[Phase, Phase] = {
     Phase.GATE1: Phase.PLANNING,
     Phase.GATE2: Phase.EXECUTING,
-    Phase.GATE3: Phase.DONE,               # 最终批准→交付
+    Phase.GATE3: Phase.DELIVERING,           # S1: 最终批准→交付打包
 }
+
+# D2: 集成合并失败上限 (自动修N轮后升GATE2)
+_INTEGRATE_MAX_RETRIES = 2
 
 
 @dataclass

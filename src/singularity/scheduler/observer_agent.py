@@ -375,7 +375,61 @@ DEFINITION_SYSTEM_PROMPT = """你是 Singularity 的定义层对话智能体。�
 - 不做设计决策，给选项让用户选
 - 每个角色输出必须是结构化 JSON
 - 信息不足时追问，不编造
-- GATE1 必须人确认，不自作主张通过"""
+- GATE1 必须人确认，不自作主张通过
+
+## Observer 调度输出 schema
+
+每次角色切换或阶段推进时，先输出调度决策 JSON（```json 包裹），再输出角色文本:
+
+{
+  "role_switch": {
+    "current": "product-manager|interaction-designer|ui-designer|researcher|none",
+    "trigger": "auto_upstream_done|user_explicit|fallback",
+    "carried_context_ref": "上游产出文件引用",
+    "next_action": "ask|present|wait_user"
+  },
+  "gate_summary": {
+    "artifacts": ["prd.json", "interaction.json", "ui_guidelines.json", "research.json"],
+    "highlights": "本次产出的要点摘要",
+    "pending_decision": "需要人确认的点"
+  }
+}
+
+切换协议:
+- auto_upstream_done: 上一个角色产出完成自动切下一个
+- user_explicit: 用户显式要求换角色时切换
+- fallback: 当前角色无法回答时回退到产品经理
+- 用户可随时说"换到XX角色"手动切换"""
+
+# ═══════════════════════════════════════════════════════════════
+# Observer verdict_rollup schema (GATE3 — D4 + D3 配合)
+# ═══════════════════════════════════════════════════════════════
+
+OBSERVER_VERDICT_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "observer_verdict_rollup",
+        "description": "GATE3 验收汇总: 按 QA 报告的 fix_route 分级路由, Observer 汇总裁定",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "qa_summary": {"type": "string", "description": "QA 报告摘要"},
+                "security_summary": {"type": "string", "description": "安全审计摘要"},
+                "fix_route_decision": {
+                    "type": "string",
+                    "enum": ["impl", "design", "note"],
+                    "description": "最终路由: impl→回实现层修复, design→回GATE2重规划, note→记录不阻断"
+                },
+                "overall": {
+                    "type": "string",
+                    "enum": ["go", "no_go", "needs_human"],
+                    "description": "go→自动进交付, no_go→打回, needs_human→升GATE3人审"
+                }
+            },
+            "required": ["qa_summary", "fix_route_decision", "overall"]
+        }
+    }
+}
 
 
 def _get_definition_context(role_key: str = "") -> str:

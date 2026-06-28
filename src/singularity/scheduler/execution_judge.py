@@ -378,6 +378,7 @@ _ARCH_FUSION_STAGE2 = """你是架构合成定稿人。基于五维分析，产�
 7. 任务去重: 同描述 → 合并，保留更详细的那个
 8. 约束去重: 同含义 → 保留更严格的验证方式
 9. 风险去重: 同风险 → 合并缓解措施取并集
+10. 顺便生成 test_cases: 基于 PRD 成功标准 + API契约 + state_machine 生成测试用例
 
 输出必须严格遵循以下 JSON schema:
 
@@ -390,6 +391,12 @@ _ARCH_FUSION_STAGE2 = """你是架构合成定稿人。基于五维分析，产�
   "constraints": [{{"type":"","rule":"","check":""}}],
   "tasks": [{{"id":"","title":"","description":"","complexity":"","layer":"","depends_on":[],"acceptance":""}}],
   "risks": [{{"risk":"","impact":"","mitigation":""}}],
+  "test_cases": {{
+    "unit": [{{"name":"","target_module":"","input":"","expected":""}}],
+    "integration": [{{"name":"","interfaces_tested":[],"setup":"","expected":""}}],
+    "e2e": [{{"name":"","user_flow":"","success_criteria":""}}],
+    "security": [{{"name":"","rule":"","source":"constraints|通用规则库","expected":""}}]
+  }},
   "fusion_notes": {{
     "resolved_contradictions": 0,
     "adopted_insights": 0,
@@ -432,6 +439,71 @@ def fuse_architecture(task_desc: str, outputs: list[str],
     )
     fused = _call_model(stage2_prompt, synthesizer_model, max_tokens=8000)
     return fused if fused else outputs[0]
+
+
+def decompose_architecture(arch_json: dict) -> list[dict]:
+    """拆解器: 把 unified_architecture.tasks 转成可执行 task 列表。
+
+    输入: fuse_architecture 输出的 unified_architecture JSON
+    输出: [{desc, suggested_level, depends_on_local_id, context_snippet, acceptance}, ...]
+
+    context_snippet: 从架构文档提取的任务相关上下文 (模块/接口/约束)
+    acceptance: 对应 test_cases 中的验收条件
+    """
+    tasks = arch_json.get("tasks", [])
+    if not tasks:
+        return []
+    modules = {m.get("name", ""): m for m in arch_json.get("modules", [])}
+    api_contracts = arch_json.get("api_contracts", [])
+    constraints = arch_json.get("constraints", [])
+    test_cases = arch_json.get("test_cases", {})
+
+    result = []
+    for t in tasks:
+        tid = t.get("id", "")
+        title = t.get("title", "")
+        desc = t.get("description", "")
+        layer = t.get("layer", "")
+        deps = t.get("depends_on", [])
+
+        # 提取上下文片段
+        ctx_parts = []
+        # 关联模块
+        for mod_name in t.get("related_modules", []):
+            if mod_name in modules:
+                m = modules[mod_name]
+                ctx_parts.append(f"[{mod_name}] {m.get('responsibility','')}")
+
+        # 关联 API
+        api_names = t.get("api_contracts", [])
+        for api in api_contracts:
+            if api.get("path", "") in api_names or api.get("description", "") in api_names:
+                ctx_parts.append(f"API {api.get('method','')} {api.get('path','')}: {api.get('description','')}")
+
+        # 相关约束
+        for c in constraints:
+            if any(kw in title.lower() or kw in desc.lower()
+                   for kw in [c.get("type", ""), c.get("rule", "")[:20]]):
+                ctx_parts.append(f"约束[{c.get('type','')}]: {c.get('rule','')}")
+
+        # acceptance 来自 test_cases
+        acceptance = t.get("acceptance", "")
+        if not acceptance:
+            # 尝试从 test_cases 匹配
+            for tc_type in ("unit", "integration", "e2e"):
+                for tc in test_cases.get(tc_type, []):
+                    if tc.get("target_module", "") in title or tc.get("name", "") in title:
+                        if not acceptance:
+                            acceptance = tc.get("expected", "")
+
+        result.append({
+            "desc": f"{title}: {desc}" if title else desc,
+            "suggested_level": layer or "E",
+            "depends_on_local_id": list(deps) if isinstance(deps, list) else ([deps] if deps else []),
+            "context_snippet": "\n".join(ctx_parts) if ctx_parts else "",
+            "acceptance": acceptance,
+        })
+    return result
 
 
 def _is_architecture_task(task: str) -> bool:

@@ -710,14 +710,33 @@ def model_remove(model_id):
 
 
 def model_update(model_id, data):
-    from . import model_registry
+    from . import model_registry, dispatcher as disp_mod
     models = model_registry.load_models()
     if model_id not in models: return {"error": "模型不存在"}, 404
     m = models[model_id]
-    model_registry.add_model(model_id, data.get("provider", m.provider), data.get("display", m.display),
-        data.get("tiers", m.tiers), data.get("speed", m.speed), data.get("cost", m.cost),
-        data.get("reasoning", m.reasoning), data.get("max_turns", m.max_turns))
-    return {"ok": True, "model_id": model_id}, 200
+    old_tiers = set(m.tiers or [])
+    new_tiers = set((data["tiers"] if "tiers" in data else m.tiers) or [])
+
+    # ponytail: 参数名对齐 add_model(model_id, provider, display, tiers, speed, cost, rating, reasoning, max_turns, notes)
+    model_registry.add_model(
+        model_id,
+        data.get("provider", m.provider),
+        data.get("display", m.display),
+        list(new_tiers) if "tiers" in data else m.tiers,
+        data.get("speed", m.speed),
+        data.get("cost", m.cost),
+        data.get("rating", getattr(m, "rating", "")),
+        data.get("reasoning", m.reasoning),
+        data.get("max_turns", m.max_turns),
+        data.get("notes", getattr(m, "notes", "")),
+    )
+    # 同步 agent 层: 新增的层加 agent，移除的层删 agent
+    for tier in old_tiers - new_tiers:
+        disp_mod.remove_agent(tier, model_id)
+    for tier in new_tiers - old_tiers:
+        disp_mod.add_agent(tier, model_id)
+    return {"ok": True, "model_id": model_id,
+            "synced": {"added": sorted(new_tiers - old_tiers), "removed": sorted(old_tiers - new_tiers)}}, 200
 
 
 # ═══════════════════════════════════════════════════════════════
