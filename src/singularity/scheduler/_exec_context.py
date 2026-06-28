@@ -139,6 +139,23 @@ def _build_project_context(task) -> str:
                     if acceptance:
                         parts.append(f"验收标准: {acceptance}")
                     break
+        # S3: data_engineer 获取 AI 架构产物 (prompt_templates/agent_topology/tool_definitions)
+        route_role = getattr(task, 'route_role', '') or ''
+        if route_role == 'data_engineer' and proj.architecture:
+            ai_strategy = proj.architecture.get("ai_strategy", {})
+            if not ai_strategy:
+                # ponytail: 看架构顶层是否有这些字段
+                ai_strategy = {
+                    k: proj.architecture.get(k, [])
+                    for k in ("prompt_templates", "agent_topology", "tool_definitions")
+                    if k in proj.architecture
+                }
+            if ai_strategy:
+                parts.append("[AI架构产物]")
+                for k, v in ai_strategy.items():
+                    if v:
+                        parts.append(f"  {k}: {json.dumps(v, ensure_ascii=False)[:300]}")
+
         # 上游 Agent 交接记录 (最近 3 条)
         handoffs = getattr(proj, 'handoffs', []) or []
         if handoffs:

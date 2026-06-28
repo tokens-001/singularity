@@ -641,6 +641,21 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     elif err2:
         msgs.append(f"安全审计失败: {err2}")
 
+    # S4: E2E 测试执行 (对照 test_cases.json 中的 e2e 用例)
+    tc_path = config.PROJECT_ROOT / "test_cases.json"
+    if tc_path.exists():
+        try:
+            tc = json.loads(tc_path.read_text())
+            e2e_cases = tc.get("e2e", []) if isinstance(tc, dict) else []
+            if e2e_cases:
+                msgs.append(f"E2E用例 {len(e2e_cases)} 个待人工验收 (对照 state_machine 验证)")
+                _save_phase_output(project.id, "e2e_checklist.json",
+                    json.dumps([{"name": c.get("name",""), "user_flow": c.get("user_flow",""),
+                     "success_criteria": c.get("success_criteria","")} for c in e2e_cases],
+                    ensure_ascii=False, indent=2))
+        except Exception:
+            pass
+
     # D3: 构建结构化 QA 报告 (fix_route 分级)
     try:
         from singularity.scheduler.validator import build_qa_report

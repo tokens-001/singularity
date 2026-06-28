@@ -446,6 +446,15 @@ def _get_definition_context(role_key: str = "", include_verdict_schema: bool = F
     return prompt
 
 
+def _any_project_at_gate3() -> bool:
+    """检查是否有项目处于 GATE3 阶段 (需要 verdict schema)。"""
+    try:
+        from singularity.scheduler.project import list_all, Phase
+        return any(p.phase == Phase.GATE3 for p in list_all())
+    except Exception:
+        return False
+
+
 def _detect_definition_intent(question: str) -> str:
     """检测用户意图是否为定义层需求。返回角色 key 或空字符串。"""
     q = question.lower()
@@ -601,7 +610,9 @@ def _answer_question(question: str) -> str:
 
     # Step 3: 检测定义层意图，注入角色 prompt
     def_role = _detect_definition_intent(question)
-    system_prompt = _get_definition_context(def_role) if def_role else OBSERVER_SYSTEM_PROMPT
+    # D4: 检查是否有项目处于 GATE3, 注入 verdict schema
+    at_gate3 = _any_project_at_gate3()
+    system_prompt = _get_definition_context(def_role, include_verdict_schema=at_gate3) if def_role else OBSERVER_SYSTEM_PROMPT
 
     messages = [
         {"role": "system", "content": system_prompt},
