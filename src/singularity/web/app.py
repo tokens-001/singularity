@@ -13,7 +13,7 @@ from pathlib import Path
 
 from urllib.parse import urlparse
 
-from flask import Flask, Response, g, render_template, request, jsonify
+from flask import Flask, Response, g, request, jsonify
 
 # ── 加载 .env ──────────────────────────────────────────────
 _ENV_PATH = Path(__file__).resolve().parents[3] / ".env"
@@ -642,9 +642,7 @@ from singularity.scheduler import _api as _api_handler
 def spa(path=""):
     """React SPA。API 路由优先匹配，其他全部 fallback。"""
     dist_index = Path(__file__).parent / "static" / "dist" / "index.html"
-    if dist_index.exists():
-        return dist_index.read_text(encoding="utf-8")
-    return render_template("index.html")
+    return dist_index.read_text(encoding="utf-8")
 
 
 # ═══════════════════════════════════════════════════════════
