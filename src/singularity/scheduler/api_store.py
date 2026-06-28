@@ -70,7 +70,7 @@ def _seed() -> dict[str, APIEntry]:
         from .dispatcher import load_agents
         agents = load_agents()
         seen = set()
-        for level in ["E", "E+", "D"]:
+        for level in ["any"]:
             for a in agents.get(level, []):
                 env_key = a.get("api_key_env", "")
                 if not env_key or env_key in seen:

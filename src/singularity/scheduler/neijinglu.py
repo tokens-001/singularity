@@ -46,7 +46,7 @@ class DeliveryReport:
         """从 JSON dict 重建 (简化版, 仅字段映射)。"""
         route_data = d.get("route", {})
         route = RouteResult(
-            level=route_data.get("level", "E"),
+            level=route_data.get("level", ""),
             gate_required=route_data.get("gate_required", False),
             task_type=route_data.get("task_type", "default"),
             matched_signals=route_data.get("matched_signals", []),

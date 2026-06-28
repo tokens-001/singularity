@@ -13,7 +13,7 @@ export default function ModelManagement() {
   const [editTiers, setEditTiers] = useState<string[]>([])
   const [tierFilter, setTierFilter] = useState('')
   const [showAdd, setShowAdd] = useState(false)
-  const [addForm, setAddForm] = useState<any>({ id: '', provider: '', tiers: [], context_window: '', cost_1k_input: '', cost_1k_output: '' })
+  const [addForm, setAddForm] = useState<any>({ id: '', provider: '', recommended_for: [], context_window: '', cost_1k_input: '', cost_1k_output: '' })
 
   const fetch = async () => {
     const [m, a] = await Promise.all([api.models(), api.apiStore()])
@@ -48,7 +48,7 @@ export default function ModelManagement() {
     await api.deleteModel(id); fetch()
   }
 
-  const filtered = tierFilter ? models.filter((m:any) => (m.recommended_for||m.tiers||[]).includes(tierFilter)) : models
+  const filtered = tierFilter ? models.filter((m:any) => (m.recommended_for||[]).includes(tierFilter)) : models
   const phases = ['定义','架构','实现','审查','验收','交付']
 
   return (
@@ -70,7 +70,7 @@ export default function ModelManagement() {
           <input placeholder="模型 ID" value={addForm.id} onChange={e=>setAddForm({...addForm,id:e.target.value})} style={{...inp,width:160}}/>
           <input placeholder="Provider" value={addForm.provider} onChange={e=>setAddForm({...addForm,provider:e.target.value})} style={{...inp,width:100}}/>
           <div style={{display:'flex',gap:4,alignItems:'center'}}>
-            {phases.map(t=><label key={t} style={{fontSize:10,display:'flex',alignItems:'center',gap:2}}><input type="checkbox" checked={(addForm.recommended_for||addForm.recommended_for||addForm.tiers||[]).includes(t)} onChange={e=>{const nt=e.target.checked?[...(addForm.recommended_for||addForm.recommended_for||addForm.tiers||[]),t]:(addForm.recommended_for||addForm.recommended_for||addForm.tiers||[]).filter((x:string)=>x!==t);setAddForm({...addForm,recommended_for:nt})}}/>{t}</label>)}
+            {phases.map(t=><label key={t} style={{fontSize:10,display:'flex',alignItems:'center',gap:2}}><input type="checkbox" checked={(addForm.recommended_for||[]).includes(t)} onChange={e=>{const nt=e.target.checked?[...(addForm.recommended_for||[]),t]:(addForm.recommended_for||[]).filter((x:string)=>x!==t);setAddForm({...addForm,recommended_for:nt})}}/>{t}</label>)}
           </div>
           <input placeholder="上下文窗口" type="number" value={addForm.context_window} onChange={e=>setAddForm({...addForm,context_window:e.target.value})} style={{...inp,width:100}}/>
           <input placeholder="输入$/1k" type="number" step="0.001" value={addForm.cost_1k_input} onChange={e=>setAddForm({...addForm,cost_1k_input:e.target.value})} style={{...inp,width:90}}/>
@@ -157,8 +157,8 @@ export default function ModelManagement() {
                       <button onClick={()=>setEditingTiers(null)} style={iconBtn}>✕</button>
                     </div>
                   ) : (
-                    <span onClick={(e)=>{e.stopPropagation();setEditingTiers(m.id||m.model);setEditTiers(m.recommended_for||m.tiers||[])}} style={{cursor:'pointer'}}>
-                      {(m.recommended_for||m.tiers||[]).length>0 ? (m.recommended_for||m.tiers).map((t:string)=><span key={t} style={{background:'var(--bg-tertiary)',padding:'1px 5px',borderRadius:3,fontSize:9,fontWeight:600,color:'var(--accent)',marginRight:2}}>{t}</span>) : <span style={{color:'var(--text-muted)',fontSize:10}}>点击设置</span>}
+                    <span onClick={(e)=>{e.stopPropagation();setEditingTiers(m.id||m.model);setEditTiers(m.recommended_for||[])}} style={{cursor:'pointer'}}>
+                      {(m.recommended_for||[]).length>0 ? (m.recommended_for).map((t:string)=><span key={t} style={{background:'var(--bg-tertiary)',padding:'1px 5px',borderRadius:3,fontSize:9,fontWeight:600,color:'var(--accent)',marginRight:2}}>{t}</span>) : <span style={{color:'var(--text-muted)',fontSize:10}}>点击设置</span>}
                     </span>
                   )}
                 </td>

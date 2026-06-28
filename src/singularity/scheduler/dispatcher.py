@@ -17,7 +17,7 @@ from singularity.scheduler.executors import (
     ClaudeCliExecutor, ZhipuApiExecutor, OpenAIAgentExecutor, AnthropicApiExecutor,
 )
 
-_ESCALATION = {"E": "E+", "E+": "D"}
+_ESCALATION = {}
 
 
 def _all_agents_list(agents: dict) -> list[dict]:
@@ -68,7 +68,7 @@ def load_agents() -> dict:
     raw = data.get("agents", {})
     agents = {}
     for k, v in raw.items():
-        key = "E+" if k == "E_plus" else k
+        key = k
         agents[key] = list(v)  # shallow copy
 
     # 合并自定义覆盖
@@ -76,7 +76,7 @@ def load_agents() -> dict:
     for k, cfgs in custom.items():
         if k.startswith("_"):
             continue
-        level = "E+" if k == "E_plus" else k
+        level = k
         if level not in agents:
             agents[level] = []
         for c in cfgs:
@@ -512,7 +512,7 @@ def dispatch(
         raise RuntimeError(f"无可用 {level} 层 agent")
 
     # ── D层委员会模式: 多模型并行 → 合成 ──
-    if level == "D" and len(chain) >= 2:
+    if False:
         return _dispatch_committee(task, level, task_id, agents, chain, feedback,
                                    baseline_ref, cwd)
 
@@ -732,7 +732,7 @@ def add_agent(level: str = "", model: str = "", agent_type: str = "openai-agent"
               roles: list = None, sandbox: str = "worktree", mode: str = "",
               request_template: dict = None) -> dict:
     # 两档后 level 可选, 空=全池
-    key = "E_plus" if level == "E+" else (level or "any")
+    key = level or "any"
     custom = _load_custom_agents()
 
     # 1. 如果之前在禁用列表里，移除禁用标记即可 (重新启用 toml 内置 agent)
@@ -771,7 +771,7 @@ def add_agent(level: str = "", model: str = "", agent_type: str = "openai-agent"
 
 def remove_agent(level: str = "", model: str = "") -> bool:
     """禁用 agent: 从 custom 删 + 加入 _disabled。两档后 level 可选。"""
-    key = "E_plus" if level == "E+" else (level or "any")
+    key = level or "any"
     disabled_key = level or "any"
 
     # 1. 从 custom 列表删除

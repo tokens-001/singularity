@@ -84,11 +84,11 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             writer_model = agent_cfg.get("model", "")
             agents_all = disp_mod.load_agents()
             reviewer_models = [
-                a['model'] for a in agents_all.get("D", [])
+                a['model'] for a in (agents_all.get('any',[]) or sum((v for v in agents_all.values() if isinstance(v,list)),[]))
                 if a['model'] != writer_model and disp_mod.agent_api_available(a)][:2]
             if not reviewer_models:
                 reviewer_models = [
-                    a['model'] for a in agents_all.get("E+", [])
+                    a['model'] for a in (agents_all.get('any',[]) or sum((v for v in agents_all.values() if isinstance(v,list)),[]))
                     if a['model'] != writer_model and disp_mod.agent_api_available(a)][:2]
 
             if reviewer_models:

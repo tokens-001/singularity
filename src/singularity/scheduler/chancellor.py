@@ -78,7 +78,7 @@ def assess(task_desc: str, term_reason: str, changed_files: list[str] = None,
         tried = ", ".join(agent_tried) if agent_tried else "全部 agent"
         return Report(
             severity="alert",
-            title="所有层级都试过了，没搞定",
+            title="所有模型都试过了，没搞定",
             what=f"任务「{task_desc[:60]}」从 E 升到 D，{tried} 都试了，还是失败了。D 层已给出分析方案，已自动生成 E+ 修复任务。",
             why="这是当前系统能力的天花板。可能任务描述不清、约束太严、或者需要你亲自看一下。",
             suggestion="查看 D 层的分析方案。如果方案可行，让修复任务跑完。如果方案也不行，重新描述需求或放宽约束。",

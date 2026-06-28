@@ -1224,8 +1224,7 @@ class ExperienceRecord:
     task_id: str
     description: str
     status: str           # done / failed / rolled_back
-    route_level: str      # E / E+ / D
-    model: str            # 实际执行模型
+    model: str = ""            # 实际执行模型
     elapsed_ms: float = 0
     tokens: int = 0
     failure_mode: str = ""  # 失败模式标签
@@ -1255,7 +1254,7 @@ class ExperienceRecord:
                       for k in ["task_id","description","status","route_level","model","elapsed_ms","tokens","failure_mode","files_changed","pattern_id","timestamp"]})
 
 
-def archive_experience(task_id: str, description: str, status: str, route_level: str,
+def archive_experience(task_id: str, description: str, status: str, route_level: str = "",
                        model: str = "", elapsed_ms: float = 0, tokens: int = 0,
                        failure_mode: str = "", files_changed: list[str] = None) -> None:
     """归档单次任务执行经验。orchestrator 在任务完成后调用。"""
@@ -1466,7 +1465,7 @@ If task A caused task B, is_causal=true. Otherwise false. When unsure, false."""
 
     try:
         agents = disp_mod.load_agents()
-        e_agents = agents.get("E", [])
+        e_agents = agents.get("any", [])
         if not e_agents: return {"is_causal": False, "reason": "no_e_agent"}
         e_cfg = e_agents[0]
         api_key = os.environ.get(e_cfg.get("api_key_env", ""), "")

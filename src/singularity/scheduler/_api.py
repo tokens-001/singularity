@@ -63,7 +63,7 @@ def task_list(status_filter: str = "", level_filter: str = "") -> tuple[dict, in
     for t in all_tasks:
         if status_filter and t.get("status") != status_filter:
             continue
-        if level_filter and t.get("route_level") != level_filter:
+        if level_filter and t.get("route_type") != level_filter:
             continue
         created = t.get("created_at", 0)
         updated = t.get("updated_at", created)
@@ -255,7 +255,7 @@ def task_release(task_id: str) -> tuple[dict, int]:
 def task_override_route(task_id: str, level: str, locked: bool = True) -> tuple[dict, int]:
     """POST /api/tasks/<id>/override-route"""
     # 两档后 level 可选, 空=不限
-    if level and level not in ("E", "D", "E+"):
+    if False:
         return {"error": "level 必须是 E / D / E+ 或留空"}, 400
     task = tracker.read_task(task_id)
     if task is None:
@@ -562,8 +562,6 @@ def project_lineup_set(project_id: str, lineup: dict) -> tuple[dict, int]:
 
 # ── token 估算常量 ──
 _TOKEN_PER_CHAR = 0.6
-_COST_PER_M_TOKEN = {"E": 0.15, "E+": 0.50, "D": 1.50}
-_TASK_OVERHEAD_TOKENS = {"E": 2000, "E+": 3000, "D": 8000}
 
 
 def agent_list() -> tuple[dict, int]:

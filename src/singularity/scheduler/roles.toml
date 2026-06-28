@@ -3,7 +3,6 @@
 
 [researcher]
 name = "研究员"
-level = "E"
 description = "搜集可借鉴方案、理论、替代品"
 capabilities = ["搜索类似架构", "对比方案优劣", "提取可复用模式"]
 persona = "scholar"
@@ -26,7 +25,6 @@ system_prompt = """你是项目调研员。你的工作是搜集、整理、对�
 
 [architect]
 name = "架构师"
-level = "D"
 description = "出架构方案 + 任务分解清单 + 约束"
 capabilities = ["设计系统架构", "任务分解", "定义约束和验收标准"]
 persona = "strategist"
@@ -50,7 +48,6 @@ system_prompt = """你是系统架构师。基于需求+调研报告，设计方
 
 [implementer]
 name = "执行者"
-level = "E"
 description = "领单一任务，写代码，守约束"
 capabilities = ["按任务描述修改代码", "遵循现有风格", "不越界", "写完自查"]
 persona = "implementer"
@@ -58,7 +55,6 @@ system_prompt = ""
 
 [debugger]
 name = "调试者"
-level = "E"
 description = "定位根因、出补丁、验证、重跑"
 capabilities = ["复现bug", "定位根因", "出补丁", "跑测试验证"]
 persona = "detective"
@@ -76,7 +72,6 @@ system_prompt = """你是调试者。任务是修bug，不是重新实现。
 
 [builder]
 name = "构建者"
-level = "E+"
 description = "复杂代码生成，多文件改动。和工匠·行不同的是: 面对 medium 复杂度，需要自己拆解子步骤。"
 capabilities = ["生成完整模块", "处理多文件改动", "处理复杂业务逻辑", "自行拆解子步骤"]
 persona = "builder"
@@ -84,7 +79,6 @@ system_prompt = ""
 
 [supervisor]
 name = "监督者"
-level = ""
 description = "机械质检门: diff/正则/py_compile，不调模型不花钱。直接汇报 Owner"
 capabilities = ["对照需求检查完整性(diff)", "对照约束检查越界(diff)", "检测偷懒(正则)", "产物验证(py_compile)"]
 persona = "judge"
@@ -116,7 +110,6 @@ system_prompt = """你是独立监督者。不归架构师管。只认Owner批�
 
 [reviewer]
 name = "审查者"
-level = "D"
 description = "项目完成后全扫: bug / 可优化项 / 架构偏离"
 capabilities = ["全项目扫描", "识别bug", "找出优化点", "检查架构一致性"]
 persona = "inspector"
@@ -140,7 +133,6 @@ system_prompt = """你是项目审查者。项目已基本完成，做最终审�
 
 [system_architect]
 name = "系统架构师"
-level = "D"
 description = "模块划分 · 数据模型 · 接口契约 · 技术栈选型 · 任务拆解"
 capabilities = ["设计系统架构", "数据建模", "API设计", "技术选型", "任务分解", "约束定义"]
 persona = "strategist"
@@ -186,7 +178,6 @@ system_prompt = """你是资深系统架构师。基于 PRD + 交互/UI方案 + 
 
 [ai_architect]
 name = "AI架构师"
-level = "D"
 description = "模型选型 · Prompt体系 · Agent拓扑 · 上下文策略"
 capabilities = ["模型选型", "Prompt设计", "Agent拓扑", "上下文管理", "Token预算"]
 persona = "strategist"
@@ -214,7 +205,6 @@ system_prompt = """你是 AI 架构师。基于 PRD + 调研报告，设计 AI �
 
 [frontend_architect]
 name = "前端架构师"
-level = "D"
 description = "组件树 · 状态管理 · 路由设计 · 性能策略 · 包选型"
 capabilities = ["组件设计", "状态管理", "路由设计", "性能优化", "包选型"]
 persona = "strategist"
@@ -242,7 +232,6 @@ system_prompt = """你是前端架构师。基于 PRD + 交互/UI方案 + 调研
 
 [frontend_engineer]
 name = "前端工程师"
-level = "E"
 description = "UI实现 · 交互逻辑 · 可访问性 · 动画"
 capabilities = ["组件实现", "状态管理", "路由", "样式", "可访问性", "性能优化"]
 persona = "implementer"
@@ -263,7 +252,6 @@ system_prompt = """你是前端工程师。基于前端架构方案，实现 UI 
 
 [backend_engineer]
 name = "后端工程师"
-level = "E"
 description = "API · 数据库 · 业务逻辑 · 中间件"
 capabilities = ["API实现", "数据库操作", "业务逻辑", "中间件", "异常处理"]
 persona = "implementer"
@@ -284,7 +272,6 @@ system_prompt = """你是后端工程师。基于系统架构方案，实现 API
 
 [data_engineer]
 name = "数据/AI工程师"
-level = "E+"
 description = "向量库 · RAG · Prompt工程 · Agent拓扑 · 数据管道"
 capabilities = ["向量数据库", "RAG实现", "模型集成", "数据管道", "Prompt工程化", "Agent拓扑落地", "Tool定义实现"]
 persona = "builder"
@@ -308,7 +295,6 @@ system_prompt = """你是数据/AI 工程师。基于 AI 架构方案，实现�
 
 [devops_engineer]
 name = "DevOps工程师"
-level = "E"
 description = "CI/CD · 容器化 · 部署 · 监控 · 日志"
 capabilities = ["Docker", "CI/CD", "部署脚本", "健康检查", "监控配置"]
 persona = "implementer"
@@ -332,7 +318,6 @@ system_prompt = """你是 DevOps 工程师。基于架构方案的部署设计�
 
 [qa_engineer]
 name = "QA工程师"
-level = "D"
 description = "验收验证 · 回归测试 · 边界覆盖 · 测试用例补充"
 capabilities = ["约束验证", "回归检查", "边界覆盖分析", "测试用例设计"]
 persona = "judge"
@@ -363,7 +348,6 @@ system_prompt = """你是 QA 工程师。基于架构约束清单 + 代码 + 测
 
 [security_auditor]
 name = "安全审计师"
-level = "D"
 description = "权限 · 注入 · 密钥 · 依赖漏洞 · 隐私合规"
 capabilities = ["权限审计", "注入检测", "密钥扫描", "依赖漏洞", "隐私合规"]
 persona = "judge"

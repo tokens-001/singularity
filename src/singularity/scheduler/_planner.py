@@ -81,7 +81,7 @@ def _run_committee(task, ctx: RunContext, agents: dict, d_agents: list) -> Batch
     with ThreadPoolExecutor(max_workers=len(d_agents)) as pool:
         for agent_cfg in d_agents:
             single = dict(agents)
-            single["D"] = [agent_cfg]
+            single["any"] = [agent_cfg]
             # ── subagent 事件: 启动 ──
             _pending_sse_events.append({
                 "kind": "subagent", "msg": f"委员会成员启动: {agent_cfg.get('model','?')}",
@@ -145,7 +145,7 @@ def _run_committee(task, ctx: RunContext, agents: dict, d_agents: list) -> Batch
         exec_result.raw_output = synthesis
         from . import dispatcher as _disp
         batch.dispatch_result = _disp.DispatchResult(
-            level="D", agent_cfg={"model": "committee"},
+            level="", agent_cfg={"model": "committee"},
             executor_result=exec_result, attempts=1,
         )
         batch.term_reason = f"committee({len(plans)}/{len(d_agents)}): " + ", ".join(p["model"] for p in plans)
@@ -262,7 +262,7 @@ def _llm_synthesize(task_desc: str, summary_text: str, models: list) -> str | No
     try:
         # 获取 E 层 agent 配置
         agents = disp_mod.load_agents()
-        e_agents = agents.get("E", [])
+        e_agents = agents.get("any", [])
         if not e_agents:
             return None
 
@@ -359,7 +359,7 @@ def materialize_plan(parent_id: str, subtasks: list[dict]) -> list[str]:
             )
             tracker.transition(
                 child.id, TaskStatus.PENDING,
-                route_level=st.get("suggested_level", "E"),
+                route_level=st.get("phase_hint", ""),
                 route_locked=True,
             )
             local_to_real[local_id] = child.id
@@ -383,7 +383,6 @@ def estimate_tokens(subtasks: list[dict], parent_desc: str = "") -> dict:
     """
     # 估算参数
     TOKENS_PER_CHAR = 0.6          # 中英混合平均
-    OVERHEAD = {"E": 2000, "E+": 3000, "D": 8000}
     COST_PER_M = {"E": 0.15, "E+": 0.50, "D": 1.50}  # $/M tokens
     RESPONSE_MULTIPLIER = 2.0      # prompt + completion + retry buffer
 
@@ -392,7 +391,7 @@ def estimate_tokens(subtasks: list[dict], parent_desc: str = "") -> dict:
     breakdown = {}
     for st in subtasks:
         desc = st.get("desc", "")
-        level = st.get("suggested_level", "E")
+        level = st.get("phase_hint", "")
         chars = len(desc)
         tokens = int(chars * TOKENS_PER_CHAR + OVERHEAD.get(level, 2000))
         tokens = int(tokens * RESPONSE_MULTIPLIER)

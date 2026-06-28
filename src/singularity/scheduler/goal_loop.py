@@ -103,7 +103,7 @@ class GoalLoop:
 如果产出基本满足了目标要求 → met=true。不确定 → met=false。"""
 
         try:
-            e_agents = self._agents.get("E", [])
+            e_agents = self._agents.get("any", [])
             if not e_agents:
                 return {"met": False, "reason": "no_judge_agent: 无 E 层 agent 可判定 goal"}
             e_cfg = e_agents[0]

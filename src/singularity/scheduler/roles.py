@@ -162,13 +162,13 @@ class RoleAssignment:
 
 _DEFAULT_AGENTS: dict[str, Agent] = {
     "DeepSeek-E": Agent(
-        name="DeepSeek-E", level="E", model="deepseek-v4-pro",
+        name="DeepSeek-E", level="", model="deepseek-v4-pro",
         api_type="claude-cli",
         entry="/Users/jingzhe/.claude/local/claude --exclude-dynamic-system-prompt-sections -p {prompt}",
         max_turns=2, default=True,
     ),
     "Opus-D": Agent(
-        name="Opus-D", level="D", model="claude-opus-4-8",
+        name="Opus-D", level="", model="claude-opus-4-8",
         api_type="claude-cli",
         entry="/opt/homebrew/bin/claude --model claude-opus-4-8 -p {prompt}",
         max_turns=2, default=True,
@@ -177,7 +177,7 @@ _DEFAULT_AGENTS: dict[str, Agent] = {
         env_unset=["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"],
     ),
     "GLM-E+": Agent(
-        name="GLM-E+", level="E+", model="glm-5.2",
+        name="GLM-E+", level="", model="glm-5.2",
         api_type="zhipu-api",
         entry="https://open.bigmodel.cn/api/paas/v4/chat/completions",
         api_key_env="ZHIPU_API_KEY",

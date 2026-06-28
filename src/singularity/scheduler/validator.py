@@ -231,7 +231,7 @@ def crossover_review(task_desc, raw_output, changed_files, writer_level, writer_
     if not changed_files:
         return {"issues":[],"verdict":"pass","summary":"no file changes"}
 
-    review_level = {"E":"E+","E+":"D"}.get(writer_level, "D")
+    review_level = writer_level
 
     # Get git diff
     diff_text = ""
@@ -333,7 +333,7 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
     if models:
         model_cfgs = []
         for name in models:
-            for a in agents.get("D",[]):
+            for a in (agents.get("any",[]) or sum((v for v in agents.values() if isinstance(v,list)),[])):
                 if a.get("model") == name and _disp.agent_api_available(a):
                     model_cfgs.append(a); break
     else:
