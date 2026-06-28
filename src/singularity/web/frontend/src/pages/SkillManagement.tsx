@@ -14,14 +14,14 @@ export default function SkillManagement() {
     const [s, a] = await Promise.all([api.skills(), api.agents()])
     setSkills(s)
     const flat: any[] = []
-    for (const lvl of ['D','E+','E']) for (const agent of (a?.[lvl]||[])) flat.push({...agent, level: lvl})
+    for (const lvl of Object.keys(a||{})) for (const agent of (a?.[lvl]||[])) flat.push({...agent})
     setAgents(flat)
 
     // Load skills per agent
     const m: Record<string, string[]> = {}
     for (const ag of flat) {
       try {
-        const d = await api.agentSkills(ag.level, ag.model)
+        const d = await api.agentSkills(ag.model)
         m[ag.model] = d.skills || []
       } catch { m[ag.model] = [] }
     }
@@ -35,14 +35,14 @@ export default function SkillManagement() {
     setShowForm(false); setForm({ name: '', description: '', type: 'prompt', content: '' }); fetch()
   }
 
-  const toggleSkill = async (model: string, level: string, skillName: string) => {
+  const toggleSkill = async (model: string, skillName: string) => {
     // ponytail: read cur inside functional updater to avoid stale closure under rapid clicks
     let before: string[] = []
     const next = matrix[model]?.includes(skillName)
       ? (before = matrix[model]||[], matrix[model].filter(s => s !== skillName))
       : (before = matrix[model]||[], [...(matrix[model]||[]), skillName])
     setMatrix(prev => ({...prev, [model]: next}))
-    try { await api.updateAgentSkills(level, model, next) } catch { setMatrix(prev => ({...prev, [model]: before})) }
+    try { await api.updateAgentSkills(model, next) } catch { setMatrix(prev => ({...prev, [model]: before})) }
   }
 
   return (
@@ -119,7 +119,7 @@ export default function SkillManagement() {
                       const has = curSkills.includes(s.name)
                       return (
                         <td key={s.name} style={{padding:'4px 6px',textAlign:'center'}}>
-                          <button onClick={()=>toggleSkill(a.model, a.level, s.name)}
+                          <button onClick={()=>toggleSkill(a.model, s.name)}
                             style={{background:has?'var(--accent-green)':'var(--bg-tertiary)',border:'none',borderRadius:3,width:22,height:22,cursor:'pointer',display:'inline-flex',alignItems:'center',justifyContent:'center'}}>
                             {has ? <Check size={12} color='#fff'/> : <span style={{color:'var(--text-muted)',fontSize:10}}>—</span>}
                           </button>

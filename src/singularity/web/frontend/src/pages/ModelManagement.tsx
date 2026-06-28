@@ -48,8 +48,8 @@ export default function ModelManagement() {
     await api.deleteModel(id); fetch()
   }
 
-  const filtered = tierFilter ? models.filter((m:any) => (m.tiers||[]).includes(tierFilter)) : models
-  const tiers = ['D', 'E+', 'E']
+  const filtered = tierFilter ? models.filter((m:any) => (m.recommended_for||m.tiers||[]).includes(tierFilter)) : models
+  const phases = ['定义','架构','实现','审查','验收','交付']
 
   return (
     <div>
@@ -57,7 +57,7 @@ export default function ModelManagement() {
         <h2 style={{fontSize:16,fontWeight:600}}>模型管理 ({models.length})</h2>
         <div style={{display:'flex',gap:6,marginLeft:16}}>
           <button onClick={()=>setTierFilter('')} style={filterBtn(tierFilter==='')}>全部</button>
-          {tiers.map(t=><button key={t} onClick={()=>setTierFilter(t)} style={filterBtn(tierFilter===t)}>{t} 层</button>)}
+          {phases.map(t=><button key={t} onClick={()=>setTierFilter(t)} style={filterBtn(tierFilter===t)}>{t}</button>)}
         </div>
         <button onClick={()=>setShowAdd(!showAdd)}
           style={{marginLeft:'auto',background:'var(--accent)',color:'#fff',border:'none',borderRadius:'var(--radius)',padding:'6px 12px',cursor:'pointer',fontSize:12,display:'flex',alignItems:'center',gap:4}}>
@@ -70,7 +70,7 @@ export default function ModelManagement() {
           <input placeholder="模型 ID" value={addForm.id} onChange={e=>setAddForm({...addForm,id:e.target.value})} style={{...inp,width:160}}/>
           <input placeholder="Provider" value={addForm.provider} onChange={e=>setAddForm({...addForm,provider:e.target.value})} style={{...inp,width:100}}/>
           <div style={{display:'flex',gap:4,alignItems:'center'}}>
-            {tiers.map(t=><label key={t} style={{fontSize:10,display:'flex',alignItems:'center',gap:2}}><input type="checkbox" checked={(addForm.tiers||[]).includes(t)} onChange={e=>{const nt=e.target.checked?[...(addForm.tiers||[]),t]:(addForm.tiers||[]).filter((x:string)=>x!==t);setAddForm({...addForm,tiers:nt})}}/>{t}</label>)}
+            {phases.map(t=><label key={t} style={{fontSize:10,display:'flex',alignItems:'center',gap:2}}><input type="checkbox" checked={(addForm.recommended_for||addForm.recommended_for||addForm.tiers||[]).includes(t)} onChange={e=>{const nt=e.target.checked?[...(addForm.recommended_for||addForm.recommended_for||addForm.tiers||[]),t]:(addForm.recommended_for||addForm.recommended_for||addForm.tiers||[]).filter((x:string)=>x!==t);setAddForm({...addForm,recommended_for:nt})}}/>{t}</label>)}
           </div>
           <input placeholder="上下文窗口" type="number" value={addForm.context_window} onChange={e=>setAddForm({...addForm,context_window:e.target.value})} style={{...inp,width:100}}/>
           <input placeholder="输入$/1k" type="number" step="0.001" value={addForm.cost_1k_input} onChange={e=>setAddForm({...addForm,cost_1k_input:e.target.value})} style={{...inp,width:90}}/>
@@ -138,7 +138,7 @@ export default function ModelManagement() {
           <thead><tr style={{borderBottom:'1px solid var(--border)',fontSize:11,color:'var(--text-muted)',textAlign:'left'}}>
             <th style={{padding:'7px 10px',width:180}}>模型</th>
             <th style={{padding:'7px 10px',width:80}}>来源</th>
-            <th style={{padding:'7px 10px',width:60}}>层级</th>
+            <th style={{padding:'7px 10px',width:60}}>推荐</th>
             <th style={{padding:'7px 10px',width:90}}>上下文</th>
             <th style={{padding:'7px 10px',width:120}}>成本 (/1k)</th>
             <th style={{padding:'7px 10px',width:50}}></th>
@@ -152,13 +152,13 @@ export default function ModelManagement() {
                 <td style={{padding:'7px 10px'}}>
                   {editingTiers===(m.id||m.model) ? (
                     <div style={{display:'flex',gap:4,alignItems:'center'}} onClick={e=>e.stopPropagation()}>
-                      {tiers.map(t=><label key={t} style={{fontSize:10,display:'flex',alignItems:'center',gap:2}}><input type="checkbox" checked={editTiers.includes(t)} onChange={e=>{setEditTiers(e.target.checked?[...editTiers,t]:editTiers.filter((x:string)=>x!==t))}}/>{t}</label>)}
-                      <button onClick={async()=>{await api.updateModel(m.id||m.model,{tiers:editTiers});setEditingTiers(null);fetch()}} style={{...iconBtn,color:'var(--accent-green)'}}>✓</button>
+                      {phases.map(t=><label key={t} style={{fontSize:9,display:'flex',alignItems:'center',gap:1}}><input type="checkbox" checked={editTiers.includes(t)} onChange={e=>{setEditTiers(e.target.checked?[...editTiers,t]:editTiers.filter((x:string)=>x!==t))}}/>{t.slice(0,1)}</label>)}
+                      <button onClick={async()=>{await api.updateModel(m.id||m.model,{recommended_for:editTiers});setEditingTiers(null);fetch()}} style={{...iconBtn,color:'var(--accent-green)'}}>✓</button>
                       <button onClick={()=>setEditingTiers(null)} style={iconBtn}>✕</button>
                     </div>
                   ) : (
-                    <span onClick={(e)=>{e.stopPropagation();setEditingTiers(m.id||m.model);setEditTiers(m.tiers||[])}} style={{cursor:'pointer'}}>
-                      {m.tiers&&m.tiers.length>0 ? m.tiers.map((t:string)=><span key={t} style={{background:'var(--bg-tertiary)',padding:'1px 5px',borderRadius:3,fontSize:9,fontWeight:600,color:t==='D'?'#f0883e':t==='E+'?'#a371f7':'#58a6ff',marginRight:2}}>{t}</span>) : <span style={{color:'var(--text-muted)',fontSize:10}}>点击设置</span>}
+                    <span onClick={(e)=>{e.stopPropagation();setEditingTiers(m.id||m.model);setEditTiers(m.recommended_for||m.tiers||[])}} style={{cursor:'pointer'}}>
+                      {(m.recommended_for||m.tiers||[]).length>0 ? (m.recommended_for||m.tiers).map((t:string)=><span key={t} style={{background:'var(--bg-tertiary)',padding:'1px 5px',borderRadius:3,fontSize:9,fontWeight:600,color:'var(--accent)',marginRight:2}}>{t}</span>) : <span style={{color:'var(--text-muted)',fontSize:10}}>点击设置</span>}
                     </span>
                   )}
                 </td>

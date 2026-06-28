@@ -43,7 +43,7 @@ export default function AgentDashboard() {
 
     // Load skills per role
     for (const r of result) {
-      try { const d = await api.agentSkills(r.level, r.model); r.skills = d.skills||[] } catch { r.skills = [] }
+      try { const d = await api.agentSkills( r.model); r.skills = d.skills||[] } catch { r.skills = [] }
     }
 
     setRoles(result); setLoading(false)
@@ -54,18 +54,17 @@ export default function AgentDashboard() {
   const handleSwitchModel = async (roleKey: string, newModel: string) => {
     const role = roles.find(r=>r.key===roleKey); if(!role) return
     for (const lvl of ['D','E+','E']) { for (const a of (agents?.[lvl]||[])) {
-      if (a.model===newModel) { const nr=[...new Set([...(a.roles||[]),roleKey])];await api.updateAgent(lvl,a.model,{roles:nr}) }
-      if (a.model===role.model&&a.model!==newModel) { await api.updateAgent(lvl,a.model,{roles:(a.roles||[]).filter((x:string)=>x!==roleKey)}) }
+      if (a.model===newModel) { const nr=[...new Set([...(a.roles||[]),roleKey])];await api.updateAgent(a.model,{roles:nr}) }
+      if (a.model===role.model&&a.model!==newModel) { await api.updateAgent(a.model,{roles:(a.roles||[]).filter((x:string)=>x!==roleKey)}) }
     }}
     setEditingModel(null); fetch()
   }
 
   const handleSkills = async (roleKey: string, model: string) => {
-    try { const d=await api.agentSkills(roles.find(r=>r.key===roleKey)?.level||'E',model);setSkillModal({role:roleKey,model,skills:d.skills||[],available:d.available||[]}) }
+    try { const d=await api.agentSkills(model);setSkillModal({role:roleKey,model,skills:d.skills||[],available:d.available||[]}) }
     catch { setSkillModal({role:roleKey,model,skills:[],available:[]}) }
   }
 
-  const levelColor = (l:string) => l==='D'?'#f0883e':l==='E+'?'#a371f7':'#58a6ff'
   const totalActive = roles.reduce((s,r)=>s+r.tasks.running+r.tasks.pending,0)
 
   if (loading) return <div style={{color:'var(--text-muted)'}}>加载中...</div>
@@ -89,7 +88,7 @@ export default function AgentDashboard() {
             {(skillModal.available||[]).filter((s:string)=>!skillModal.skills.includes(s)).map((s:string)=><span key={s} onClick={()=>setSkillModal({...skillModal,skills:[...skillModal.skills,s]})} style={{background:'var(--bg-tertiary)',padding:'4px 8px',borderRadius:4,fontSize:11,cursor:'pointer',color:'var(--text-secondary)'}}>+ {s}</span>)}
           </div>
           <div style={{display:'flex',gap:8,marginTop:10}}>
-            <button onClick={async()=>{if(skillModal){const r=roles.find(x=>x.key===skillModal.role);await api.updateAgentSkills(r?.level||'E',skillModal.model,skillModal.skills);setSkillModal(null);fetch()}}} style={btn('var(--accent-green)')}>保存</button>
+            <button onClick={async()=>{if(skillModal){const r=roles.find(x=>x.key===skillModal.role);await api.updateAgentSkills(skillModal.model,skillModal.skills);setSkillModal(null);fetch()}}} style={btn('var(--accent-green)')}>保存</button>
             <button onClick={()=>setSkillModal(null)} style={btn('var(--bg-tertiary)')}>关闭</button>
           </div>
         </div>
@@ -127,7 +126,7 @@ export default function AgentDashboard() {
                   <td style={{padding:'8px 10px'}}>
                     <div style={{display:'flex',alignItems:'center',gap:6}}>
                       <span style={{fontWeight:600}}>{r.name}</span>
-                      <span style={{background:levelColor(r.level)+'22',color:levelColor(r.level),padding:'1px 5px',borderRadius:3,fontSize:9,fontWeight:600}}>{r.level}</span>
+                      <span style={{background:'var(--accent)'+'22',color:"var(--accent)",padding:'1px 5px',borderRadius:3,fontSize:9,fontWeight:600}}>-</span>
                     </div>
                     <div style={{fontSize:10,color:'var(--text-muted)',marginTop:1}}>{r.key} · {r.description.slice(0,24)}</div>
                   </td>

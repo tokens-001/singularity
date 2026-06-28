@@ -8,7 +8,7 @@ async function request<T>(url: string, opts?: RequestInit): Promise<T> {
   return res.json()
 }
 
-export interface Task { id: string; description: string; status: string; route_level: string; route_gate: string; route_role: string; project_id: string; updated_at: number; created_at: number }
+export interface Task { id: string; description: string; status: string; route_type: string; route_gate: string; route_role: string; project_id: string; updated_at: number; created_at: number }
 export interface TaskDetail extends Task { trace?: any; timeline?: any }
 
 export const api = {
@@ -16,7 +16,7 @@ export const api = {
   tasks: async (p?: string) => { const d = await request<any>(`/api/tasks${p||''}`); return (d?.tasks||d) as any[] },
   task: (id: string) => request<any>(`/api/tasks/${id}`),
   taskTrace: (id: string) => request<any>(`/api/tasks/${id}/trace`),
-  createTask: (desc: string, level='E') => request('/api/tasks',{method:'POST',body:JSON.stringify({description:desc,level})}),
+  createTask: (desc: string) => request('/api/tasks',{method:'POST',body:JSON.stringify({description:desc})}),
   cancelTask: (id: string) => request(`/api/tasks/${id}/cancel`,{method:'POST'}),
   retryTask: (id: string) => request(`/api/tasks/${id}/retry`,{method:'POST'}),
   holdTask: (id: string) => request(`/api/tasks/${id}/hold`,{method:'POST'}),
@@ -36,8 +36,8 @@ export const api = {
   observerChat: (q: string) => request<any>('/api/observer/chat',{method:'POST',body:JSON.stringify({question:q})}),
 
   agents: () => request<any>('/api/agents'),
-  deleteAgent: (level: string, model: string) => request(`/api/agents/${level}/${model}`,{method:'DELETE'}),
-  updateAgent: (level: string, model: string, data: any) => request(`/api/agents/${level}/${model}`,{method:'PUT',body:JSON.stringify(data)}),
+  deleteAgent: (model: string) => request(`/api/agents/any/${model}`,{method:'DELETE'}),
+  updateAgent: (model: string, data: any) => request(`/api/agents/any/${model}`,{method:'PUT',body:JSON.stringify(data)}),
   addAgent: (data: any) => request('/api/agents',{method:'POST',body:JSON.stringify(data)}),
 
   models: async () => { const d = await request<any>('/api/models'); return Object.values(d||{}) as any[] },
@@ -54,9 +54,9 @@ export const api = {
   skills: async () => { const d = await request<any>('/api/skills'); return (d?.skills||d||[]) as any[] },
   addSkill: (data: any) => request('/api/skills',{method:'POST',body:JSON.stringify(data)}),
   deleteSkill: (name: string) => request(`/api/skills/${name}`,{method:'DELETE'}),
-  agentSkills: async (level: string, model: string) => { const d = await request<any>(`/api/agents/${level}/${model}/skills`); return { skills: d?.skill_names || d?.skills || [], available: d?.available || [] } },
-  updateAgentSkills: (level: string, model: string, skills: string[]) =>
-    request(`/api/agents/${level}/${model}/skills`,{method:'PUT',body:JSON.stringify({skills})}),
+  agentSkills: async (model: string) => { const d = await request<any>(`/api/agents/any/${model}/skills`); return { skills: d?.skill_names || d?.skills || [], available: d?.available || [] } },
+  updateAgentSkills: (model: string, skills: string[]) =>
+    request(`/api/agents/any/${model}/skills`,{method:'PUT',body:JSON.stringify({skills})}),
 
   fusionConfig: () => request<any>('/api/fusion/config'),
   updateFusionConfig: (data: any) => request('/api/fusion/config',{method:'PUT',body:JSON.stringify(data)}),

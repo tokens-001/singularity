@@ -7,7 +7,6 @@ import { Play, Square, RotateCcw, XCircle, Plus, RefreshCw, ChevronRight, CheckC
 const STATUS_CN: Record<string, string> = {
   pending: '待处理', running: '运行中', done: '已完成', failed: '失败', cancelled: '已取消', blocked: '已暂停', needs_approval: '待审批',
 }
-const LEVEL_TAGS: Record<string, string> = { E: '#58a6ff', 'E+': '#a371f7', D: '#f0883e' }
 const STATUS_COLORS: Record<string, string> = {
   pending: 'var(--text-muted)', running: 'var(--accent)',
   done: 'var(--accent-green)', failed: 'var(--accent-red)', cancelled: 'var(--accent-yellow)',
@@ -18,10 +17,8 @@ export default function TaskPanel() {
   const nav = useNavigate()
   const [tasks, setTasks] = useState<Task[]>([])
   const [statusFilter, setStatusFilter] = useState('')
-  const [levelFilter, setLevelFilter] = useState('')
   const [showCreate, setShowCreate] = useState(false)
   const [newDesc, setNewDesc] = useState('')
-  const [newLevel, setNewLevel] = useState('E')
   const [loading, setLoading] = useState(true)
 
   const fetchTasks = useCallback(() => {
@@ -48,7 +45,7 @@ export default function TaskPanel() {
     return () => clearInterval(t)
   }, [fetchTasks])
 
-  const filtered = levelFilter ? tasks.filter(t => t.route_level === levelFilter) : tasks
+  const filtered = tasks
   const counts = { total: tasks.length, running: tasks.filter(t=>t.status==='running').length,
     done: tasks.filter(t=>t.status==='done').length, failed: tasks.filter(t=>t.status==='failed').length }
 
@@ -62,7 +59,7 @@ export default function TaskPanel() {
 
   const handleCreate = () => {
     if (!newDesc.trim()) return
-    api.createTask(newDesc, newLevel).then(() => { setShowCreate(false); setNewDesc(''); fetchTasks() })
+    api.createTask(newDesc).then(() => { setShowCreate(false); setNewDesc(''); fetchTasks() })
   }
 
   return (
@@ -82,9 +79,6 @@ export default function TaskPanel() {
       {showCreate && (
         <div style={{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:14,marginBottom:14,display:'flex',gap:8,alignItems:'center'}}>
           <input value={newDesc} onChange={e=>setNewDesc(e.target.value)} placeholder="任务描述..." style={{flex:1,background:'var(--bg-tertiary)',border:'1px solid var(--border)',borderRadius:4,padding:'8px 10px',color:'var(--text-primary)',fontSize:13}} onKeyDown={e=>e.key==='Enter'&&handleCreate()}/>
-          <select value={newLevel} onChange={e=>setNewLevel(e.target.value)} style={{background:'var(--bg-tertiary)',color:'var(--text-primary)',border:'1px solid var(--border)',borderRadius:4,padding:'8px 10px',fontSize:12}}>
-            {['E','E+','D'].map(l=><option key={l}>{l}</option>)}
-          </select>
           <button onClick={handleCreate} style={{background:'var(--accent-green)',color:'#fff',border:'none',borderRadius:4,padding:'8px 14px',cursor:'pointer',fontSize:12}}>创建</button>
         </div>
       )}
@@ -104,7 +98,7 @@ export default function TaskPanel() {
         {!loading && filtered.length > 0 && (
           <table style={{width:'100%',borderCollapse:'collapse'}}>
             <thead><tr style={{borderBottom:'1px solid var(--border)',fontSize:11,color:'var(--text-muted)',textAlign:'left'}}>
-              <th style={{padding:"7px 10px"}}>描述</th><th style={{padding:'7px 10px',width:60}}>层级</th><th style={{padding:'7px 10px',width:80}}>状态</th><th style={{padding:'7px 10px',width:100}}>操作</th>
+              <th style={{padding:"7px 10px"}}>描述</th><th style={{padding:'7px 10px',width:80}}>状态</th><th style={{padding:'7px 10px',width:100}}>操作</th>
             </tr></thead>
             <tbody>
               {filtered.slice(0, 50).map(t=>(
@@ -112,7 +106,6 @@ export default function TaskPanel() {
                   onMouseEnter={e=>{e.currentTarget.style.background='var(--bg-tertiary)'}} onMouseLeave={e=>{e.currentTarget.style.background='transparent'}} onClick={()=>nav(`/tasks/${t.id}`)}>
                   <td style={{padding:'7px 10px',fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text-muted)'}}>{t.id.slice(0,8)}</td>
                   <td style={{padding:'7px 10px',maxWidth:400,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.description}</td>
-                  <td style={{padding:'7px 10px'}}><span style={{background:(LEVEL_TAGS[t.route_level]||'#666')+'22',color:LEVEL_TAGS[t.route_level]||'#666',padding:'1px 5px',borderRadius:3,fontSize:10,fontWeight:600}}>{t.route_level}</span></td>
                   <td style={{padding:'7px 10px'}}><span style={{display:'flex',alignItems:'center',gap:4,color:STATUS_COLORS[t.status]||'var(--text-secondary)'}}><span style={{width:6,height:6,borderRadius:'50%',background:STATUS_COLORS[t.status]||'var(--text-secondary)',display:'inline-block'}}/>{STATUS_CN[t.status]||t.status}</span></td>
                   <td style={{padding:'7px 10px'}} onClick={e=>e.stopPropagation()}>
                     <div style={{display:'flex',gap:2}}>

@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
 export interface Task {
-  id: string; description: string; status: string; route_level: string;
+  id: string; description: string; status: string; route_type: string;
   route_gate: string; route_role: string; project_id: string;
   updated_at: number; created_at: number;
 }

@@ -28,7 +28,7 @@ export default function TaskDetail() {
       <div style={{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:16,marginBottom:12}}>
         <div style={{fontSize:16,fontWeight:600,marginBottom:8}}>{task.description}</div>
         <div style={{display:'flex',gap:10,fontSize:12,color:'var(--text-secondary)',fontFamily:'var(--font-mono)'}}>
-          <span>ID: {task.id}</span><span>层级: {task.route_level}</span><span>状态: {task.status}</span>
+          <span>ID: {task.id}</span><span>类型: {task.route_type}</span><span>状态: {task.status}</span>
           {task.route_role && <span>角色: {task.route_role}</span>}
           {task.project_id && <span>项目: {task.project_id.slice(0,8)}</span>}
         </div>
