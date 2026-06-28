@@ -432,9 +432,13 @@ OBSERVER_VERDICT_SCHEMA = {
 }
 
 
-def _get_definition_context(role_key: str = "") -> str:
-    """构建定义层角色上下文。"""
+def _get_definition_context(role_key: str = "", include_verdict_schema: bool = False) -> str:
+    """构建定义层角色上下文。GATE3 时注入 verdict schema。"""
     prompt = DEFINITION_SYSTEM_PROMPT
+    if include_verdict_schema:
+        prompt += "\n\n## GATE3 验收汇总 schema\n你必须输出:\n```json\n" + \
+            json.dumps(OBSERVER_VERDICT_SCHEMA["json_schema"]["schema"], ensure_ascii=False, indent=2) + \
+            "\n```"
     if role_key:
         role_prompt = _definition_role_prompt(role_key)
         if role_prompt:

@@ -433,6 +433,18 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
                          "validation_issues": len(arch_issues),
                          "blockers": len(blockers)})
 
+    # D4 拆解器: unified_architecture → 结构化可执行 task 列表
+    try:
+        from singularity.scheduler.execution_judge import decompose_architecture
+        exec_tasks = decompose_architecture(arch)
+        if exec_tasks:
+            _save_phase_output(project.id, "executable_tasks.json",
+                              json.dumps(exec_tasks, ensure_ascii=False, indent=2))
+            project.add_lineage({"action": "tasks_decomposed",
+                                "count": len(exec_tasks)})
+    except Exception:
+        pass
+
     project.phase = Phase.GATE2
     save(project)
     block_warn = f" (⚠阻塞: {'; '.join(blockers[:2])})" if blockers else ""
@@ -628,6 +640,21 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
         msgs.append(f"安全报告完成 ({len(raw2)} chars)")
     elif err2:
         msgs.append(f"安全审计失败: {err2}")
+
+    # D3: 构建结构化 QA 报告 (fix_route 分级)
+    try:
+        from singularity.scheduler.validator import build_qa_report
+        qa_raw = disp_result.executor_result.raw_output if disp_result and disp_result.executor_result else "{}"
+        qa_data = json.loads(qa_raw) if qa_raw.strip().startswith("{") else {}
+        issues = qa_data.get("issues", [])
+        passed = qa_data.get("passed", [])
+        verdict = qa_data.get("verdict", "go" if not issues else "no_go")
+        reason = qa_data.get("summary", qa_data.get("verdict_reason", ""))
+        qa_report = build_qa_report(passed, issues, verdict, reason)
+        _save_phase_output(project.id, "qa_report.json",
+                          json.dumps(qa_report, ensure_ascii=False, indent=2))
+    except Exception:
+        pass
 
     return msgs
 

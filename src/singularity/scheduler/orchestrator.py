@@ -244,13 +244,25 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                     # 跑集成合并: 拓扑合并 + 集成测试 + 冒烟构建
                     ok, detail = _run_integration_merge(proj)
                     if ok:
-                        proj.phase = proj_mod.Phase.REVIEWING
-                        proj_mod.save(proj)
-                        msg = run_test_fix_loop(proj, agents)
-                        _pending_sse_events.append({
-                            "kind": "system", "msg": f"集成合并通过 → REVIEWING {msg[:120]}",
-                            "ts": time.time(), "task_id": proj.id,
-                        })
+                        # D1: 检查审查失败次数是否触顶
+                        from singularity.scheduler._review import check_review_fail_limit
+                        fail_check = check_review_fail_limit(proj.id,
+                            getattr(proj, 'review_failures', 0))
+                        if fail_check["blocked"]:
+                            proj.phase = proj_mod.Phase.GATE2
+                            proj_mod.save(proj)
+                            _pending_sse_events.append({
+                                "kind": "system", "msg": fail_check["reason"],
+                                "ts": time.time(), "task_id": proj.id,
+                            })
+                        else:
+                            proj.phase = proj_mod.Phase.REVIEWING
+                            proj_mod.save(proj)
+                            msg = run_test_fix_loop(proj, agents)
+                            _pending_sse_events.append({
+                                "kind": "system", "msg": f"集成合并通过 → REVIEWING {msg[:120]}",
+                                "ts": time.time(), "task_id": proj.id,
+                            })
                     else:
                         # 集成合并失败 → 计数
                         integrate_fails = getattr(proj, 'integrate_failures', 0) + 1
