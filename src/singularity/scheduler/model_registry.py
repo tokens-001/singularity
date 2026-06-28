@@ -1,7 +1,9 @@
-"""model_registry.py — 模型能力注册表。
+"""model_registry.py — 模型权威目录。
 
-读取 models.toml，提供按层级/能力/价格的查询接口。
+读取 models.toml，提供按推荐阶段/能力/价格的查询接口。
 与 api_store 联动: 查询时自动过滤 API 不可用的模型。
+
+两档后: tiers → recommended_for (权威推荐, 不强制路由)。
 """
 
 from __future__ import annotations
@@ -19,19 +21,24 @@ class ModelEntry:
     id: str                      # deepseek-v4-flash
     provider: str                # deepseek (对应 api_store)
     display: str                 # DeepSeek V4 Flash
-    tiers: list[str]             # ["E", "E+", "D"]
-    speed: str                   # fast | medium | slow
-    cost: str                    # budget | standard | premium
+    recommended_for: list[str] = field(default_factory=list)  # 权威推荐: ["定义","实现","交付"] 等
+    speed: str = "medium"        # fast | medium | slow
+    cost: str = "standard"       # budget | standard | premium
     rating: str = ""             # SSS/SS/S/A 评级
     reasoning: bool = False      # 推理模型 (用 reasoning_content)
     max_turns: int = 5
     strengths: list[str] = field(default_factory=list)
     notes: str = ""
 
+    # backward compat
+    @property
+    def tiers(self) -> list[str]:
+        return self.recommended_for
+
     def to_dict(self) -> dict:
         return {
             "id": self.id, "provider": self.provider, "display": self.display,
-            "tiers": self.tiers, "speed": self.speed, "cost": self.cost,
+            "recommended_for": self.recommended_for, "speed": self.speed, "cost": self.cost,
             "rating": self.rating, "reasoning": self.reasoning,
             "max_turns": self.max_turns, "strengths": self.strengths,
             "notes": self.notes,
@@ -39,9 +46,11 @@ class ModelEntry:
 
     @classmethod
     def from_dict(cls, d: dict) -> "ModelEntry":
+        # backward compat: read old "tiers" key or new "recommended_for"
+        rf = _safe_list(d.get("recommended_for") or d.get("tiers"))
         return cls(
             id=_safe_str(d.get("id")), provider=_safe_str(d.get("provider")), display=_safe_str(d.get("display"), _safe_str(d.get("id")) or ""),
-            tiers=_safe_list(d.get("tiers")), speed=_safe_str(d.get("speed"),"medium"), cost=_safe_str(d.get("cost"),"standard"),
+            recommended_for=rf, speed=_safe_str(d.get("speed"),"medium"), cost=_safe_str(d.get("cost"),"standard"),
             rating=_safe_str(d.get("rating")), reasoning=_safe_bool(d.get("reasoning")),
             max_turns=_safe_int(d.get("max_turns")), strengths=_safe_list(d.get("strengths")),
             notes=_safe_str(d.get("notes")),
@@ -94,8 +103,7 @@ def load_models() -> dict[str, ModelEntry]:
     # 2. 用户自定义覆盖 / 新增 (空 tiers 视为已删除, 不显示)
     custom = _load_custom()
     for mid, m in custom.items():
-        if m.tiers:  # 有层级 → 覆盖/新增
-            # 合并: custom 空字段不覆盖 toml 值 (防脏数据)
+        if m.recommended_for:  # 有推荐 → 覆盖/新增
             if mid in models:
                 toml = models[mid]
                 if not m.rating: m.rating = toml.rating
@@ -104,7 +112,7 @@ def load_models() -> dict[str, ModelEntry]:
                 if not m.strengths: m.strengths = toml.strengths
                 if not m.notes: m.notes = toml.notes
             models[mid] = m
-        elif mid in models:  # 空层级 → 删除标记
+        elif mid in models:  # 空推荐 → 删除标记
             del models[mid]
     return models
 
@@ -126,7 +134,7 @@ def _entry_from_raw(mid: str, data: dict) -> ModelEntry:
         id=mid,
         provider=_safe_str(data.get("provider")),
         display=_safe_str(data.get("display"), mid),
-        tiers=_safe_list(data.get("tiers")),
+        recommended_for=_safe_list(data.get("recommended_for") or data.get("tiers")),
         speed=_safe_str(data.get("speed"), "medium"),
         cost=_safe_str(data.get("cost"), "standard"),
         rating=_safe_str(data.get("rating")),
@@ -140,16 +148,16 @@ def _entry_from_raw(mid: str, data: dict) -> ModelEntry:
 # ── CRUD (写入自定义 JSON) ──
 
 def add_model(model_id: str, provider: str, display: str = "",
-              tiers: list[str] = None, speed: str = "medium",
+              recommended_for: list[str] = None, speed: str = "medium",
               cost: str = "standard", rating: str = "",
               reasoning: bool = False, max_turns: int = 5,
               notes: str = "") -> ModelEntry:
-    """添加或更新自定义模型。"""
+    """添加或更新自定义模型。推荐阶段为空=不限制。"""
     custom = _load_custom()
     entry = ModelEntry(
         id=model_id, provider=provider,
         display=display or model_id,
-        tiers=tiers or ["E"],
+        recommended_for=recommended_for or [],
         speed=speed, cost=cost, rating=rating,
         reasoning=reasoning, max_turns=max_turns, notes=notes,
     )
@@ -172,7 +180,7 @@ def remove_model(model_id: str) -> bool:
         custom[model_id] = ModelEntry(
             id=model_id, provider=m.provider,
             display=m.display,
-            tiers=[], speed=m.speed, cost=m.cost,
+            recommended_for=[], speed=m.speed, cost=m.cost,
             rating=m.rating, reasoning=m.reasoning,
             max_turns=m.max_turns,
             strengths=m.strengths, notes=m.notes,
@@ -182,24 +190,28 @@ def remove_model(model_id: str) -> bool:
     return False
 
 
-def for_tier(tier: str, available_only: bool = True) -> list[ModelEntry]:
-    """获取某一层可用的所有模型。
+def for_phase(phase: str = "", available_only: bool = True) -> list[ModelEntry]:
+    """获取某阶段推荐的模型。phase 为空时返回全部。
 
-    tier: "E" | "E+" | "D"
-    available_only: True → 只返回 API 可用的模型
+    phase: "定义" | "架构" | "实现" | "审查" | "验收" | "交付" 或留空
     """
     from . import api_store
     models = load_models()
     result = []
     for m in models.values():
-        if tier in m.tiers:
-            if available_only and not api_store.is_available(m.provider):
-                continue
-            result.append(m)
-    # 按成本排序: budget → standard → premium
+        if phase and phase not in m.recommended_for:
+            continue
+        if available_only and not api_store.is_available(m.provider):
+            continue
+        result.append(m)
     cost_order = {"budget": 0, "standard": 1, "premium": 2}
     result.sort(key=lambda m: cost_order.get(m.cost, 1))
     return result
+
+
+# backward compat
+def for_tier(tier: str = "", available_only: bool = True) -> list[ModelEntry]:
+    return for_phase(tier, available_only)
 
 
 def get(model_id: str) -> Optional[ModelEntry]:
@@ -217,18 +229,17 @@ def models_for_provider(provider: str) -> list[ModelEntry]:
     return [m for m in load_models().values() if m.provider == provider]
 
 
-def fallback_for_tier(tier: str, exclude_providers: set[str] = None) -> list[ModelEntry]:
-    """获取某层的容灾备选链。
+def fallback_for_tier(phase: str = "", exclude_providers: set[str] = None) -> list[ModelEntry]:
+    """获取容灾备选链。phase 为空=全池。
 
-    按成本排序，排除指定 provider（如已欠费的）。
-    返回全部可用模型的排序列表，供 dispatcher 建立 fallback 链。
+    按成本排序，排除指定 provider。
     """
     from . import api_store
     exclude = exclude_providers or set()
     models = load_models()
     result = []
     for m in models.values():
-        if tier not in m.tiers:
+        if phase and phase not in m.recommended_for:
             continue
         if m.provider in exclude:
             continue

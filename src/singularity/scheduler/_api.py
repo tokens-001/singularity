@@ -254,8 +254,9 @@ def task_release(task_id: str) -> tuple[dict, int]:
 
 def task_override_route(task_id: str, level: str, locked: bool = True) -> tuple[dict, int]:
     """POST /api/tasks/<id>/override-route"""
-    if level not in ("E", "D", "E+"):
-        return {"error": "level 必须是 E / D / E+"}, 400
+    # 两档后 level 可选, 空=不限
+    if level and level not in ("E", "D", "E+"):
+        return {"error": "level 必须是 E / D / E+ 或留空"}, 400
     task = tracker.read_task(task_id)
     if task is None:
         return {"error": "任务不存在"}, 404
@@ -651,18 +652,18 @@ def models_import(models: list[dict], auto_assign: bool = False):
             api_store.save_custom_model(
                 model_id=m["id"], provider=m.get("provider", ""),
                 display=m.get("display", m["id"]),
-                tiers=m.get("tiers", ["E"]),
+                recommended_for=m.get("recommended_for") or m.get("tiers", []),
                 speed=m.get("speed", "medium"), cost=m.get("cost", "standard"),
                 rating=m.get("rating", "?"), strengths=m.get("strengths", []),
                 notes=m.get("notes", ""),
             )
             imported.append(m["id"])
             if auto_assign:
-                for tier in m.get("tiers", []):
-                    try:
-                        disp_mod.add_agent(level=tier, model=m["id"])
-                    except Exception:
-                        pass
+                # 两档后: 直接添加, 不按层级
+                try:
+                    disp_mod.add_agent(model=m["id"])
+                except Exception:
+                    pass
         except Exception as e:
             errors.append(f"{m.get('id', '?')}: {e}")
             witness.heartbeat('_api', f'warn:{e}'[:80])
@@ -676,10 +677,10 @@ def model_list():
     custom = disp_mod._load_custom_agents()
     disabled_by_tier = custom.get("_disabled", {})
     return {mid: {"id": m.id, "provider": m.provider, "display": m.display,
-        "tiers": m.tiers, "speed": m.speed, "cost": m.cost, "rating": m.rating,
+        "recommended_for": m.recommended_for, "speed": m.speed, "cost": m.cost, "rating": m.rating,
         "reasoning": m.reasoning, "max_turns": m.max_turns, "strengths": m.strengths,
         "notes": m.notes, "api_available": api_store.is_available(m.provider),
-        "disabled_in": [t for t in m.tiers if mid in disabled_by_tier.get(t, [])]} for mid, m in models.items()}, 200
+        "disabled_in": [t for t in m.recommended_for if mid in disabled_by_tier.get(t, [])]} for mid, m in models.items()}, 200
 
 
 def model_list_for_tier(tier):
@@ -689,24 +690,20 @@ def model_list_for_tier(tier):
         "cost": m.cost, "speed": m.speed, "api_available": api_store.is_available(m.provider)} for m in models], 200
 
 
-def model_add(model_id, provider="", display="", tiers=None, speed="medium", cost="standard", reasoning=False, max_turns=5, strengths="", notes=""):
+def model_add(model_id, provider="", display="", recommended_for=None, speed="medium", cost="standard", reasoning=False, max_turns=5, strengths="", notes=""):
     from . import model_registry
-    model_registry.add_model(model_id, provider, display, tiers or ["E"], speed, cost, reasoning, max_turns)
+    # backward compat: accept old "tiers" param too
+    rf = recommended_for or []
+    model_registry.add_model(model_id, provider, display, rf, speed, cost, "", reasoning, max_turns, notes)
     return {"ok": True, "model_id": model_id}, 200
 
 
 def model_remove(model_id):
     from . import model_registry, dispatcher
     ok = model_registry.remove_model(model_id)
-    agents = dispatcher.load_agents()
-    disabled_levels = []
-    for lvl in ("E", "E+", "D"):
-        for a in agents.get(lvl, []):
-            if a.get("model") == model_id:
-                dispatcher.remove_agent(lvl, model_id)
-                disabled_levels.append(lvl)
-                break
-    return {"ok": ok, "synced_agents": disabled_levels}, 200
+    # 两档后: 从全池移除, 不按层级
+    dispatcher.remove_agent("", model_id)
+    return {"ok": ok, "synced": True}, 200
 
 
 def model_update(model_id, data):
@@ -714,15 +711,15 @@ def model_update(model_id, data):
     models = model_registry.load_models()
     if model_id not in models: return {"error": "模型不存在"}, 404
     m = models[model_id]
-    old_tiers = set(m.tiers or [])
-    new_tiers = set((data["tiers"] if "tiers" in data else m.tiers) or [])
+    # backward compat: read old "tiers" or new "recommended_for"
+    old_rf = set(m.recommended_for or [])
+    new_rf = set((data.get("recommended_for") or data.get("tiers") or m.recommended_for) or [])
 
-    # ponytail: 参数名对齐 add_model(model_id, provider, display, tiers, speed, cost, rating, reasoning, max_turns, notes)
     model_registry.add_model(
         model_id,
         data.get("provider", m.provider),
         data.get("display", m.display),
-        list(new_tiers) if "tiers" in data else m.tiers,
+        list(new_rf),
         data.get("speed", m.speed),
         data.get("cost", m.cost),
         data.get("rating", getattr(m, "rating", "")),
@@ -730,13 +727,8 @@ def model_update(model_id, data):
         data.get("max_turns", m.max_turns),
         data.get("notes", getattr(m, "notes", "")),
     )
-    # 同步 agent 层: 新增的层加 agent，移除的层删 agent
-    for tier in old_tiers - new_tiers:
-        disp_mod.remove_agent(tier, model_id)
-    for tier in new_tiers - old_tiers:
-        disp_mod.add_agent(tier, model_id)
     return {"ok": True, "model_id": model_id,
-            "synced": {"added": sorted(new_tiers - old_tiers), "removed": sorted(old_tiers - new_tiers)}}, 200
+            "updated": {"recommended_for": sorted(new_rf)}}, 200
 
 
 # ═══════════════════════════════════════════════════════════════

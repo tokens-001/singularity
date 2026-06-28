@@ -16,7 +16,7 @@ class TestFormatReport:
         from singularity.scheduler.snapshot import Snapshot
         r = DeliveryReport(
             task="abc123: 修复登录",
-            route=RouteResult(level="E", gate_required=False, task_type="bugfix"),
+            route=RouteResult(gate_required=False, task_type="bugfix"),
             executor_result=ExecutorResult(success=False, raw_output="错误输出"),
             validation=ValidationReport(verdict="阻断", action="abort",
                 unverified=["测试不通过"]),
@@ -36,7 +36,7 @@ class TestFormatReport:
         from singularity.scheduler.snapshot import Snapshot
         r = DeliveryReport(
             task="t1: 添加功能",
-            route=RouteResult(level="E", gate_required=False, task_type="feature"),
+            route=RouteResult(gate_required=False, task_type="feature"),
             executor_result=ExecutorResult(success=True, raw_output="完成"),
             validation=ValidationReport(verdict="通过", action="pass"),
             snapshot=Snapshot(id="s1", method="git", ref="abc", created_at=0.0),

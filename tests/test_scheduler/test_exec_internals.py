@@ -419,7 +419,7 @@ class TestFinalizeResult:
                 "tracker.transition": record_transition,
             },
         )
-        assert "escalated_to_E+" in reason
+        assert "auto_fix" in reason
         assert any("PENDING" in str(s) for _, s, _ in transitions), f"transitions: {transitions}"
 
     # ── 分支5: 重试耗尽 + depth<MAX → 自动拆分 ──

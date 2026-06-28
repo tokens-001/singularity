@@ -89,7 +89,7 @@ class TaskRunner:
         # 路由
         if task.route_locked:
             route = router_mod.RouteResult(
-                level=task.route_level, gate_required=task.route_gate,
+                gate_required=task.route_gate,
                 task_type=task.route_type)
         else:
             route = router_mod.route(task.description)
@@ -107,12 +107,6 @@ class TaskRunner:
                     project_phase = proj.phase.value
         except Exception as e:
             witness.heartbeat('orch', f'warn:{e}')
-        ranked_models = router_mod.rank_models_for_task(
-            task.description, route.task_type, phase=project_phase, route_level=route.level)
-        effective_agents = dict(agents)
-        if ranked_models:
-            effective_agents[route.level] = _reorder_agents_by_rank(
-                agents.get(route.level, []), ranked_models)
         # 快照
         snap = snap_mod.take(task.id)
         ctx = RunContext(batch_id=task.id, snapshot_ref=snap.ref, merge_queue=None)
@@ -120,7 +114,7 @@ class TaskRunner:
         if pre.code_context:
             task.description = f"{task.description}\n\n[代码结构上下文]\n{pre.code_context}"
 
-        # 执行分叉: Goal循环 / D层委员会 / 普通
+        # 执行分叉: Goal循环 / 普通 (两档后不分层级)
         goal_match = _GOAL_RE.match(task.description)
         if goal_match:
             goal = goal_match.group(1).strip()
@@ -128,7 +122,7 @@ class TaskRunner:
                 "kind": "system", "msg": f"Goal循环: {goal[:60]}",
                 "ts": time.time(), "task_id": task.id,
             })
-            loop = GoalLoop(effective_agents)
+            loop = GoalLoop(agents)
             g_result = loop.run(task, goal, max_iter=5)
             from ._types import BatchOutput as _BO
             from .executors.base import ExecutorResult as _ER
@@ -141,15 +135,10 @@ class TaskRunner:
                             unverified=[f"Goal循环 {g_result.iterations}轮, 满足={g_result.success}"]))
             batch.dispatch_result = type('obj', (object,), {
                 'executor_result': _ER(success=g_result.success, raw_output=g_result.final_output),
-                'agent_cfg': {}, 'level': route.level})()
+                'agent_cfg': {}, 'level': ''})()
         else:
-            d_agents = effective_agents.get("D", [])
-            use_committee = route.level == "D" and len(d_agents) >= 2
-            # ponytail: fusion 执行层已移除，仅保留 D 层委员会（多模型出方案）
-            if use_committee:
-                batch = _run_committee(task, ctx, effective_agents, d_agents)
-            else:
-                batch = _run_with_retry(task, ctx, effective_agents)
+            # 两档后: 从全池选 agent, 不按层级
+            batch = _run_with_retry(task, ctx, agents)
         batch.pre_search_skipped = pre.skipped
         batch.pre_search_reason = pre.reason
         batch.pre_search_top_decisions = pre.top_decisions
@@ -187,10 +176,10 @@ class TaskRunner:
                     f"[D方案执行] {task.description[:80]}",
                     depends_on=[task.id], depth=task.depth)
                 tracker.transition(fix_task.id, TaskStatus.PENDING,
-                                 route_level="E+", route_locked=True)
+                                 route_locked=True)
                 tracker.transition(task.id, TaskStatus.FAILED,
-                                 error=f"已生成E+修复任务 {fix_task.id[:8]}: {term_reason}")
-                reason = f"escalated_to_E+: {fix_task.id[:8]}"
+                                 error=f"已生成修复任务 {fix_task.id[:8]}: {term_reason}")
+                reason = f"auto_fix: {fix_task.id[:8]}"
             else:
                 # 降级重试: 重试耗尽 → 自动拆分再提交
                 retry_count = getattr(task, 'retry_count', 0)

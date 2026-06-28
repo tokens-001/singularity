@@ -18,6 +18,21 @@ from singularity.scheduler.executors import (
 )
 
 _ESCALATION = {"E": "E+", "E+": "D"}
+
+
+def _all_agents_list(agents: dict) -> list[dict]:
+    """两档后: 从所有层级收集 agent (去重)。"""
+    seen = set()
+    result = []
+    for level_agents in agents.values():
+        for a in (level_agents if isinstance(level_agents, list) else []):
+            m = a.get("model", "")
+            if m and m not in seen:
+                seen.add(m)
+                result.append(a)
+    return result
+
+
 _EXECUTOR_BY_TYPE = {
     "claude-cli": ClaudeCliExecutor,
     "zhipu-api": ZhipuApiExecutor,
@@ -221,11 +236,11 @@ def pick_agent(agents: dict, level: str, role: str = None,
     """选 agent: project_lineup > role > default。
 
     API 不可用的 agent 自动跳过。
-    project_lineup 里的模型找不到时跨层搜索。
+    level 为空时从全池选 (两档后不再强制 E/E+/D)。
     """
-    candidates = agents.get(level, [])
+    candidates = agents.get(level, []) if level else _all_agents_list(agents)
     if not candidates:
-        raise RuntimeError(f"无 {level} 层 agent")
+        raise RuntimeError(f"无可用 agent (level={level or 'any'})")
 
     # project_lineup 优先
     lineup = (project_lineup or {}).get(level, [])
@@ -328,7 +343,18 @@ def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
                 res.append(a); s.add(k)
         return res
 
-    result = _collect(level)
+    # 两档后: level 为空时从全池收集
+    if level:
+        result = _collect(level)
+    else:
+        result = []
+        excl = exclude or set()
+        seen = set()
+        for a in _all_agents_list(agents):
+            k = a.get("model", "")
+            if k not in seen and k not in excl and agent_api_available(a):
+                result.append(a)
+                seen.add(k)
     if not result and fallback_levels:
         for fl in fallback_levels:
             result = _collect(fl)
@@ -701,12 +727,13 @@ def _save_custom_agents(data: dict) -> None:
     config.QIDIAN_DIR.mkdir(parents=True, exist_ok=True)
     _custom_agents_path().write_text(_json.dumps(data, ensure_ascii=False, indent=2))
 
-def add_agent(level: str, model: str, agent_type: str = "openai-agent",
+def add_agent(level: str = "", model: str = "", agent_type: str = "openai-agent",
               entry: str = "", api_key_env: str = "", max_turns: int = 5,
               roles: list = None, sandbox: str = "worktree", mode: str = "",
               request_template: dict = None) -> dict:
+    # 两档后 level 可选, 空=全池
+    key = "E_plus" if level == "E+" else (level or "any")
     custom = _load_custom_agents()
-    key = "E_plus" if level == "E+" else level
 
     # 1. 如果之前在禁用列表里，移除禁用标记即可 (重新启用 toml 内置 agent)
     disabled = custom.get("_disabled", {}).get(level, [])
@@ -742,10 +769,10 @@ def add_agent(level: str, model: str, agent_type: str = "openai-agent",
     _notify_agent_change()
     return cfg
 
-def remove_agent(level: str, model: str) -> bool:
-    """禁用 agent: 从 custom 删 + 加入 _disabled (双保险, 防 toml/custom 重复激活)。"""
-    custom = _load_custom_agents()
-    key = "E_plus" if level == "E+" else level
+def remove_agent(level: str = "", model: str = "") -> bool:
+    """禁用 agent: 从 custom 删 + 加入 _disabled。两档后 level 可选。"""
+    key = "E_plus" if level == "E+" else (level or "any")
+    disabled_key = level or "any"
 
     # 1. 从 custom 列表删除
     cfgs = custom.get(key, [])
@@ -754,9 +781,9 @@ def remove_agent(level: str, model: str) -> bool:
 
     # 2. 加入禁用列表 (幂等, 无论来源是 toml 还是 custom)
     custom.setdefault("_disabled", {})
-    custom["_disabled"].setdefault(level, [])
-    if model not in custom["_disabled"][level]:
-        custom["_disabled"][level].append(model)
+    custom["_disabled"].setdefault(disabled_key, [])
+    if model not in custom["_disabled"][disabled_key]:
+        custom["_disabled"][disabled_key].append(model)
 
     _save_custom_agents(custom)
     _notify_agent_change()
@@ -821,4 +848,7 @@ def update_agent(level: str, model: str, updates: dict) -> dict:
 
 
 def escalate(level: str) -> str | None:
+    # 两档后: 空 level 不升级 (已从全池选)
+    if not level:
+        return None
     return _ESCALATION.get(level)

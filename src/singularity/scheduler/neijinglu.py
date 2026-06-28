@@ -99,7 +99,6 @@ class DeliveryReport:
             "task": self.task,
             "final_status": self.final_status,
             "route": {
-                "level": self.route.level,
                 "gate_required": self.route.gate_required,
                 "task_type": self.route.task_type,
                 "matched_signals": self.route.matched_signals,
@@ -184,7 +183,6 @@ def format_report(report: DeliveryReport) -> str:
         f"**最终状态:** {d['final_status']}",
         "",
         "### 路由",
-        f"- 复杂度: {d['route']['level']}",
         f"- 任务类型: {d['route']['task_type']}",
         f"- gate_required: {d['route']['gate_required']}",
         f"- 命中信号: {'; '.join(d['route']['matched_signals']) or '无'}",

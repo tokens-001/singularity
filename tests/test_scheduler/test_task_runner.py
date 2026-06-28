@@ -179,7 +179,7 @@ class TestTaskRunnerExecute:
         result_batch, result_route, result_snap = runner.execute(task, _make_agents())
 
         assert not route_called
-        assert result_route.level == "D"
+        # 两档后 level 不再使用, gate_required 和 task_type 保留
         assert result_route.gate_required == "security"
         assert result_route.task_type == "fix"
 
@@ -252,44 +252,6 @@ class TestTaskRunnerExecute:
         assert "goal_exhausted_5iter" in batch.term_reason
         assert batch.validation.action == "abort"
 
-    def test_committee_d_level_two_agents(self, monkeypatch):
-        """D 层 + ≥2 个 D agent → _run_committee。"""
-        tr, batch, pre, route, snap = _setup(monkeypatch)
-
-        # 路由到 D 层
-        monkeypatch.setattr(tr.router_mod, "route",
-            lambda d: _make_route_stub(level="D", task_type="default"))
-
-        committee_called = []
-        monkeypatch.setattr(tr, "_run_committee",
-            lambda t, ctx, agents, d_agents: committee_called.append(len(d_agents)) or batch)
-
-        from singularity.scheduler._task_runner import TaskRunner
-        task = _make_task(description="重构数据库层")
-        runner = TaskRunner()
-        runner.execute(task, _make_agents())
-
-        assert committee_called == [2]  # 2个D agent
-
-    def test_d_level_one_agent_no_committee(self, monkeypatch):
-        """D 层但只有 1 个 D agent → 不走委员会，走默认路径。"""
-        tr, batch, pre, route, snap = _setup(monkeypatch)
-
-        monkeypatch.setattr(tr.router_mod, "route",
-            lambda d: _make_route_stub(level="D", task_type="default"))
-
-        retry_called = []
-        monkeypatch.setattr(tr, "_run_with_retry",
-            lambda t, ctx, agents: retry_called.append(1) or batch)
-
-        from singularity.scheduler._task_runner import TaskRunner
-        task = _make_task()
-        agents = {"D": [{"model": "claude-opus"}]}  # 只有1个D agent
-        runner = TaskRunner()
-        runner.execute(task, agents)
-
-        assert retry_called == [1]
-
     def test_default_retry_path(self, monkeypatch):
         """普通任务非 Goal/委员会 → _run_with_retry。"""
         tr, batch, pre, route, snap = _setup(monkeypatch)
@@ -305,32 +267,9 @@ class TestTaskRunnerExecute:
 
         assert retry_calls == ["test12345678"]
 
-    def test_agents_reordered_with_ranked_models(self, monkeypatch):
-        """有模型排名 → effective_agents 按排名重排。"""
+    def test_execute_preserves_agents(self, monkeypatch):
+        """执行时 agents 保持原样 (两档后无模型重排)。"""
         tr, batch, pre, route, snap = _setup(monkeypatch)
-
-        monkeypatch.setattr(tr.router_mod, "rank_models_for_task",
-            lambda *a, **k: ["claude", "gpt-4"])
-
-        retry_agents = []
-        monkeypatch.setattr(tr, "_run_with_retry",
-            lambda t, ctx, agents: retry_agents.append(agents) or batch)
-
-        from singularity.scheduler._task_runner import TaskRunner
-        task = _make_task()
-        runner = TaskRunner()
-        runner.execute(task, _make_agents())
-
-        e_agents = retry_agents[0].get("E", [])
-        assert e_agents[0]["model"] == "claude"
-        assert e_agents[1]["model"] == "gpt-4"
-
-    def test_no_ranked_models_preserves_agents(self, monkeypatch):
-        """无排名 → agents 保持原顺序。"""
-        tr, batch, pre, route, snap = _setup(monkeypatch)
-
-        monkeypatch.setattr(tr.router_mod, "rank_models_for_task",
-            lambda *a, **k: [])  # 空排名
 
         retry_agents = []
         monkeypatch.setattr(tr, "_run_with_retry",
@@ -342,8 +281,9 @@ class TestTaskRunnerExecute:
         runner = TaskRunner()
         runner.execute(task, agents)
 
-        # E层保持原顺序
-        assert retry_agents[0]["E"] == agents["E"]
+        # agents 保持传入时的结构
+        assert "E" in retry_agents[0]
+        assert "D" in retry_agents[0]
 
     def test_code_context_injected(self, monkeypatch):
         """pre.code_context 非空 → 追加到 task.description。"""

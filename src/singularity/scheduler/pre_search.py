@@ -188,9 +188,9 @@ def apply_escalation(route_result: RouteResult, pre: PreSearchResult) -> None:
     MAGMA 记忆增强: 结构化信号传给 router, 不做字符串拼接。
     """
     # 知识库强 D
-    if pre.escalated and route_result.level != "D":
-        route_result.matched_signals.append(f"pre_search 升 D: {pre.reason}")
-        route_result.level = "D"
+    # 两档后不再自动升级, 只标记信号供 trace
+    if pre.escalated:
+        route_result.matched_signals.append(f"pre_search: {pre.reason}")
 
     if not pre.memory:
         return
