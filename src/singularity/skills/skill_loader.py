@@ -30,15 +30,6 @@ USER_SKILLS_DIR = _QIDIAN_DIR / "skills"             # .qidian/skills/
 # ── 常量 ──────────────────────────────────────────────────────────
 SKILL_FILE = "SKILL.md"
 _VALID_TYPES = frozenset({"tool", "prompt", "flow"})
-_DANGEROUS_COMMANDS = [
-    "rm -rf /", "rm -rf ~", "rm -rf .",
-    "curl", "wget",
-    "chmod 777", "chmod -R",
-    "sudo", "su ",
-    "mkfs.", "dd if=",
-    "> /dev/sda",
-]
-
 
 @dataclass
 class SkillDef:

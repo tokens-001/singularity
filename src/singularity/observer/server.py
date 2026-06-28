@@ -48,7 +48,8 @@ class ClientSession:
 
     @property
     def remote(self) -> str:
-        return self.ws.remote_address[0] if self.ws.remote_address else "?"
+        addr = self.ws.remote_address
+        return addr[0] if addr else "?"
 
 
 # ── 连接管理器 ────────────────────────────────────────────
