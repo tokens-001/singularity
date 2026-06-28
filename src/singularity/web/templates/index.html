@@ -92,10 +92,11 @@
       <option value="failed">failed</option>
     </select>
     <select id="filter-level" onchange="renderTasks()">
-      <option value="">全部层级</option>
-      <option value="E">E</option>
-      <option value="E+">E+</option>
-      <option value="D">D</option>
+      <option value="">全部类型</option>
+      <option value="bugfix">bugfix</option>
+      <option value="feature">feature</option>
+      <option value="refactor">refactor</option>
+      <option value="docs">docs</option>
     </select>
     <label style="font-size:9px;display:flex;align-items:center;gap:2px;margin-left:6px">
       <input type="checkbox" id="f-held" onchange="renderTasks()"> 仅扣留
@@ -200,11 +201,6 @@
         </select>
         <input id="model-new-id" placeholder="模型 id" style="width:100px;font-size:9px">
         <input id="model-new-display" placeholder="显示名" style="width:80px;font-size:9px">
-        <select id="model-new-tier" style="width:55px;font-size:9px;padding:2px">
-          <option value="E">E</option>
-          <option value="E+">E+</option>
-          <option value="D">D</option>
-        </select>
         <select id="model-new-speed" style="width:55px;font-size:9px;padding:2px">
           <option value="fast">快</option>
           <option value="medium" selected>中</option>
@@ -235,7 +231,6 @@
         <div style="flex:1.5">
           <h4 style="font-size:10px;margin:0 0 4px 0;color:var(--text2)">Agent 绑定</h4>
           <div style="display:flex;gap:4px;margin-bottom:4px">
-            <select id="perm-level" style="font-size:9px;padding:2px"><option value="E">E</option><option value="E+">E+</option><option value="D">D</option></select>
             <select id="perm-model" style="font-size:9px;padding:2px;flex:1" onchange="showPermBinding()"></select>
             <select id="perm-profile-select" style="font-size:9px;padding:2px;flex:1"></select>
             <button class="btn cyan sm" onclick="bindPerm()">绑定</button>

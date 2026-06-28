@@ -44,7 +44,6 @@ async function pollLoopEvents(){
     }
   }catch(e){ console.error('pollLoopEvents:', e); }
 }
-// Check loop status on init
 pollLoopEvents();
 setInterval(pollLoopEvents,2000);
 
@@ -69,20 +68,24 @@ function fmtDur(s){if(s<60)return Math.round(s)+'s';if(s<3600)return(s/60).toFix
 function unix2str(ts){if(!ts)return'--';return new Date(ts*1000).toLocaleString('zh-CN');}
 
 // ═══════════════════════════════════════════════════════
-// 基础设施 Tab — API库 / 模型库 / Agent编组
+// 推荐阶段 (两档后替代 E/E+/D)
 // ═══════════════════════════════════════════════════════
+const PHASES = ['定义','架构','实现','审查','验收','交付'];
+const PHASE_COLORS = {
+  '定义':'var(--accent)', '架构':'var(--st-hold)', '实现':'var(--st-done)',
+  '审查':'var(--st-pending)', '验收':'var(--st-done)', '交付':'var(--text2)'
+};
 
 // ═══════════════════════════════════════════════════════
-// API 库 — 添加 / 扫描 / 管理
+// API 库
 // ═══════════════════════════════════════════════════════
-
 async function renderAPIStore(){
   const body = document.getElementById('api-store-body');
   try {
     const d = await api('/api/api-store');
     if (d.error) { body.innerHTML = `<span style="color:var(--st-fail)">${esc(d.error)}</span>`; return; }
     const entries = Object.values(d);
-    if (!entries.length) { body.innerHTML = '<span style="color:var(--text3);font-family:var(--mono);font-size:9px">NO_API_CONFIGURED — 添加第一个 API 提供商</span>'; return; }
+    if (!entries.length) { body.innerHTML = '<span style="color:var(--text3);font-family:var(--mono);font-size:9px">NO_API_CONFIGURED</span>'; return; }
     const statusDot = {active:'<span style="color:var(--st-done);font-size:7px">●</span>',quota_exhausted:'<span style="color:var(--st-pending);font-size:7px">◑</span>',rate_limited:'<span style="color:var(--st-pending);font-size:7px">◐</span>',disabled:'<span style="color:var(--st-fail);font-size:7px">○</span>'};
     const statusLabel = {active:'ON',quota_exhausted:'QTA',rate_limited:'RTL',disabled:'OFF'};
     body.innerHTML = entries.map(e => {
@@ -117,21 +120,19 @@ async function addAPI(){
   document.getElementById('api-new-env').value='';
   renderAPIStore();
   toast('API 已添加，正在扫描模型...', 'success');
-  scanModels(id);  // 自动触发扫描
+  scanModels(id);
 }
 
 // ═══════════════════════════════════════════════════════
 // 模型扫描 & 导入
 // ═══════════════════════════════════════════════════════
-
-let _scanResults = {};      // api_id → [{id, display, rating, ...}]
-let _importedModelIds = {}; // model_id → true (已导入的模型)
+let _scanResults = {};
+let _importedModelIds = {};
 
 async function scanModels(apiId){
   const btns = document.querySelectorAll(`button[onclick*="scanModels('${apiId}')"]`);
   btns.forEach(b => { b.textContent = '扫描中...'; b.disabled = true; });
   try {
-    // 获取已导入模型列表
     const existing = await api('/api/models');
     _importedModelIds = {};
     if (!existing.error) Object.values(existing).forEach(m => { _importedModelIds[m.id] = true; });
@@ -159,7 +160,11 @@ function renderScanResults(apiId){
   const renderCard = (m, alreadyImported) => {
     const rc = ratingColor[m.rating]||'var(--text3)';
     const cost = costLabel[m.cost]||'$$';
-    const tiers = m.tiers||(m.known?m.tiers:['E']);
+    const rf = m.recommended_for||m.tiers||[];
+    const phaseTags = PHASES.map(p => {
+      const on = rf.includes(p);
+      return `<label style="cursor:pointer;color:${on?PHASE_COLORS[p]:'var(--text3)'};font-size:7px"><input type="checkbox" ${on?'checked':''}>${p.slice(0,1)}</label>`;
+    }).join('');
     const statusTag = alreadyImported
       ? '<span style="color:var(--st-done);font-size:7px;background:rgba(62,207,142,.1);padding:2px 4px;border-radius:2px">已导入</span>'
       : (m.known ? '' : '<span style="color:var(--st-pending);font-size:7px;background:rgba(216,162,54,.1);padding:2px 4px;border-radius:2px">NEW</span>');
@@ -173,12 +178,7 @@ function renderScanResults(apiId){
         </div>
         ${m.strengths&&m.strengths.length?`<div style="font-size:7px;color:var(--text3)">${m.strengths.slice(0,3).join(' · ')}</div>`:''}
       </div>
-      ${alreadyImported ? '' : `
-      <span style="display:flex;gap:3px;flex-shrink:0;font-size:8px" data-model="${esc(m.id)}">
-        <label style="cursor:pointer;color:${tiers.includes('E')?'var(--accent)':'var(--text3)'}"><input type="checkbox" ${tiers.includes('E')?'checked':''} onchange="this.parentElement.style.color=this.checked?'var(--accent)':'var(--text3)'">E</label>
-        <label style="cursor:pointer;color:${tiers.includes('E+')?'var(--st-pending)':'var(--text3)'}"><input type="checkbox" ${tiers.includes('E+')?'checked':''} onchange="this.parentElement.style.color=this.checked?'var(--st-pending)':'var(--text3)'">E+</label>
-        <label style="cursor:pointer;color:${tiers.includes('D')?'var(--st-hold)':'var(--text3)'}"><input type="checkbox" ${tiers.includes('D')?'checked':''} onchange="this.parentElement.style.color=this.checked?'var(--st-hold)':'var(--text3)'">D</label>
-      </span>`}
+      ${alreadyImported ? '' : `<span style="display:flex;gap:2px;flex-shrink:0" data-model="${esc(m.id)}">${phaseTags}</span>`}
     </label>`;
   };
 
@@ -203,11 +203,11 @@ async function importSelected(apiId){
   if (!checks.length) return alert('至少选一个模型');
   const models = Array.from(checks).map(cb => {
     const m = _scanResults[apiId].find(x=>x.id===cb.value);
-    const tierRow = cb.closest('label').querySelector('[data-model]');
-    const tierChecks = tierRow ? tierRow.querySelectorAll('input[type=checkbox]:checked') : [];
-    const tiers = Array.from(tierChecks).map(c => c.parentElement.textContent.trim()).filter(t => ['E','E+','D'].includes(t));
+    const phaseRow = cb.closest('label').querySelector('[data-model]');
+    const phaseChecks = phaseRow ? phaseRow.querySelectorAll('input[type=checkbox]:checked') : [];
+    const rf = Array.from(phaseChecks).map(c => PHASES[Array.from(phaseRow.children).indexOf(c.parentElement)]).filter(Boolean);
     return {id:m.id, provider:m.provider, display:m.display||m.id,
-            tiers:tiers.length?tiers:(m.tiers||['E']),
+            recommended_for:rf.length?rf:(m.recommended_for||['实现']),
             speed:m.speed||'medium', cost:m.cost||'standard',
             rating:m.rating||'?', strengths:m.strengths||[], notes:m.notes||''};
   });
@@ -216,11 +216,10 @@ async function importSelected(apiId){
   if (r.error) { alert(r.error); return; }
   toast(`导入 ${r.imported.length} 个模型`);
   if (r.errors.length) toast(`${r.errors.length} 个失败`, 'error');
-  // 刷新所有关联面板
   _scanResults[apiId] = [];
   document.getElementById('scan-results-panel').style.display = 'none';
   renderModels();
-  renderLayerSwitch();
+  renderAgentPool();
   populateLineupProjects();
 }
 
@@ -241,42 +240,37 @@ async function addModel(){
   const provider = sel.options[sel.selectedIndex]?.dataset?.id || sel.value;
   const id=document.getElementById('model-new-id').value.trim();
   const display=document.getElementById('model-new-display').value.trim();
-  const tier=document.getElementById('model-new-tier').value;
   const speed=document.getElementById('model-new-speed').value;
   const cost=document.getElementById('model-new-cost').value;
   const reasoning=document.getElementById('model-new-reasoning').checked;
   if(!id||!provider) return alert('需要 id 和 provider');
-  const r=await api('/api/models',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,provider,display,tiers:[tier],speed,cost,reasoning,max_turns:5})});
+  const r=await api('/api/models',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,provider,display,recommended_for:['实现'],speed,cost,reasoning,max_turns:5})});
   if(r.error) alert(r.error); else {
     ['model-new-id','model-new-display'].forEach(x=>document.getElementById(x).value='');
     renderModels();
   }
 }
 
-// provider 下拉切换时自动建议
 function onProviderChange(){
   const sel = document.getElementById('model-new-provider');
   const provider = sel.options[sel.selectedIndex]?.dataset?.id || sel.value;
   if (!provider) return;
-  // 已知 provider → 模型名映射，自动填 id
   const hints = {
-    deepseek: { id: 'deepseek-chat', display: 'DeepSeek V3', tier: 'E', speed: 'fast', cost: 'budget' },
-    zhipu: { id: 'glm-5-turbo', display: 'GLM-5 Turbo', tier: 'E', speed: 'slow', cost: 'budget' },
-    kimi: { id: 'kimi-k2.7-code', display: 'Kimi K2.7', tier: 'E', speed: 'medium', cost: 'standard' },
-    anthropic: { id: 'claude-opus-4-8', display: 'Claude Opus 4.8', tier: 'D', speed: 'slow', cost: 'premium' },
-    openai: { id: 'gpt-5.5', display: 'GPT-5.5', tier: 'D', speed: 'fast', cost: 'premium' },
+    deepseek: { id: 'deepseek-chat', display: 'DeepSeek V3', speed: 'fast', cost: 'budget' },
+    zhipu: { id: 'glm-5-turbo', display: 'GLM-5 Turbo', speed: 'slow', cost: 'budget' },
+    kimi: { id: 'kimi-k2.7-code', display: 'Kimi K2.7', speed: 'medium', cost: 'standard' },
+    anthropic: { id: 'claude-opus-4-8', display: 'Claude Opus 4.8', speed: 'slow', cost: 'premium' },
+    openai: { id: 'gpt-5.5', display: 'GPT-5.5', speed: 'fast', cost: 'premium' },
   };
   const hint = hints[provider];
   if (hint) {
     document.getElementById('model-new-id').value = hint.id;
     document.getElementById('model-new-display').value = hint.display;
-    document.getElementById('model-new-tier').value = hint.tier;
     document.getElementById('model-new-speed').value = hint.speed;
     document.getElementById('model-new-cost').value = hint.cost;
   }
 }
 
-// 从 API 库填充 provider 下拉
 async function populateProviderDropdown(){
   const sel = document.getElementById('model-new-provider');
   const current = sel.value;
@@ -292,43 +286,31 @@ async function populateProviderDropdown(){
   } catch(_) {}
 }
 
-// renderModels 时同步更新 provider 下拉
 const _origRenderModels = renderModels;
 renderModels = async function() {
   await populateProviderDropdown();
   return _origRenderModels();
 };
-async function setDefaultModel(id, tier){
-  // 先获取当前 agents 配置
-  const ag = await api('/api/agents');
-  if (!ag[tier]) return;
-  // 把该层所有 agent 的 default 置 false，目标置 true
-  for (const a of ag[tier]) {
-    const body = {default: a.model === id};
-    await api('/api/agents/'+tier+'/'+a.model, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  }
-  renderModels();
-  refreshAll();
-}
+
 async function updateModel(id, field, value){
   const body = {};
-  if (field === 'tiers') {
-    // toggle tier in/out
+  if (field === 'recommended_for') {
     const all = await api('/api/models');
     const model = all[id];
     if (!model) return;
-    const tiers = [...(model.tiers || [])];
-    const idx = tiers.indexOf(value);
-    if (idx >= 0) tiers.splice(idx, 1);
-    else tiers.push(value);
-    if (!tiers.length) return;
-    body.tiers = tiers;
+    const rf = [...(model.recommended_for||model.tiers||[])];
+    const idx = rf.indexOf(value);
+    if (idx >= 0) rf.splice(idx, 1);
+    else rf.push(value);
+    if (!rf.length) return;
+    body.recommended_for = rf;
   } else {
     body[field] = value;
   }
   const r = await api('/api/models/'+id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if (r.error) { /* ignore */ } else renderModels();
 }
+
 async function editModel(id){
   event.stopPropagation();
   const old = document.getElementById('model-edit-'+id);
@@ -336,23 +318,25 @@ async function editModel(id){
   const models = await api('/api/models');
   const m = Object.values(models).find(x => x.id === id);
   if (!m) return;
-  const tiers = m.tiers||[];
-  const html = '<div id="model-edit-'+esc(m.id)+'" style="margin:4px 0;padding:8px;border:1px solid var(--accent);background:var(--bg2)">层级：'+['E','E+','D'].map(t=>{
-    const checked = tiers.includes(t);
-    return '<label style="display:inline-block;margin-right:12px;cursor:pointer;font-size:11px"><input type="checkbox" id="em-'+esc(m.id)+'-'+t+'" '+(checked?'checked':'')+'> '+t+'</label>';
+  const rf = m.recommended_for||m.tiers||[];
+  const html = '<div id="model-edit-'+esc(m.id)+'" style="margin:4px 0;padding:8px;border:1px solid var(--accent);background:var(--bg2)">推荐阶段：'+PHASES.map(p=>{
+    const checked = rf.includes(p);
+    return `<label style="display:inline-block;margin-right:8px;cursor:pointer;font-size:10px;color:${checked?PHASE_COLORS[p]:'var(--text3)'}"><input type="checkbox" id="em-${esc(m.id)}-${p}" ${checked?'checked':''}> ${p}</label>`;
   }).join('')+' <button class="btn sm" onclick="saveModelEdit(\''+esc(m.id)+'\')" style="margin-left:8px;margin-right:4px">保存</button><button class="btn sm" style="color:var(--text3)" onclick="editModel(\''+esc(m.id)+'\')">取消</button></div>';
   document.getElementById('models-body').insertAdjacentHTML('afterbegin', html);
 }
+
 async function saveModelEdit(id){
-  const tiers = ['E','E+','D'].filter(t => document.getElementById('em-'+id+'-'+t)?.checked);
-  if (!tiers.length) { alert('至少选一个层级'); return; }
-  const r = await api('/api/models/'+id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({tiers})});
+  const rf = PHASES.filter(p => document.getElementById('em-'+id+'-'+p)?.checked);
+  if (!rf.length) { alert('至少选一个推荐阶段'); return; }
+  const r = await api('/api/models/'+id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({recommended_for:rf})});
   if (r.error) alert(r.error); else renderModels();
 }
+
 async function removeModel(id){
   if(!confirm('删除模型 '+id+' ？')) return;
   const r=await api('/api/models/'+id,{method:'DELETE'});
-  if(r.error) alert(r.error); else { renderModels(); renderLayerSwitch(); refreshAll(); }
+  if(r.error) alert(r.error); else { renderModels(); renderAgentPool(); refreshAll(); }
 }
 
 async function renderModels(){
@@ -362,30 +346,17 @@ async function renderModels(){
     if (d.error) { body.innerHTML = '<span style="color:var(--st-fail)">'+esc(d.error)+'</span>'; return; }
     const models = Object.values(d);
     if (!models.length) { body.innerHTML = '<span style="color:var(--text3);font-family:var(--mono);font-size:9px">NO_MODELS_REGISTERED</span>'; return; }
-    let agentData = {};
-    try { agentData = await api('/api/agents'); } catch(e) {}
-    const defaults = {};
-    for (const [lvl, agents] of Object.entries(agentData)) {
-      if (!Array.isArray(agents)) continue;
-      for (const a of agents) {
-        if (a.default) { defaults[a.model] = defaults[a.model] || {}; defaults[a.model][lvl] = true; }
-      }
-    }
     const costMark = {budget:'_',standard:'=',premium:'≡'};
-    // 按 provider 分组
     const providerNames = {deepseek:'DeepSeek',zhipu:'智谱 GLM',kimi:'Moonshot Kimi',openai:'OpenAI',anthropic:'Anthropic',qwen:'阿里云 千问'};
     const groups = {};
     for (const m of models) {
-      m._isDefault = defaults[m.id] || {};
       const p = m.provider || 'other';
       if (!groups[p]) groups[p] = [];
       groups[p].push(m);
     }
     function renderCard(m){
-      const tiers = (m.tiers||[]).map(t => {
-        const tc = {E:'var(--accent)','E+':'var(--st-pending)',D:'var(--st-hold)'}[t]||'var(--text3)';
-        return '<span style="color:'+tc+';font-family:var(--mono);font-size:8px">'+t+'</span>';
-      }).join('/');
+      const rf = (m.recommended_for||m.tiers||[]);
+      const phaseTags = rf.map(p => `<span style="color:${PHASE_COLORS[p]||'var(--text3)'};font-family:var(--mono);font-size:7px">${p}</span>`).join(' ');
       const dot = m.api_available
         ? '<span style="color:var(--st-done);font-size:7px">●</span>'
         : '<span style="color:var(--text3);font-size:7px">○</span>';
@@ -401,23 +372,17 @@ async function renderModels(){
       html += '<span style="font-size:8px;color:var(--text3)">'+m.speed+'</span>';
       if (m.reasoning) html += '<span style="font-size:8px;color:var(--st-hold);font-family:var(--mono)">RSN</span>';
       html += '<span style="flex:1"></span>';
-      html += '<span style="font-size:8px;font-family:var(--mono)">'+tiers+'</span>';
+      html += '<span style="font-size:8px;font-family:var(--mono)">'+phaseTags+'</span>';
       html += ' <button class="btn sm" style="color:var(--accent);font-size:7px;padding:1px 3px;margin-left:4px" onclick="event.stopPropagation();editModel(\''+esc(m.id)+'\')">✎</button>';
       html += ' <button class="btn sm" style="color:var(--st-fail);font-size:7px;padding:1px 3px;margin-left:4px" onclick="event.stopPropagation();removeModel(\''+esc(m.id)+'\')">DEL</button>';
       html += '</div>';
       html += '<div style="font-size:8px;color:var(--text3);margin-top:2px;font-family:var(--mono)">'+esc(m.notes||'')+'</div>';
       html += '<div style="margin-top:2px;display:flex;gap:2px">';
-      for (const t of ['E','E+','D']) {
-        const on = (m.tiers||[]).includes(t);
-        const tc = {E:'var(--accent)','E+':'var(--st-pending)',D:'var(--st-hold)'}[t]||'var(--text3)';
-        html += '<span onclick="event.stopPropagation();updateModel(\''+esc(m.id)+'\',\'tiers\',\''+t+'\')" style="cursor:pointer;font-size:7px;font-family:var(--mono);padding:1px 4px;color:'+(on?tc:'var(--text3)')+';background:'+(on?'var(--bg3)':'transparent')+'">['+t+']</span>';
+      for (const p of PHASES) {
+        const on = rf.includes(p);
+        html += `<span onclick="event.stopPropagation();updateModel('${esc(m.id)}','recommended_for','${p}')" style="cursor:pointer;font-size:7px;font-family:var(--mono);padding:1px 3px;color:${on?PHASE_COLORS[p]:'var(--text3)'};background:${on?'var(--bg3)':'transparent'}">[${p.slice(0,1)}]</span>`;
       }
-      html += '<span style="font-size:7px;color:var(--text3);font-family:var(--mono)"> 层级</span>';
-      for (const t of ['E','E+','D']) {
-        if (!(m.tiers||[]).includes(t)) continue;
-        const isDef = m._isDefault && m._isDefault[t];
-        html += '<span onclick="event.stopPropagation();setDefaultModel(\''+esc(m.id)+'\',\''+t+'\')" style="cursor:pointer;font-size:7px;font-family:var(--mono);padding:1px 4px;color:'+(isDef?'var(--accent)':'var(--text3)')+';background:'+(isDef?'rgba(57,210,192,.12)':'transparent')+'">'+(isDef?'DEF':'def')+'</span>';
-      }
+      html += '<span style="font-size:7px;color:var(--text3);font-family:var(--mono)"> 推荐</span>';
       html += '</div></div>';
       return html;
     }
@@ -434,7 +399,83 @@ async function renderModels(){
   } catch(e) { body.innerHTML = '<span style="color:var(--st-fail)">'+esc(e.message)+'</span>'; }
 }
 
+// ═══════════════════════════════════════════════════════
+// Agent 池 (两档后: 全池展示, 不分组)
+// ═══════════════════════════════════════════════════════
+async function renderAgentPool(){
+  const body = document.getElementById('layer-switch-body');
+  const [agents, models] = await Promise.all([api('/api/agents'), api('/api/models')]);
+  if (agents.error || models.error) { body.innerHTML = '<span style="color:var(--st-fail)">加载失败</span>'; return; }
 
+  const allModels = Object.values(models);
+  const allAgents = [];
+  for (const [lvl, lst] of Object.entries(agents)) {
+    if (!Array.isArray(lst)) continue;
+    for (const a of lst) allAgents.push({...a, _level: lvl});
+  }
+  const activeModels = new Set(allAgents.map(a => a.model));
+  const disabledModels = new Set();
+  for (const [lvl, lst] of Object.entries(agents._disabled||{})) {
+    if (Array.isArray(lst)) lst.forEach(m => disabledModels.add(m));
+  }
+
+  const cards = allModels.map(m => {
+    const active = activeModels.has(m.id);
+    const disabled = disabledModels.has(m.id);
+    const online = m.api_available;
+    const rf = m.recommended_for||m.tiers||[];
+    const bg = active ? 'var(--bg3)' : (disabled ? 'rgba(240,97,109,.04)' : 'transparent');
+    const border = active ? 'var(--accent)' : (disabled ? 'rgba(240,97,109,.3)' : 'var(--bg3)');
+    const costLabel = {budget:'$',standard:'$$',premium:'$$$'}[m.cost]||'$$';
+    const stateLabel = active ? 'ON' : (disabled ? '禁用' : 'OFF');
+    const stateColor = active ? 'var(--accent)' : (disabled ? 'var(--st-fail)' : 'var(--text3)');
+    const clickAction = disabled
+      ? `if(confirm('重新启用 ${m.display||m.id}？'))togglePoolAgent('${esc(m.id)}',true)`
+      : `togglePoolAgent('${esc(m.id)}',${!active})`;
+    const phaseHint = rf.length ? rf.map(p => p.slice(0,1)).join('') : '—';
+
+    return `<div onclick="${clickAction}"
+      style="cursor:pointer;padding:8px 10px;border:1px solid ${border};background:${bg};display:flex;align-items:center;gap:8px;min-width:180px;transition:all .15s"
+      title="${disabled?'点击重新启用':'点击切换启用/禁用'}">
+      <span style="display:flex;align-items:center;gap:4px;min-width:40px">
+        <span style="width:10px;text-align:center">${online?'<span style="color:var(--st-done);font-size:7px">●</span>':'<span style="color:var(--st-fail);font-size:7px">●</span>'}</span>
+        <span style="font-size:8px;font-family:var(--mono);text-transform:uppercase;color:${stateColor}">${stateLabel}</span>
+      </span>
+      <div style="min-width:0;flex:1">
+        <div style="font-size:10px;font-weight:500;color:${active?'var(--text)':'var(--text3)'}">${esc(m.display||m.id)}</div>
+        <div style="font-size:8px;color:var(--text3);font-family:var(--mono)">${esc(m.provider)} · ${m.speed} · ${costLabel} · ${phaseHint}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  body.innerHTML = `
+    <div style="margin-bottom:10px">
+      <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:6px">
+        <span style="font-size:10px;font-weight:600;color:var(--accent);font-family:var(--mono)">Agent 池</span>
+        <span style="font-size:8px;color:var(--text3)">${allAgents.length} active · ${disabledModels.size} 禁用 · 全池自由选择</span>
+      </div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap">${cards||'<span style="color:var(--text3);font-size:9px">无可用模型</span>'}</div>
+    </div>`;
+}
+
+async function togglePoolAgent(modelId, enable){
+  if (enable) {
+    await api('/api/agents', {method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model:modelId})});
+  } else {
+    await api('/api/agents/any/'+modelId, {method:'DELETE'});
+  }
+  renderAgentPool();
+  const s = await api('/api/status');
+  if (s && s.agents) { statusData = s; renderAgentRow(); }
+}
+
+// backward compat
+async function renderLayerSwitch(){ renderAgentPool(); }
+
+// ═══════════════════════════════════════════════════════
+// Lineup (两档后: 全池勾选, 不分层)
+// ═══════════════════════════════════════════════════════
 async function loadLineup(){
   const sel = document.getElementById('lineup-project-select');
   const pid = sel.value;
@@ -442,17 +483,13 @@ async function loadLineup(){
   const status = document.getElementById('lineup-status');
   if (!pid) { editor.style.display='none'; status.textContent=''; return; }
 
-  // 加载项目 lineup
   const r = await api(`/api/projects/${pid}/lineup`);
   const lineup = (r.lineup) || {};
-  // 加载可用模型列表
-  const [eMods, epMods, dMods] = await Promise.all([
-    api('/api/models/tier/E'), api('/api/models/tier/E+'), api('/api/models/tier/D')
-  ]);
+  const allMods = await api('/api/models');
 
-  function renderCheckboxes(tier, models, containerId){
+  function renderCheckboxes(models, containerId){
     const c = document.getElementById(containerId);
-    const selected = lineup[tier] || [];
+    const selected = lineup['any'] || [];
     c.innerHTML = models.map(m => {
       const checked = selected.includes(m.id) ? 'checked' : '';
       const dot = m.api_available
@@ -466,11 +503,11 @@ async function loadLineup(){
     }).join('');
   }
 
-  renderCheckboxes('E', eMods, 'lineup-e');
-  renderCheckboxes('E+', epMods, 'lineup-ep');
-  renderCheckboxes('D', dMods, 'lineup-d');
+  renderCheckboxes(Object.values(allMods), 'lineup-e');
+  document.getElementById('lineup-ep').parentElement.style.display = 'none';
+  document.getElementById('lineup-d').parentElement.style.display = 'none';
   editor.style.display = 'block';
-  status.textContent = lineup && Object.keys(lineup).length ? '已有自定义编组' : '使用全局默认';
+  status.textContent = lineup && Object.keys(lineup).length ? '已有自定义编组' : '使用全池默认';
 }
 
 function lineupChanged(){
@@ -485,84 +522,11 @@ async function saveLineup(){
     const c = document.getElementById(containerId);
     return [...c.querySelectorAll('input:checked')].map(cb => cb.value);
   }
-  const lineup = {E: getChecked('lineup-e'), 'E+': getChecked('lineup-ep'), D: getChecked('lineup-d')};
+  const lineup = {any: getChecked('lineup-e')};
   const r = await api(`/api/projects/${pid}/lineup`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({lineup})});
   if (r.error) { alert(r.error); return; }
   document.getElementById('lineup-status').textContent = '已保存 ✓';
   document.getElementById('lineup-status').style.color = 'var(--st-done)';
-}
-
-async function renderLayerSwitch(){
-  const body = document.getElementById('layer-switch-body');
-  const [agents, models] = await Promise.all([api('/api/agents'), api('/api/models')]);
-  if (agents.error || models.error) { body.innerHTML = '<span style="color:var(--st-fail)">加载失败</span>'; return; }
-
-  const tiers = [
-    {id:'E', color:'var(--accent)', label:'E 层', desc:'日常执行 · bugfix · 查询'},
-    {id:'E+', color:'var(--st-pending)', label:'E+ 层', desc:'复杂构建 · 多文件 · 新模块'},
-    {id:'D', color:'var(--st-hold)', label:'D 层', desc:'架构设计 · 审查 · 方案'},
-  ];
-
-  body.innerHTML = tiers.map(t => {
-    const tierAgents = agents[t.id] || [];
-    const activeModels = new Set(tierAgents.map(a => a.model));
-    const disabledModels = new Set((agents._disabled||{})[t.id]||[]);
-    const available = Object.values(models).filter(m => (m.tiers||[]).includes(t.id));
-
-    const cards = available.map(m => {
-      const active = activeModels.has(m.id);
-      const disabled = disabledModels.has(m.id);
-      const online = m.api_available;
-      const bg = active ? 'var(--bg3)' : (disabled ? 'rgba(240,97,109,.04)' : 'transparent');
-      const border = active ? t.color : (disabled ? 'rgba(240,97,109,.3)' : 'var(--bg3)');
-      const statusDot = online
-        ? `<span style="color:var(--st-done);font-size:7px">●</span>`
-        : `<span style="color:var(--st-fail);font-size:7px">●</span>`;
-      const costLabel = {budget:'$',standard:'$$',premium:'$$$'}[m.cost]||'$$';
-      const stateLabel = active ? 'ON' : (disabled ? '禁用' : 'OFF');
-      const stateColor = active ? t.color : (disabled ? 'var(--st-fail)' : 'var(--text3)');
-      const clickAction = disabled
-        ? `if(confirm('重新启用 ${m.display||m.id} 到 ${t.label}？'))toggleLayerAgent('${t.id}','${esc(m.id)}',true)`
-        : `toggleLayerAgent('${t.id}','${esc(m.id)}',${!active})`;
-
-      return `<div onclick="${clickAction}"
-        style="cursor:pointer;padding:8px 10px;border:1px solid ${border};background:${bg};display:flex;align-items:center;gap:8px;min-width:180px;transition:all .15s"
-        title="${disabled?'点击重新启用':'点击切换启用/禁用'}">
-        <span style="display:flex;align-items:center;gap:4px;min-width:50px">
-          <span style="width:10px;text-align:center">${statusDot}</span>
-          <span style="font-size:8px;font-family:var(--mono);text-transform:uppercase;color:${stateColor}">${stateLabel}</span>
-        </span>
-        <div style="min-width:0;flex:1">
-          <div style="font-size:10px;font-weight:500;color:${active?'var(--text)':(disabled?'var(--text3)':'var(--text)')}">${esc(m.display||m.id)}${m.rating?' <span style="font-size:8px;font-weight:600;color:'+({'SSS+':'#ffd700','SSS':'var(--st-hold)','SS+':'#ff8c00','SS':'var(--accent)','S+':'#9acd32','S':'var(--st-done)','A+':'#5dade2','A':'var(--text3)'}[m.rating]||'var(--text3)')+'">'+esc(m.rating)+'</span>':''}</div>
-          <div style="font-size:8px;color:var(--text3);font-family:var(--mono)">${esc(m.provider)} · ${m.speed} · ${costLabel}</div>
-        </div>
-      </div>`;
-    }).join('');
-
-    const disabledCount = available.filter(m => disabledModels.has(m.id)).length;
-    return `<div style="margin-bottom:10px">
-      <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:6px">
-        <span style="font-size:10px;font-weight:600;color:${t.color};font-family:var(--mono)">${t.label}</span>
-        <span style="font-size:8px;color:var(--text3)">${t.desc}</span>
-        <span style="flex:1"></span>
-        <span style="font-size:8px;color:var(--text3);font-family:var(--mono)">${tierAgents.length} active${disabledCount?' · '+disabledCount+' 禁用':''}</span>
-      </div>
-      <div style="display:flex;gap:4px;flex-wrap:wrap">${cards||'<span style="color:var(--text3);font-size:9px">无可用模型</span>'}</div>
-    </div>`;
-  }).join('');
-}
-
-async function toggleLayerAgent(tier, modelId, enable){
-  if (enable) {
-    await api('/api/agents', {method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({level:tier,model:modelId})});
-  } else {
-    await api('/api/agents/'+tier+'/'+modelId, {method:'DELETE'});
-  }
-  renderLayerSwitch();
-  // 直接拉 status 更新仪表盘 agent row
-  const s = await api('/api/status');
-  if (s && s.agents) { statusData = s; renderAgentRow(); }
 }
 
 async function populateLineupProjects(){
@@ -574,7 +538,6 @@ async function populateLineupProjects(){
       projects.map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${p.phase})</option>`).join('');
   } catch(e) {}
 }
-
 // ═══════════════════════════════════════════════════════
 // SSE 事件流 — 替代轮询，Last-Event-ID + 指数退避重连
 // ═══════════════════════════════════════════════════════
@@ -656,7 +619,6 @@ function _scheduleRefresh(delay) {
   if (_refreshTimer) clearTimeout(_refreshTimer);
   _refreshTimer = setTimeout(refreshAll, delay);
 }
-
 // ═══════════════════════════════════════════════════════
 // Judge Monitor & Pattern Profile
 // ═══════════════════════════════════════════════════════
@@ -734,213 +696,6 @@ async function refreshPatternProfile(){
 // 每 30 秒刷新一次裁判监控和模式画像（低频，避免不必要的负载）
 setInterval(refreshJudgeMonitor,30000);
 setInterval(refreshPatternProfile,30000);
-
-// ═══════════════════════════════════════════════════════
-// Skills 面板
-// ═══════════════════════════════════════════════════════
-async function renderSkills(){
-  const [skills, agents] = await Promise.all([
-    fetch('/api/skills').then(r=>r.json()).catch(()=>({skills:[]})),
-    fetch('/api/agents').then(r=>r.json()).catch(()=>({}))
-  ]);
-  const skillList = skills.skills || [];
-  // 左侧 skill 列表
-  const listBody = document.getElementById('skill-list-body');
-  if (!listBody) return;
-  if (!skillList.length){ listBody.innerHTML = '<span style="color:var(--text2)">无 Skill</span>'; }
-  else {
-    listBody.innerHTML = skillList.map(s =>
-      `<div class="skill-item">
-        <span><span class="name">${esc(s.name)}</span>
-          <span class="type-tag ${s.type}">${s.type}</span></span>
-        <span>${s.source === 'user' ? '<button class="btn-del" onclick="deleteSkill(\''+esc(s.name)+'\')">×</button>' : ''}</span>
-      </div>`
-    ).join('');
-  }
-  // 右侧 agent × skill 矩阵
-  renderSkillMatrix(skillList, agents);
-}
-
-function renderSkillMatrix(skillList, agents){
-  const body = document.getElementById('skill-matrix-body');
-  if (!body) return;
-  if (!skillList.length){ body.innerHTML = '<span style="color:var(--text2)">无 Skill 可绑定</span>'; return; }
-
-  const levels = ['E', 'E+', 'D'];
-  let rows = [];
-  // header row
-  let hdr = '<tr><th>Agent</th>';
-  skillList.forEach(s => { hdr += `<th>${s.name}</th>`; });
-  hdr += '</tr>';
-  rows.push(hdr);
-
-  levels.forEach(lv => {
-    const agentCfgs = (agents[lv] || []);
-    agentCfgs.forEach(cfg => {
-      const m = cfg.model || '';
-      if (!m) return;
-      let r = `<tr><td>${lv}/${m}</td>`;
-      skillList.forEach(s => {
-        r += `<td><input type="checkbox"
-          data-level="${lv}" data-model="${m}" data-skill="${s.name}"
-          onchange="toggleAgentSkill(this)"></td>`;
-      });
-      r += '</tr>';
-      rows.push(r);
-    });
-  });
-
-  body.innerHTML = `<table class="matrix-table">${rows.join('')}</table>`;
-
-  // 拉取所有 agent 的 skill 绑定，回填 checkbox
-  Promise.all(
-    levels.flatMap(lv =>
-      (agents[lv]||[]).map(cfg =>
-        fetch(`/api/agents/${lv}/${cfg.model}/skills`).then(r=>r.json()).then(d => ({
-          level: lv, model: cfg.model, skills: (d.skills||[]).map(s=>s.name)
-        })).catch(()=>({level:lv,model:cfg.model,skills:[]}))
-      )
-    )
-  ).then(results => {
-    results.forEach(r => {
-      (r.skills||[]).forEach(sname => {
-        const cb = document.querySelector(`input[data-level="${r.level}"][data-model="${r.model}"][data-skill="${sname}"]`);
-        if (cb) cb.checked = true;
-      });
-    });
-  });
-}
-
-async function toggleAgentSkill(cb){
-  const {level, model, skill} = cb.dataset;
-  try{
-    // 读当前绑定
-    const r = await fetch(`/api/agents/${level}/${model}/skills`);
-    const d = await r.json();
-    const current = (d.skills||[]).map(s=>s.name);
-    const updated = cb.checked ? [...current, skill] : current.filter(n=>n!==skill);
-    await fetch(`/api/agents/${level}/${model}/skills`, {
-      method:'PUT', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({skills: updated})
-    });
-  }catch(e){ cb.checked = !cb.checked; }
-}
-
-function toggleSkillForm(){
-  const f = document.getElementById('skill-form');
-  if (f) f.classList.toggle('open');
-}
-
-async function createSkill(){
-  const name = document.getElementById('skill-new-name').value.trim();
-  const desc = document.getElementById('skill-new-desc').value.trim();
-  const type = document.getElementById('skill-new-type').value;
-  const args = document.getElementById('skill-new-args').value.trim();
-  const body = document.getElementById('skill-new-body').value;
-  if (!name) return toast('请输入名称', 'error');
-  try{
-    await fetch('/api/skills', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({name, description:desc, type, arguments:args, body})
-    });
-    toggleSkillForm();
-    renderSkills();
-  }catch(e){ toast('创建失败: '+e, 'error'); }
-}
-
-async function deleteSkill(name){
-  if (!confirm('删除 Skill: ' + name + '?')) return;
-  try{
-    await fetch('/api/skills/'+encodeURIComponent(name), {method:'DELETE'});
-    renderSkills();
-  }catch(e){ toast('删除失败: '+e, 'error'); }
-}
-
-// ═══════════════════════════════════════════════════════
-// Permission 面板
-// ═══════════════════════════════════════════════════════
-async function renderPermissions(){
-  try{
-    const r = await fetch('/api/permissions/profiles');
-    const d = await r.json();
-    const profiles = d.profiles || [];
-    const bindings = d.bindings || {};
-    // Profiles list
-    const pb = document.getElementById('perm-profiles-body');
-    if(pb) pb.innerHTML = profiles.map(p =>
-      `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid var(--grid)">
-        <span>${p.builtin?'🔒 ':''}${esc(p.name)} <span style="color:var(--text3)">${esc(p.description)}</span></span>
-        <span style="color:var(--text2)">${p.allowed_tools_count?p.allowed_tools_count+'工具':'全部'}</span>
-      </div>`
-    ).join('');
-    // Profile select
-    const ps = document.getElementById('perm-profile-select');
-    if(ps) ps.innerHTML = profiles.map(p => `<option value="${p.name}">${p.name}${p.builtin?' (内置)':''}</option>`).join('');
-    // Model select
-    const ms = document.getElementById('perm-model');
-    if(ms){
-      const ag = await fetch('/api/agents').then(r=>r.json()).catch(()=>({}));
-      const lv = document.getElementById('perm-level')?.value || 'E';
-      const models = (ag[lv]||[]).map(a=>a.model).filter(Boolean);
-      ms.innerHTML = models.map(m=>`<option value="${m}">${m}</option>`).join('');
-      if(models.length) showPermBinding();
-    }
-    // Store bindings
-    window._permBindings = bindings;
-  }catch(e){}
-}
-
-async function showPermBinding(){
-  const lv = document.getElementById('perm-level')?.value || 'E';
-  const m = document.getElementById('perm-model')?.value || '';
-  const info = document.getElementById('perm-binding-info');
-  if(!info || !m) return;
-  const key = `${lv}/${m}`;
-  const profile = (window._permBindings||{})[key] || 'full-access';
-  info.textContent = `${key} → ${profile}`;
-}
-
-async function bindPerm(){
-  const lv = document.getElementById('perm-level')?.value || 'E';
-  const m = document.getElementById('perm-model')?.value;
-  const p = document.getElementById('perm-profile-select')?.value;
-  if(!m||!p) return;
-  try{
-    await fetch('/api/permissions/bindings', {method:'PUT', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({level:lv, model:m, profile:p})});
-    renderPermissions();
-  }catch(e){ toast('绑定失败: '+e, 'error'); }
-}
-
-// ═══════════════════════════════════════════════════════
-// Approval 确认
-// ═══════════════════════════════════════════════════════
-function showApproval(task_id, action, detail){
-  const m = document.getElementById('approval-modal');
-  const b = document.getElementById('approval-body');
-  if (!m || !b) return;
-  b.textContent = `任务 ${task_id.slice(0,8)}\n操作: ${action}\n${detail}`;
-  m.style.display = 'flex';
-  return new Promise((resolve) => {
-    _approvalPending = {task_id, action, resolve};
-  });
-}
-function respondApproval(decision){
-  const m = document.getElementById('approval-modal');
-  if (m) m.style.display = 'none';
-  if (_approvalPending) {
-    _approvalPending.resolve(decision);
-    // 通知后端
-    if (_approvalPending.task_id) {
-      fetch(`/api/tasks/${_approvalPending.task_id}/approval`, {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({decision, action: _approvalPending.action})
-      }).catch(()=>{});
-    }
-    _approvalPending = null;
-  }
-}
-function closeApproval(){ respondApproval('reject'); }
 
 // ═══════════════════════════════════════════════════════
 // MCP 服务器管理
@@ -1058,147 +813,3 @@ async function refreshMCPTools(){
     alert(`刷新失败: ${e.message}`);
   }
 }
-
-// ═══════════════════════════════════════════════════════
-// Fusion 多模型融合 — dual/triple/super 三级可自定义
-// ═══════════════════════════════════════════════════════
-
-const FUSION_MODEL_LABELS = {
-  'deepseek-chat': 'DeepSeek Chat', 'glm-5-turbo': 'GLM-5 Turbo',
-  'kimi-k2.7-code': 'Kimi K2.7', 'deepseek-v4-pro': 'DeepSeek V4 Pro',
-  'claude-opus-4-8': 'Claude Opus 4.8', 'gpt-5.5': 'GPT-5.5',
-  'gpt-5.5-pro': 'GPT-5.5 Pro', 'glm-5.2': 'GLM-5.2',
-  'kimi-k2.5': 'Kimi K2.5', 'kimi-k2.6': 'Kimi K2.6',
-  'kimi-k2.7-code-highspeed': 'Kimi K2.7 HS',
-  'qwen3.7-max': 'Qwen3.7 Max', 'qwen3.7-plus': 'Qwen3.7 Plus',
-  'qwen3-coder-plus': 'Qwen3 Coder+', 'qwen3-coder-next': 'Qwen3 Coder Next',
-  'qwen3-flash': 'Qwen3 Flash',
-};
-const FUSION_DEFAULTS = {
-  dual:   {models:[], judge:'', call:''},
-  triple: {models:[], judge:'', call:''},
-  super:  {models:[], judge:'', call:''},
-};
-let _fusionConfig = {};  // {dual:{}, triple:{}, super:{}}
-
-async function loadFusionConfig() {
-  try {
-    const r = await fetch('/api/fusion/config');
-    const d = await r.json();
-    for (const t of ['dual','triple','super']) {
-      _fusionConfig[t] = d[t] || FUSION_DEFAULTS[t];
-    }
-    buildFusionCheckboxes();
-    updateFusionModels();
-  } catch(e) { /* 使用默认 */ }
-}
-
-async function buildFusionCheckboxes() {
-  // ponytail: Fusion 只跑 D 层，只列 D 层可用模型（排除 disabled_in 含 D 的）
-  let availModels = [];
-  try {
-    const r = await fetch('/api/models');
-    const d = await r.json();
-    if (d && typeof d === 'object') {
-      availModels = Object.entries(d)
-        .filter(([_,m]) => (m.tiers||[]).includes('D') && !(m.disabled_in||[]).includes('D'))
-        .map(([id,_]) => id);
-    }
-  } catch(e) {}
-  window._fusionAvailModels = availModels;
-
-  const tier = document.getElementById('fusion-tier').value;
-  const cfg = _fusionConfig[tier] || FUSION_DEFAULTS[tier];
-  const selected = cfg.models || [];
-
-  const container = document.getElementById('fusion-model-checkboxes');
-  if (!container) return;
-  container.innerHTML = availModels.map(m => {
-    const checked = selected.includes(m) ? 'checked' : '';
-    return `<label style="font-size:9px;cursor:pointer;white-space:nowrap">
-      <input type="checkbox" value="${m}" ${checked} onchange="onFusionModelChange()"> ${FUSION_MODEL_LABELS[m]||m}
-    </label>`;
-  }).join('');
-
-  ['fusion-judge','fusion-call'].forEach(id => {
-    const sel = document.getElementById(id); if(!sel) return;
-    sel.innerHTML = availModels.map(m => `<option value="${m}">${FUSION_MODEL_LABELS[m]||m}</option>`).join('');
-  });
-  const fallbackModel = availModels[0] || '';
-  document.getElementById('fusion-judge').value = cfg.judge_model || fallbackModel;
-  document.getElementById('fusion-call').value = cfg.call_model || fallbackModel;
-}
-
-function onFusionModelChange() {
-  const tier = document.getElementById('fusion-tier').value;
-  const checks = document.querySelectorAll('#fusion-model-checkboxes input:checked');
-  _fusionConfig[tier].models = [...checks].map(c => c.value);
-}
-
-function updateFusionModels() {
-  const tier = document.getElementById('fusion-tier').value;
-  const superOpts = document.getElementById('fusion-super-opts');
-  superOpts.style.display = tier === 'super' ? 'block' : 'none';
-  buildFusionCheckboxes();
-}
-
-async function saveFusionConfig() {
-  const tier = document.getElementById('fusion-tier').value;
-  const cfg = _fusionConfig[tier];
-  cfg.judge_model = document.getElementById('fusion-judge').value;
-  cfg.call_model = document.getElementById('fusion-call').value;
-  if (!cfg.models || cfg.models.length < 2) { alert('至少选2个模型'); return; }
-  try {
-    const r = await api('/api/fusion/config', {
-      method:'PUT', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({[tier]: cfg}),
-    });
-    if (r.ok) {
-      document.getElementById('fusion-status').textContent = `✅ ${tier} 已保存`;
-      document.getElementById('fusion-status').style.color = '#57d9a3';
-    }
-  } catch(e) { alert('保存失败: '+e.message); }
-}
-
-function updateFusionStatus() {
-  const auto = document.getElementById('fusion-auto');
-  const hint = document.getElementById('fusion-auto-hint');
-  if (auto && hint) hint.textContent = auto.checked
-    ? '架构/安全/跨模块任务自动走 Fusion' : '需手动指定 route_type=fusion 才走';
-}
-
-function getFusionModels() {
-  const tier = document.getElementById('fusion-tier').value;
-  return (_fusionConfig[tier] || FUSION_DEFAULTS[tier]).models;
-}
-
-async function testFusion() {
-  const tier = document.getElementById('fusion-tier').value;
-  const models = getFusionModels();
-  const status = document.getElementById('fusion-status');
-  status.textContent = `提交中 (${tier})...`;
-  status.style.color = 'var(--text2)';
-  try {
-    const r = await api('/api/tasks', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        description: '分析Singularity Dispatch的架构优缺点，给出改进建议（Fusion测试，不修改文件）',
-        priority: 80, route_level: 'E', route_type: 'fusion',
-      }),
-    });
-    if (r.ok) {
-      const names = [...new Set(models.map(m => FUSION_MODEL_LABELS[m]||m))];
-      status.textContent = `✅ ${r.task_id.slice(-8)} ${tier}: ${names.join('+')}`;
-      status.style.color = '#57d9a3'; refreshAll();
-    } else {
-      status.textContent = `❌ ${r.error||'失败'}`; status.style.color = '#f44747';
-    }
-  } catch(e) {
-    status.textContent = `❌ ${e.message}`; status.style.color = '#f44747';
-  }
-}
-
-loadFusionConfig();
-
-// ═══════════════════════════════════════════════════════
-// Init (removed — see app.js)

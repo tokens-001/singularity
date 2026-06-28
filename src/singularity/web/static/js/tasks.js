@@ -9,7 +9,7 @@ function renderTasks(){
   const fq=(document.getElementById('filter-search')?.value||'').toLowerCase();
   let filtered=tasks;
   if(fs) filtered=filtered.filter(t=>t.status===fs);
-  if(fl) filtered=filtered.filter(t=>t.route_level===fl);
+  if(fl) filtered=filtered.filter(t=>t.route_type===fl);
   if(fh) filtered=filtered.filter(t=>t.held);
   if(fq) filtered=filtered.filter(t=>(t.description||'').toLowerCase().includes(fq)||(t.id||'').includes(fq));
 
@@ -21,8 +21,6 @@ function renderTasks(){
     const desc=(t.description||'').slice(0,70);
     const status=STATUS_CN[t.status]||t.status||'?';
     const wait=fmtDur(t.wait_sec||0);
-    const lvl=t.route_level||'';
-    const lvls=lvl==='E'?'level-e':lvl==='D'?'level-d':lvl==='E+'?'level-ep':'';
     const heldMark=t.held?' ◈':'';
     const dotColor={'pending':'var(--yellow)','routed':'var(--text2)','dispatched':'var(--accent)','running':'var(--accent)','validating':'var(--purple)','done':'var(--green)','failed':'var(--red)','rolled_back':'var(--red)','decomposed':'var(--yellow)','blocked':'var(--purple)','conflict_held':'var(--purple)'};
     const dc=dotColor[t.status]||'var(--text3)';
@@ -30,7 +28,7 @@ function renderTasks(){
       <td style="font-family:'SF Mono',monospace;font-size:10px;color:var(--text2)">${idShort}${heldMark}</td>
       <td>${esc(desc)}</td>
       <td><span class="badge ${t.status}" style="display:inline-flex;align-items:center;gap:4px"><span style="width:6px;height:6px;border-radius:50%;flex-shrink:0;background:${dc}"></span>${status}</span></td>
-      <td>${lvl?`<span class="level-tag ${lvls}">${lvl}</span>`:'--'}</td>
+      <td style="font-size:11px;color:var(--text3)">${t.priority||0}</td>
       <td style="font-size:11px;color:var(--text2)">${t.priority||0}</td>
       <td>${['pending','routed'].includes(t.status)?`<button class="btn red sm" style="font-size:8px;padding:1px 4px" data-action="cancel" data-task-id="${t.id}">取消</button>`:""}${["pending","routed","failed","rolled_back","done","decomposed"].includes(t.status)?`<button class="btn orange sm" style="font-size:8px;padding:1px 4px;margin-left:2px" data-action="delete" data-task-id="${t.id}">删除</button>`:''}</td>
       <td style="font-size:10px;color:var(--text2)">${wait}</td>
@@ -68,7 +66,7 @@ async function toggleDetail(taskId){
       const cls=node.to==='done'?'done':node.to==='failed'||node.to==='rolled_back'?'failed':node.to==='running'?'active':'';
       tlHtml+=`<div class="tl-node ${cls}">
         <span class="tl-from">${node.from||'∅'}</span>→<span class="tl-to">${node.to}</span>
-        ${node.meta&&node.meta.route_level?`<span class="tl-meta">level=${node.meta.route_level}</span>`:''}
+        ${node.meta&&node.meta.route_type?`<span class="tl-meta">${node.meta.route_type}</span>`:''}
         ${node.meta&&node.meta.error?`<span class="tl-meta" style="color:var(--st-fail)">${esc(node.meta.error.slice(0,80))}</span>`:''}
       </div>`;
     });
@@ -102,7 +100,7 @@ async function toggleDetail(taskId){
         ${data.route_locked?'<span style="font-size:9px;color:var(--st-pending);margin-left:4px">🔒锁定</span>':''}
       </dd></div>
       <div><dt>描述</dt><dd>${esc(data.description||'')}</dd></div>
-      <div><dt>路由级别 · 类型</dt><dd>${data.route_level||'--'} · ${data.route_type||'--'}</dd></div>
+      <div><dt>任务类型</dt><dd>${data.route_type||'--'}</dd></div>
       <div><dt>优先级 · 深度</dt><dd>${data.priority||0} · ${data.depth||0}</dd></div>
       <div><dt>重试</dt><dd>${data.retry_count||0}/${data.max_retries||3}</dd></div>
       <div><dt>创建</dt><dd>${created}</dd></div>
@@ -142,10 +140,8 @@ async function loadDecisions(){
   let html='';
 
   // Card 1: Route
-  const lvl=route.level||'?';
-  const lvlC=lvl==='E'?'e-dot':lvl==='D'?'d-dot':'ep-dot';
   html+=`<div class="decision-card">
-    <div class="dc-header route">路由决策 · level=<b>${lvl}</b> · type=${route.task_type||'?'} · gate=${route.gate_required?'ON':'off'}</div>
+    <div class="dc-header route">路由决策 · type=${route.task_type||'?'} · gate=${route.gate_required?'ON':'off'}</div>
     <div class="dc-body">`;
   if(route.matched_signals&&route.matched_signals.length){
     route.matched_signals.forEach(s=>{
@@ -243,13 +239,11 @@ function renderIntervention(){
   const now = Date.now() / 1000;
   document.getElementById('active-list').innerHTML=active.length?active.map(t=>{
     const elapsed = t.created_at ? (now - t.created_at) : 0;
-    const lvl = t.route_level || '?';
     return `<div class="intervention-row">
       <span style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
         <span class="pulse-dot" style="width:5px;height:5px;background:var(--accent);display:inline-block;border-radius:50%"></span>
         <span style="font-family:'SF Mono',monospace;font-size:10px;color:var(--text2)">${(t.id||'').slice(-8)}</span>
         <span class="badge ${t.status}">${STATUS_CN[t.status]||t.status}</span>
-        <span style="font-size:9px;color:var(--text3)">[${lvl}]</span>
         <span style="font-size:9px;color:var(--text2)">${fmtDur(elapsed)}</span>
         <span style="font-size:9px;color:var(--text2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((t.description||'').slice(0,50))}</span>
       </span>
