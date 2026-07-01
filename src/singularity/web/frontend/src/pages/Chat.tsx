@@ -37,7 +37,10 @@ export default function Chat() {
   const fetchTasks = async () => {
     try {
       const t = await api.tasks()
-      if (Array.isArray(t)) setTasks(t.slice(0, 20).map((x: any) => ({ id: x.id, desc: x.description || '', status: x.status, ts: x.updated_at || Date.now() })))
+      if (Array.isArray(t)) {
+        const filtered = activePid !== '_default' ? t.filter((x: any) => x.project_id === activePid) : t
+        setTasks(filtered.slice(0, 20).map((x: any) => ({ id: x.id, desc: x.description || '', status: x.status, ts: x.updated_at || Date.now() })))
+      }
     } catch {}
   }
 

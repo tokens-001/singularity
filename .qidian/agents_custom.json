@@ -6,7 +6,10 @@
       "gpt-5.5",
       "kimi-k2.7-code-highspeed",
       "gpt-5.5-pro",
-      "claude-opus-4-8"
+      "claude-opus-4-8",
+      "qwen3-coder-plus",
+      "qwen3.7-plus",
+      "qwen3.7-max"
     ],
     "D": [
       "deepseek-v4-pro"
@@ -25,18 +28,6 @@
     ]
   },
   "any": [
-    {
-      "model": "qwen3-coder-plus",
-      "type": "openai-agent",
-      "entry": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-      "api_key_env": "DASHSCOPE_API_KEY",
-      "max_turns": 8,
-      "default": true,
-      "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
-    },
     {
       "model": "kimi-k2.7-code",
       "type": "openai-agent",
@@ -67,18 +58,6 @@
       "sandbox": "worktree"
     },
     {
-      "model": "qwen3.7-plus",
-      "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
-      "max_turns": 5,
-      "default": false,
-      "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
-    },
-    {
       "model": "deepseek-v4-pro",
       "type": "openai-agent",
       "entry": "",
@@ -104,18 +83,6 @@
     },
     {
       "model": "kimi-k2.6",
-      "type": "openai-agent",
-      "entry": "",
-      "api_key_env": "",
-      "max_turns": 5,
-      "default": false,
-      "roles": [
-        "daily"
-      ],
-      "sandbox": "worktree"
-    },
-    {
-      "model": "qwen3.7-max",
       "type": "openai-agent",
       "entry": "",
       "api_key_env": "",
