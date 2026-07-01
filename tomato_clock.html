@@ -7,7 +7,7 @@
     <style>
         body {
             font-family: 'Arial', sans-serif;
-            background-color: #ffffff;
+            background-color: white;
             display: flex;
             justify-content: center;
             align-items: center;
@@ -18,72 +18,79 @@
         
         .container {
             text-align: center;
-            padding: 30px;
-            border-radius: 15px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-            background-color: #fafafa;
-            max-width: 400px;
-            width: 100%;
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            background-color: #fff;
         }
         
         h1 {
             color: #333;
             margin-bottom: 30px;
-            font-size: 2em;
+            font-size: 2.5em;
         }
         
         .timer-display {
             font-size: 5em;
             font-weight: bold;
             color: #333;
-            margin: 20px 0;
+            margin: 30px 0;
             font-family: 'Courier New', monospace;
         }
         
-        .status {
+        .mode-display {
             font-size: 1.5em;
             color: #666;
             margin-bottom: 30px;
         }
         
-        .controls button {
-            background-color: #4CAF50;
+        .controls {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+        }
+        
+        button {
+            padding: 12px 25px;
+            font-size: 1.1em;
             border: none;
-            color: white;
-            padding: 12px 24px;
-            text-align: center;
-            text-decoration: none;
-            display: inline-block;
-            font-size: 16px;
-            margin: 10px 5px;
+            border-radius: 50px;
             cursor: pointer;
-            border-radius: 5px;
-            transition: background-color 0.3s;
+            transition: all 0.3s ease;
         }
         
-        .controls button:hover {
-            background-color: #45a049;
+        #startBtn {
+            background-color: #4CAF50;
+            color: white;
         }
         
-        .controls button:disabled {
-            background-color: #cccccc;
+        #pauseBtn {
+            background-color: #FFC107;
+            color: black;
+        }
+        
+        #resetBtn {
+            background-color: #F44336;
+            color: white;
+        }
+        
+        button:hover {
+            opacity: 0.9;
+            transform: scale(1.05);
+        }
+        
+        button:disabled {
+            opacity: 0.5;
             cursor: not-allowed;
-        }
-        
-        .work-phase {
-            color: #e74c3c;
-        }
-        
-        .break-phase {
-            color: #3498db;
+            transform: none;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>番茄钟</h1>
-        <div class="status" id="status">工作时间</div>
-        <div class="timer-display" id="display">25:00</div>
+        <div class="mode-display" id="modeDisplay">专注时间</div>
+        <div class="timer-display" id="timerDisplay">25:00</div>
         <div class="controls">
             <button id="startBtn">开始</button>
             <button id="pauseBtn" disabled>暂停</button>
@@ -92,38 +99,32 @@
     </div>
 
     <script>
-        // 配置时间（秒）
-        const WORK_TIME = 25 * 60; // 25分钟
-        const BREAK_TIME = 5 * 60; // 5分钟
+        // 番茄钟配置
+        const WORK_TIME = 25 * 60; // 25分钟专注
+        const BREAK_TIME = 5 * 60; // 5分钟休息
         
         let timeLeft = WORK_TIME;
         let timerInterval = null;
         let isRunning = false;
-        let isWorkPhase = true;
+        let isWorkMode = true; // true为工作模式，false为休息模式
         
-        // 获取DOM元素
-        const displayEl = document.getElementById('display');
-        const statusEl = document.getElementById('status');
+        // DOM元素
+        const timerDisplay = document.getElementById('timerDisplay');
+        const modeDisplay = document.getElementById('modeDisplay');
         const startBtn = document.getElementById('startBtn');
         const pauseBtn = document.getElementById('pauseBtn');
         const resetBtn = document.getElementById('resetBtn');
         
-        // 格式化时间为 MM:SS
-        function formatTime(seconds) {
-            const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
-            const secs = (seconds % 60).toString().padStart(2, '0');
-            return `${mins}:${secs}`;
-        }
-        
         // 更新显示
         function updateDisplay() {
-            displayEl.textContent = formatTime(timeLeft);
-            if (isWorkPhase) {
-                statusEl.textContent = '工作时间';
-                statusEl.className = 'status work-phase';
+            const minutes = Math.floor(timeLeft / 60).toString().padStart(2, '0');
+            const seconds = (timeLeft % 60).toString().padStart(2, '0');
+            timerDisplay.textContent = `${minutes}:${seconds}`;
+            
+            if (isWorkMode) {
+                modeDisplay.textContent = '专注时间';
             } else {
-                statusEl.textContent = '休息时间';
-                statusEl.className = 'status break-phase';
+                modeDisplay.textContent = '休息时间';
             }
         }
         
@@ -140,26 +141,19 @@
                 
                 if (timeLeft <= 0) {
                     clearInterval(timerInterval);
+                    // 切换模式
+                    isWorkMode = !isWorkMode;
+                    timeLeft = isWorkMode ? WORK_TIME : BREAK_TIME;
                     
-                    // 播放提示音（如果浏览器支持）
-                    try {
-                        const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFd2xqZ2RjYF1bWVdWVVRTUlFQT05MS0pJSEdGRURDQkFAPz49PDs6OTg3NjU0MzIxMC8uLSwrKikoJyYlJCMiISAfHh0cGxoZGBcWFRQTEhEQDw4NDAsKCQgHBgUEAwIBAA==');
-                        audio.play().catch(e => console.log("音频播放失败:", e));
-                    } catch(e) {
-                        console.log("无法播放音频:", e);
-                    }
+                    // 播放提示音
+                    const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFd2xqZ2VjYF1bWVdWVVRTUlFQTk1MS0pJSEdGRURDQkFAPz49PDs6OTg3NjU0MzIxMC8uLSwrKikoJyYlJCMiISAfHh0cGxoZGBcWFRQTEhEQDw4NDAsKCQgHBgUEAwIBAA==');
+                    audio.play().catch(e => console.log("音频播放失败"));
                     
-                    // 切换阶段
-                    isWorkPhase = !isWorkPhase;
-                    timeLeft = isWorkPhase ? WORK_TIME : BREAK_TIME;
-                    
-                    // 更新按钮状态
-                    isRunning = false;
-                    startBtn.disabled = false;
-                    pauseBtn.disabled = true;
+                    updateDisplay();
+                    startTimer(); // 自动开始下一阶段
+                } else {
+                    updateDisplay();
                 }
-                
-                updateDisplay();
             }, 1000);
         }
         
@@ -175,15 +169,18 @@
         
         // 重置计时器
         function resetTimer() {
-            pauseTimer();
-            isWorkPhase = true;
+            clearInterval(timerInterval);
+            isRunning = false;
+            isWorkMode = true;
             timeLeft = WORK_TIME;
-            updateDisplay();
+            
             startBtn.disabled = false;
             pauseBtn.disabled = true;
+            
+            updateDisplay();
         }
         
-        // 绑定事件
+        // 事件监听
         startBtn.addEventListener('click', startTimer);
         pauseBtn.addEventListener('click', pauseTimer);
         resetBtn.addEventListener('click', resetTimer);
