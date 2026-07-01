@@ -1,87 +1,56 @@
-import { getArticles, getArticleById } from './data.js';
-import { navigateTo } from './router.js';
+// 视图模块 - 负责渲染页面HTML
+// 依赖：data模块（通过显式接口）
+import { getAllArticles, getArticleById } from './data.js';
 
-export function renderArticleList(container) {
-  const articles = getArticles();
-  const startTime = performance.now();
+// 显式接口：渲染文章列表页
+export function renderArticleList() {
+  const articles = getAllArticles();
+  const items = articles.map(article => `
+    <li class="article-item">
+      <h2><a href="#/article/${article.id}">${escapeHtml(article.title)}</a></h2>
+      <div class="article-meta">
+        <time>${escapeHtml(article.date)}</time>
+      </div>
+      <p class="article-summary">${escapeHtml(article.summary)}</p>
+    </li>
+  `).join('');
 
-  const header = document.createElement('header');
-  header.innerHTML = '<h1>个人博客</h1>';
-
-  const list = document.createElement('ul');
-  list.className = 'article-list';
-
-  const fragment = document.createDocumentFragment();
-  for (const article of articles) {
-    const li = document.createElement('li');
-    li.className = 'article-item';
-    li.innerHTML = `
-      <h2>${escapeHtml(article.title)}</h2>
-      <p class="summary">${escapeHtml(article.summary)}</p>
-      <div class="meta">${escapeHtml(article.date)} · ${escapeHtml(article.author)}</div>
-    `;
-    li.addEventListener('click', () => {
-      navigateTo('detail', { id: article.id });
-    });
-    fragment.appendChild(li);
-  }
-  list.appendChild(fragment);
-
-  container.innerHTML = '';
-  container.appendChild(header);
-  container.appendChild(list);
-
-  const endTime = performance.now();
-  console.log(`列表渲染耗时: ${(endTime - startTime).toFixed(2)}ms`);
+  return `<ul class="article-list">${items}</ul>`;
 }
 
-export function renderArticleDetail(container, id) {
+// 显式接口：渲染文章详情页，文章不存在时返回404页面
+export function renderArticleDetail(id) {
   const article = getArticleById(id);
-
   if (!article) {
-    renderNotFound(container);
-    return;
+    return render404();
   }
 
-  const wrapper = document.createElement('div');
-  wrapper.className = 'container';
-
-  const backBtn = document.createElement('button');
-  backBtn.className = 'back-btn';
-  backBtn.textContent = '← 返回列表';
-  backBtn.addEventListener('click', () => {
-    navigateTo('list');
-  });
-
-  const detail = document.createElement('article');
-  detail.className = 'article-detail';
-  detail.innerHTML = `
-    <h1>${escapeHtml(article.title)}</h1>
-    <div class="meta">${escapeHtml(article.date)} · ${escapeHtml(article.author)}</div>
-    <div class="content">${escapeHtml(article.content)}</div>
+  return `
+    <a href="#/" class="back-link">&larr; 返回列表</a>
+    <article class="article-detail">
+      <h2>${escapeHtml(article.title)}</h2>
+      <div class="article-meta">
+        <time>${escapeHtml(article.date)}</time>
+      </div>
+      <div class="article-content">${escapeHtml(article.content).replace(/\n/g, '<br>')}</div>
+    </article>
   `;
-
-  wrapper.appendChild(backBtn);
-  wrapper.appendChild(detail);
-
-  container.innerHTML = '';
-  container.appendChild(wrapper);
 }
 
-export function renderNotFound(container) {
-  const notFound = document.createElement('div');
-  notFound.className = 'not-found';
-  notFound.innerHTML = `
-    <h2>404</h2>
-    <p>抱歉，您访问的文章不存在。</p>
+// 显式接口：渲染404页面
+export function render404() {
+  return `
+    <div class="not-found">
+      <h2>404 - 页面未找到</h2>
+      <p>抱歉，您访问的文章不存在或已被删除。</p>
+      <a href="#/">返回首页</a>
+    </div>
   `;
-
-  container.innerHTML = '';
-  container.appendChild(notFound);
 }
 
-function escapeHtml(text) {
+// 工具函数：转义HTML防止XSS
+function escapeHtml(str) {
   const div = document.createElement('div');
-  div.textContent = text;
+  div.textContent = str;
   return div.innerHTML;
 }

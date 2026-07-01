@@ -1,66 +1,52 @@
-/**
- * router.js — 基于 hash 的路由模块
- * 解析 URL hash，提取当前路由信息，并通知监听者。
- */
-
-let currentRoute = { page: 'list', params: {} };
-let listeners = [];
-
-/**
- * 解析 URL hash 为路由对象。
- * @returns {{ page: string, params: Object }}
- */
-function parseHash() {
-    const hash = window.location.hash || '#/';
-    const match = hash.match(/^#\/article\/(\S+)$/);
-
-    if (match) {
-        return { page: 'detail', params: { id: match[1] } };
+// 简单的路由模块
+export class Router {
+    constructor() {
+        this.routes = new Map();
+        this.currentRoute = null;
     }
-    return { page: 'list', params: {} };
-}
-
-/**
- * 获取当前路由的副本（防止外部直接修改内部数据）。
- * @returns {{ page: string, params: Object }}
- */
-export function getRoute() {
-    return { page: currentRoute.page, params: { ...currentRoute.params } };
-}
-
-/**
- * 编程式导航到指定路由。
- * @param {string} page
- * @param {Object} params
- */
-export function navigateTo(page, params = {}) {
-    if (page === 'detail' && params.id != null) {
-        window.location.hash = `#/article/${params.id}`;
-    } else {
-        window.location.hash = '#/';
+    
+    // 注册路由
+    addRoute(path, handler) {
+        this.routes.set(path, handler);
     }
-}
-
-/**
- * 注册路由变化监听器，返回取消注册的函数。
- * @param {Function} listener
- * @returns {Function}
- */
-export function onRouteChange(listener) {
-    listeners.push(listener);
-    return () => {
-        listeners = listeners.filter(l => l !== listener);
-    };
-}
-
-/**
- * 初始化路由：同步当前 hash → currentRoute，并监听 hashchange。
- */
-export function initRouter() {
-    currentRoute = parseHash();
-
-    window.addEventListener('hashchange', () => {
-        currentRoute = parseHash();
-        listeners.forEach(listener => listener(currentRoute));
-    });
+    
+    // 导航到指定路由
+    navigate(path) {
+        window.location.hash = path;
+    }
+    
+    // 获取当前路由
+    getCurrentRoute() {
+        const hash = window.location.hash.slice(1) || '/';
+        return hash;
+    }
+    
+    // 解析路由参数
+    parseRoute(path) {
+        const match = path.match(/^\/article\/(\d+)$/);
+        if (match) {
+            return { type: 'detail', id: match[1] };
+        }
+        return { type: 'list' };
+    }
+    
+    // 处理路由变化
+    handleRoute() {
+        const currentPath = this.getCurrentRoute();
+        const route = this.parseRoute(currentPath);
+        
+        if (this.currentRoute !== currentPath) {
+            this.currentRoute = currentPath;
+            const handler = this.routes.get(route.type);
+            if (handler) {
+                handler(route);
+            }
+        }
+    }
+    
+    // 初始化路由监听
+    init() {
+        window.addEventListener('hashchange', () => this.handleRoute());
+        window.addEventListener('load', () => this.handleRoute());
+    }
 }
