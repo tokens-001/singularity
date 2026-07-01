@@ -2,7 +2,8 @@ import { useState, useRef, useEffect } from 'react'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
 import { useAppStore, type ChatMsg } from '../stores/app'
-import { Send, Bot, User, Loader2, CheckCircle2, XCircle, Hash } from 'lucide-react'
+import { Send, Bot, User, Loader2, CheckCircle2, XCircle, Hash, PanelRightOpen } from 'lucide-react'
+import FilePanel from '../components/FilePanel'
 
 interface ProgressItem { id: string; desc: string; status: string; ts: number }
 
@@ -15,6 +16,7 @@ export default function Chat() {
 
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [showFiles, setShowFiles] = useState(false)
   const [tasks, setTasks] = useState<ProgressItem[]>([])
   const [statusText, setStatusText] = useState('')
   const [projects, setProjects] = useState<any[]>([])
@@ -118,7 +120,8 @@ export default function Chat() {
   const active = tasks.filter(t => !['done','failed','cancelled'].includes(t.status)).length
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', maxWidth: 800, margin: '0 auto', width: '100%' }}>
+    <div style={{ display: 'flex', height: '100%', flex: 1 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', maxWidth: 800, margin: '0 auto', width: '100%', flex: 1 }}>
       {/* 项目选择器 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', marginBottom: 8, fontSize: 12 }}>
         <Hash size={12} style={{ color: 'var(--text-muted)' }}/>
@@ -135,6 +138,12 @@ export default function Chat() {
             {completed > 0 && <span style={{ color: 'var(--accent-green)', fontSize: 10 }}>{completed}✓</span>}
             {failed > 0 && <span style={{ color: 'var(--accent-red)', fontSize: 10 }}>{failed}✗</span>}
           </>
+        )}
+        {activePid !== '_default' && (
+          <button onClick={() => setShowFiles(!showFiles)}
+            style={{ background: 'none', border: 'none', color: showFiles ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', padding: 2 }}>
+            <PanelRightOpen size={14}/>
+          </button>
         )}
       </div>
 
@@ -204,6 +213,8 @@ export default function Chat() {
         </button>
       </div>
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+    </div>
+    {showFiles && <FilePanel onClose={() => setShowFiles(false)} />}
     </div>
   )
 }

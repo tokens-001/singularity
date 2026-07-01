@@ -947,6 +947,36 @@ def api_project_start(project_id):
     data, code = _api_handler.project_start(project_id, _push_event)
     return jsonify(data), code
 
+@app.route("/api/projects/<project_id>/files")
+def api_project_files(project_id):
+    """列出项目文件树 (git ls-files)。"""
+    import subprocess, os
+    try:
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+        result = subprocess.run(
+            ['git', 'ls-files', '--cached', '--others', '--exclude-standard'],
+            capture_output=True, text=True, cwd=root, timeout=5)
+        files = [f.strip() for f in result.stdout.split('\n') if f.strip() and not f.strip().startswith('.qidian/')]
+        files = [f for f in files if not f.startswith('node_modules/') and not f.endswith('.pyc')]
+        return jsonify({"files": sorted(files)})
+    except Exception as e:
+        return jsonify({"files": [], "error": str(e)})
+
+@app.route("/api/projects/<project_id>/files/<path:filepath>")
+def api_project_file_content(project_id, filepath):
+    """读取文件内容。"""
+    import subprocess, os
+    try:
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+        fpath = os.path.join(root, filepath)
+        if not os.path.exists(fpath) or not fpath.startswith(root):
+            return jsonify({"content": "", "error": "file not found"}), 404
+        with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()[:50000]
+        return jsonify({"content": content})
+    except Exception as e:
+        return jsonify({"content": "", "error": str(e)})
+
 @app.route("/api/projects/<project_id>/cost")
 def api_project_cost(project_id):
     data, code = _api_handler.project_cost(project_id)
