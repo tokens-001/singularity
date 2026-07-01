@@ -2,9 +2,16 @@
 name = "todo-cli"
 version = "0.1.0"
 edition = "2021"
+authors = ["Your Name <your.email@example.com>"]
+description = "A simple CLI tool for managing todos"
+license = "MIT"
+repository = "https://github.com/yourusername/todo-cli"
 
 [dependencies]
 clap = { version = "4.0", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dirs = "5.0"
+
+[dev-dependencies]
+tempfile = "3.0"
