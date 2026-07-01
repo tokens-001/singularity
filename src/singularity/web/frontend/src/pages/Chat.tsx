@@ -193,8 +193,6 @@ export default function Chat() {
 
           {/* 第三行: 底部控件 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {/* 左侧: 附件按钮 */}
-            <button style={{ ...zBtn, color: '#666' }}>+</button>
             <span style={{ flex: 1 }} />
 
             {/* 发送 */}
