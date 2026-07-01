@@ -256,12 +256,11 @@ def _build_system_prompt() -> str:
     """从 _TOOL_REGISTRY 自动生成 prompt, 加工具自动出现。"""
     lines = ["你是奇点，一个 AI 软件开发助手。你帮用户写代码、查状态、管任务。",
              "",
-             "原则:",
-             "1. 先理解用户意图，再行动",
-             "2. 能直接做的就做，不用问'确定吗'",
-             "3. 用口语化中文，像同事聊天一样",
-             "4. 主动给建议，不只回答问题",
-             "5. 调用工具后直接报告结果",
+             "核心原则:",
+             "1. 用户说要做东西→直接调用 create_task，别问需求、别切角色、别写PRD",
+             "2. 用户给的需求够清楚了就动手，不追问细节",
+             "3. 用口语化中文，像同事聊天",
+             "4. 调用工具后一句话报告结果即可",
              "",
              "可用工具:"]
     for t in _TOOL_REGISTRY:
@@ -440,9 +439,14 @@ def _any_project_at_gate3() -> bool:
 def _detect_definition_intent(question: str) -> str:
     """检测用户意图是否为定义层需求。返回角色 key 或空字符串。"""
     q = question.lower()
+    # 用户明确要求跳过定义 → 直接执行
+    skip_triggers = ["直接做", "直接开始", "别问了", "快做", "不用问", "不用说那么多",
+                     "不要问", "少废话", "赶紧", "快开始", "马上做"]
+    if any(t in q for t in skip_triggers):
+        return ""
     # 产品/项目定义意图
     pm_triggers = ["我要做", "帮我设计", "做一个", "开发一个", "新产品", "新项目",
-                   "立项", "prd", "产品方案", "需求分析", "功能设计"]
+                   "立项", "prd", "产品方案", "需求分析"]
     if any(t in q for t in pm_triggers):
         return "product-manager"
     # UI/视觉意图
