@@ -83,9 +83,9 @@ def _dispatch_ready(dispatched: set, pool, agents, runner: TaskRunner,
             route = router_mod.route(t.description)
         pre = pre_mod.pre_search(t.description, route)
         pre_mod.apply_escalation(route, pre)
-        # PENDING → ROUTED (若尚未路由)
-        if t.status == TaskStatus.PENDING:
-            if not tracker.cas(t.id, TaskStatus.PENDING, TaskStatus.ROUTED,
+        # PENDING/BLOCKED → ROUTED (若尚未路由)
+        if t.status in (TaskStatus.PENDING, TaskStatus.BLOCKED):
+            if not tracker.cas(t.id, t.status, TaskStatus.ROUTED,
                                route_level=t.route_level, route_gate=route.gate_required,
                                route_type=route.task_type):
                 continue  # CAS 失败，下一轮重试
@@ -200,7 +200,12 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
 
 
 def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
-    """v3 统一调度循环: dispatch→reap→drain 三步，支持 1..N 并发。"""
+    """v3 调度循环: dispatch→reap→drain 三步，支持 1..N 并发。
+
+    KNOWN_ISSUE(2026-07-02): ThreadPoolExecutor futures 在 daemon 线程中偶发拿不到 done() 状态,
+    导致任务状态不回写, 卡在 running。需要进一步调试 wait()/FIRST_COMPLETED 行为。
+    临时缓解: deadline 300s 超时自动杀, truthy merge_request 检查。
+    """
     results: list[tuple] = []
     mq = MergeQueue()
     dispatched: set[str] = set()
@@ -216,14 +221,11 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                 remaining = tracker.ready_tasks(exclude=dispatched)
                 if not remaining:
                     break
-                # ponytail: avoid busy-wait when queue drains mid-loop
                 time.sleep(0.5)
                 continue
 
             _reap_futures(running_futures, pending_batches, mq, runner, results)
             _drain_pending(pending_batches, mq, results)
-
-            # ── 项目任务全部完成 → 自动触发 test-fix 循环 ──
             _auto_trigger_test_fix(agents, results)
 
     return results
