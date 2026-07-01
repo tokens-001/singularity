@@ -51,15 +51,20 @@ export default function AppLayout() {
     <div style={{ display: 'flex', height: '100vh', background: '#000' }}>
       {/* 左侧边栏 */}
       <div style={{ width: sidebarWidth, transition: 'width 0.15s', overflow: 'hidden', background: '#0a0a0a', borderRight: '1px solid #1c1c1e', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
-        {/* 顶部功能按钮 */}
-        <div style={{ padding: '12px 12px 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
+        {/* 顶部功能按钮 (竖向) */}
+        <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 2 }}>
           <button onClick={() => { navigate('/'); selectProject('_default') }}
-            style={{ ...topBtn, background: '#1c1c1e', color: '#fff', display: 'flex', alignItems: 'center', gap: 4, padding: '5px 10px', borderRadius: 6 }}>
-            <Plus size={13}/> 新建
+            style={{ ...sideBtn }}>
+            <Plus size={14}/> 新建任务 <span style={shortcutHint}>⌘N</span>
           </button>
-          <span style={{ flex: 1 }}/>
-          <button onClick={() => setShowSearch(!showSearch)} style={iconBtn}><Search size={14}/></button>
-          <button onClick={() => navigate('/config')} style={iconBtn}><PenLine size={14}/></button>
+          <button onClick={() => setShowSearch(!showSearch)}
+            style={{ ...sideBtn }}>
+            <Search size={14}/> 搜索 <span style={shortcutHint}>⌘K</span>
+          </button>
+          <button onClick={() => navigate('/config')}
+            style={{ ...sideBtn }}>
+            <PenLine size={14}/> 技能
+          </button>
         </div>
 
         {/* 搜索 */}
@@ -167,6 +172,7 @@ function FolderIcon() {
   )
 }
 
-const topBtn: React.CSSProperties = { background: 'none', border: 'none', color: '#999', cursor: 'pointer', fontSize: 12 }
+const sideBtn: React.CSSProperties = { background: 'none', border: 'none', color: '#999', cursor: 'pointer', fontSize: 12, padding: '4px 6px', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 6, textAlign: 'left' as const, width: '100%' }
+const shortcutHint: React.CSSProperties = { fontSize: 9, color: '#444', marginLeft: 'auto' }
 const iconBtn: React.CSSProperties = { background: 'none', border: 'none', color: '#666', cursor: 'pointer', padding: 4, borderRadius: 4 }
 const opBtn: React.CSSProperties = { background: 'none', border: 'none', cursor: 'pointer', padding: 1, fontSize: 10 }
