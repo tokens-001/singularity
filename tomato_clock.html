@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>番茄钟</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            background-color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+        }
+        
+        .container {
+            width: 100%;
+            max-width: 500px;
+            padding: 20px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 40px;
+            font-size: 2.5rem;
+        }
+        
+        .timer-display {
+            font-size: 6rem;
+            font-weight: bold;
+            color: #333;
+            margin: 30px 0;
+            font-family: monospace;
+        }
+        
+        .mode-indicator {
+            font-size: 1.8rem;
+            color: #555;
+            margin-bottom: 30px;
+            height: 40px;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        
+        button {
+            background-color: #ffffff;
+            border: 2px solid #333;
+            color: #333;
+            padding: 12px 25px;
+            font-size: 1.1rem;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            min-width: 100px;
+        }
+        
+        button:hover {
+            background-color: #f5f5f5;
+        }
+        
+        button:active {
+            transform: scale(0.98);
+        }
+        
+        button.active {
+            background-color: #333;
+            color: white;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background-color: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 30px 0;
+        }
+        
+        .progress {
+            height: 100%;
+            background-color: #333;
+            width: 100%;
+            transition: width 1s linear;
+        }
+        
+        .sessions {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 30px;
+        }
+        
+        .session-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background-color: #ddd;
+        }
+        
+        .session-dot.completed {
+            background-color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>番茄钟</h1>
+        <div class="mode-indicator" id="mode">专注时间</div>
+        <div class="timer-display" id="display">25:00</div>
+        <div class="progress-bar">
+            <div class="progress" id="progress"></div>
+        </div>
+        <div class="controls">
+            <button id="startBtn">开始</button>
+            <button id="pauseBtn">暂停</button>
+            <button id="resetBtn">重置</button>
+        </div>
+        <div class="sessions" id="sessions"></div>
+    </div>
+
+    <script>
+        // 番茄钟配置
+        const WORK_DURATION = 25 * 60; // 25分钟专注
+        const BREAK_DURATION = 5 * 60; // 5分钟休息
+        
+        // 全局变量
+        let timeLeft = WORK_DURATION;
+        let timerInterval = null;
+        let isRunning = false;
+        let isWorkTime = true;
+        let completedSessions = 0;
+        let totalTime = WORK_DURATION;
+        
+        // DOM元素
+        const displayEl = document.getElementById('display');
+        const modeEl = document.getElementById('mode');
+        const startBtn = document.getElementById('startBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const progressEl = document.getElementById('progress');
+        const sessionsEl = document.getElementById('sessions');
+        
+        // 初始化会话点显示
+        function initSessions() {
+            sessionsEl.innerHTML = '';
+            for (let i = 0; i < 4; i++) {
+                const dot = document.createElement('div');
+                dot.className = 'session-dot';
+                if (i < completedSessions) {
+                    dot.classList.add('completed');
+                }
+                sessionsEl.appendChild(dot);
+            }
+        }
+        
+        // 更新显示
+        function updateDisplay() {
+            const minutes = Math.floor(timeLeft / 60).toString().padStart(2, '0');
+            const seconds = (timeLeft % 60).toString().padStart(2, '0');
+            displayEl.textContent = `${minutes}:${seconds}`;
+            
+            // 更新进度条
+            const progressPercent = (totalTime - timeLeft) / totalTime * 100;
+            progressEl.style.width = `${progressPercent}%`;
+        }
+        
+        // 切换模式
+        function switchMode() {
+            isWorkTime = !isWorkTime;
+            timeLeft = isWorkTime ? WORK_DURATION : BREAK_DURATION;
+            totalTime = timeLeft;
+            modeEl.textContent = isWorkTime ? '专注时间' : '休息时间';
+            updateDisplay();
+            initSessions();
+        }
+        
+        // 开始计时
+        function startTimer() {
+            if (isRunning) return;
+            
+            isRunning = true;
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                updateDisplay();
+                
+                if (timeLeft <= 0) {
+                    clearInterval(timerInterval);
+                    isRunning = false;
+                    
+                    // 播放提示音
+                    const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFd2xqZ2VjYF1bWVhXVlVUU1JRUFFQT05OTUxMS0tKSUlJSEhIR0dHRkZGRUVFRURERENDQ0JCQkFBQT8/Pz4+Pj09PTw8PDs7Ozo6Ojk5OTg4ODc3NzY2NjU1NTQ0NDMzMzIyMjExMTAwMC8vLy4uLi0tLSwsLCsrKyoqKikpKSgoKCcnJyYmJiUlJSQkJCMjIyIiIiEhISAgIB8fHx4eHh0dHRwcHBsbGxoaGhkZGRgYGBcXFxYWFhUVFRQUFBMTExISEhERERAQEA8PDw4ODg0NDQwMDAsLCwoKCgkJCQgICAcHBwYGBgUFBQQEBAMDAwICAgEBAQA=');
+                    audio.play().catch(e => console.log("Audio play failed:", e));
+                    
+                    // 切换到下一模式
+                    switchMode();
+                    
+                    // 如果是完成了一个工作周期，增加已完成会话数
+                    if (!isWorkTime) {
+                        completedSessions++;
+                        initSessions();
+                    }
+                }
+            }, 1000);
+        }
+        
+        // 暂停计时
+        function pauseTimer() {
+            if (!isRunning) return;
+            
+            clearInterval(timerInterval);
+            isRunning = false;
+        }
+        
+        // 重置计时器
+        function resetTimer() {
+            pauseTimer();
+            isWorkTime = true;
+            timeLeft = WORK_DURATION;
+            totalTime = WORK_DURATION;
+            modeEl.textContent = '专注时间';
+            completedSessions = 0;
+            updateDisplay();
+            initSessions();
+        }
+        
+        // 事件监听
+        startBtn.addEventListener('click', startTimer);
+        pauseBtn.addEventListener('click', pauseTimer);
+        resetBtn.addEventListener('click', resetTimer);
+        
+        // 初始化页面
+        updateDisplay();
+        initSessions();
+    </script>
+</body>
+</html>
