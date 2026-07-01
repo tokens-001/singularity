@@ -5,64 +5,52 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>番茄钟</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            font-family: 'Arial', sans-serif;
             background-color: white;
             display: flex;
             justify-content: center;
             align-items: center;
-            min-height: 100vh;
-            padding: 20px;
-        }
-        
-        .container {
-            text-align: center;
-            max-width: 500px;
-            width: 100%;
-        }
-        
-        h1 {
-            font-size: 2.5rem;
-            margin-bottom: 30px;
-            color: #333;
+            height: 100vh;
+            margin: 0;
+            flex-direction: column;
         }
         
         .timer-display {
-            font-size: 6rem;
+            font-size: 120px;
             font-weight: bold;
-            color: #333;
             margin-bottom: 40px;
-            font-family: 'Courier New', monospace;
+            text-align: center;
         }
         
-        .mode-indicator {
-            font-size: 1.5rem;
+        .mode-display {
+            font-size: 24px;
             margin-bottom: 30px;
-            color: #666;
-            height: 30px;
+            color: #333;
         }
         
         .controls {
             display: flex;
-            justify-content: center;
-            gap: 15px;
-            flex-wrap: wrap;
+            gap: 20px;
         }
         
         button {
             padding: 15px 30px;
-            font-size: 1.1rem;
+            font-size: 18px;
             border: none;
-            border-radius: 12px;
+            border-radius: 50px;
             cursor: pointer;
-            transition: all 0.2s ease;
-            min-width: 120px;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        }
+        
+        button:active {
+            transform: translateY(0);
         }
         
         #startPauseBtn {
@@ -70,142 +58,68 @@
             color: white;
         }
         
-        #startPauseBtn:hover {
-            background-color: #45a049;
-        }
-        
         #resetBtn {
             background-color: #f44336;
             color: white;
         }
         
-        #resetBtn:hover {
-            background-color: #da190b;
+        .focus-mode {
+            color: #e91e63;
         }
         
-        button:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-        
-        @media (max-width: 600px) {
-            .timer-display {
-                font-size: 4rem;
-            }
-            
-            h1 {
-                font-size: 2rem;
-            }
-            
-            button {
-                padding: 12px 20px;
-                min-width: 100px;
-            }
+        .break-mode {
+            color: #2196F3;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>番茄钟</h1>
-        <div class="mode-indicator" id="modeIndicator">专注时间</div>
-        <div class="timer-display" id="timerDisplay">25:00</div>
-        <div class="controls">
-            <button id="startPauseBtn">开始</button>
-            <button id="resetBtn">重置</button>
-        </div>
+    <div class="mode-display" id="modeDisplay">专注时间</div>
+    <div class="timer-display" id="timerDisplay">25:00</div>
+    <div class="controls">
+        <button id="startPauseBtn">开始</button>
+        <button id="resetBtn">重置</button>
     </div>
 
     <script>
-        // 配置时间（秒）
-        const FOCUS_TIME = 25 * 60; // 25分钟专注
-        const BREAK_TIME = 5 * 60;  // 5分钟休息
+        // 配置时间（分钟）
+        const FOCUS_TIME = 25 * 60; // 专注时间（秒）
+        const BREAK_TIME = 5 * 60;  // 休息时间（秒）
         
-        // DOM元素
+        let timeLeft = FOCUS_TIME;
+        let timerInterval = null;
+        let isRunning = false;
+        let isFocusMode = true;
+        
+        // 获取DOM元素
         const timerDisplay = document.getElementById('timerDisplay');
+        const modeDisplay = document.getElementById('modeDisplay');
         const startPauseBtn = document.getElementById('startPauseBtn');
         const resetBtn = document.getElementById('resetBtn');
-        const modeIndicator = document.getElementById('modeIndicator');
-        
-        // 状态变量
-        let timeLeft = FOCUS_TIME;
-        let isRunning = false;
-        let intervalId = null;
-        let isFocusMode = true; // true为专注，false为休息
-        
-        // 格式化时间为 MM:SS
-        function formatTime(seconds) {
-            const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
-            const secs = (seconds % 60).toString().padStart(2, '0');
-            return `${mins}:${secs}`;
-        }
         
         // 更新显示
         function updateDisplay() {
-            timerDisplay.textContent = formatTime(timeLeft);
-            modeIndicator.textContent = isFocusMode ? '专注时间' : '休息时间';
-        }
-        
-        // 开始/暂停功能
-        function toggleTimer() {
-            if (isRunning) {
-                // 暂停
-                clearInterval(intervalId);
-                isRunning = false;
-                startPauseBtn.textContent = '开始';
+            const minutes = Math.floor(timeLeft / 60).toString().padStart(2, '0');
+            const seconds = (timeLeft % 60).toString().padStart(2, '0');
+            timerDisplay.textContent = `${minutes}:${seconds}`;
+            
+            if (isFocusMode) {
+                modeDisplay.textContent = '专注时间';
+                modeDisplay.className = 'mode-display focus-mode';
             } else {
-                // 开始
-                if (timeLeft <= 0) return; // 时间到了不能继续
-                
-                isRunning = true;
-                startPauseBtn.textContent = '暂停';
-                
-                intervalId = setInterval(() => {
-                    timeLeft--;
-                    updateDisplay();
-                    
-                    if (timeLeft <= 0) {
-                        // 播放提示音
-                        playBeep();
-                        
-                        // 切换模式
-                        if (isFocusMode) {
-                            // 从专注切换到休息
-                            isFocusMode = false;
-                            timeLeft = BREAK_TIME;
-                        } else {
-                            // 从休息切换到专注
-                            isFocusMode = true;
-                            timeLeft = FOCUS_TIME;
-                        }
-                        
-                        updateDisplay();
-                        clearInterval(intervalId);
-                        isRunning = false;
-                        startPauseBtn.textContent = '开始';
-                    }
-                }, 1000);
+                modeDisplay.textContent = '休息时间';
+                modeDisplay.className = 'mode-display break-mode';
             }
         }
         
-        // 重置功能
-        function resetTimer() {
-            clearInterval(intervalId);
-            isRunning = false;
-            isFocusMode = true;
-            timeLeft = FOCUS_TIME;
-            updateDisplay();
-            startPauseBtn.textContent = '开始';
-        }
-        
-        // 播放提示音（使用Web Audio API生成简单蜂鸣声）
-        function playBeep() {
+        // 播放提示音
+        function playSound() {
             try {
-                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                const oscillator = audioContext.createOscillator();
-                const gainNode = audioContext.createGain();
+                const context = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = context.createOscillator();
+                const gainNode = context.createGain();
                 
                 oscillator.connect(gainNode);
-                gainNode.connect(audioContext.destination);
+                gainNode.connect(context.destination);
                 
                 oscillator.type = 'sine';
                 oscillator.frequency.value = 800;
@@ -216,15 +130,64 @@
                     oscillator.stop();
                 }, 500);
             } catch (e) {
-                // 如果浏览器不支持Web Audio API，则忽略
-                console.log('音频API不可用，跳过提示音');
+                console.log('音频播放失败:', e);
             }
         }
         
-        // 初始化
+        // 开始/暂停计时器
+        function toggleTimer() {
+            if (isRunning) {
+                pauseTimer();
+            } else {
+                startTimer();
+            }
+        }
+        
+        // 开始计时器
+        function startTimer() {
+            if (!isRunning) {
+                timerInterval = setInterval(() => {
+                    timeLeft--;
+                    
+                    if (timeLeft <= 0) {
+                        // 切换模式
+                        isFocusMode = !isFocusMode;
+                        timeLeft = isFocusMode ? FOCUS_TIME : BREAK_TIME;
+                        
+                        // 播放提示音
+                        playSound();
+                    }
+                    
+                    updateDisplay();
+                }, 1000);
+                
+                isRunning = true;
+                startPauseBtn.textContent = '暂停';
+            }
+        }
+        
+        // 暂停计时器
+        function pauseTimer() {
+            if (isRunning) {
+                clearInterval(timerInterval);
+                isRunning = false;
+                startPauseBtn.textContent = '继续';
+            }
+        }
+        
+        // 重置计时器
+        function resetTimer() {
+            pauseTimer();
+            isFocusMode = true;
+            timeLeft = FOCUS_TIME;
+            updateDisplay();
+            startPauseBtn.textContent = '开始';
+        }
+        
+        // 初始化显示
         updateDisplay();
         
-        // 事件监听器
+        // 绑定事件
         startPauseBtn.addEventListener('click', toggleTimer);
         resetBtn.addEventListener('click', resetTimer);
     </script>
