@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useAppStore } from '../stores/app'
 import { api } from '../lib/api'
-import { FileText, Folder, FolderOpen, X, PanelRightClose, GitBranch } from 'lucide-react'
+import { FileText, Folder, FolderOpen, X, PanelRightClose, GitBranch, Activity } from 'lucide-react'
+import StatusPanel from './StatusPanel'
 
 interface FileNode {
   name: string
@@ -15,7 +16,7 @@ export default function FilePanel({ onClose }: { onClose: () => void }) {
   const [selectedFile, setSelectedFile] = useState<string>('')
   const [fileContent, setFileContent] = useState<string>('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const [activeTab, setActiveTab] = useState<'files'|'diff'>('files')
+  const [activeTab, setActiveTab] = useState<'files'|'diff'|'status'>('files')
   const [diffData, setDiffData] = useState<{stat: string, diff: string}>({stat:'',diff:''})
   const activePid = useAppStore(s => s.activeProjectId)
 
@@ -127,6 +128,11 @@ export default function FilePanel({ onClose }: { onClose: () => void }) {
           background: activeTab === 'diff' ? 'var(--bg-tertiary)' : 'transparent',
           color: activeTab === 'diff' ? 'var(--text-primary)' : 'var(--text-muted)',
         }}><GitBranch size={12} style={{display:'inline',marginRight:4}}/>Diff</button>
+        <button onClick={() => setActiveTab('status')} style={{
+          padding: '3px 8px', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 11,
+          background: activeTab === 'status' ? 'var(--bg-tertiary)' : 'transparent',
+          color: activeTab === 'status' ? 'var(--text-primary)' : 'var(--text-muted)',
+        }}><Activity size={12} style={{display:'inline',marginRight:4}}/>状态</button>
         <span style={{ flex: 1 }} />
         <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 2 }}>
           <PanelRightClose size={14}/>
@@ -169,6 +175,12 @@ export default function FilePanel({ onClose }: { onClose: () => void }) {
           ) : (
             <div style={{ color: 'var(--text-muted)', fontSize: 11, textAlign: 'center', padding: 20 }}>无变更记录</div>
           )}
+        </div>
+      )}
+
+      {activeTab === 'status' && (
+        <div style={{ flex: 1, overflow: 'auto' }}>
+          <StatusPanel />
         </div>
       )}
     </div>
