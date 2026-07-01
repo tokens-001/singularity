@@ -23,7 +23,12 @@ export default function Chat() {
   const pendingCid = useRef<string>('')
   const projectsRef = useRef<any[]>([])
 
-  useEffect(() => { fetchProjects(); fetchTasks() }, [activePid])
+  useEffect(() => {
+    if (activePid === '_default') {
+      useAppStore.getState().clearConversation('_default')
+    }
+    fetchProjects(); fetchTasks()
+  }, [activePid])
   useEffect(() => { requestAnimationFrame(() => { bottomRef.current?.scrollIntoView({behavior:'smooth'}) }) }, [msgs, tasks])
 
   const fetchProjects = async () => {
