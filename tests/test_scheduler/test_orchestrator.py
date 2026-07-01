@@ -49,9 +49,10 @@ class TestScheduleMonotonicity:
         a, b = self._t("a", starvation=100), self._t("b", starvation=1)
         assert schedule_policy([b, a])[0].id == "a"
 
-    def test_level_bonus(self):
-        a, b, c = self._t("a", level="D"), self._t("b", level="E+"), self._t("c", level="E")
-        assert [t.id for t in schedule_policy([c, b, a])] == ["a", "b", "c"]
+    def test_level_no_longer_affects_ordering(self):
+        # 两档后 level_bonus 已移除, E/E+/D 不影响排序
+        a, b, c = self._t("a", priority=5), self._t("b", priority=3), self._t("c", priority=1)
+        assert schedule_policy([c, b, a])[0].id == "a"
 
     def test_deterministic(self):
         tasks = [self._t(str(i), priority=i % 5, starvation=i) for i in range(10)]
