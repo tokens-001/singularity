@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
-import { Send, Bot, User, Play, Square, RefreshCw, Loader2, CheckCircle2, XCircle, Circle, FileText, Wrench } from 'lucide-react'
+import { Send, Bot, User, RefreshCw, Loader2, CheckCircle2, XCircle } from 'lucide-react'
 
 interface Msg { role: 'user' | 'assistant'; content: string; ts: number }
 interface ProgressItem { id: string; desc: string; status: string; ts: number }
@@ -97,8 +97,6 @@ export default function Chat() {
     }
   }
 
-  const toggleLoop = () => loopRunning ? api.stopLoop().then(refreshStatus) : api.startLoop().then(refreshStatus)
-
   const completed = tasks.filter(t => t.status === 'done').length
   const failed = tasks.filter(t => t.status === 'failed').length
   const active = tasks.filter(t => !['done','failed','cancelled'].includes(t.status)).length
@@ -114,10 +112,7 @@ export default function Chat() {
         {completed > 0 && <span style={{ color: 'var(--accent-green)' }}>{completed} 完成</span>}
         {failed > 0 && <span style={{ color: 'var(--accent-red)' }}>{failed} 失败</span>}
         <span style={{ flex: 1 }} />
-        <button onClick={refreshStatus} style={{background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',padding:2}}><RefreshCw size={12}/></button>
-        <button onClick={toggleLoop} style={{background:'none',border:'none',color:loopRunning?'var(--accent-red)':'var(--accent-green)',cursor:'pointer',padding:2}}>
-          {loopRunning ? <Square size={14}/> : <Play size={14}/>}
-        </button>
+        <button onClick={refreshStatus} style={{background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',padding:2}} title="刷新"><RefreshCw size={12}/></button>
       </div>
 
       {/* 主体: 对话 + 进度 */}
