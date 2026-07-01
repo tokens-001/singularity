@@ -1241,7 +1241,7 @@ def api_models_add():
     model_id = data["id"].strip()
     if not model_id or len(model_id) > 100:
         return jsonify({"error": "id 不能为空且不超过 100 字符"}), 400
-    tiers = data.get("tiers", ["E"])
+    tiers = data.get("tiers", ["any"])
     if not isinstance(tiers, list) or not tiers:
         return jsonify({"error": "tiers 非空数组"}), 400
     for t in tiers:

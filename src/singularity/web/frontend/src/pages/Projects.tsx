@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
-import { Plus, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react'
+import { Plus, RefreshCw, ChevronDown, ChevronRight, Check, X } from 'lucide-react'
 
 const PHASE_CN: Record<string,string> = {
   template:'模板', researching:'调研', gate1:'G1确认', planning:'规划', gate2:'G2确认',
@@ -39,6 +39,13 @@ export default function Projects() {
     if (!form.name) return
     await api.createProject(form)
     setShowCreate(false); setForm({ name: '', description: '', template: 'product_dev' }); fetch()
+  }
+
+  const [confirming, setConfirming] = useState<string|null>(null)
+  const handleGate = async (id: string, gate: string, decision: string) => {
+    setConfirming(gate)
+    try { await api.gateConfirm(id, gate, decision); toggle(id) } catch {}
+    setConfirming(null)
   }
 
   const phases = ['template','researching','gate1','planning','gate2','executing','integrating','reviewing','fixing','gate3','delivering','done']
@@ -87,6 +94,25 @@ export default function Projects() {
                 ))}
               </div>
               <div style={{ color: 'var(--text-secondary)', marginBottom: 4 }}>{detail.description}</div>
+              {detail.phase && detail.phase.startsWith('gate') && (
+                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                  <button onClick={()=>handleGate(p.id, detail.phase, 'approved')}
+                    disabled={confirming===detail.phase}
+                    style={{ display:'flex',alignItems:'center',gap:4, padding:'5px 12px', background:'var(--accent-green)', color:'#fff',
+                      border:'none', borderRadius:'var(--radius)', cursor:'pointer', fontSize:12, fontWeight:600 }}>
+                    <Check size={14}/> 批准
+                  </button>
+                  <button onClick={()=>handleGate(p.id, detail.phase, 'rejected')}
+                    disabled={confirming===detail.phase}
+                    style={{ display:'flex',alignItems:'center',gap:4, padding:'5px 12px', background:'var(--accent-red)', color:'#fff',
+                      border:'none', borderRadius:'var(--radius)', cursor:'pointer', fontSize:12, fontWeight:600 }}>
+                    <X size={14}/> 驳回
+                  </button>
+                  <span style={{ fontSize:10, color:'var(--text-muted)', alignSelf:'center' }}>
+                    {PHASE_CN[detail.phase]} — 确认后自动推进
+                  </span>
+                </div>
+              )}
               {detail.lineage && detail.lineage.length > 0 && (
                 <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-muted)' }}>
                   {detail.lineage.slice(-5).map((l:any,i:number) => (

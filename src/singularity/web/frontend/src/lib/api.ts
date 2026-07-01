@@ -30,8 +30,8 @@ export const api = {
   project: (id: string) => request<any>(`/api/projects/${id}`),
   createProject: (data: any) => request('/api/projects',{method:'POST',body:JSON.stringify(data)}),
   runPhase: (id: string) => request(`/api/projects/${id}/run-phase`,{method:'POST'}),
-  gateConfirm: (id: string, gate: string, verdict: string) =>
-    request(`/api/projects/${id}/gate-confirm`,{method:'POST',body:JSON.stringify({gate,verdict})}),
+  gateConfirm: (id: string, gate: string, decision: string) =>
+    request(`/api/projects/${id}/gate-confirm`,{method:'POST',body:JSON.stringify({gate,decision})}),
 
   observerChat: (q: string) => request<any>('/api/observer/chat',{method:'POST',body:JSON.stringify({question:q})}),
 
