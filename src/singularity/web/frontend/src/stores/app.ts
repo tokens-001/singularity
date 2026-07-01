@@ -25,7 +25,7 @@ export const useAppStore = create<AppState>()(
       toggleSidebar: () => set(s => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       chatMsgs: [],
       setChatMsgs: (msgs) => set({ chatMsgs: msgs }),
-      addChatMsg: (msg) => set(s => ({ chatMsgs: [...s.chatMsgs, msg] })),
+      addChatMsg: (msg) => set(s => ({ chatMsgs: [...s.chatMsgs, msg].slice(-200) })),
     }),
     { name: 'qidian-chat', partialize: (s) => ({ sidebarCollapsed: s.sidebarCollapsed, chatMsgs: s.chatMsgs }) }
   )
