@@ -225,6 +225,20 @@ def _next_id() -> str:
     return str(max(max_existing, base) + 1)
 
 
+def delete(project_id: str) -> bool:
+    """删除项目及所有关联文件。"""
+    p = _path(project_id)
+    deleted = False
+    if p.exists():
+        p.unlink()
+        deleted = True
+    # 删除关联产出文件
+    for f in _projects_dir().glob(f"{project_id}.*"):
+        try: f.unlink(); deleted = True
+        except Exception: pass
+    return deleted
+
+
 def save(project: ProjectState) -> None:
     project.updated_at = time.time()
     p = _path(project.id)

@@ -30,6 +30,7 @@ export const api = {
   project: (id: string) => request<any>(`/api/projects/${id}`),
   createProject: (data: any) => request('/api/projects',{method:'POST',body:JSON.stringify(data)}),
   runPhase: (id: string) => request(`/api/projects/${id}/run-phase`,{method:'POST'}),
+  deleteProject: (id: string) => request(`/api/projects/${id}`,{method:'DELETE'}),
   gateConfirm: (id: string, gate: string, decision: string) =>
     request(`/api/projects/${id}/gate-confirm`,{method:'POST',body:JSON.stringify({gate,decision})}),
 

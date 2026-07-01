@@ -942,6 +942,12 @@ def api_project_run_phase(project_id):
     data, code = _api_handler.project_run_phase(project_id, body.get("phase", ""), body.get("desc", ""), body.get("agent", ""), _push_event)
     return jsonify(data), code
 
+@app.route("/api/projects/<project_id>", methods=["DELETE"])
+def api_project_delete(project_id):
+    from singularity.scheduler import project as proj_mod
+    ok = proj_mod.delete(project_id)
+    return jsonify({"ok": ok}), 200 if ok else 404
+
 @app.route("/api/projects/<project_id>/start", methods=["POST"])
 def api_project_start(project_id):
     data, code = _api_handler.project_start(project_id, _push_event)

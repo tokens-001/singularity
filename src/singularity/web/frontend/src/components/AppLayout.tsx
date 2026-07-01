@@ -1,9 +1,19 @@
 import { useState, useEffect } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAppStore } from '../stores/app'
-import { ToastContainer } from './Toast'
+import { ToastContainer, useToast } from './Toast'
 import { api } from '../lib/api'
-import { MessageSquare, PanelLeftClose, PanelLeft, Plus } from 'lucide-react'
+import { MessageSquare, PanelLeftClose, PanelLeft, Plus, Trash2, Pin, PinOff } from 'lucide-react'
+
+// 置顶存储 (ponytail: localStorage 直读, 不引入额外 store)
+function getPinned(): string[] {
+  try { return JSON.parse(localStorage.getItem('qidian-pinned') || '[]') } catch { return [] }
+}
+function togglePin(pid: string) {
+  const pins = getPinned()
+  const next = pins.includes(pid) ? pins.filter(p => p !== pid) : [pid, ...pins]
+  localStorage.setItem('qidian-pinned', JSON.stringify(next))
+}
 
 export default function AppLayout() {
   const { sidebarCollapsed, toggleSidebar } = useAppStore()
@@ -12,6 +22,9 @@ export default function AppLayout() {
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const [projects, setProjects] = useState<any[]>([])
+  const [hovered, setHovered] = useState<string>('')
+  const [pinned, setPinned] = useState<string[]>(getPinned)
+  const addToast = useToast(s => s.add)
 
   useEffect(() => {
     const fetch = async () => {
@@ -62,20 +75,50 @@ export default function AppLayout() {
         <div style={{ padding: '4px 12px', fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, marginTop: 4 }}>
           项目
         </div>
-        {projects.map((p: any) => (
-          <button key={p.id} onClick={() => selectProject(p.id)}
+        {/* 排序: 置顶优先 */}
+        {[...projects].sort((a, b) => {
+          const aPin = pinned.includes(a.id) ? 0 : 1
+          const bPin = pinned.includes(b.id) ? 0 : 1
+          return aPin - bPin || a.name.localeCompare(b.name)
+        }).map((p: any) => {
+          const isPinned = pinned.includes(p.id)
+          return (
+          <div key={p.id} onClick={() => selectProject(p.id)}
+            onMouseEnter={() => setHovered(p.id)} onMouseLeave={() => setHovered('')}
             style={{
-              display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', margin: '1px 6px',
+              display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px 5px 12px', margin: '1px 6px',
               border: 'none', borderRadius: 'var(--radius)', cursor: 'pointer', fontSize: 12,
               background: activePid === p.id ? 'var(--bg-tertiary)' : 'transparent',
               color: activePid === p.id ? 'var(--text-primary)' : 'var(--text-secondary)',
               textAlign: 'left' as const, width: 'auto',
             }}>
-            <span style={{ fontSize: 8, color: 'var(--text-muted)' }}>#</span>
+            <span style={{ fontSize: 8, color: isPinned ? 'var(--accent-yellow)' : 'var(--text-muted)' }}>#</span>
             <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
             <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>{p.phase}</span>
-          </button>
-        ))}
+            {/* 操作按钮: hover 时显示 */}
+            {hovered === p.id && (
+              <>
+                <button onClick={e => { e.stopPropagation(); togglePin(p.id); setPinned(getPinned()) }}
+                  style={{ ...opBtn, color: isPinned ? 'var(--accent-yellow)' : 'var(--text-muted)' }}
+                  title={isPinned ? '取消置顶' : '置顶'}>
+                  {isPinned ? <PinOff size={10}/> : <Pin size={10}/>}
+                </button>
+                <button onClick={e => {
+                  e.stopPropagation()
+                  if (confirm(`删除项目 "${p.name}"?`)) {
+                    api.deleteProject(p.id).then(() => {
+                      setProjects(prev => prev.filter(x => x.id !== p.id))
+                      if (activePid === p.id) { setActiveProject('_default'); navigate('/') }
+                      addToast(`已删除 ${p.name}`, 'success')
+                    }).catch(() => addToast('删除失败', 'error'))
+                  }
+                }} style={{ ...opBtn, color: 'var(--accent-red)' }} title="删除">
+                  <Trash2 size={10}/>
+                </button>
+              </>
+            )}
+          </div>
+        )})}
 
         {/* 底部: 配置入口 */}
         <div style={{ marginTop: 'auto', padding: '8px 12px', borderTop: '1px solid var(--border)' }}>
@@ -110,3 +153,5 @@ export default function AppLayout() {
     </div>
   )
 }
+
+const opBtn: React.CSSProperties = { background: 'none', border: 'none', cursor: 'pointer', padding: 2 }
