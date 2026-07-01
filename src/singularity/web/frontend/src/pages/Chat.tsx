@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
 import { useAppStore, type ChatMsg } from '../stores/app'
-import { Send, Loader2, CheckCircle2, XCircle, PanelRightOpen, RotateCcw } from 'lucide-react'
+import { Send, Loader2, CheckCircle2, XCircle, PanelRightOpen, RotateCcw, FolderOpen, ChevronDown } from 'lucide-react'
 import FilePanel from '../components/FilePanel'
 
 interface ProgressItem { id: string; desc: string; status: string; ts: number }
@@ -19,24 +19,27 @@ export default function Chat() {
   const [showFiles, setShowFiles] = useState(false)
   const [tasks, setTasks] = useState<ProgressItem[]>([])
   const [projects, setProjects] = useState<any[]>([])
+  const [models, setModels] = useState<any[]>([])
+  const [selectedModel, setSelectedModel] = useState('GLM-5.2')
+  const [showModelMenu, setShowModelMenu] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const pendingCid = useRef<string>('')
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     fetchProjects(); fetchTasks()
+    api.models().then(setModels).catch(() => {})
     if (msgs.length === 0 && activePid === '_default') {
       addChatMsg({role:'assistant',content:'你好，我是奇点。直接跟我说你想做什么，我来搞定。',ts:Date.now()})
     }
   }, [activePid])
+
   useEffect(() => { bottomRef.current?.scrollIntoView({behavior:'smooth'}) }, [msgs, tasks])
 
   const fetchProjects = async () => {
     try { const d: any = await api.projects(); setProjects(Array.isArray(d)?d:(d?.projects||[])) } catch {}
   }
-  const retryFailed = async (tid: string) => {
-    try { await api.retryTask(tid); fetchTasks() } catch {}
-  }
+  const retryFailed = async (tid: string) => { try { await api.retryTask(tid); fetchTasks() } catch {} }
   const fetchTasks = async () => {
     try {
       const t = await api.tasks()
@@ -89,47 +92,51 @@ export default function Chat() {
   const completed = tasks.filter(t => t.status === 'done').length
   const failed = tasks.filter(t => t.status === 'failed').length
   const active = tasks.filter(t => !['done','failed','cancelled'].includes(t.status)).length
-
   const info = activePid !== '_default' ? projects.find(p => p.id === activePid) : null
+
+  const hasMsgs = msgs.length > 0
 
   return (
     <div style={{ display: 'flex', height: '100%', flex: 1 }}>
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', flex: 1, maxWidth: 900, margin: '0 auto', width: '100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', flex: 1, position: 'relative' }}>
 
-      {/* 项目信息条 */}
-      {info && (
-        <div style={{ padding: '4px 0 8px', fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--border)', marginBottom: 4 }}>
-          <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{info.name}</span>
-          <span>·</span><span>{info.phase}</span>
-          <span>·</span><span>{info.task_count||0} 任务</span>
-          <span style={{ flex:1 }}/>
-          <button onClick={() => setShowFiles(!showFiles)} style={{ background:'none',border:'none',color: showFiles?'var(--accent)':'var(--text-muted)',cursor:'pointer',padding:2 }}>
-            <PanelRightOpen size={14}/>
-          </button>
-        </div>
-      )}
-
-      {/* 消息列表 */}
-      <div style={{ flex: 1, overflow: 'auto', paddingBottom: 8 }}>
-        {msgs.map((m: ChatMsg, i: number) => {
-          const isUser = m.role === 'user'
-          return (
-          <div key={i} style={{ marginBottom: isUser ? 6 : 16 }}>
-            {isUser ? (
-              <div style={{ padding: '4px 0', fontSize: 13, color: 'var(--text-primary)' }}>
-                {m.content}
-              </div>
-            ) : (
-              <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
-                {m.content}
-              </div>
-            )}
+      {/* 内容区 */}
+      <div style={{ flex: 1, overflow: 'auto', padding: hasMsgs ? '12px 0' : '0' }}>
+        {/* 空状态: 居中欢迎 */}
+        {!hasMsgs && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '70%' }}>
+            <div style={{ fontSize: 40, marginBottom: 16, opacity: 0.3 }}>
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                <path d="M6 42L24 6l18 36H6z" stroke="currentColor" strokeWidth="2" fill="none"/>
+                <path d="M16 42l8-20 8 20H16z" stroke="currentColor" strokeWidth="2" fill="none"/>
+              </svg>
+            </div>
+            <div style={{ fontSize: 14, color: 'var(--text-muted)' }}>
+              {activePid === '_default' ? '跟我说你想做什么' : '向项目提问'}
+            </div>
           </div>
-        )})}
+        )}
+
+        {/* 消息 */}
+        {hasMsgs && msgs.map((m: ChatMsg, i: number) => {
+          const isUser = m.role === 'user'
+          if (isUser) {
+            return (
+              <div key={i} style={{ padding: '2px 0 6px', fontSize: 13, color: 'var(--text-primary)', maxWidth: 860, margin: '0 auto', width: '100%' }}>
+                {m.content}
+              </div>
+            )
+          }
+          return (
+            <div key={i} style={{ padding: '2px 0 16px', fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.7, whiteSpace: 'pre-wrap', maxWidth: 860, margin: '0 auto', width: '100%' }}>
+              {m.content}
+            </div>
+          )
+        })}
 
         {/* 任务进度 */}
         {tasks.length > 0 && (
-          <div style={{ marginBottom: 16 }}>
+          <div style={{ maxWidth: 860, margin: '0 auto 16px', width: '100%' }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
               {active > 0 ? <Loader2 size={10} style={{animation:'spin 1s linear infinite'}}/> : <CheckCircle2 size={10} style={{color:'var(--accent-green)'}}/>}
               {active > 0 ? `${active} 个执行中` : completed === tasks.length ? '全部完成' : `进度 ${completed}/${tasks.length}`}
@@ -155,33 +162,85 @@ export default function Chat() {
           </div>
         )}
 
-        {/* 思考中 */}
         {loading && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>
-            <Loader2 size={11} style={{animation:'spin 1s linear infinite'}}/>
-            思考中...
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-muted)', fontSize: 12, maxWidth: 860, margin: '0 auto' }}>
+            <Loader2 size={11} style={{animation:'spin 1s linear infinite'}}/>思考中...
           </div>
         )}
         <div ref={bottomRef} />
       </div>
 
-      {/* 底部输入 */}
-      <div style={{ padding: '8px 0', borderTop: '1px solid var(--border)' }}>
-        <div style={{ display: 'flex', gap: 8, background: 'var(--bg-secondary)', borderRadius: 8, padding: '6px 8px', border: '1px solid var(--border)' }}>
+      {/* 底部 Zcode 风格控制面板 */}
+      <div style={{ padding: '0 0 16px' }}>
+        <div style={{ maxWidth: 860, margin: '0 auto', background: '#1c1c1e', borderRadius: 16, border: '1px solid #2c2c2e', padding: '8px 12px' }}>
+
+          {/* 第一行: 项目上下文 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <select value={activePid} onChange={e => setActiveProject(e.target.value)}
+              style={{ background: '#2c2c2e', border: 'none', borderRadius: 6, color: '#fff', fontSize: 12, padding: '4px 8px', cursor: 'pointer', maxWidth: 200 }}>
+              <option value="_default">通用对话</option>
+              {projects.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <span style={{ flex: 1 }} />
+            <button onClick={() => setShowFiles(!showFiles)}
+              style={{ background: 'none', border: 'none', color: showFiles ? 'var(--accent)' : '#666', cursor: 'pointer', padding: 2 }}>
+              <FolderOpen size={15}/>
+            </button>
+          </div>
+
+          {/* 第二行: 输入框 */}
           <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-            placeholder="发送消息..."
+            placeholder={info ? `向 ${info.name} 提问，@ 文件 / 命令 $ 技能` : '向奇点提问，/ 使用命令'}
             rows={1}
-            style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'inherit', resize: 'none', padding: '4px 0', lineHeight: '20px' }}/>
-          <button onClick={send} disabled={loading || !input.trim()}
-            style={{ background: input.trim() ? 'var(--accent)' : 'var(--bg-tertiary)', color: input.trim() ? '#fff' : 'var(--text-muted)', border: 'none', borderRadius: 6, padding: '4px 10px', cursor: input.trim() ? 'pointer' : 'default', display: 'flex', alignItems: 'center', transition: '0.15s' }}>
-            <Send size={14}/>
-          </button>
+            style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#fff', fontSize: 14, fontFamily: 'inherit', resize: 'none', padding: '4px 0', lineHeight: '22px', marginBottom: 8 }}/>
+
+          {/* 第三行: 底部控件 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {/* 左侧: 附件/权限 */}
+            <button style={{ ...zBtn, color: '#666' }}>+</button>
+            <span style={{ fontSize: 11, color: '#f0a060', display: 'flex', alignItems: 'center', gap: 2 }}>
+              <span style={{ width: 6, height: 6, borderRadius: 3, background: '#f0a060', display: 'inline-block' }}/>
+              完全访问
+            </span>
+            <span style={{ flex: 1 }} />
+
+            {/* 右侧: 模型选择 */}
+            <div style={{ position: 'relative' }}>
+              <button onClick={() => setShowModelMenu(!showModelMenu)}
+                style={{ ...zBtn, color: '#aaa', display: 'flex', alignItems: 'center', gap: 4 }}>
+                {selectedModel}
+                <ChevronDown size={10}/>
+              </button>
+              {showModelMenu && (
+                <div style={{ position: 'absolute', bottom: 28, right: 0, background: '#2c2c2e', borderRadius: 8, padding: 4, minWidth: 160, border: '1px solid #3c3c3e' }}>
+                  {(models.length > 0 ? models.map((m:any) => m.id) : ['GLM-5.2','DeepSeek-V4','Kimi-K2.6','Claude-Opus']).map((mid: string) => (
+                    <button key={mid} onClick={() => { setSelectedModel(mid); setShowModelMenu(false) }}
+                      style={{ display: 'block', width: '100%', padding: '4px 8px', border: 'none', borderRadius: 4, background: selectedModel===mid?'#3c3c3e':'transparent', color: '#fff', fontSize: 12, cursor: 'pointer', textAlign: 'left' }}>
+                      {mid}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 算力档位 */}
+            <span style={{ fontSize: 10, color: '#666', background: '#2c2c2e', padding: '2px 6px', borderRadius: 4 }}>最高</span>
+
+            {/* 发送 */}
+            <button onClick={send} disabled={loading || !input.trim()}
+              style={{ background: input.trim() ? '#fff' : '#333', color: input.trim() ? '#000' : '#666', border: 'none', borderRadius: 6, width: 28, height: 28, cursor: input.trim() ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: '0.15s' }}>
+              <Send size={13}/>
+            </button>
+          </div>
         </div>
       </div>
+
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
     {showFiles && <FilePanel onClose={() => setShowFiles(false)} />}
     </div>
   )
 }
+
+const zBtn: React.CSSProperties = { background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, padding: '2px 6px', borderRadius: 4 }
