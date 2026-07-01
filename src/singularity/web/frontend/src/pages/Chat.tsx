@@ -56,7 +56,8 @@ export default function Chat() {
       if (e.project_id && activePid === '_default') setActiveProject(e.project_id)
       const last = msgs[msgs.length - 1]
       if (last?.role !== 'assistant' || last.content !== e.msg) addChatMsg({ role: 'assistant', content: e.msg || '', ts: Date.now() })
-    } else if (e.kind === 'observer_answer') {
+    } else if (e.kind === 'observer_answer' && pendingCid.current) {
+      // 只处理当前等待中的回复, 忽略历史回放
       try {
         const data = JSON.parse(e.msg || '{}')
         if (data.client_id === pendingCid.current && data.answer) {
