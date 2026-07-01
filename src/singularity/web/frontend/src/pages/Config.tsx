@@ -3,7 +3,7 @@ import { api } from '../lib/api'
 import { Cpu, Bot, Wrench, Plus, Trash2, Search, Download, Check, X } from 'lucide-react'
 
 const TABS = [
-  { key: 'models', icon: Cpu, label: '模型' },
+  { key: 'models', icon: Cpu, label: '模型目录' },
   { key: 'agents', icon: Bot, label: '智能体' },
   { key: 'skills', icon: Wrench, label: '技能' },
 ]
@@ -123,8 +123,7 @@ function ModelsTab() {
           return (
             <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
               <span style={{ color: m.api_available?'var(--accent-green)':'var(--text-muted)', fontSize: 8 }}>{m.api_available?'●':'○'}</span>
-              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 500, minWidth: 80 }}>{m.display||m.id}</span>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-muted)', flex: 1 }}>{m.id}</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 500, flex: 1 }}>{m.display||m.id}</span>
               <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{m.cost} · {m.speed}</span>
               <span style={{ display: 'flex', gap: 2 }}>{rf.slice(0,3).map((p:string)=><span key={p} style={{ padding: '1px 4px', borderRadius: 2, background: 'var(--bg-tertiary)', fontSize: 9, color: 'var(--accent)' }}>{p}</span>)}</span>
               <button onClick={()=>api.deleteModel(m.id).then(fetch)} style={{background:'none',border:'none',color:'var(--accent-red)',cursor:'pointer',padding:2}}><Trash2 size={10}/></button>
@@ -136,9 +135,13 @@ function ModelsTab() {
   )
 }
 
+const ALL_ROLES = ['builder','architect','ai_architect','qa_engineer','security_auditor','reviewer','daily']
+
 function AgentsTab() {
   const [agents, setAgents] = useState<any>({})
   const [models, setModels] = useState<any[]>([])
+  const [expanded, setExpanded] = useState<string>('')
+  const [showAdd, setShowAdd] = useState(false)
 
   const fetch = async () => {
     const [a, m] = await Promise.all([api.agents(), api.models()])
@@ -148,41 +151,122 @@ function AgentsTab() {
 
   const allAgents: any[] = []
   for (const lst of Object.values(agents)) if (Array.isArray(lst)) (lst as any[]).forEach((a:any) => allAgents.push(a))
-  const activeSet = new Set(allAgents.map((a:any)=>a.model))
-  const disabledAny = (agents._disabled?.any||[]) as any[]
-  const disabledSet = new Set(Array.isArray(disabledAny)?disabledAny:[])
+  const agentMap = new Map(allAgents.map((a:any) => [a.model, a]))
+  const disabledSet = new Set((agents._disabled?.any||[]) as any[])
 
-  const toggle = async (modelId: string, enable: boolean) => {
-    if (enable) await api.addAgent({model:modelId})
-    else await api.deleteAgent(modelId)
+  // ponytail: 只看已激活的 agent, 模型列表用作"添加"的来源
+  const activeModels = new Set(allAgents.filter((a:any) => !disabledSet.has(a.model)).map((a:any) => a.model))
+  const addableModels = models.filter((m:any) => m.api_available && !activeModels.has(m.id) && !disabledSet.has(m.id))
+
+  const toggleRole = async (model: string, role: string, currentRoles: string[]) => {
+    const next = currentRoles.includes(role)
+      ? currentRoles.filter((r: string) => r !== role)
+      : [...currentRoles, role]
+    await api.updateAgent(model, { roles: next })
     fetch()
   }
 
+  const disable = async (model: string) => { await api.deleteAgent(model); fetch() }
+  const enable = async (model: string) => { await api.addAgent({model}); fetch() }
+
   return (
     <div>
-      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
-        Agent 池 ({allAgents.length} active · {disabledSet.size} 禁用)
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>
+          已激活 ({allAgents.filter((a:any)=>!disabledSet.has(a.model)).length})
+        </span>
+        <button onClick={() => setShowAdd(!showAdd)}
+          style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: 11, display: 'flex', alignItems: 'center', gap: 3 }}>
+          <Plus size={12}/> 添加
+        </button>
       </div>
-      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-        {models.map((m:any) => {
-          const active = activeSet.has(m.id)
-          const disabled = disabledSet.has(m.id)
+
+      {showAdd && addableModels.length > 0 && (
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 8, padding: 6, background: 'var(--bg-secondary)', borderRadius: 'var(--radius)' }}>
+          {addableModels.map((m:any) => (
+            <button key={m.id} onClick={() => { enable(m.id); setShowAdd(false) }}
+              style={{ padding: '2px 8px', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', fontSize: 10, background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
+              + {m.display||m.id}
+            </button>
+          ))}
+        </div>
+      )}
+      {showAdd && addableModels.length === 0 && (
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 8 }}>没有可添加的模型 — 先去"模型目录"页扫描导入</div>
+      )}
+
+      {allAgents.filter((a:any) => !disabledSet.has(a.model)).length === 0 && (
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: 20, textAlign: 'center' }}>
+          暂无激活的智能体，点"+ 添加"选择一个模型
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {allAgents.filter((a:any) => !disabledSet.has(a.model)).map((a: any) => {
+          const m = models.find((x:any) => x.id === a.model)
+          const roles: string[] = a.roles || []
+          const isExpanded = expanded === a.model
           return (
-            <div key={m.id} onClick={()=>toggle(m.id,!active)}
-              style={{ cursor: 'pointer', padding: '6px 10px', border: `1px solid ${active?'var(--accent)':disabled?'rgba(240,97,109,.3)':'var(--border)'}`,
-                background: active?'var(--bg-tertiary)':disabled?'rgba(240,97,109,.04)':'transparent', borderRadius: 'var(--radius)', fontSize: 11, minWidth: 160 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ color: m.api_available?'var(--accent-green)':'var(--accent-red)', fontSize: 8 }}>{m.api_available?'●':'○'}</span>
-                <span style={{ fontWeight: 500 }}>{m.display||m.id}</span>
-                <span style={{ marginLeft: 'auto', fontSize: 9, color: active?'var(--accent)':disabled?'var(--accent-red)':'var(--text-muted)' }}>
-                  {active?'ON':disabled?'禁用':'OFF'}
+            <div key={a.model}
+              style={{ padding: '8px 12px', border: '1px solid var(--accent)', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius)', fontSize: 11, minWidth: 180 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+                onClick={() => setExpanded(isExpanded ? '' : a.model)}>
+                <span style={{ color: 'var(--accent-green)', fontSize: 8 }}>●</span>
+                <span style={{ fontWeight: 600 }}>{m?.display||a.model}</span>
+                <span style={{ marginLeft: 'auto', fontSize: 9, color: 'var(--text-muted)' }}>
+                  {roles.length} 角色
                 </span>
               </div>
-              <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 2 }}>{m.provider} · {m.cost} · {m.speed}</div>
+              <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 2 }}>
+                {m?.provider||'?'} · {m?.cost||'?'} · max_turns={a.max_turns||5}
+              </div>
+              {isExpanded && (
+                <div style={{ marginTop: 6, borderTop: '1px solid var(--border)', paddingTop: 4 }}
+                  onClick={e => e.stopPropagation()}>
+                  <div style={{ fontSize: 9, color: 'var(--text-muted)', marginBottom: 4 }}>角色分配:</div>
+                  <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap', marginBottom: 4 }}>
+                    {ALL_ROLES.map(r => {
+                      const has = roles.includes(r)
+                      return (
+                        <button key={r} onClick={() => toggleRole(a.model, r, roles)}
+                          style={{ padding: '1px 6px', borderRadius: 3, border: 'none', cursor: 'pointer', fontSize: 9,
+                            background: has ? 'var(--accent)' : 'var(--bg-secondary)',
+                            color: has ? '#fff' : 'var(--text-muted)' }}>
+                          {r}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <button onClick={() => disable(a.model)}
+                    style={{ background: 'none', border: 'none', color: 'var(--accent-red)', cursor: 'pointer', fontSize: 9, padding: 0 }}>
+                    移除
+                  </button>
+                </div>
+              )}
             </div>
           )
         })}
       </div>
+
+      {(agents._disabled?.any||[]).length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 4 }}>
+            已禁用 ({(agents._disabled?.any||[]).length})
+          </div>
+          <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+            {(agents._disabled?.any||[]).map((model: string) => {
+              const m = models.find((x:any) => x.id === model)
+              return (
+                <button key={model} onClick={() => enable(model)}
+                  style={{ padding: '2px 8px', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', fontSize: 10,
+                    background: 'transparent', color: 'var(--text-muted)' }}>
+                  {m?.display||model} ↗
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
