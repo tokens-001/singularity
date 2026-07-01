@@ -14,6 +14,7 @@ export default function Chat() {
   const [tasks, setTasks] = useState<ProgressItem[]>([])
   const [statusText, setStatusText] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
+  const pendingCid = useRef<string>('')
 
   useEffect(() => { refreshStatus(); fetchTasks() }, [])
   useEffect(() => { bottomRef.current?.scrollIntoView({behavior:'smooth'}) }, [msgs, tasks])
@@ -52,6 +53,18 @@ export default function Chat() {
         if (last?.role === 'assistant' && last.content === e.msg) return prev
         return [...prev, { role: 'assistant', content: e.msg || '', ts: Date.now() }]
       })
+    } else if (e.kind === 'observer_answer') {
+      // Observer 异步回复
+      try {
+        const data = JSON.parse(e.msg || '{}')
+        if (data.client_id === pendingCid.current && data.answer) {
+          setMsgs(prev => [...prev, { role: 'assistant', content: data.answer, ts: Date.now() }])
+          setLoading(false)
+          setStatusText('')
+          pendingCid.current = ''
+          fetchTasks()
+        }
+      } catch {}
     }
   })
 
@@ -68,26 +81,20 @@ export default function Chat() {
     setStatusText('思考中...')
     try {
       const r = await api.observerChat(q)
-      const answer = r.answer || r.text || r.result || ''
-      if (answer) {
-        setMsgs(prev => [...prev, {role:'assistant',content:answer,ts:Date.now()}])
+      if (r.client_id) {
+        // Observer 异步回复, 等待 SSE 推送 observer_answer
+        pendingCid.current = r.client_id
+        setStatusText('Observer 思考中...')
+      } else if (r.answer) {
+        setMsgs(prev => [...prev, {role:'assistant',content:r.answer,ts:Date.now()}])
+        setLoading(false)
+        setStatusText('')
       }
-      // Observer 可能创建了任务，刷新任务列表
-      setTimeout(async () => {
-        try {
-          const t = await api.tasks()
-          if (Array.isArray(t)) {
-            setTasks(t.slice(0, 20).map((x: any) => ({
-              id: x.id, desc: x.description || '', status: x.status, ts: x.updated_at || Date.now()
-            })))
-          }
-        } catch {}
-      }, 2000)
     } catch {
       setMsgs(prev => [...prev, {role:'assistant',content:'请求失败，请确认后端服务在运行。',ts:Date.now()}])
+      setLoading(false)
+      setStatusText('')
     }
-    setLoading(false)
-    setStatusText('')
   }
 
   const toggleLoop = () => loopRunning ? api.stopLoop().then(refreshStatus) : api.startLoop().then(refreshStatus)
