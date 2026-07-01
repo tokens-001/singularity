@@ -51,7 +51,15 @@ export default function AppLayout() {
       <div style={{ width: sidebarWidth, transition: 'width 0.15s', overflow: 'hidden', background: '#0a0a0a', borderRight: '1px solid #1c1c1e', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
         {/* 顶部功能按钮 (竖向, 对应奇点实际操作) */}
         <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <button onClick={() => { navigate('/'); selectProject('_default') }}
+          <button onClick={async () => {
+            try {
+              const r: any = await api.createProject({name: '新项目', description: '', template: 'product_dev'})
+              if (r?.project?.id) {
+                setActiveProject(r.project.id)
+                navigate('/')
+              }
+            } catch {}
+          }}
             style={{ ...sideBtn }}>
             <Plus size={14}/> 新建项目
           </button>
