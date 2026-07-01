@@ -8,9 +8,14 @@ export interface Task {
 }
 export interface TaskDetail extends Task { trace?: any; timeline?: any }
 
+export interface ChatMsg { role: 'user' | 'assistant'; content: string; ts: number }
+
 interface AppState {
   sidebarCollapsed: boolean
   toggleSidebar: () => void
+  chatMsgs: ChatMsg[]
+  setChatMsgs: (msgs: ChatMsg[]) => void
+  addChatMsg: (msg: ChatMsg) => void
 }
 
 export const useAppStore = create<AppState>()(
@@ -18,7 +23,10 @@ export const useAppStore = create<AppState>()(
     (set) => ({
       sidebarCollapsed: false,
       toggleSidebar: () => set(s => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+      chatMsgs: [],
+      setChatMsgs: (msgs) => set({ chatMsgs: msgs }),
+      addChatMsg: (msg) => set(s => ({ chatMsgs: [...s.chatMsgs, msg] })),
     }),
-    { name: 'qidian-app', partialize: (s) => ({ sidebarCollapsed: s.sidebarCollapsed }) }
+    { name: 'qidian-chat', partialize: (s) => ({ sidebarCollapsed: s.sidebarCollapsed, chatMsgs: s.chatMsgs }) }
   )
 )

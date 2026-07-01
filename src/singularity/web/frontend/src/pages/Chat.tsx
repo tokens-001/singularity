@@ -1,13 +1,14 @@
 import { useState, useRef, useEffect } from 'react'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
+import { useAppStore, type ChatMsg } from '../stores/app'
 import { Send, Bot, User, Loader2, CheckCircle2, XCircle } from 'lucide-react'
 
-interface Msg { role: 'user' | 'assistant'; content: string; ts: number }
 interface ProgressItem { id: string; desc: string; status: string; ts: number }
 
 export default function Chat() {
-  const [msgs, setMsgs] = useState<Msg[]>([{role:'assistant',content:'你好，我是奇点。直接跟我说你想做什么，我来搞定。',ts:Date.now()}])
+  const msgs = useAppStore(s => s.chatMsgs)
+  const addChatMsg = useAppStore(s => s.addChatMsg)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [tasks, setTasks] = useState<ProgressItem[]>([])
@@ -15,7 +16,12 @@ export default function Chat() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const pendingCid = useRef<string>('')
 
-  useEffect(() => { fetchTasks() }, [])
+  useEffect(() => {
+    if (msgs.length === 0) {
+      addChatMsg({role:'assistant',content:'你好，我是奇点。直接跟我说你想做什么，我来搞定。',ts:Date.now()})
+    }
+    fetchTasks()
+  }, [])
   useEffect(() => { bottomRef.current?.scrollIntoView({behavior:'smooth'}) }, [msgs, tasks])
 
   const fetchTasks = async () => {
@@ -44,17 +50,16 @@ export default function Chat() {
       })
     } else if (e.kind === 'system') {
       setStatusText(e.msg || '')
-      setMsgs(prev => {
-        const last = prev[prev.length - 1]
-        if (last?.role === 'assistant' && last.content === e.msg) return prev
-        return [...prev, { role: 'assistant', content: e.msg || '', ts: Date.now() }]
-      })
+      const last = msgs[msgs.length - 1]
+      if (last?.role !== 'assistant' || last.content !== e.msg) {
+        addChatMsg({ role: 'assistant', content: e.msg || '', ts: Date.now() })
+      }
     } else if (e.kind === 'observer_answer') {
       // Observer 异步回复
       try {
         const data = JSON.parse(e.msg || '{}')
         if (data.client_id === pendingCid.current && data.answer) {
-          setMsgs(prev => [...prev, { role: 'assistant', content: data.answer, ts: Date.now() }])
+          addChatMsg({ role: 'assistant', content: data.answer, ts: Date.now() })
           setLoading(false)
           setStatusText('')
           pendingCid.current = ''
@@ -66,21 +71,20 @@ export default function Chat() {
 
   const send = async () => {
     const q = input.trim(); if (!q || loading) return
-    setMsgs(prev => [...prev, {role:'user',content:q,ts:Date.now()}]); setInput(''); setLoading(true)
+    addChatMsg({role:'user',content:q,ts:Date.now()}); setInput(''); setLoading(true)
     setStatusText('思考中...')
     try {
       const r = await api.observerChat(q)
       if (r.client_id) {
-        // Observer 异步回复, 等待 SSE 推送 observer_answer
         pendingCid.current = r.client_id
         setStatusText('Observer 思考中...')
       } else if (r.answer) {
-        setMsgs(prev => [...prev, {role:'assistant',content:r.answer,ts:Date.now()}])
+        addChatMsg({role:'assistant',content:r.answer,ts:Date.now()})
         setLoading(false)
         setStatusText('')
       }
     } catch {
-      setMsgs(prev => [...prev, {role:'assistant',content:'请求失败，请确认后端服务在运行。',ts:Date.now()}])
+      addChatMsg({role:'assistant',content:'请求失败，请确认后端服务在运行。',ts:Date.now()})
       setLoading(false)
       setStatusText('')
     }
