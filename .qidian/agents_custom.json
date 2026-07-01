@@ -7,6 +7,9 @@
       "kimi-k2.7-code-highspeed",
       "gpt-5.5-pro",
       "claude-opus-4-8"
+    ],
+    "D": [
+      "deepseek-v4-pro"
     ]
   },
   "_order": {
@@ -76,18 +79,6 @@
       "sandbox": "worktree"
     },
     {
-      "model": "gpt-5.5",
-      "type": "openai-agent",
-      "entry": "https://api.openai.com/v1/chat/completions",
-      "api_key_env": "OPENAI_API_KEY",
-      "max_turns": 5,
-      "default": true,
-      "roles": [
-        "architecture"
-      ],
-      "sandbox": "worktree"
-    },
-    {
       "model": "deepseek-v4-pro",
       "type": "openai-agent",
       "entry": "",
@@ -135,5 +126,6 @@
       ],
       "sandbox": "worktree"
     }
-  ]
+  ],
+  "D": []
 }

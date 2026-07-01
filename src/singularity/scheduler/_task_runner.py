@@ -84,8 +84,13 @@ class TaskRunner:
     orchestrator 只需 import 这一个类。
     """
 
-    def execute(self, task, agents: dict):
-        """执行单个任务: 路由→预检→Goal/委员会/普通→返回(batch, route, snap)。"""
+    def execute(self, task, agents: dict, merge_queue=None):
+        """执行单个任务: 路由→预检→Goal/委员会/普通→返回(batch, route, snap)。
+
+        merge_queue: v3 并行时由 _run_queue_v3 传入, 使 _exec.run 走 v3 路径
+          (commit_wt + 填 merge_request, 不直接 merge_back)。
+          None → v2 路径 (直接 merge_back)。修复 reap bug 根因#1。
+        """
         # 路由
         if task.route_locked:
             route = router_mod.RouteResult(
@@ -109,7 +114,7 @@ class TaskRunner:
             witness.heartbeat('orch', f'warn:{e}')
         # 快照
         snap = snap_mod.take(task.id)
-        ctx = RunContext(batch_id=task.id, snapshot_ref=snap.ref, merge_queue=None)
+        ctx = RunContext(batch_id=task.id, snapshot_ref=snap.ref, merge_queue=merge_queue)
         # ── 代码上下文注入 (codegraph) ──
         if pre.code_context:
             task.description = f"{task.description}\n\n[代码结构上下文]\n{pre.code_context}"
@@ -295,9 +300,12 @@ class TaskRunner:
                 results.append((task.id, reason + " (QA拒绝)", validation))
                 return reason + "; QA:fail"
             elif sv.verdict != "pass":
-                tracker.transition(task.id, task.status,
+                # 修复 reap bug 根因#2: QA 中间态(retry/escalate/block)之前用
+                # task.status(RUNNING)回写 → 任务转回 RUNNING 永久卡死。
+                # 改为转 PENDING 重新入队, 让调度循环重试。
+                tracker.transition(task.id, TaskStatus.PENDING,
                                  error=f"QA:{sv.verdict}: " + "; ".join(sv.issues[:2]))
-                reason += f"; QA:{sv.verdict}"
+                reason += f"; QA:{sv.verdict}→PENDING"
         except Exception as e:
             witness.heartbeat('orch', f'warn:{e}')
         # Chancellor

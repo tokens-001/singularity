@@ -68,7 +68,7 @@ def schedule_policy(tasks: list) -> list:
 
 
 def _dispatch_ready(dispatched: set, pool, agents, runner: TaskRunner,
-                    running_futures: dict) -> bool:
+                    running_futures: dict, mq) -> bool:
     """_run_queue_v3 步骤①②③: 选就绪→cas抢占→提交线程池。返回是否有新派发。"""
     ready = tracker.ready_tasks(exclude=dispatched)
     ready = schedule_policy(ready)
@@ -96,7 +96,7 @@ def _dispatch_ready(dispatched: set, pool, agents, runner: TaskRunner,
             snap = snap_mod.take(t.id)
             tracker.transition(t.id, TaskStatus.RUNNING, snapshot_id=snap.id)
             dispatched.add(t.id)
-            fut = pool.submit(runner.execute, t, agents)
+            fut = pool.submit(runner.execute, t, agents, mq)
             running_futures[fut] = (t, route, snap, pre, time.time())
             dispatched_any = True
     return dispatched_any
@@ -202,9 +202,9 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
 def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
     """v3 调度循环: dispatch→reap→drain 三步，支持 1..N 并发。
 
-    KNOWN_ISSUE(2026-07-02): ThreadPoolExecutor futures 在 daemon 线程中偶发拿不到 done() 状态,
-    导致任务状态不回写, 卡在 running。需要进一步调试 wait()/FIRST_COMPLETED 行为。
-    临时缓解: deadline 300s 超时自动杀, truthy merge_request 检查。
+    修复 reap bug (2026-07-02): 根因不是 daemon 线程/future.done() 异步, 而是
+    merge_queue 被硬编码 None → execute 走 v2 直接 merge_back → batch.merge_request
+    恒 None → reap 永远走 finalize 分支。现 mq 传入 execute, v3 路径恢复。
     """
     results: list[tuple] = []
     mq = MergeQueue()
@@ -215,7 +215,7 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
 
     with ThreadPoolExecutor(max_workers=max_concurrent) as pool:
         while True:
-            _dispatch_ready(dispatched, pool, agents, runner, running_futures)
+            _dispatch_ready(dispatched, pool, agents, runner, running_futures, mq)
 
             if not running_futures and not pending_batches:
                 remaining = tracker.ready_tasks(exclude=dispatched)
