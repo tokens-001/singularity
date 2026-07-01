@@ -26,6 +26,9 @@ export default function Chat() {
 
   useEffect(() => {
     fetchProjects(); fetchTasks()
+    if (msgs.length === 0) {
+      addChatMsg({role:'assistant',content:'你好！直接告诉我想做什么，我来搞定。',ts:Date.now()})
+    }
   }, [activePid])
 
   useEffect(() => { requestAnimationFrame(() => { bottomRef.current?.scrollIntoView({behavior:'smooth'}) }) }, [msgs, tasks])
