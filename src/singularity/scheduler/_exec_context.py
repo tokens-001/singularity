@@ -32,7 +32,7 @@ _PLANNER_PREAMBLE = """\
 在末尾输出 ```json 块:
 ```json
 [
-  {"desc": "子任务描述(含文件名+预估行数)", "suggested_level": "E", "depends_on_local_id": []}
+  {"desc": "子任务描述(含文件名+预估行数)", "suggested_level": "any", "depends_on_local_id": []}
 ]
 ```
 depends_on_local_id 用从 0 开始的索引指代同数组内的子任务。

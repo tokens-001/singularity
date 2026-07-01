@@ -65,6 +65,10 @@ def validate(candidate, gate_required, task_type, changed_files, snap, turn, max
     if report.human_review_required: report.verdict = "阻断"; report.action = "abort"
     elif report.validate_verdict == "人工复核": report.verdict = "人工复核"; report.action = "retry" if turn < max_turns else "abort"
     elif report.validate_verdict == "信息不足": report.verdict = "信息不足"; report.action = "retry" if turn < max_turns else "abort"
+    elif report.validate_verdict == "未知":
+        # S5: 校验脚本超时/解析失败/不存在 → 不默认通过, 重试或阻断 (D1: 安全项绝不放行)
+        report.verdict = "未知"; report.action = "retry" if turn < max_turns else "abort"
+        report.unverified.append(f"validate 未知结果: {report.validate_reason}")
     elif report.validate_verdict == "注意": report.verdict = "通过"; report.action = "pass"
     else: report.verdict = "通过"; report.action = "pass"
     return report
@@ -305,6 +309,9 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
 
     root = cwd or str(config.PROJECT_ROOT)
 
+    # S4: review_level 在闭包 review_chunk 中被引用, 必须在此定义 (两档后统一 "any")
+    review_level = "any"
+
     if diff_only:
         # 获取该文件的 git diff
         try:
@@ -337,7 +344,7 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
                 if a.get("model") == name and _disp.agent_api_available(a):
                     model_cfgs.append(a); break
     else:
-        model_cfgs = [a for a in agents.get("D",[]) if _disp.agent_api_available(a)][:3]
+        model_cfgs = [a for a in agents.get("any",[]) if _disp.agent_api_available(a)][:3]
 
     if not model_cfgs:
         return {"issues":[],"verdicts":[],"summaries":[],"models_used":[],"elapsed":0,"error":"no models available"}
@@ -458,7 +465,7 @@ def incremental_review(file_path: str, old_content: str, new_content: str,
         f"Incremental review of {file_path}",
         f"Diff:\n{diff_text}",
         [file_path],
-        "D",  # 使用D级别
+        "any",  # 两档后统一 any
         "",
         cwd
     )

@@ -234,7 +234,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     # 容灾: 获取 fallback 链, 当前 agent 失败自动切下一个
     # 如果任务已重试多次，强制优先用 premium 模型
     force_premium = getattr(ctx, 'retry_count', 0) >= 2
-    fallback_chain = disp_mod.pick_agent_fallback_chain(agents, level, fallback_levels=["E+","E"])
+    fallback_chain = disp_mod.pick_agent_fallback_chain(agents, level, fallback_levels=["any"])
     if force_premium and fallback_chain:
         # 把 premium 模型移到最前面 (model 名含 glm 或 opus)
         premium = [a for a in fallback_chain if any(p in a.get('model','').lower() for p in ('glm','opus'))]
@@ -529,7 +529,7 @@ def decompose(planner_raw_output: str) -> list[dict]:
             continue
         subtasks.append({
             "desc": str(item["desc"]),
-            "suggested_level": str(item.get("suggested_level", "E")),
+            "suggested_level": str(item.get("suggested_level", "any")),
             "depends_on_local_id": _safe_dep_list(item.get("depends_on_local_id", [])),
         })
     return subtasks

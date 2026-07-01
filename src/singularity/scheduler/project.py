@@ -34,7 +34,8 @@ class Phase(str, Enum):
 _REJECT_FALLBACK: dict[Phase, Phase] = {
     Phase.GATE1: Phase.TEMPLATE,
     Phase.GATE2: Phase.RESEARCHING,        # 回调研或重写需求
-    Phase.GATE3: Phase.PLANNING,           # 打回让D重新出方案
+    # GATE3 不在此表: 由 workflow.handle_gate3_reject 按 fix_route 分级路由
+    # (impl→EXECUTING / design→PLANNING / note→不回退), 不再一刀切回 PLANNING
 }
 
 # 架构级返工: 可从这些阶段直接回 planning
@@ -79,9 +80,10 @@ class ProjectState:
     token_budget_total: float = 5.0        # $ (默认 $5)
     token_spent: float = 0.0               # $ 累计
     fix_round: int = 0                      # 内循环修复轮次(上限3)
+    review_failures: int = 0                # D1: 审查自动修失败计数 (上限 _REVIEW_MAX_AUTO_FIX)
+    integrate_failures: int = 0             # D2: 集成合并失败计数 (上限 _INTEGRATE_MAX_RETRIES)
 
-    # Agent 编组: {"E": ["flash","kimi"], "E+": ["glm-5.2"], "D": ["opus"]}
-    # 不设则使用 agents.toml 全局配置
+    # Agent 编组: {"any": ["model_a","model_b"]} — 两档后统一全池, 不设则用全局配置
     agent_lineup: dict[str, list[str]] = field(default_factory=dict)
 
     created_at: float = 0.0
@@ -103,6 +105,8 @@ class ProjectState:
             "token_budget_total": self.token_budget_total,
             "token_spent": self.token_spent,
             "fix_round": self.fix_round,
+            "review_failures": self.review_failures,
+            "integrate_failures": self.integrate_failures,
             "agent_lineup": self.agent_lineup,
             "created_at": self.created_at, "updated_at": self.updated_at,
         }
@@ -128,6 +132,8 @@ class ProjectState:
         d.setdefault("token_budget_total", 5.0)
         d.setdefault("token_spent", 0.0)
         d.setdefault("fix_round", 0)
+        d.setdefault("review_failures", 0)
+        d.setdefault("integrate_failures", 0)
         d.setdefault("agent_lineup", {})
         d.setdefault("created_at", 0.0)
         d.setdefault("updated_at", 0.0)

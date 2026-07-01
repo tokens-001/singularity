@@ -12,10 +12,10 @@ print("1. 验收层角色:")
 for role_key in ["qa_engineer", "security_auditor"]:
     role = get_role(role_key)
     assert role, f"{role_key} 未找到"
-    assert role.level == "D", f"{role_key} should be D, got {role.level}"
+    # 两档后 role 不再绑定 level, 统一 any
     ra = registry.get_assignment(role_key)
     agent = registry.get_active_agent(role_key)
-    print(f"  {role_key}: level={role.level}, agent={agent.name if agent else '?'}, "
+    print(f"  {role_key}: agent={agent.name if agent else '?'}, "
           f"prompt={len(role.system_prompt)} chars")
 
 # ── 2. 验证输出schema ──

@@ -592,9 +592,9 @@ def _cmd_project_advance(project_id: str, approve: bool = False, yes: bool = Fal
 def _phase_agent_level(phase: Phase) -> str:
     """返回 phase 调用的 agent 层级。"""
     return {
-        Phase.RESEARCHING: "E",
-        Phase.PLANNING: "D",
-        Phase.REVIEWING: "D",
+        Phase.RESEARCHING: "any",
+        Phase.PLANNING: "any",
+        Phase.REVIEWING: "any",
     }.get(phase, "-")
 
 

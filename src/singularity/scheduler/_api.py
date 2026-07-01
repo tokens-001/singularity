@@ -489,7 +489,7 @@ def project_cost(project_id: str) -> tuple[dict, int]:
     if p is None:
         return {"error": "项目不存在"}, 404
     cost_rates = {Phase.RESEARCHING: 0.02, Phase.PLANNING: 2.50, Phase.REVIEWING: 1.00}
-    phase_levels = {Phase.RESEARCHING: "E", Phase.PLANNING: "D", Phase.REVIEWING: "D"}
+    phase_levels = {Phase.RESEARCHING: "any", Phase.PLANNING: "any", Phase.REVIEWING: "any"}
     phase = p.phase
     cost = 0
     level = "-"

@@ -383,7 +383,7 @@ def estimate_tokens(subtasks: list[dict], parent_desc: str = "") -> dict:
     """
     # 估算参数
     TOKENS_PER_CHAR = 0.6          # 中英混合平均
-    COST_PER_M = {"E": 0.15, "E+": 0.50, "D": 1.50}  # $/M tokens
+    COST_PER_M = {"any": 0.30, "E": 0.15, "E+": 0.50, "D": 1.50}  # $/M tokens (any=两档统一均价, E/E+/D 旧兼容)
     RESPONSE_MULTIPLIER = 2.0      # prompt + completion + retry buffer
 
     total = 0

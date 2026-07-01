@@ -169,39 +169,6 @@ def _needs_research(project: ProjectState) -> bool:
     return any(t in desc for t in triggers)
 
 
-def _reassess_complexity(tdef: dict, arch_level: str) -> str:
-    """精准升层: 架构师可能低估复杂度，用关键词二次判断。
-
-    只升不降。E+ 变 D 的条件 (满足任一):
-    1. 需要读现有代码+写新代码 (跨文件集成)
-    2. 涉及协议/异步/服务端基础设施
-    3. 架构师已标 high
-    """
-    if arch_level == "D":
-        return "D"
-
-    title = tdef.get("title", "") + " " + tdef.get("description", "")
-    title_lower = title.lower()
-
-    # D 层触发词: 需要理解现有系统 + 写基础设施代码
-    d_triggers = [
-        # 集成/挂载
-        ("集成", "挂载"), ("bridge", "入口"), ("接入", "现有"),
-        # 协议/基础设施
-        ("websocket", "server"), ("async", "asyncio"), ("服务端", "server"),
-        ("event", "loop"), ("事件循环",),
-        # 跨文件复杂操作
-        ("安全执行", "代理"), ("白名单", "executor"),
-        # 架构师已标的 (trust the architect)
-    ]
-
-    for trigger_group in d_triggers:
-        if all(t in title_lower for t in trigger_group):
-            return "D"
-
-    # 单文件实现、纯功能模块 → 保持原层
-    return arch_level
-
 def _should_skip(project, key: str) -> bool:
     return project.owner_confirm.get(key) == "skip"
 
@@ -338,7 +305,7 @@ def _run_research(project: ProjectState, agents: dict) -> str:
         pass
 
     task_id = f"research_{project.id}"
-    disp_result, err = _safe_dispatch(prompt, "E", task_id, agents, project,
+    disp_result, err = _safe_dispatch(prompt, "any", task_id, agents, project,
                                        project.agent_lineup)
     raw = disp_result.executor_result.raw_output if disp_result else ""
     if err:
@@ -383,7 +350,7 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     )
 
     task_id = f"architect_{project.id}"
-    disp_result, err = _safe_dispatch(prompt, "D", task_id, agents, project,
+    disp_result, err = _safe_dispatch(prompt, "any", task_id, agents, project,
                                        project.agent_lineup)
     raw = disp_result.executor_result.raw_output if disp_result else ""
     if err:
@@ -392,7 +359,7 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     arch = try_parse_json(raw, try_repair=True)
     if arch.get("parse_error"):
         retry_prompt = prompt + "\n\n[格式错误] 上一次输出不是合法JSON。请用 ```json ... ``` 包裹输出。"
-        disp_result2, err2 = _safe_dispatch(retry_prompt, "D", task_id + "_r", agents,
+        disp_result2, err2 = _safe_dispatch(retry_prompt, "any", task_id + "_r", agents,
                                              project, project.agent_lineup)
         raw2 = disp_result2.executor_result.raw_output if disp_result2 else ""
         if err2:
@@ -497,56 +464,56 @@ def _validate_architecture(arch: dict) -> list[str]:
 def _run_execution(project: ProjectState, agents: dict) -> str:
     """分发架构任务到 tracker。不调 LLM, 只创建任务。
 
-    Step 4: 按 layer 路由到对应工程师角色。
+    两档后: 实现层统一 route_level="any", 由 dispatcher 从全池选 agent。
+    S8: 优先用拆解器(executable_tasks.json)产出, fallback 到 architecture.tasks。
     """
     if not project.architecture:
         return "无架构方案"
-    tasks = project.architecture.get("tasks", [])
     constraints = project.architecture.get("constraints", [])
-    if not tasks:
+
+    # S8: 优先读拆解器产出 (含 context_snippet/acceptance), fallback 到架构原 tasks
+    exec_tasks = None
+    exec_tasks_path = _projects_dir() / f"{project.id}.executable_tasks.json"
+    if exec_tasks_path.exists():
+        try:
+            exec_tasks = json.loads(exec_tasks_path.read_text(encoding="utf-8"))
+        except Exception:
+            exec_tasks = None
+    if not exec_tasks:
+        exec_tasks = project.architecture.get("tasks", [])
+    if not exec_tasks:
         return "架构方案无任务清单"
 
-    #  layer → (level, role_key) 映射
+    #  layer → role_key 映射 (两档后不再分 level, 统一 "any")
     LAYER_ROLE_MAP = {
-        "frontend": ("E", "frontend_engineer"),
-        "backend": ("E", "backend_engineer"),
-        "data": ("E+", "data_engineer"),
-        "devops": ("E", "devops_engineer"),
+        "frontend": "frontend_engineer",
+        "backend": "backend_engineer",
+        "data": "data_engineer",
+        "devops": "devops_engineer",
     }
 
     created = 0
     id_map = {}  # architecture task_id → tracker task_id
-    for tdef in tasks:
-        level_map = {"low": "E", "medium": "E+", "high": "D"}
-        architecture_level = level_map.get(tdef.get("complexity", "low"), "E")
-
-        # ── Step 4: 按 layer 路由到对应角色 ──
+    for tdef in exec_tasks:
+        # ── 按 layer 路由到对应角色 ──
         layer = tdef.get("layer", "")
-        if layer in LAYER_ROLE_MAP:
-            level, role_key = LAYER_ROLE_MAP[layer]
-            # 架构师标的 complexity 如果更高，尊重架构师判断
-            if architecture_level == "D":
-                level = "D"
-                role_key = "system_architect"
-        else:
-            level = _reassess_complexity(tdef, architecture_level)
-            role_key = "implementer"
-
-        # ── 精准升层: 检测架构师低估的复杂任务 ──
-        level = _reassess_complexity(tdef, level)
+        role_key = LAYER_ROLE_MAP.get(layer, "implementer")
 
         # 解析真正的依赖关系 (架构中定义的 depends_on)
         arch_deps = tdef.get("depends_on", [])
         dep_ids = [id_map[d] for d in arch_deps if d in id_map]
 
-        # 注入项目上下文 + 角色信息
+        # 注入项目上下文 + 角色信息 + 拆解器上下文片段
+        ctx_snippet = tdef.get("context_snippet", "")
+        acceptance = tdef.get("acceptance", "") or tdef.get("acceptance_criteria", "")
         task_desc = (
             f"项目背景: {project.description[:300]}\n"
             f"项目范围: {project.scope[:200]}\n"
             f"你的任务: [{tdef.get('id', '?')}] {tdef.get('title', '')}\n"
             f"具体要求: {tdef.get('description', '')}\n"
-            f"验收标准: {tdef.get('acceptance', '代码可运行，功能完整')}\n"
-            f"角色: {role_key}\n"
+            f"验收标准: {acceptance or '代码可运行，功能完整'}\n"
+            + (f"相关上下文:\n{ctx_snippet}\n" if ctx_snippet else "")
+            + f"角色: {role_key}\n"
             f"约束: {'; '.join([c.get('rule', c.get('text','')) for c in constraints[:3]]) if constraints else '无'}"
         )
         child = tracker.create(
@@ -555,8 +522,8 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
             depth=2,
         )
         tracker.transition(child.id, TaskStatus.PENDING,
-                           route_level=level, route_locked=True,
-                           route_role=role_key,  # Step 4: 绑定角色
+                           route_level="any", route_locked=True,
+                           route_role=role_key,  # 绑定角色
                            project_id=project.id)
         project.task_ids.append(child.id)
         id_map[tdef.get("id", "")] = child.id
@@ -566,7 +533,7 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
     project.constraints_checklist = constraints
     project.phase = Phase.EXECUTING
     save(project)
-    return f"已分发 {created} 个子任务 (按 layer 路由到对应工程师)"
+    return f"已分发 {created} 个子任务 (按 layer 路由到对应工程师, 全池选模型)"
 
 
 # ═══════════════════════════════════════════════════════════
@@ -620,7 +587,7 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
         f"你是 QA 工程师。做验收验证，不写代码，只出报告。\n\n{ctx}\n\n"
         "逐条检查约束是否满足，给出 evidence。输出 JSON。"
     )
-    disp_result, err = _safe_dispatch(qa_prompt, "D", f"qa_{project.id}", agents, project)
+    disp_result, err = _safe_dispatch(qa_prompt, "any", f"qa_{project.id}", agents, project)
     if disp_result and disp_result.executor_result:
         raw = disp_result.executor_result.raw_output
         _save_phase_output(project.id, "qa-report.md", raw)
@@ -633,7 +600,7 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
         f"你是安全审计师。做安全审计，不写代码，只出报告。\n\n{ctx}\n\n"
         "审计: 权限/注入/密钥/依赖漏洞/隐私合规。输出 JSON。"
     )
-    disp_result2, err2 = _safe_dispatch(sec_prompt, "D", f"sec_{project.id}", agents, project)
+    disp_result2, err2 = _safe_dispatch(sec_prompt, "any", f"sec_{project.id}", agents, project)
     if disp_result2 and disp_result2.executor_result:
         raw2 = disp_result2.executor_result.raw_output
         _save_phase_output(project.id, "security-report.md", raw2)
@@ -679,15 +646,54 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
 # ═══════════════════════════════════════════════════════════
 
 def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "") -> str:
-    """GATE3 被人工打回: 记录反馈 → 回到架构规划重做。
+    """GATE3 被人工打回: 按 fix_route 分级路由 (D3)。
 
-    ponytail: 不再调D层自动修复。人工给出反馈后，回到PLANNING重新走流程。
+    impl   → 回 EXECUTING, 只重做有问题的 task (依赖该 task 的下游一并重测)
+    design → 回 PLANNING 重新规划
+    note   → 仅记录, 不阻断交付
+    无 qa_report 或读失败 → 默认 design (保守回规划)
     """
     project.add_lineage({"action": "gate3_rejected", "feedback": feedback[:500]})
-    project.phase = Phase.PLANNING
-    project.architecture = None
+
+    # 读 QA 报告的 fix_route 决定路由
+    fix_route = "design"  # 默认保守
+    qa_report_path = _projects_dir() / f"{project.id}.qa_report.json"
+    if qa_report_path.exists():
+        try:
+            qa_report = json.loads(qa_report_path.read_text(encoding="utf-8"))
+            # 优先用 summary.verdict_reason 里的 route, 否则按 issues 推断
+            issues = qa_report.get("issues", [])
+            if issues:
+                routes = [i.get("fix_route", "") for i in issues if i.get("fix_route")]
+                if routes:
+                    # 有 design 就 design, 否则 impl, 否则 note
+                    if "design" in routes:
+                        fix_route = "design"
+                    elif "impl" in routes:
+                        fix_route = "impl"
+                    else:
+                        fix_route = "note"
+        except Exception:
+            pass
+
+    if fix_route == "impl":
+        # 回实现层: 重置失败 task 状态, 保留已通过的
+        project.phase = Phase.EXECUTING
+        project.add_lineage({"action": "gate3_route", "route": "impl"})
+        msg = f"GATE3 打回 → 回实现层修复 (反馈: {feedback[:80]})"
+    elif fix_route == "note":
+        # 仅记录, 不阻断 (保持当前阶段, 等人再次确认)
+        project.add_lineage({"action": "gate3_route", "route": "note"})
+        msg = f"GATE3 问题仅记录 (suggestion), 不阻断交付"
+    else:
+        # design: 回规划重做架构
+        project.phase = Phase.PLANNING
+        project.architecture = None
+        project.add_lineage({"action": "gate3_route", "route": "design"})
+        msg = f"GATE3 打回 → 回架构规划 (反馈: {feedback[:80]})"
+
     save(project)
-    return f"GATE3 打回 (反馈: {feedback[:100]}) → 回到架构规划"
+    return msg
 
 
 # ═══════════════════════════════════════════════════════════

@@ -36,6 +36,13 @@ except ImportError:
     MergeRequest = None  # type: ignore
 
 
+# ── F1: 集成合并异步化 — 解除调度循环阻塞 ──
+# 集成合并含 pytest/docker subprocess (最长 ~150s), 不能在调度循环线程同步跑,
+# 否则单项目合并期间全局任务派发/SSE 停摆。用独立线程池异步执行, 完成后回写 phase。
+_merge_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="integrate")
+_merge_inflight: set[str] = set()  # 正在跑集成合并的 project_id, 防重入
+
+
 def run_queue(agents: dict, max_concurrent: int = 1) -> list[tuple]:
     """统一的调度循环入口。v3 支持 1..N 并发。"""
     return _run_queue_v3(agents, max_concurrent)
@@ -48,16 +55,14 @@ def schedule_policy(tasks: list) -> list:
       - starvation_score (1.0): 防饥饿, 等越久越优先
       - priority (0.5): 用户指定优先级
       - dependency_weight (0.5): 阻塞越多子任务越优先 (关键路径)
-      - level_bonus (0.3): D > E+ > E, 复杂任务优先启动
+    两档后不再有 level_bonus (E/E+/D 已废弃, 统一 "any")。
     """
     def _score(t) -> float:
-        level_bonus = {"D": 3, "E+": 2, "E": 1}.get(t.route_level, 0)
         dep_weight = len(t.children) if hasattr(t, 'children') else 0
         return (
             1.0 * t.starvation_score +
             0.5 * t.priority +
-            0.5 * dep_weight +
-            0.3 * level_bonus
+            0.5 * dep_weight
         )
     return sorted(tasks, key=_score, reverse=True)
 
@@ -70,8 +75,9 @@ def _dispatch_ready(dispatched: set, pool, agents, runner: TaskRunner,
     dispatched_any = False
     for t in ready:
         if t.route_locked:
+            # 两档后 RouteResult 不再带 level; route_level 仅作 trace 标签存于 task
             route = router_mod.RouteResult(
-                level=t.route_level, gate_required=t.route_gate,
+                gate_required=t.route_gate,
                 task_type=t.route_type)
         else:
             route = router_mod.route(t.description)
@@ -80,12 +86,12 @@ def _dispatch_ready(dispatched: set, pool, agents, runner: TaskRunner,
         # PENDING → ROUTED (若尚未路由)
         if t.status == TaskStatus.PENDING:
             if not tracker.cas(t.id, TaskStatus.PENDING, TaskStatus.ROUTED,
-                               route_level=route.level, route_gate=route.gate_required,
+                               route_level=t.route_level, route_gate=route.gate_required,
                                route_type=route.task_type):
                 continue  # CAS 失败，下一轮重试
             t.status = TaskStatus.ROUTED
         if tracker.cas(t.id, TaskStatus.ROUTED, TaskStatus.DISPATCHED,
-                       route_level=route.level, route_gate=route.gate_required,
+                       route_level=t.route_level, route_gate=route.gate_required,
                        route_type=route.task_type):
             snap = snap_mod.take(t.id)
             tracker.transition(t.id, TaskStatus.RUNNING, snapshot_id=snap.id)
@@ -214,7 +220,7 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                 if not remaining:
                     break
                 # ponytail: avoid busy-wait when queue drains mid-loop
-                import time as _time; _time.sleep(0.5)
+                time.sleep(0.5)
                 continue
 
             _reap_futures(running_futures, pending_batches, mq, runner, results)
@@ -227,10 +233,13 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
 
 
 def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
-    """检查项目阶段推进: EXECUTING → INTEGRATING → REVIEWING (D2 集成合并)。"""
+    """检查项目阶段推进: EXECUTING → INTEGRATING → REVIEWING (D2 集成合并)。
+
+    F1: 集成合并异步化 — executing 任务全完成后只推进 phase→INTEGRATING,
+    把 _run_integration_merge 扔进 _merge_executor 后台跑, 调度循环不阻塞。
+    """
     try:
         from singularity.scheduler import project as proj_mod
-        from singularity.scheduler.workflow import run_test_fix_loop
         for proj in proj_mod.list_all():
             if proj.phase.value == "executing":
                 pending = [tid for tid in proj.task_ids
@@ -238,53 +247,14 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                               tracker.TaskStatus.DONE, tracker.TaskStatus.ROLLED_BACK,
                               tracker.TaskStatus.FAILED, tracker.TaskStatus.DECOMPOSED)]
                 if not pending and proj.task_ids:
-                    # D2: 先进入集成合并阶段
+                    # D2: 推进到集成合并阶段, 异步跑 (不阻塞调度循环)
                     proj.phase = proj_mod.Phase.INTEGRATING
                     proj_mod.save(proj)
-                    # 跑集成合并: 拓扑合并 + 集成测试 + 冒烟构建
-                    ok, detail = _run_integration_merge(proj)
-                    if ok:
-                        # D1: 检查审查失败次数是否触顶
-                        from singularity.scheduler._review import check_review_fail_limit
-                        fail_check = check_review_fail_limit(proj.id,
-                            getattr(proj, 'review_failures', 0))
-                        if fail_check["blocked"]:
-                            proj.phase = proj_mod.Phase.GATE2
-                            proj_mod.save(proj)
-                            _pending_sse_events.append({
-                                "kind": "system", "msg": fail_check["reason"],
-                                "ts": time.time(), "task_id": proj.id,
-                            })
-                        else:
-                            proj.phase = proj_mod.Phase.REVIEWING
-                            proj_mod.save(proj)
-                            msg = run_test_fix_loop(proj, agents)
-                            _pending_sse_events.append({
-                                "kind": "system", "msg": f"集成合并通过 → REVIEWING {msg[:120]}",
-                                "ts": time.time(), "task_id": proj.id,
-                            })
-                    else:
-                        # 集成合并失败 → 计数
-                        integrate_fails = getattr(proj, 'integrate_failures', 0) + 1
-                        proj.integrate_failures = integrate_fails
-                        if integrate_fails >= proj_mod._INTEGRATE_MAX_RETRIES:
-                            # 触顶 → 打回架构 (GATE2)
-                            proj.phase = proj_mod.Phase.GATE2
-                            proj_mod.save(proj)
-                            _pending_sse_events.append({
-                                "kind": "system", "msg": f"集成合并{integrate_fails}次失败→升GATE2: {detail[:120]}",
-                                "ts": time.time(), "task_id": proj.id,
-                            })
-                        else:
-                            # 回实现层重试
-                            proj.phase = proj_mod.Phase.EXECUTING
-                            proj_mod.save(proj)
-                            _pending_sse_events.append({
-                                "kind": "system", "msg": f"集成合并失败({integrate_fails}/{proj_mod._INTEGRATE_MAX_RETRIES})→回实现层: {detail[:120]}",
-                                "ts": time.time(), "task_id": proj.id,
-                            })
+                    if proj.id not in _merge_inflight:
+                        _merge_inflight.add(proj.id)
+                        _merge_executor.submit(_run_integration_merge_async, proj.id, agents)
             elif proj.phase.value == "delivering":
-                # S1: 自动交付打包
+                # S1: 自动交付打包 (轻量, 同步即可)
                 ok, detail = _run_delivery(proj)
                 if ok:
                     proj.phase = proj_mod.Phase.DONE
@@ -299,21 +269,82 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                         "ts": time.time(), "task_id": proj.id,
                     })
             elif proj.phase.value == "integrating":
-                # 重启恢复: 重跑集成合并
-                ok, detail = _run_integration_merge(proj)
-                if ok:
-                    proj.phase = proj_mod.Phase.REVIEWING
-                    proj_mod.save(proj)
-                else:
-                    integrate_fails = getattr(proj, 'integrate_failures', 0) + 1
-                    proj.integrate_failures = integrate_fails
-                    if integrate_fails >= proj_mod._INTEGRATE_MAX_RETRIES:
-                        proj.phase = proj_mod.Phase.GATE2
-                    else:
-                        proj.phase = proj_mod.Phase.EXECUTING
-                    proj_mod.save(proj)
-    except Exception:
-        pass  # 不阻塞主循环
+                # 重启恢复: 若没在跑则提交 (已在跑的跳过防重入)
+                if proj.id not in _merge_inflight:
+                    _merge_inflight.add(proj.id)
+                    _merge_executor.submit(_run_integration_merge_async, proj.id, agents)
+    except Exception as e:
+        # S6: 不再静默吞错 — 记录并通知, 避免项目卡死无反馈
+        try:
+            witness.heartbeat('orch', f'warn:auto_trigger:{e}')
+        except Exception:
+            pass
+
+
+def _run_integration_merge_async(project_id: str, agents: dict) -> None:
+    """F1: 后台线程跑集成合并 + 后续 phase 推进。
+
+    完成后回写 phase (→REVIEWING 调 run_test_fix_loop, 或 →EXECUTING/GATE2 重试),
+    释放 _merge_inflight, SSE 通知。任何异常都不抛出 (后台线程无法冒泡)。
+    """
+    from singularity.scheduler import project as proj_mod
+    try:
+        proj = proj_mod.load(project_id)
+        if proj is None:
+            return
+        ok, detail = _run_integration_merge(proj)
+        if ok:
+            # D1: 检查审查失败次数是否触顶
+            from singularity.scheduler._review import check_review_fail_limit
+            fail_check = check_review_fail_limit(proj.id,
+                getattr(proj, 'review_failures', 0))
+            if fail_check["blocked"]:
+                proj.phase = proj_mod.Phase.GATE2
+                proj_mod.save(proj)
+                _pending_sse_events.append({
+                    "kind": "system", "msg": fail_check["reason"],
+                    "ts": time.time(), "task_id": proj.id,
+                })
+            else:
+                proj.phase = proj_mod.Phase.REVIEWING
+                proj_mod.save(proj)
+                from singularity.scheduler.workflow import run_test_fix_loop
+                msg = run_test_fix_loop(proj, agents)
+                _pending_sse_events.append({
+                    "kind": "system", "msg": f"集成合并通过 → REVIEWING {msg[:120]}",
+                    "ts": time.time(), "task_id": proj.id,
+                })
+        else:
+            # 集成合并失败 → 计数
+            integrate_fails = getattr(proj, 'integrate_failures', 0) + 1
+            proj.integrate_failures = integrate_fails
+            if integrate_fails >= proj_mod._INTEGRATE_MAX_RETRIES:
+                # 触顶 → 打回架构 (GATE2)
+                proj.phase = proj_mod.Phase.GATE2
+                proj_mod.save(proj)
+                _pending_sse_events.append({
+                    "kind": "system", "msg": f"集成合并{integrate_fails}次失败→升GATE2: {detail[:120]}",
+                    "ts": time.time(), "task_id": proj.id,
+                })
+            else:
+                # 回实现层重试
+                proj.phase = proj_mod.Phase.EXECUTING
+                proj_mod.save(proj)
+                _pending_sse_events.append({
+                    "kind": "system", "msg": f"集成合并失败({integrate_fails}/{proj_mod._INTEGRATE_MAX_RETRIES})→回实现层: {detail[:120]}",
+                    "ts": time.time(), "task_id": proj.id,
+                })
+    except Exception as e:
+        try:
+            witness.heartbeat('orch', f'warn:integrate_async:{e}')
+            _pending_sse_events.append({
+                "kind": "system", "msg": f"集成合并异常: {e}",
+                "ts": time.time(), "task_id": project_id,
+            })
+        except Exception:
+            pass
+    finally:
+        _merge_inflight.discard(project_id)
 
 
 def _run_integration_merge(proj) -> tuple[bool, str]:

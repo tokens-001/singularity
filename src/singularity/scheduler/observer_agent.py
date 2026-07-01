@@ -118,7 +118,7 @@ def _tool_get_recent_events(limit: int = 20) -> list[dict]:
 # 写操作工具
 # ═══════════════════════════════════════════════════════════════
 
-def _tool_create_task(description: str, level: str = "E") -> dict:
+def _tool_create_task(description: str, level: str = "any") -> dict:
     """创建新任务。"""
     try:
         task = tracker.create(description)
@@ -234,7 +234,7 @@ OBSERVER_TOOLS = [
                 "type": "object",
                 "properties": {
                     "description": {"type": "string", "description": "任务描述"},
-                    "level": {"type": "string", "description": "任务层级：E/E+/D，默认E"},
+                    "level": {"type": "string", "description": "任务层级(两档后统一 any，留空即可)"},
                 },
                 "required": ["description"],
             },
@@ -518,7 +518,7 @@ def _execute_observer_tool(name: str, args: dict[str, Any]) -> str:
 def _get_observer_cfg() -> dict[str, Any]:
     """优先复用配置中 observer / E 模型，否则默认走本地 Ollama。"""
     agents = getattr(config, "AGENTS", {}) or {}
-    observer_cfg = agents.get("observer") or agents.get("E") or {}
+    observer_cfg = agents.get("observer") or agents.get("any") or {}
     if observer_cfg.get("model"):
         return {
             "model": observer_cfg.get("model"),

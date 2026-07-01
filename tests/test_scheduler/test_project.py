@@ -78,7 +78,7 @@ class TestProjectWorkflow:
             assert t is not None, f"task {tid[:8]} should exist on disk"
             assert t.route_locked
             assert t.project_id == self.p.id
-            assert t.route_level in ("E", "E+", "D")
+            assert t.route_level == "any"  # 两档后统一 any
         assert self.p.phase.value == "executing"
 
     def test_run_phase_manual_stops_at_gates(self):
@@ -116,9 +116,10 @@ class TestProjectWorkflow:
             assert self.p.phase == expected
 
     def test_gate_confirm_rejected_falls_back(self):
+        # S7: GATE3 不在 _REJECT_FALLBACK — 路由由 workflow.handle_gate3_reject 外部处理
         self.p.phase = Phase.GATE3
-        self.p.confirm_gate(Phase.GATE3, "rejected")
-        assert self.p.phase == Phase.PLANNING
+        result = self.p.confirm_gate(Phase.GATE3, "rejected")
+        assert result is None  # GATE3 拒绝不再自动回退
         self.p.phase = Phase.GATE2
         self.p.confirm_gate(Phase.GATE2, "rejected")
         assert self.p.phase == Phase.RESEARCHING

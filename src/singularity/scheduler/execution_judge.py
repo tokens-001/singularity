@@ -221,7 +221,7 @@ def execute_fusion_tool(question: str, tier: str = "budget") -> str:
     return fuse_outputs(question, outputs[0], outputs[1], outputs=outputs, tier=tier)
 
 
-def run_parallel_models(task_desc: str, level: str = "E", tier: str = "budget") -> list[str]:
+def run_parallel_models(task_desc: str, level: str = "any", tier: str = "budget") -> list[str]:
     """并行调用 N 个模型产出独立方案。
 
     Budget Fusion: 3模型 (DeepSeek+GLM+Kimi)
@@ -498,7 +498,7 @@ def decompose_architecture(arch_json: dict) -> list[dict]:
 
         result.append({
             "desc": f"{title}: {desc}" if title else desc,
-            "suggested_level": layer or "E",
+            "suggested_level": layer or "any",
             "depends_on_local_id": list(deps) if isinstance(deps, list) else ([deps] if deps else []),
             "context_snippet": "\n".join(ctx_parts) if ctx_parts else "",
             "acceptance": acceptance,

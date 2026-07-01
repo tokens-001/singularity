@@ -36,24 +36,49 @@ def run_post_exec_checks(*, validation, quality, exec_result,
     Mutates validation and quality dicts in place.
 
     D1: 审查超时/失败上限 — 累计自动修 >= _REVIEW_MAX_AUTO_FIX → 升GATE2兜底。
+    S2: 超时检测改为真实 (用 ThreadPoolExecutor 带 timeout 包装耗时操作)。
+    S3: reviewer_models 用 _all_agents_list 取全池, 去重复分支。
     """
     from . import dispatcher as disp_mod
     from . import validator as val_mod
+    import concurrent.futures
 
     start_time = time.time()
+    project_id = getattr(task, 'project_id', '')
 
-    # 1) run project tests
-    if validation.action == "pass" and changed:
-        # D1: 超时检测
-        if time.time() - start_time > _REVIEW_TIMEOUT_SEC:
-            quality["warnings"].append("审查超时(>10min) — 不进入验收, 升GATE2兜底")
-            quality["failure_kind"] = "review_timeout"
-            quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.4)
-            validation.action = "retry"
-            validation.unverified.append("审查超时: 不默认通过, 需人工兜底")
+    def _record_review_failure(reason: str):
+        """B6: 审查失败计数 + 触顶检查, 写回 project.review_failures。"""
+        if not project_id:
             return
         try:
-            test_result = val_mod.run_project_tests(cwd=cwd)
+            from . import project as proj_mod
+            proj = proj_mod.load(project_id)
+            if proj is None:
+                return
+            proj.review_failures = getattr(proj, 'review_failures', 0) + 1
+            proj_mod.save(proj)
+            fail_check = check_review_fail_limit(project_id, proj.review_failures)
+            if fail_check["blocked"]:
+                quality["warnings"].append(fail_check["reason"])
+                quality["failure_kind"] = "review_limit_hit"
+        except Exception:
+            pass
+
+    # 1) run project tests (S2: 带超时包装)
+    if validation.action == "pass" and changed:
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(val_mod.run_project_tests, cwd=cwd)
+                try:
+                    test_result = fut.result(timeout=_REVIEW_TIMEOUT_SEC)
+                except concurrent.futures.TimeoutExpired:
+                    quality["warnings"].append(f"审查超时(>{_REVIEW_TIMEOUT_SEC}s) — 不默认通过, 升GATE2兜底")
+                    quality["failure_kind"] = "review_timeout"
+                    quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.4)
+                    validation.action = "retry"
+                    validation.unverified.append("测试执行超时: 不默认通过, 需人工兜底")
+                    _record_review_failure("test_timeout")
+                    return
             if not test_result.get("passed"):
                 quality["warnings"].append(
                     f"tests failed ({test_result.get('runner','?')}): "
@@ -63,6 +88,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                 validation.unverified.append(
                     f"tests failed: {test_result.get('output','')[:200]}")
                 validation.action = "retry"
+                _record_review_failure("test_failure")
             elif test_result.get("runner") != "none":
                 quality["quality_signals"]["tests_passed"] = test_result.get("total", 0)
                 quality["confidence"] = min(1.0, quality.get("confidence", 0.5) + 0.1)
@@ -72,30 +98,33 @@ def run_post_exec_checks(*, validation, quality, exec_result,
     # 2) multi-model review: 2+ models independently review changed files
     # ponytail: 小改动跳过审查 — 单文件 + <50行diff 不值得额外90s开销
     if validation.action == "pass" and changed and not _is_trivial_change(changed, cwd):
-        # D1: 超时检测
-        if time.time() - start_time > _REVIEW_TIMEOUT_SEC:
-            quality["warnings"].append("多模型审查超时 — 不默认通过")
-            quality["failure_kind"] = "review_timeout"
-            quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.4)
-            validation.action = "retry"
-            validation.unverified.append("多模型审查超时: 不进入验收")
-            return
         try:
             writer_model = agent_cfg.get("model", "")
             agents_all = disp_mod.load_agents()
+            # S3: 用 _all_agents_list 一次取全池, 去重复分支
+            all_pool = disp_mod._all_agents_list(agents_all)
             reviewer_models = [
-                a['model'] for a in (agents_all.get('any',[]) or sum((v for v in agents_all.values() if isinstance(v,list)),[]))
+                a['model'] for a in all_pool
                 if a['model'] != writer_model and disp_mod.agent_api_available(a)][:2]
-            if not reviewer_models:
-                reviewer_models = [
-                    a['model'] for a in (agents_all.get('any',[]) or sum((v for v in agents_all.values() if isinstance(v,list)),[]))
-                    if a['model'] != writer_model and disp_mod.agent_api_available(a)][:2]
 
             if reviewer_models:
                 rev_files = []; rev_models = []; all_issues = []
+                review_failed = False
                 for f in changed[:3]:
-                    review = val_mod.multi_model_review(
-                        filepath=f, models=reviewer_models, cwd=cwd, diff_only=True)
+                    # S2: 多模型审查带超时
+                    try:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                            fut = ex.submit(val_mod.multi_model_review,
+                                filepath=f, models=reviewer_models, cwd=cwd, diff_only=True)
+                            review = fut.result(timeout=_REVIEW_TIMEOUT_SEC)
+                    except concurrent.futures.TimeoutExpired:
+                        quality["warnings"].append("多模型审查超时 — 不默认通过")
+                        quality["failure_kind"] = "review_timeout"
+                        quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.4)
+                        validation.action = "retry"
+                        validation.unverified.append("多模型审查超时: 不进入验收")
+                        _record_review_failure("multi_review_timeout")
+                        return
                     rev_files.append(f)
                     rev_models = review.get("models_used", [])
                     issues = review.get("issues", [])
@@ -112,6 +141,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                             quality["confidence"] = max(
                                 0.0, quality.get("confidence", 0.5) - 0.25)
                             validation.action = "retry"
+                            review_failed = True
                             break
                         elif warns:
                             quality["warnings"].append(
@@ -124,7 +154,10 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                                      if v.get("verdict") == "needs_fix"]
                         if len(needs_fix) >= 2:
                             validation.action = "retry"
+                            review_failed = True
                             break
+                if review_failed:
+                    _record_review_failure("review_critical")
                 quality["quality_signals"]["review_models"] = rev_models
                 quality["quality_signals"]["review_files"] = rev_files
                 quality["quality_signals"]["review_issues"] = len(all_issues)
@@ -148,6 +181,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                         quality["confidence"] = max(
                             0.0, quality.get("confidence", 0.5) - 0.25)
                         validation.action = "retry"
+                        _record_review_failure("review_critical")
                     elif warns:
                         quality["warnings"].append(
                             f"review found {len(warns)} warnings")

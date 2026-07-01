@@ -8,27 +8,27 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 from singularity.scheduler.roles import get_role, registry
 
 # ── 1. 验证角色加载 ──
-print("1. 4个E层工程师角色:")
+print("1. 4个实现层工程师角色 (两档后统一 any):")
 for role_key in ["frontend_engineer", "backend_engineer", "data_engineer", "devops_engineer"]:
     role = get_role(role_key)
     assert role, f"{role_key} 未找到"
     ra = registry.get_assignment(role_key)
     agent = registry.get_active_agent(role_key)
-    print(f"  {role_key}: level={role.level}, agent={agent.name if agent else '?'}, "
+    print(f"  {role_key}: agent={agent.name if agent else '?'}, "
           f"prompt={len(role.system_prompt)} chars")
 
-# ── 2. 验证 layer→role 映射 ──
+# ── 2. 验证 layer→role 映射 (两档后不再分 level) ──
 print("\n2. Layer→Role 路由映射:")
 LAYER_ROLE_MAP = {
-    "frontend": ("E", "frontend_engineer"),
-    "backend": ("E", "backend_engineer"),
-    "data": ("E+", "data_engineer"),
-    "devops": ("E", "devops_engineer"),
+    "frontend": "frontend_engineer",
+    "backend": "backend_engineer",
+    "data": "data_engineer",
+    "devops": "devops_engineer",
 }
-for layer, (level, role_key) in LAYER_ROLE_MAP.items():
+for layer, role_key in LAYER_ROLE_MAP.items():
     role = get_role(role_key)
-    assert role.level == level, f"{role_key} level should be {level}"
-    print(f"  {layer} → {role_key} ({level}) ✓")
+    assert role, f"{role_key} 未找到"
+    print(f"  {layer} → {role_key} ✓")
 
 # ── 3. 验证 skill 文件 ──
 print("\n3. Skill 文件检查:")

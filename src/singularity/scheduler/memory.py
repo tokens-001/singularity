@@ -1152,7 +1152,7 @@ def system2_extract() -> dict:
             continue
         status = ev.get("attrs", {}).get("status", "") if isinstance(ev.get("attrs"), dict) else ""
         task_type = ev.get("attrs", {}).get("route_type", "default") if isinstance(ev.get("attrs"), dict) else "default"
-        level = ev.get("attrs", {}).get("route_level", "E") if isinstance(ev.get("attrs"), dict) else "E"
+        level = ev.get("attrs", {}).get("route_level", "any") if isinstance(ev.get("attrs"), dict) else "any"
         key = f"{task_type}×{level}"
         if status in ("done", "pass", "merged"):
             successes[key].append(tid)

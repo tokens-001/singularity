@@ -69,13 +69,13 @@ _MIN_BUDGET = 0.01           # 最小项目预算
 _MAX_BUDGET = 100000.0       # 最大项目预算
 
 # ── 枚举校验集 ────────────────────────────────────────
-_VALID_LEVELS = frozenset({"E", "E+", "D"})
+_VALID_LEVELS = frozenset({"any"})  # 两档后统一 any
 _VALID_AGENT_TYPES = frozenset({"openai-agent", "claude-cli", "zhipu-api"})
 _VALID_SANDBOXES = frozenset({"worktree", "inline", "none"})
 _VALID_ROLES = frozenset({"admin", "operator", "viewer"})
 _VALID_SPEEDS = frozenset({"fast", "medium", "slow"})
 _VALID_COSTS = frozenset({"budget", "standard", "premium"})
-_VALID_TIERS = frozenset({"E", "E+", "D"})
+_VALID_TIERS = frozenset({"any", "定义", "架构", "实现", "审查", "验收", "交付", "E", "E+", "D"})  # 两档后推荐阶段 + 旧兼容
 _VALID_TEMPLATES = frozenset({"product_dev", "bug_fix", "refactor", "agent_dev"})
 _VALID_DECISIONS = frozenset({"approved", "rejected"})
 
@@ -829,7 +829,7 @@ def api_task_submit():
         return jsonify({"error": f"depends_on 不能超过 {_MAX_DEPENDS_ON}"}), 400
     route_level = data.get("route_level", "")
     if route_level and route_level not in _VALID_LEVELS:
-        return jsonify({"error": f"route_level 必须是 E/E+/D"}), 400
+        return jsonify({"error": f"route_level 必须是 any"}), 400
     route_type = data.get("route_type", "")
     _VALID_TYPES = frozenset({"default", "bugfix", "feature", "refactor", "docs", "fusion"})
     if route_type and route_type not in _VALID_TYPES:
@@ -1081,14 +1081,14 @@ def api_agents():
 @app.route("/api/agents", methods=["POST"])
 def api_agents_add():
     data = request.get_json(silent=True)
-    if not data or not data.get("model") or not data.get("level"):
-        return jsonify({"error": "缺少 model / level"}), 400
+    if not data or not data.get("model"):
+        return jsonify({"error": "缺少 model"}), 400
     model = data["model"].strip()
     if not model or len(model) > 100:
         return jsonify({"error": "model 不能为空且不超过 100 字符"}), 400
-    level = data["level"]
+    level = data.get("level", "any")
     if level not in _VALID_LEVELS:
-        return jsonify({"error": f"level 必须是 E/E+/D 之一"}), 400
+        return jsonify({"error": "level 必须是 any"}), 400
     agent_type = data.get("type", "openai-agent")
     if agent_type not in _VALID_AGENT_TYPES:
         return jsonify({"error": f"type 必须是 {', '.join(sorted(_VALID_AGENT_TYPES))} 之一"}), 400
@@ -1246,7 +1246,7 @@ def api_models_add():
         return jsonify({"error": "tiers 非空数组"}), 400
     for t in tiers:
         if t not in _VALID_TIERS:
-            return jsonify({"error": "tiers 元素 E/E+/D"}), 400
+            return jsonify({"error": "tiers 不合法"}), 400
     speed = data.get("speed", "medium")
     if speed not in _VALID_SPEEDS:
         return jsonify({"error": f"speed 必须是 {', '.join(sorted(_VALID_SPEEDS))} 之一"}), 400

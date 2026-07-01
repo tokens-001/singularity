@@ -53,7 +53,7 @@ class Task:
     status: TaskStatus = TaskStatus.PENDING
     priority: int = 0
     depends_on: list[str] = field(default_factory=list)
-    route_level: str = "E"
+    route_level: str = "any"  # 两档后统一 "any" (E/E+/D 已废弃)
     route_gate: bool = False
     route_type: str = "default"
     snapshot_id: str = ""

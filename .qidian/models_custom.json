@@ -52,7 +52,7 @@
   },
   "qwen3-flash": {
     "id": "qwen3-flash",
-    "provider": "qwen",
+    "provider": "dashscope_api_key",
     "display": "Qwen3 Flash",
     "speed": "fast",
     "cost": "budget",
@@ -70,7 +70,7 @@
   },
   "qwen3-coder-next": {
     "id": "qwen3-coder-next",
-    "provider": "qwen",
+    "provider": "dashscope_api_key",
     "display": "Qwen3 Coder Next",
     "speed": "fast",
     "cost": "budget",
@@ -103,7 +103,7 @@
   },
   "qwen3.7-plus": {
     "id": "qwen3.7-plus",
-    "provider": "qwen",
+    "provider": "dashscope_api_key",
     "display": "Qwen3.7 Plus",
     "speed": "medium",
     "cost": "standard",

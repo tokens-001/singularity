@@ -37,7 +37,7 @@ notes = "Code Arena 1595 (#1开源) | FrontierSWE≈Opus4.8 | 1M无损上下文 
 
 [[models]]
 id = "qwen3.7-max"
-provider = "qwen"
+provider = "dashscope_api_key"
 display = "Qwen3.7 Max"
 recommended_for = ["架构","审查"]
 rating = "SSS"
@@ -50,7 +50,7 @@ notes = "Code Arena 1541 (#2国产) | SWE-bench Pro 60.6% | 35h长程自主 | GP
 
 [[models]]
 id = "gpt-5.5"
-provider = "openai"
+provider = "openai_api_key"
 display = "GPT-5.5"
 recommended_for = ["架构","审查"]
 rating = "SSS"
@@ -63,7 +63,7 @@ notes = "SWE-bench 88.7% | Terminal-Bench 82.7% (#1) | 1M上下文。强但贵($
 
 [[models]]
 id = "gpt-5.5-pro"
-provider = "openai"
+provider = "openai_api_key"
 display = "GPT-5.5 Pro"
 recommended_for = ["架构","审查"]
 rating = "SSS+"
@@ -102,7 +102,7 @@ notes = "SWE-bench Pro 58.6% | OJBench 60.6% | Terminal-Bench 66.7% | 300agent�
 
 [[models]]
 id = "qwen3.7-plus"
-provider = "qwen"
+provider = "dashscope_api_key"
 display = "Qwen3.7 Plus"
 recommended_for = ["实现"]
 rating = "S+"
@@ -115,7 +115,7 @@ notes = "Qwen多模态主力。1M上下文。图+视频理解。E层可靠选择
 
 [[models]]
 id = "qwen3-coder-plus"
-provider = "qwen"
+provider = "dashscope_api_key"
 display = "Qwen3 Coder Plus"
 recommended_for = ["定义"]
 rating = "S"
@@ -193,7 +193,7 @@ notes = "上代次旗舰。262K上下文。视觉编码器MoonViT 400M。性价�
 
 [[models]]
 id = "qwen3-coder-next"
-provider = "qwen"
+provider = "dashscope_api_key"
 display = "Qwen3 Coder Next"
 recommended_for = ["定义"]
 rating = "S"
@@ -206,7 +206,7 @@ notes = "极便宜($0.07/$0.30 per 1M)。专项编程模型, A层批量首选。
 
 [[models]]
 id = "qwen3-flash"
-provider = "qwen"
+provider = "dashscope_api_key"
 display = "Qwen3 Flash"
 recommended_for = ["定义"]
 rating = "A"

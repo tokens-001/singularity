@@ -116,26 +116,29 @@ def _seed() -> dict[str, APIEntry]:
 def _guess_provider(entry_url: str, env_key: str) -> str:
     url_lower = entry_url.lower()
     if "deepseek" in url_lower:
-        return "DeepSeek"
+        return "deepseek"
     if "bigmodel" in url_lower or "zhipu" in url_lower:
-        return "智谱"
+        return "zhipu"
     if "moonshot" in url_lower or "kimi" in url_lower:
-        return "Moonshot"
+        return "kimi"
     if "anthropic" in url_lower:
-        return "Anthropic"
+        return "anthropic"
+    if "dashscope" in url_lower or "qwen" in url_lower:
+        return "dashscope_api_key"
     # fallback: guess from env var name
     if "DEEPSEEK" in env_key:
-        return "DeepSeek"
+        return "deepseek"
     if "ZHIPU" in env_key or "GLM" in env_key:
-        return "智谱"
+        return "zhipu"
     if "KIMI" in env_key or "MOONSHOT" in env_key:
-        return "Moonshot"
-    return env_key
+        return "kimi"
+    if "DASHSCOPE" in env_key or "QWEN" in env_key:
+        return "dashscope_api_key"
+    return env_key.lower()
 
 
 def _provider_id(provider: str) -> str:
-    return {"DeepSeek": "deepseek", "智谱": "zhipu", "Moonshot": "kimi",
-            "Anthropic": "anthropic"}.get(provider, provider.lower())
+    return provider.lower()
 
 
 def _guess_base_url(entry_url: str) -> str:
@@ -240,13 +243,13 @@ def _is_major_model(model_id: str) -> bool:
 def _infer_model_provider(model_id: str, fallback: str = "") -> str:
     """从模型 ID 推断真实 provider（处理模型网关代理多家的情况）。"""
     m = model_id.lower().replace("_", "").replace("/", "")
-    if "qwen" in m: return "阿里通义千问"
-    if "glm" in m or "zhipu" in m: return "智谱"
-    if "kimi" in m or "moonshot" in m: return "Moonshot/Kimi"
-    if "deepseek" in m or "vanchin" in m: return "DeepSeek"
-    if "siliconflow" in m: return "SiliconFlow"
-    if "gpt" in m or "openai" in m or model_id.startswith("o") and model_id[1:].isdigit(): return "OpenAI"
-    if "claude" in m or "anthropic" in m: return "Anthropic"
+    if "qwen" in m: return "dashscope_api_key"
+    if "glm" in m or "zhipu" in m: return "zhipu"
+    if "kimi" in m or "moonshot" in m: return "kimi"
+    if "deepseek" in m or "vanchin" in m: return "deepseek"
+    if "siliconflow" in m: return "siliconflow"
+    if "gpt" in m or "openai" in m or model_id.startswith("o") and model_id[1:].isdigit(): return "openai_api_key"
+    if "claude" in m or "anthropic" in m: return "anthropic"
     return fallback
 
 
@@ -404,10 +407,10 @@ def _guess_tiers(model_id: str) -> list[str]:
     """根据模型名猜测适合的层级。"""
     mid = model_id.lower()
     if any(k in mid for k in ["opus", "gpt-5", "pro", "ultra", "o3", "o4"]):
-        return ["D"]
+        return ["any"]  # 两档后统一 any
     if any(k in mid for k in ["sonnet", "gpt-4", "k2", "flash"]):
-        return ["E+", "E"]
-    return ["E"]
+        return ["any"]
+    return ["any"]
 
 
 def _guess_cost(model_id: str) -> str:

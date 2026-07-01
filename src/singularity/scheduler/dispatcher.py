@@ -506,13 +506,15 @@ def dispatch(
     cwd: str = "",
     project_lineup: dict[str, list[str]] = None,
 ) -> DispatchResult:
-    """选 executor 并执行。D层:委员会并行→合成。其他层:fallback链。"""
+    """选 executor 并执行。架构任务: 委员会并行→合成; 其他: 单模型 fallback 链。"""
     chain = pick_agent_fallback_chain(agents, level, project_lineup=project_lineup)
     if not chain:
         raise RuntimeError(f"无可用 {level} 层 agent")
 
-    # ── D层委员会模式: 多模型并行 → 合成 ──
-    if False:
+    # ── 架构任务: 委员会模式 (多模型并行 → fuse_architecture 合成) ──
+    # 仅架构/系统设计类任务走 3 模型碰撞, research/QA/安全/实现 单模型即可
+    from .execution_judge import _is_architecture_task
+    if _is_architecture_task(task) and len(chain) >= 2:
         return _dispatch_committee(task, level, task_id, agents, chain, feedback,
                                    baseline_ref, cwd)
 
@@ -736,15 +738,15 @@ def add_agent(level: str = "", model: str = "", agent_type: str = "openai-agent"
     custom = _load_custom_agents()
 
     # 1. 如果之前在禁用列表里，移除禁用标记即可 (重新启用 toml 内置 agent)
-    disabled = custom.get("_disabled", {}).get(level, [])
+    disabled = custom.get("_disabled", {}).get(key, [])
     if model in disabled:
         disabled.remove(model)
-        custom.setdefault("_disabled", {})[level] = disabled
+        custom.setdefault("_disabled", {})[key] = disabled
         _save_custom_agents(custom)
         _notify_agent_change()
         # 从 toml 找到原始配置返回
         agents = load_agents()
-        for a in agents.get(level, []):
+        for a in agents.get(key, []):
             if a.get("model") == model:
                 return a
 
@@ -773,6 +775,7 @@ def remove_agent(level: str = "", model: str = "") -> bool:
     """禁用 agent: 从 custom 删 + 加入 _disabled。两档后 level 可选。"""
     key = level or "any"
     disabled_key = level or "any"
+    custom = _load_custom_agents()
 
     # 1. 从 custom 列表删除
     cfgs = custom.get(key, [])
@@ -802,7 +805,7 @@ def _notify_agent_change():
 
 def update_agent(level: str, model: str, updates: dict) -> dict:
     custom = _load_custom_agents()
-    key = "E_plus" if level == "E+" else level
+    key = level  # 两档后不再映射 E+ → E_plus
 
     # 处理 disabled: 加到 _disabled 列表或从中移除
     if "disabled" in updates:
