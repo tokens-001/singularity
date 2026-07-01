@@ -324,11 +324,8 @@ def ready_tasks(exclude: set[str] = None) -> list[Task]:
                 ready.append(task)
                 continue
             if _deps_satisfied(task):
-                # 就绪的 PENDING/BLOCKED 都转 ROUTED (修复 #1: PENDING 不转则 CAS 必失败)
-                if task.status in (TaskStatus.PENDING, TaskStatus.BLOCKED):
-                    task.status = TaskStatus.ROUTED
-                    task.updated_at = time.time()
-                    _write(task)
+                # ponytail: 不在此预写 ROUTED — 交给 _dispatch_ready CAS 独占状态变更,
+                # 避免 CAS 看到 ROUTED→跳过 PENDING→ROUTED→task 永远 pending
                 task.compute_starvation()
                 ready.append(task)
             else:
