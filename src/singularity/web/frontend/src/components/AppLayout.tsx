@@ -3,7 +3,7 @@ import { Outlet, useNavigate } from 'react-router-dom'
 import { useAppStore } from '../stores/app'
 import { ToastContainer, useToast } from './Toast'
 import { api } from '../lib/api'
-import { MessageSquare, Plus, Search, Hash, Grid3X3, List, Settings, User } from 'lucide-react'
+import { MessageSquare, Plus, Search, List, Settings, User } from 'lucide-react'
 
 function getPinned(): string[] {
   try { return JSON.parse(localStorage.getItem('qidian-pinned') || '[]') } catch { return [] }
@@ -20,8 +20,6 @@ export default function AppLayout() {
   const activePid = useAppStore(s => s.activeProjectId)
   const navigate = useNavigate()
   const [projects, setProjects] = useState<any[]>([])
-  const [tab, setTab] = useState<'project'|'group'>('project')
-  const [viewMode, setViewMode] = useState<'list'|'grid'>('list')
   const [showSearch, setShowSearch] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [hovered, setHovered] = useState<string>('')
@@ -72,27 +70,14 @@ export default function AppLayout() {
           </div>
         )}
 
-        {/* 分类切换 */}
-        <div style={{ padding: '0 12px 6px', display: 'flex', alignItems: 'center', gap: 4 }}>
-          <button onClick={() => setTab('group')} style={{
-            padding: '3px 10px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12,
-            background: tab === 'group' ? '#1c1c1e' : 'transparent', color: tab === 'group' ? '#fff' : '#666',
-          }}><Hash size={11} style={{display:'inline',marginRight:3}}/>分组</button>
-          <button onClick={() => setTab('project')} style={{
-            padding: '3px 10px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12,
-            background: tab === 'project' ? '#1c1c1e' : 'transparent', color: tab === 'project' ? '#fff' : '#666',
-          }}>□ 项目</button>
-          <span style={{ flex:1 }}/>
-          <button onClick={() => setViewMode(viewMode === 'list' ? 'grid' : 'list')} style={iconBtn}>
-            {viewMode === 'list' ? <List size={14}/> : <Grid3X3 size={14}/>}
-          </button>
+        {/* 项目列表标题 */}
+        <div style={{ padding: '6px 12px 4px', fontSize: 10, color: '#555', fontWeight: 600 }}>
+          项目
         </div>
 
         {/* 项目列表 */}
-        {tab === 'project' && (
-          <div style={{ flex: 1, overflow: 'auto', padding: '0 6px' }}>
-            {/* 项目列表 */}
-            {[...filteredProjects].sort((a, b) => {
+        <div style={{ flex: 1, overflow: 'auto', padding: '0 6px' }}>
+          {[...filteredProjects].sort((a, b) => {
               const aPin = pinned.includes(a.id) ? 0 : 1
               const bPin = pinned.includes(b.id) ? 0 : 1
               return aPin - bPin || a.name.localeCompare(b.name)
@@ -122,7 +107,6 @@ export default function AppLayout() {
               )
             })}
           </div>
-        )}
 
         {/* 底部: 用户 + 配置 */}
         <div style={{ padding: '8px 12px', borderTop: '1px solid #1c1c1e', display: 'flex', alignItems: 'center', gap: 8 }}>
