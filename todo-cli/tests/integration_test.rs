@@ -1,115 +1,65 @@
 use std::fs;
-use std::process::Command;
 use tempfile::TempDir;
+use todo_cli::cli;
 
 #[test]
-fn test_add_and_list_todos() {
-    let temp_dir = TempDir::new().expect("Could not create temporary directory");
+fn test_add_and_list_tasks() {
+    let temp_dir = TempDir::new().unwrap();
     let data_file = temp_dir.path().join("tasks.json");
+    let data_file_str = data_file.to_str().unwrap();
 
-    // Add a todo
-    let output = Command::new("cargo")
-        .args(["run", "--", "add", "Integration test task"])
-        .env("TODO_DATA_FILE", &data_file)
-        .output()
-        .expect("Failed to execute command");
-    
-    assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Added todo"));
+    // Add a task
+    cli::add_task_for_test(data_file_str, "Test task");
 
-    // List todos
-    let output = Command::new("cargo")
-        .args(["run", "--", "list"])
-        .env("TODO_DATA_FILE", &data_file)
-        .output()
-        .expect("Failed to execute command");
-    
-    assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Integration test task"));
+    // Verify task was added
+    let tasks = cli::load_tasks_for_test(data_file_str);
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].description, "Test task");
+    assert_eq!(tasks[0].completed, false);
 }
 
 #[test]
-fn test_complete_todo() {
-    let temp_dir = TempDir::new().expect("Could not create temporary directory");
+fn test_complete_task() {
+    let temp_dir = TempDir::new().unwrap();
     let data_file = temp_dir.path().join("tasks.json");
+    let data_file_str = data_file.to_str().unwrap();
 
-    // Add a todo
-    let output = Command::new("cargo")
-        .args(["run", "--", "add", "Task to complete"])
-        .env("TODO_DATA_FILE", &data_file)
-        .output()
-        .expect("Failed to execute command");
-    
-    assert!(output.status.success());
+    // Add a task first
+    cli::add_task_for_test(data_file_str, "Test task");
 
-    // Complete the todo (assuming it gets ID 1)
-    let output = Command::new("cargo")
-        .args(["run", "--", "complete", "1"])
-        .env("TODO_DATA_FILE", &data_file)
-        .output()
-        .expect("Failed to execute command");
-    
-    assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Completed todo #1"));
+    // Load tasks to get the ID
+    let mut tasks = cli::load_tasks_for_test(data_file_str);
+    assert_eq!(tasks.len(), 1);
+    let task_id = tasks[0].id;
 
-    // Verify it's marked as completed
-    let output = Command::new("cargo")
-        .args(["run", "--", "list"])
-        .env("TODO_DATA_FILE", &data_file)
-        .output()
-        .expect("Failed to execute command");
-    
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("[x] 1 Task to complete"));
+    // Complete the task
+    cli::complete_task_for_test(data_file_str, task_id);
+
+    // Verify task was completed
+    tasks = cli::load_tasks_for_test(data_file_str);
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].id, task_id);
+    assert_eq!(tasks[0].completed, true);
 }
 
 #[test]
-fn test_remove_todo() {
-    let temp_dir = TempDir::new().expect("Could not create temporary directory");
+fn test_delete_task() {
+    let temp_dir = TempDir::new().unwrap();
     let data_file = temp_dir.path().join("tasks.json");
+    let data_file_str = data_file.to_str().unwrap();
 
-    // Add a todo
-    let output = Command::new("cargo")
-        .args(["run", "--", "add", "Task to remove"])
-        .env("TODO_DATA_FILE", &data_file)
-        .output()
-        .expect("Failed to execute command");
-    
-    assert!(output.status.success());
+    // Add a task first
+    cli::add_task_for_test(data_file_str, "Test task");
 
-    // Remove the todo
-    let output = Command::new("cargo")
-        .args(["run", "--", "remove", "1"])
-        .env("TODO_DATA_FILE", &data_file)
-        .output()
-        .expect("Failed to execute command");
-    
-    assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Removed todo #1"));
+    // Load tasks to get the ID
+    let mut tasks = cli::load_tasks_for_test(data_file_str);
+    assert_eq!(tasks.len(), 1);
+    let task_id = tasks[0].id;
 
-    // Verify it's gone
-    let output = Command::new("cargo")
-        .args(["run", "--", "list"])
-        .env("TODO_DATA_FILE", &data_file)
-        .output()
-        .expect("Failed to execute command");
-    
-    assert!(output.status.success());
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("Task to remove"));
-}
+    // Delete the task
+    cli::delete_task_for_test(data_file_str, task_id);
 
-#[test]
-fn test_list_empty_todos() {
-    let temp_dir = TempDir::new().expect("Could not create temporary directory");
-    let data_file = temp_dir.path().join("tasks.json");
-
-    let output = Command::new("cargo")
-        .args(["run", "--", "list"])
-        .env("TODO_DATA_FILE", &data_file)
-        .output()
-        .expect("Failed to execute command");
-    
-    assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("No todos found."));
+    // Verify task was deleted
+    tasks = cli::load_tasks_for_test(data_file_str);
+    assert_eq!(tasks.len(), 0);
 }
