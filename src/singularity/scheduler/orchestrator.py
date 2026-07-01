@@ -247,6 +247,10 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                     # D2: 推进到集成合并阶段, 异步跑 (不阻塞调度循环)
                     proj.phase = proj_mod.Phase.INTEGRATING
                     proj_mod.save(proj)
+                    _pending_sse_events.append({
+                        "kind": "system", "msg": f"项目 {proj.name}: 全部任务完成, 进入集成合并",
+                        "ts": time.time(), "project_id": proj.id,
+                    })
                     if proj.id not in _merge_inflight:
                         _merge_inflight.add(proj.id)
                         _merge_executor.submit(_run_integration_merge_async, proj.id, agents)
@@ -257,13 +261,13 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                     proj.phase = proj_mod.Phase.DONE
                     proj_mod.save(proj)
                     _pending_sse_events.append({
-                        "kind": "system", "msg": f"交付完成: {detail[:120]}",
-                        "ts": time.time(), "task_id": proj.id,
+                        "kind": "system", "msg": f"项目 {proj.name}: 交付完成! {detail[:100]}",
+                        "ts": time.time(), "project_id": proj.id,
                     })
                 else:
                     _pending_sse_events.append({
-                        "kind": "system", "msg": f"交付失败(需人工): {detail[:120]}",
-                        "ts": time.time(), "task_id": proj.id,
+                        "kind": "system", "msg": f"项目 {proj.name}: 交付失败, 需人工处理 - {detail[:100]}",
+                        "ts": time.time(), "project_id": proj.id,
                     })
             elif proj.phase.value == "integrating":
                 # 重启恢复: 若没在跑则提交 (已在跑的跳过防重入)
