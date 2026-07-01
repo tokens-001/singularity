@@ -137,13 +137,15 @@ export default function Chat() {
           const isUser = m.role === 'user'
           if (isUser) {
             return (
-              <div key={i} style={{ padding: '2px 0 6px', fontSize: 13, color: 'var(--text-primary)', maxWidth: 860, margin: '0 auto', width: '100%' }}>
-                {m.content}
+              <div key={i} style={{ padding: '4px 0', textAlign: 'right', maxWidth: 860, margin: '0 auto', width: '100%' }}>
+                <span style={{ display: 'inline-block', textAlign: 'left', fontSize: 13, color: '#fff', background: '#2563eb', borderRadius: 12, padding: '6px 12px', maxWidth: '80%', whiteSpace: 'pre-wrap' }}>
+                  {m.content}
+                </span>
               </div>
             )
           }
           return (
-            <div key={i} style={{ padding: '2px 0 16px', fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.7, whiteSpace: 'pre-wrap', maxWidth: 860, margin: '0 auto', width: '100%' }}>
+            <div key={i} style={{ padding: '4px 0 12px', fontSize: 13, color: '#ccc', lineHeight: 1.7, whiteSpace: 'pre-wrap', maxWidth: 860, margin: '0 auto', width: '100%' }}>
               {m.content}
             </div>
           )
