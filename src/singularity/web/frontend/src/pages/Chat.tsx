@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
 import { useAppStore, type ChatMsg } from '../stores/app'
-import { Send, Loader2, CheckCircle2, XCircle, PanelRightOpen, RotateCcw, FolderOpen, ChevronDown } from 'lucide-react'
+import { Send, Loader2, CheckCircle2, XCircle, RotateCcw, FolderOpen } from 'lucide-react'
 import FilePanel from '../components/FilePanel'
 
 interface ProgressItem { id: string; desc: string; status: string; ts: number }
@@ -19,16 +19,12 @@ export default function Chat() {
   const [showFiles, setShowFiles] = useState(false)
   const [tasks, setTasks] = useState<ProgressItem[]>([])
   const [projects, setProjects] = useState<any[]>([])
-  const [models, setModels] = useState<any[]>([])
-  const [selectedModel, setSelectedModel] = useState('GLM-5.2')
-  const [showModelMenu, setShowModelMenu] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const pendingCid = useRef<string>('')
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     fetchProjects(); fetchTasks()
-    api.models().then(setModels).catch(() => {})
     if (msgs.length === 0 && activePid === '_default') {
       addChatMsg({role:'assistant',content:'你好，我是奇点。直接跟我说你想做什么，我来搞定。',ts:Date.now()})
     }
@@ -200,25 +196,6 @@ export default function Chat() {
             {/* 左侧: 附件按钮 */}
             <button style={{ ...zBtn, color: '#666' }}>+</button>
             <span style={{ flex: 1 }} />
-
-            {/* 右侧: 模型选择 */}
-            <div style={{ position: 'relative' }}>
-              <button onClick={() => setShowModelMenu(!showModelMenu)}
-                style={{ ...zBtn, color: '#aaa', display: 'flex', alignItems: 'center', gap: 4 }}>
-                {selectedModel}
-                <ChevronDown size={10}/>
-              </button>
-              {showModelMenu && (
-                <div style={{ position: 'absolute', bottom: 28, right: 0, background: '#2c2c2e', borderRadius: 8, padding: 4, minWidth: 160, border: '1px solid #3c3c3e' }}>
-                  {(models.length > 0 ? models.map((m:any) => m.id) : ['GLM-5.2','DeepSeek-V4','Kimi-K2.6','Claude-Opus']).map((mid: string) => (
-                    <button key={mid} onClick={() => { setSelectedModel(mid); setShowModelMenu(false) }}
-                      style={{ display: 'block', width: '100%', padding: '4px 8px', border: 'none', borderRadius: 4, background: selectedModel===mid?'#3c3c3e':'transparent', color: '#fff', fontSize: 12, cursor: 'pointer', textAlign: 'left' }}>
-                      {mid}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
 
             {/* 发送 */}
             <button onClick={send} disabled={loading || !input.trim()}
