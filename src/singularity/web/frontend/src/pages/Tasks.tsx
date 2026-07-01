@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api, Task } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
-import { Play, Square, RotateCcw, XCircle, Plus, RefreshCw, ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
+import { Play, Square, RotateCcw, XCircle, Plus, RefreshCw } from 'lucide-react'
 
 const COLUMNS = [
-  { key: 'pending', label: '待处理', color: 'var(--text-muted)' },
-  { key: 'running', label: '进行中', color: 'var(--accent)' },
-  { key: 'done', label: '已完成', color: 'var(--accent-green)' },
-  { key: 'failed', label: '失败', color: 'var(--accent-red)' },
-  { key: 'blocked', label: '已暂停', color: '#f0883e' },
+  { key: 'pending', label: '待处理', color: '#666' },
+  { key: 'running', label: '进行中', color: '#58a6ff' },
+  { key: 'done', label: '已完成', color: '#3fb950' },
+  { key: 'failed', label: '失败', color: '#f85149' },
+  { key: 'blocked', label: '已暂停', color: '#d2991d' },
 ]
 
 export default function Tasks() {
@@ -33,24 +33,15 @@ export default function Tasks() {
     setExpanded(id)
     try { const d = await api.task(id); setDetail(d) } catch { setDetail(null) }
   }
-
-  const create = () => {
-    if (desc.trim()) { api.createTask(desc).then(()=>{setShowCreate(false);setDesc('');fetch()}) }
-  }
-
+  const create = () => { if (desc.trim()) { api.createTask(desc).then(()=>{setShowCreate(false);setDesc('');fetch()}) } }
   const act = (fn: (id:string)=>Promise<any>, id: string) => { fn(id).then(fetch) }
 
-  const handleDragStart = (e: React.DragEvent, tid: string) => {
-    e.dataTransfer.setData('taskId', tid)
-  }
-
+  const handleDragStart = (e: React.DragEvent, tid: string) => { e.dataTransfer.setData('taskId', tid) }
   const handleDrop = async (e: React.DragEvent, newStatus: string) => {
-    e.preventDefault()
-    setDragOver('')
+    e.preventDefault(); setDragOver('')
     const tid = e.dataTransfer.getData('taskId')
     const task = tasks.find(t => t.id === tid)
     if (!task || task.status === newStatus) return
-    // Map status changes to actions
     if (newStatus === 'pending') await api.retryTask(tid)
     else if (newStatus === 'running') await api.releaseTask(tid)
     else if (newStatus === 'done') await api.approveTask(tid)
@@ -63,38 +54,43 @@ export default function Tasks() {
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-        <h2 style={{ fontSize: 15, fontWeight: 600 }}>任务</h2>
-        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{tasks.length} 个</span>
+      {/* 顶栏 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <h2 style={{ fontSize: 15, fontWeight: 600, color: '#fff' }}>任务</h2>
+        <span style={{ fontSize: 11, color: '#666' }}>{tasks.length} 个</span>
         <span style={{ flex: 1 }} />
-        <button onClick={fetch} style={{background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',padding:2}}><RefreshCw size={14}/></button>
-        <button onClick={()=>setShowCreate(!showCreate)} style={{background:'var(--accent-green)',color:'#fff',border:'none',borderRadius:'var(--radius)',padding:'5px 10px',cursor:'pointer',fontSize:11,display:'flex',alignItems:'center',gap:4}}><Plus size={12}/> 新建</button>
+        <button onClick={fetch} style={{ ...iconBtn }}><RefreshCw size={14}/></button>
+        <button onClick={()=>setShowCreate(!showCreate)}
+          style={{ background:'#fff',color:'#000',border:'none',borderRadius:6,padding:'5px 12px',cursor:'pointer',fontSize:11,fontWeight:600,display:'flex',alignItems:'center',gap:4 }}>
+          <Plus size={12}/> 新建
+        </button>
       </div>
 
       {showCreate && (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 8, padding: 8, background: 'var(--bg-secondary)', borderRadius: 'var(--radius)' }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 10, padding: 8, background: '#1c1c1e', borderRadius: 8 }}>
           <input value={desc} onChange={e=>setDesc(e.target.value)} placeholder="任务描述..." onKeyDown={e=>e.key==='Enter'&&create()}
-            style={{ flex: 1, background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: 4, padding: '6px 10px', color: 'var(--text-primary)', fontSize: 12 }} />
-          <button onClick={create} style={{ background: 'var(--accent-green)', color: '#fff', border: 'none', borderRadius: 4, padding: '6px 12px', cursor: 'pointer', fontSize: 11 }}>创建</button>
+            style={{ flex: 1, background: '#000', border: '1px solid #2c2c2e', borderRadius: 6, padding: '6px 10px', color: '#fff', fontSize: 12, outline: 'none' }} />
+          <button onClick={create} style={{ background: '#fff', color: '#000', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>创建</button>
         </div>
       )}
 
-      {/* Kanban 看板 */}
-      {loading ? <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>加载中...</div> : (
-        <div style={{ flex: 1, display: 'flex', gap: 8, overflow: 'auto' }}>
+      {/* Kanban */}
+      {loading ? <div style={{ color: '#666', fontSize: 12 }}>加载中...</div> : (
+        <div style={{ flex: 1, display: 'flex', gap: 10, overflow: 'auto' }}>
           {COLUMNS.map(col => (
             <div key={col.key}
               onDragOver={e => { e.preventDefault(); setDragOver(col.key) }}
               onDragLeave={() => setDragOver('')}
               onDrop={e => handleDrop(e, col.key)}
               style={{
-                flex: 1, minWidth: 160, background: dragOver === col.key ? 'var(--bg-tertiary)' : 'var(--bg-secondary)',
-                borderRadius: 'var(--radius)', padding: '6px 8px', display: 'flex', flexDirection: 'column',
-                border: dragOver === col.key ? `1px dashed ${col.color}` : '1px solid transparent',
+                flex: 1, minWidth: 170, background: dragOver === col.key ? '#1c1c1e' : '#0a0a0a',
+                borderRadius: 10, padding: '8px 10px', display: 'flex', flexDirection: 'column',
+                border: dragOver === col.key ? `1px dashed ${col.color}` : '1px solid #1c1c1e',
               }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: col.color, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: col.color, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ width: 6, height: 6, borderRadius: 3, background: col.color, display: 'inline-block' }}/>
                 {col.label}
-                <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 400 }}>
+                <span style={{ fontSize: 10, color: '#555', fontWeight: 400 }}>
                   {tasksByStatus(col.key).length}
                 </span>
               </div>
@@ -102,51 +98,49 @@ export default function Tasks() {
                 <div key={t.id} draggable onDragStart={e => handleDragStart(e, t.id)}
                   onClick={() => toggle(t.id)}
                   style={{
-                    padding: '6px 8px', marginBottom: 4, borderRadius: 4, cursor: 'grab',
-                    background: 'var(--bg-primary)', border: '1px solid var(--border)',
-                    borderLeft: `3px solid ${col.color}`, fontSize: 11,
+                    padding: '8px 10px', marginBottom: 6, borderRadius: 8, cursor: 'grab',
+                    background: '#1c1c1e', border: '1px solid #2c2c2e',
+                    borderLeft: `3px solid ${col.color}`, fontSize: 11, color: '#ccc',
                   }}>
-                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 2 }}>
-                    {t.description.length > 60 ? t.description.slice(0, 60) + '...' : t.description}
+                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 4, lineHeight: 1.4 }}>
+                    {t.description.length > 80 ? t.description.slice(0, 80) + '...' : t.description}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9, color: 'var(--text-muted)' }}>
-                    <span style={{ fontFamily: 'var(--font-mono)' }}>{t.id.slice(0, 8)}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9, color: '#555' }}>
+                    <span style={{ fontFamily: 'monospace' }}>{t.id.slice(0, 8)}</span>
                     <span style={{ flex: 1 }} />
-                    {/* 快捷操作按钮 */}
-                    {t.status === 'failed' && <button onClick={e=>{e.stopPropagation();act(api.retryTask,t.id)}} style={{...actBtn}} title="重试"><RotateCcw size={10}/></button>}
-                    {['pending','running'].includes(t.status) && <button onClick={e=>{e.stopPropagation();act(api.cancelTask,t.id)}} style={{...actBtn}} title="取消"><XCircle size={10}/></button>}
-                    {t.status === 'running' && <button onClick={e=>{e.stopPropagation();act(api.holdTask,t.id)}} style={{...actBtn}} title="暂停"><Square size={10}/></button>}
-                    {t.status === 'blocked' && <button onClick={e=>{e.stopPropagation();act(api.releaseTask,t.id)}} style={{...actBtn}} title="释放"><Play size={10}/></button>}
+                    {t.status === 'failed' && <button onClick={e=>{e.stopPropagation();act(api.retryTask,t.id)}} style={actBtn}><RotateCcw size={10}/></button>}
+                    {['pending','running'].includes(t.status) && <button onClick={e=>{e.stopPropagation();act(api.cancelTask,t.id)}} style={actBtn}><XCircle size={10}/></button>}
+                    {t.status === 'running' && <button onClick={e=>{e.stopPropagation();act(api.holdTask,t.id)}} style={actBtn}><Square size={10}/></button>}
+                    {t.status === 'blocked' && <button onClick={e=>{e.stopPropagation();act(api.releaseTask,t.id)}} style={actBtn}><Play size={10}/></button>}
                   </div>
                 </div>
               ))}
               {tasksByStatus(col.key).length === 0 && (
-                <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', padding: 8, opacity: 0.5 }}>
-                  拖拽任务到这里
-                </div>
+                <div style={{ fontSize: 10, color: '#444', textAlign: 'center', padding: 12 }}>拖入任务</div>
               )}
             </div>
           ))}
         </div>
       )}
 
-      {/* 展开的详情 */}
+      {/* 详情浮层 */}
       {expanded && detail && (
         <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', width: 600, maxHeight: 300, overflow: 'auto',
-          background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 14, boxShadow: '0 8px 30px rgba(0,0,0,0.4)', zIndex: 100 }}>
+          background: '#1c1c1e', border: '1px solid #2c2c2e', borderRadius: 12, padding: 16, boxShadow: '0 16px 48px rgba(0,0,0,0.6)', zIndex: 100 }}>
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
-            <span style={{ fontWeight: 600, fontSize: 13, flex: 1 }}>{detail.id}</span>
-            <button onClick={() => {setExpanded(null); setDetail(null)}} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><XCircle size={14}/></button>
+            <span style={{ fontWeight: 600, fontSize: 13, color: '#fff', flex: 1, fontFamily: 'monospace' }}>{detail.id}</span>
+            <button onClick={() => {setExpanded(null); setDetail(null)}} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer' }}><XCircle size={14}/></button>
           </div>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>{detail.description}</div>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+          <div style={{ fontSize: 12, color: '#999', marginBottom: 8, lineHeight: 1.5 }}>{detail.description}</div>
+          <div style={{ fontSize: 10, color: '#555', fontFamily: 'monospace' }}>
             status={detail.status} type={detail.route_type} role={detail.route_role}
           </div>
-          {detail.trace && <pre style={{ fontSize: 10, color: 'var(--text-muted)', whiteSpace: 'pre-wrap', maxHeight: 150, overflow: 'auto', marginTop: 6 }}>{JSON.stringify(detail.trace, null, 2)}</pre>}
+          {detail.trace && <pre style={{ fontSize: 10, color: '#666', whiteSpace: 'pre-wrap', maxHeight: 150, overflow: 'auto', marginTop: 8 }}>{JSON.stringify(detail.trace, null, 2)}</pre>}
         </div>
       )}
     </div>
   )
 }
 
-const actBtn: React.CSSProperties = { background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 1 }
+const iconBtn: React.CSSProperties = { background:'none',border:'none',color:'#666',cursor:'pointer',padding:4 }
+const actBtn: React.CSSProperties = { background:'none',border:'none',color:'#555',cursor:'pointer',padding:1 }
