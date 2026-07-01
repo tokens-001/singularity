@@ -1,52 +1,41 @@
-// 简单的路由模块
-export class Router {
-    constructor() {
-        this.routes = new Map();
-        this.currentRoute = null;
-    }
+// 路由模块
+import { renderArticleList } from './articleList.js';
+import { renderArticleDetail } from './articleDetail.js';
+
+let currentRoute = '';
+
+export function initRouter() {
+    window.addEventListener('hashchange', handleRoute);
+    handleRoute();
+}
+
+function handleRoute() {
+    const hash = window.location.hash || '#/';
+    const path = hash.slice(1);
     
-    // 注册路由
-    addRoute(path, handler) {
-        this.routes.set(path, handler);
-    }
-    
-    // 导航到指定路由
-    navigate(path) {
-        window.location.hash = path;
-    }
-    
-    // 获取当前路由
-    getCurrentRoute() {
-        const hash = window.location.hash.slice(1) || '/';
-        return hash;
-    }
-    
-    // 解析路由参数
-    parseRoute(path) {
-        const match = path.match(/^\/article\/(\d+)$/);
-        if (match) {
-            return { type: 'detail', id: match[1] };
+    if (path === '/' || path === '') {
+        if (currentRoute !== 'list') {
+            currentRoute = 'list';
+            renderArticleList();
         }
-        return { type: 'list' };
-    }
-    
-    // 处理路由变化
-    handleRoute() {
-        const currentPath = this.getCurrentRoute();
-        const route = this.parseRoute(currentPath);
-        
-        if (this.currentRoute !== currentPath) {
-            this.currentRoute = currentPath;
-            const handler = this.routes.get(route.type);
-            if (handler) {
-                handler(route);
-            }
+    } else if (path.startsWith('/article/')) {
+        const id = path.split('/article/')[1];
+        if (currentRoute !== `detail-${id}`) {
+            currentRoute = `detail-${id}`;
+            renderArticleDetail(id);
         }
+    } else {
+        renderNotFound();
     }
-    
-    // 初始化路由监听
-    init() {
-        window.addEventListener('hashchange', () => this.handleRoute());
-        window.addEventListener('load', () => this.handleRoute());
-    }
+}
+
+function renderNotFound() {
+    const app = document.getElementById('app');
+    app.innerHTML = `
+        <div class="not-found">
+            <h2>404</h2>
+            <p>页面未找到</p>
+            <a href="#/" class="back-link">返回首页</a>
+        </div>
+    `;
 }
