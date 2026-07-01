@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
 import { useAppStore, type ChatMsg } from '../stores/app'
-import { Send, Bot, User, Loader2, CheckCircle2, XCircle, Hash, PanelRightOpen } from 'lucide-react'
+import { Send, Bot, User, Loader2, CheckCircle2, XCircle, Hash, PanelRightOpen, Search, RotateCcw } from 'lucide-react'
 import FilePanel from '../components/FilePanel'
 
 interface ProgressItem { id: string; desc: string; status: string; ts: number }
@@ -20,6 +20,8 @@ export default function Chat() {
   const [tasks, setTasks] = useState<ProgressItem[]>([])
   const [statusText, setStatusText] = useState('')
   const [projects, setProjects] = useState<any[]>([])
+  const [searchQuery, setSearchQuery] = useState('')
+  const [showSearch, setShowSearch] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const pendingCid = useRef<string>('')
 
@@ -35,6 +37,14 @@ export default function Chat() {
   const fetchProjects = async () => {
     try { const d: any = await api.projects(); setProjects(Array.isArray(d)?d:(d?.projects||[])) } catch {}
   }
+  const retryFailed = async (tid: string) => {
+    try { await api.retryTask(tid); fetchTasks(); addToast('已重新提交任务', 'success') }
+    catch { addToast('重试失败', 'error') }
+  }
+  const addToast = (msg: string, kind: 'info'|'error'|'success' = 'info') => {
+    import('../components/Toast').then(m => m.useToast.getState().add(msg, kind))
+  }
+
   const fetchTasks = async () => {
     try {
       const t = await api.tasks()
@@ -145,11 +155,24 @@ export default function Chat() {
             <PanelRightOpen size={14}/>
           </button>
         )}
+        <button onClick={() => setShowSearch(!showSearch)}
+          style={{ background: 'none', border: 'none', color: showSearch ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', padding: 2 }}>
+          <Search size={14}/>
+        </button>
       </div>
+
+      {/* 搜索栏 */}
+      {showSearch && (
+        <div style={{ padding: '4px 0', marginBottom: 4 }}>
+          <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+            placeholder="搜索对话..."
+            style={{ width: '100%', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '6px 10px', color: 'var(--text-primary)', fontSize: 12 }} />
+        </div>
+      )}
 
       {/* 对话 + 进度 */}
       <div style={{ flex: 1, overflow: 'auto' }}>
-        {msgs.map((m: ChatMsg, i: number) => {
+        {msgs.filter(m => !searchQuery || m.content.includes(searchQuery)).map((m: ChatMsg, i: number) => {
           const isUser = m.role === 'user'
           return (
           <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'flex-start', flexDirection: isUser ? 'row-reverse' : 'row' }}>
@@ -184,6 +207,11 @@ export default function Chat() {
                   <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {t.desc.length > 80 ? t.desc.slice(0,80)+'...' : t.desc || (t.status === 'running' ? '执行中...' : '')}
                   </span>
+                  {fail && (
+                    <button onClick={e => { e.stopPropagation(); retryFailed(t.id) }}
+                      style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: 2, fontSize: 10 }}
+                      title="重试"><RotateCcw size={10}/> 重试</button>
+                  )}
                 </div>
               )
             })}

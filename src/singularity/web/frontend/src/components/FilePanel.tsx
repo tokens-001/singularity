@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useAppStore } from '../stores/app'
 import { api } from '../lib/api'
-import { FileText, Folder, FolderOpen, X, PanelRightClose, GitBranch, Activity } from 'lucide-react'
+import { FileText, Folder, FolderOpen, X, PanelRightClose, GitBranch, Activity, Download } from 'lucide-react'
 import StatusPanel from './StatusPanel'
 
 interface FileNode {
@@ -65,6 +65,15 @@ export default function FilePanel({ onClose }: { onClose: () => void }) {
       else next.add(path)
       return next
     })
+  }
+
+  const downloadFile = () => {
+    if (!selectedFile || !fileContent) return
+    const blob = new Blob([fileContent], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = selectedFile.split('/').pop() || 'file'
+    a.click(); URL.revokeObjectURL(url)
   }
 
   const openFile = async (path: string) => {
@@ -149,8 +158,11 @@ export default function FilePanel({ onClose }: { onClose: () => void }) {
           {/* 文件内容预览 */}
           {selectedFile && (
             <div style={{ borderTop: '1px solid var(--border)', maxHeight: '40%', display: 'flex', flexDirection: 'column' }}>
-              <div style={{ padding: '4px 10px', fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', borderBottom: '1px solid var(--border)' }}>
-                {selectedFile}
+              <div style={{ padding: '4px 10px', fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ flex: 1 }}>{selectedFile}</span>
+                <button onClick={downloadFile} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: 2 }} title="下载">
+                  <Download size={12}/>
+                </button>
               </div>
               <pre style={{ flex: 1, overflow: 'auto', padding: '8px 10px', margin: 0, fontSize: 11, fontFamily: 'var(--font-mono)',
                 color: 'var(--text-primary)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
