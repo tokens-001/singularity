@@ -186,138 +186,72 @@ def _tool_list_projects() -> list[dict]:
 # OpenAI function calling 工具定义
 # ═══════════════════════════════════════════════════════════════
 
-OBSERVER_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_system_status",
-            "description": "获取系统整体状态：任务计数、各层运行负载、平均等待/完成时间、token消耗、停滞任务列表。",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_tasks",
-            "description": "列出任务，可按状态过滤，默认按更新时间倒序。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "status": {"type": "string", "description": "过滤状态如 pending/dispatched/running/done/failed"},
-                    "limit": {"type": "integer", "description": "最多返回条数，默认50"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_task_details",
-            "description": "获取单个任务的完整字段和执行trace。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "task_id": {"type": "string", "description": "任务ID"},
-                },
-                "required": ["task_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_stalled_tasks",
-            "description": "列出停滞超过指定秒数的任务。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "timeout_seconds": {"type": "number", "description": "停滞阈值秒数，默认600"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_judge_stats",
-            "description": "获取裁判统计：各任务类型通过率、模型偏差、异常事件、分数分布、总判定数。",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_recent_events",
-            "description": "获取最近N条执行trace事件。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "limit": {"type": "integer", "description": "返回条数，默认20"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_task",
-            "description": "创建新任务。用户说'帮我做个xxx'时调用。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "description": {"type": "string", "description": "任务描述"},
-                    "level": {"type": "string", "description": "任务层级(两档后统一 any，留空即可)"},
-                },
-                "required": ["description"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "control_loop",
-            "description": "控制调度循环：start启动/stop停止/status查看状态。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "description": "start/stop/status"},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_projects",
-            "description": "列出所有项目及当前阶段。",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_task",
-            "description": "删除指定任务（不可恢复）。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "task_id": {"type": "string", "description": "要删除的任务ID"},
-                },
-                "required": ["task_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_failed_tasks",
-            "description": "批量清除所有失败状态的任务。",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
+# ═══════════════════════════════════════════════════════════════
+# 工具注册表 — 加工具只需加一条, 自动生成 OpenAI schema + dispatch
+# ═══════════════════════════════════════════════════════════════
+
+_TOOL_REGISTRY: list[dict] = [
+    # {name, description, handler, params: {param_name: {type, description, required?}}}
+    {"name": "get_system_status", "description": "获取系统整体状态：任务计数、运行负载、平均等待/完成时间、token消耗、停滞任务列表。",
+     "handler": _tool_get_system_status, "params": {}},
+    {"name": "list_tasks", "description": "列出任务，可按状态过滤，默认按更新时间倒序。",
+     "handler": _tool_list_tasks, "params": {
+         "status": {"type": "string", "description": "过滤状态如 pending/running/done/failed"},
+         "limit": {"type": "integer", "description": "最多返回条数，默认50"},
+     }},
+    {"name": "get_task_details", "description": "获取单个任务的完整字段和执行trace。",
+     "handler": _tool_get_task_details, "params": {
+         "task_id": {"type": "string", "description": "任务ID", "required": True},
+     }},
+    {"name": "list_stalled_tasks", "description": "列出停滞超过指定秒数的任务。",
+     "handler": _tool_list_stalled_tasks, "params": {
+         "timeout_seconds": {"type": "number", "description": "停滞阈值秒数，默认600"},
+     }},
+    {"name": "get_judge_stats", "description": "获取裁判统计：各任务类型通过率、模型偏差、异常事件、分数分布。",
+     "handler": _tool_get_judge_stats, "params": {}},
+    {"name": "get_recent_events", "description": "获取系统最近执行的事件列表。",
+     "handler": _tool_get_recent_events, "params": {
+         "limit": {"type": "integer", "description": "最多返回条数，默认20"},
+     }},
+    {"name": "create_task", "description": "创建待执行任务。用户说'帮我做xxx'时调用。",
+     "handler": _tool_create_task, "params": {
+         "description": {"type": "string", "description": "任务描述", "required": True},
+         "level": {"type": "string", "description": "任务层级(留空默认any)"},
+     }},
+    {"name": "control_loop", "description": "控制调度循环：start启动/stop停止/status查看状态。",
+     "handler": _tool_control_loop, "params": {
+         "action": {"type": "string", "description": "start/stop/status", "required": True},
+     }},
+    {"name": "list_projects", "description": "列出所有项目及当前阶段。",
+     "handler": _tool_list_projects, "params": {}},
+    {"name": "delete_task", "description": "删除指定任务（不可恢复）。",
+     "handler": _tool_delete_task, "params": {
+         "task_id": {"type": "string", "description": "要删除的任务ID", "required": True},
+     }},
+    {"name": "delete_failed_tasks", "description": "批量清除所有失败状态的任务。",
+     "handler": _tool_delete_failed_tasks, "params": {}},
 ]
 
+def _build_openai_tools() -> list[dict]:
+    """从 _TOOL_REGISTRY 自动生成 OpenAI function calling schema。"""
+    tools = []
+    for t in _TOOL_REGISTRY:
+        props = {}
+        required = []
+        for pname, pinfo in t["params"].items():
+            props[pname] = {"type": pinfo["type"], "description": pinfo.get("description", "")}
+            if pinfo.get("required"):
+                required.append(pname)
+        schema: dict = {"type": "object", "properties": props}
+        if required:
+            schema["required"] = required
+        tools.append({
+            "type": "function",
+            "function": {"name": t["name"], "description": t["description"], "parameters": schema},
+        })
+    return tools
+
+OBSERVER_TOOLS = _build_openai_tools()
 OBSERVER_SYSTEM_PROMPT = """你是 Singularity Dispatch 的主交互智能体，用户通过你管理系统的一切。
 
 可用工具：
@@ -541,32 +475,15 @@ def _detect_definition_intent(question: str) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 def _execute_observer_tool(name: str, args: dict[str, Any]) -> str:
+    """从 _TOOL_REGISTRY 自动分发, 加工具无需改此处。"""
     try:
-        if name == "get_system_status":
-            result = _tool_get_system_status()
-        elif name == "list_tasks":
-            result = _tool_list_tasks(**args)
-        elif name == "get_task_details":
-            result = _tool_get_task_details(**args)
-        elif name == "list_stalled_tasks":
-            result = _tool_list_stalled_tasks(**args)
-        elif name == "get_judge_stats":
-            result = _tool_get_judge_stats()
-        elif name == "get_recent_events":
-            result = _tool_get_recent_events(**args)
-        elif name == "create_task":
-            result = _tool_create_task(**args)
-        elif name == "control_loop":
-            result = _tool_control_loop(**args)
-        elif name == "list_projects":
-            result = _tool_list_projects()
-        elif name == "delete_task":
-            result = _tool_delete_task(**args)
-        elif name == "delete_failed_tasks":
-            result = _tool_delete_failed_tasks()
-        else:
-            result = {"error": f"unknown tool {name}"}
-        return json.dumps(result, ensure_ascii=False, indent=2)
+        for t in _TOOL_REGISTRY:
+            if t["name"] == name:
+                # 只传工具声明的参数
+                valid = {k: v for k, v in args.items() if k in t["params"]}
+                result = t["handler"](**valid)
+                return json.dumps(result, ensure_ascii=False, indent=2)
+        return json.dumps({"error": f"unknown tool {name}"})
     except Exception as e:
         return json.dumps({"error": str(e)})
 
