@@ -1,87 +1,97 @@
-"""CLI 层：命令行交互入口，不直接操作文件。"""
-
+"""CLI layer - user interface for TODO tool."""
 import argparse
 import sys
-from pathlib import Path
-
-from service import TodoService
+from typing import List
 from storage import Storage
-
-DEFAULT_DATA_PATH = Path.home() / ".todo" / "data.json"
-
-
-def get_service(data_path: Path = DEFAULT_DATA_PATH) -> TodoService:
-    data_path.parent.mkdir(parents=True, exist_ok=True)
-    storage = Storage(data_path)
-    return TodoService(storage)
+from manager import TodoManager
 
 
-def cmd_add(args: argparse.Namespace) -> None:
-    svc = get_service()
-    todo = svc.create_todo(title=args.title, description=args.description or "")
-    print(f"Created todo {todo.id}: {todo.title}")
+def create_parser() -> argparse.ArgumentParser:
+    """Create argument parser for CLI."""
+    parser = argparse.ArgumentParser(description='TODO Manager CLI')
+    parser.add_argument('--file', default='todos.json', help='Data file path (default: todos.json)')
+    
+    subparsers = parser.add_subparsers(dest='command', help='Commands')
+    
+    # Add command
+    add_parser = subparsers.add_parser('add', help='Add a new TODO item')
+    add_parser.add_argument('title', help='TODO item title')
+    
+    # List command
+    subparsers.add_parser('list', help='List all TODO items')
+    
+    # Update command
+    update_parser = subparsers.add_parser('update', help='Update a TODO item')
+    update_parser.add_argument('id', type=int, help='Item ID')
+    update_parser.add_argument('--title', help='New title')
+    update_parser.add_argument('--completed', type=lambda x: x.lower() == 'true', help='Completion status (true/false)')
+    
+    # Delete command
+    delete_parser = subparsers.add_parser('delete', help='Delete a TODO item')
+    delete_parser.add_argument('id', type=int, help='Item ID')
+    
+    # Toggle command
+    toggle_parser = subparsers.add_parser('toggle', help='Toggle completion status')
+    toggle_parser.add_argument('id', type=int, help='Item ID')
+    
+    return parser
 
 
-def cmd_list(args: argparse.Namespace) -> None:
-    svc = get_service()
-    todos = svc.list_todos()
-    if not todos:
-        print("No todos found.")
-        return
-    for t in todos:
-        mark = "[x]" if t.done else "[ ]"
-        print(f"{mark} {t.id} | {t.title}")
+def format_item(item: dict) -> str:
+    """Format a TODO item for display."""
+    status = '✓' if item.get('completed') else '○'
+    return f"[{item['id']:3d}] {status} {item['title']}"
 
 
-def cmd_update(args: argparse.Namespace) -> None:
-    svc = get_service()
-    changes: dict[str, object] = {}
-    if args.title is not None:
-        changes["title"] = args.title
-    if args.description is not None:
-        changes["description"] = args.description
-    if args.done is not None:
-        changes["done"] = args.done
-    todo = svc.update_todo(args.id, **changes)
-    print(f"Updated todo {todo.id}: {todo.title}")
-
-
-def cmd_delete(args: argparse.Namespace) -> None:
-    svc = get_service()
-    if svc.delete_todo(args.id):
-        print(f"Deleted todo {args.id}")
-    else:
-        print(f"Todo {args.id} not found")
-        sys.exit(1)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(prog="todo", description="Simple CLI TODO tool")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    add_parser = sub.add_parser("add", help="Add a new todo")
-    add_parser.add_argument("title", help="Todo title")
-    add_parser.add_argument("--description", "-d", default="", help="Description")
-    add_parser.set_defaults(func=cmd_add)
-
-    list_parser = sub.add_parser("list", help="List all todos")
-    list_parser.set_defaults(func=cmd_list)
-
-    upd_parser = sub.add_parser("update", help="Update a todo")
-    upd_parser.add_argument("id", help="Todo ID")
-    upd_parser.add_argument("--title", "-t", default=None, help="New title")
-    upd_parser.add_argument("--description", "-d", default=None, help="New description")
-    upd_parser.add_argument("--done", action="store_true", default=None, help="Mark as done")
-    upd_parser.add_argument("--undone", action="store_false", dest="done", help="Mark as not done")
-    upd_parser.set_defaults(func=cmd_update)
-
-    del_parser = sub.add_parser("delete", help="Delete a todo")
-    del_parser.add_argument("id", help="Todo ID")
-    del_parser.set_defaults(func=cmd_delete)
-
+def main() -> int:
+    """Main CLI entry point."""
+    parser = create_parser()
     args = parser.parse_args()
-    args.func(args)
+    
+    if not args.command:
+        parser.print_help()
+        return 0
+    
+    storage = Storage(args.file)
+    manager = TodoManager(storage)
+    
+    if args.command == 'add':
+        item = manager.add(args.title)
+        print(f"Added: {format_item(item)}")
+    
+    elif args.command == 'list':
+        items = manager.list_all()
+        if not items:
+            print("No TODO items")
+        else:
+            for item in items:
+                print(format_item(item))
+    
+    elif args.command == 'update':
+        item = manager.update(args.id, title=args.title, completed=args.completed)
+        if item:
+            print(f"Updated: {format_item(item)}")
+        else:
+            print(f"Item {args.id} not found", file=sys.stderr)
+            return 1
+    
+    elif args.command == 'delete':
+        if manager.delete(args.id):
+            print(f"Deleted item {args.id}")
+        else:
+            print(f"Item {args.id} not found", file=sys.stderr)
+            return 1
+    
+    elif args.command == 'toggle':
+        item = manager.toggle(args.id)
+        if item:
+            print(f"Toggled: {format_item(item)}")
+        else:
+            print(f"Item {args.id} not found", file=sys.stderr)
+            return 1
+    
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
