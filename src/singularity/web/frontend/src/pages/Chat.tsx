@@ -24,11 +24,11 @@ export default function Chat() {
   const projectsRef = useRef<any[]>([])
 
   useEffect(() => {
-    if (activePid === '_default') {
-      useAppStore.getState().clearConversation('_default')
-    }
+    // 每次进 Chat 页切到 _default 显示空状态
+    if (activePid !== '_default') { setActiveProject('_default') }
+    useAppStore.getState().clearConversation('_default')
     fetchProjects(); fetchTasks()
-  }, [activePid])
+  }, [])
   useEffect(() => { requestAnimationFrame(() => { bottomRef.current?.scrollIntoView({behavior:'smooth'}) }) }, [msgs, tasks])
 
   const fetchProjects = async () => {
