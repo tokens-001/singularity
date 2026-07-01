@@ -1,10 +1,8 @@
 target/
 **/*.rs.bk
 .DS_Store
-*.swp
-*~
 .vscode/
 .idea/
-
-# Data directory
-**/todo-cli/
+*.tmp
+*.log
+todo-cli/data/
