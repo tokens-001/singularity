@@ -112,7 +112,6 @@ export default function Chat() {
         {completed > 0 && <span style={{ color: 'var(--accent-green)' }}>{completed} 完成</span>}
         {failed > 0 && <span style={{ color: 'var(--accent-red)' }}>{failed} 失败</span>}
         <span style={{ flex: 1 }} />
-        <button onClick={refreshStatus} style={{background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',padding:2}} title="刷新"><RefreshCw size={12}/></button>
       </div>
 
       {/* 主体: 对话 + 进度 */}
