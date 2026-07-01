@@ -499,6 +499,10 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
         layer = tdef.get("layer", "")
         role_key = LAYER_ROLE_MAP.get(layer, "implementer")
 
+        # 自动生成任务 ID (如果架构师没提供)
+        tid = tdef.get("id", "") or f"T{created+1}"
+        tdef["id"] = tid
+
         # 解析真正的依赖关系 (架构中定义的 depends_on)
         arch_deps = tdef.get("depends_on", [])
         dep_ids = [id_map[d] for d in arch_deps if d in id_map]
@@ -507,7 +511,7 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
         ctx_snippet = tdef.get("context_snippet", "")
         acceptance = tdef.get("acceptance", "") or tdef.get("acceptance_criteria", "")
         task_desc = (
-            f"[{tdef.get('id', '?')}] {tdef.get('title', '')}\n"
+            f"[{tid}] {tdef.get('title', '')}\n"
             f"{tdef.get('description', '')}\n"
             f"验收标准: {acceptance or '代码可运行，功能完整'}\n"
             + (f"相关上下文:\n{ctx_snippet}\n" if ctx_snippet else "")
