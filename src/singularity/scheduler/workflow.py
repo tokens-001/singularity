@@ -507,13 +507,12 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
         ctx_snippet = tdef.get("context_snippet", "")
         acceptance = tdef.get("acceptance", "") or tdef.get("acceptance_criteria", "")
         task_desc = (
-            f"项目背景: {project.description[:300]}\n"
-            f"项目范围: {project.scope[:200]}\n"
-            f"你的任务: [{tdef.get('id', '?')}] {tdef.get('title', '')}\n"
-            f"具体要求: {tdef.get('description', '')}\n"
+            f"[{tdef.get('id', '?')}] {tdef.get('title', '')}\n"
+            f"{tdef.get('description', '')}\n"
             f"验收标准: {acceptance or '代码可运行，功能完整'}\n"
             + (f"相关上下文:\n{ctx_snippet}\n" if ctx_snippet else "")
             + f"角色: {role_key}\n"
+            f"项目背景: {project.description[:200]}\n"
             f"约束: {'; '.join([c.get('rule', c.get('text','')) for c in constraints[:3]]) if constraints else '无'}"
         )
         child = tracker.create(
