@@ -3,7 +3,7 @@ import { Outlet, useNavigate } from 'react-router-dom'
 import { useAppStore } from '../stores/app'
 import { ToastContainer, useToast } from './Toast'
 import { api } from '../lib/api'
-import { MessageSquare, Plus, Search, PenLine, Hash, Grid3X3, List, Settings, User, X } from 'lucide-react'
+import { MessageSquare, Plus, Search, Hash, Grid3X3, List, Settings, User } from 'lucide-react'
 
 function getPinned(): string[] {
   try { return JSON.parse(localStorage.getItem('qidian-pinned') || '[]') } catch { return [] }
@@ -51,19 +51,19 @@ export default function AppLayout() {
     <div style={{ display: 'flex', height: '100vh', background: '#000' }}>
       {/* 左侧边栏 */}
       <div style={{ width: sidebarWidth, transition: 'width 0.15s', overflow: 'hidden', background: '#0a0a0a', borderRight: '1px solid #1c1c1e', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
-        {/* 顶部功能按钮 (竖向) */}
+        {/* 顶部功能按钮 (竖向, 对应奇点实际操作) */}
         <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 2 }}>
           <button onClick={() => { navigate('/'); selectProject('_default') }}
             style={{ ...sideBtn }}>
-            <Plus size={14}/> 新建任务 <span style={shortcutHint}>⌘N</span>
+            <Plus size={14}/> 新建项目
           </button>
-          <button onClick={() => setShowSearch(!showSearch)}
+          <button onClick={() => navigate('/tasks')}
             style={{ ...sideBtn }}>
-            <Search size={14}/> 搜索 <span style={shortcutHint}>⌘K</span>
+            <List size={14}/> 任务管理
           </button>
           <button onClick={() => navigate('/config')}
             style={{ ...sideBtn }}>
-            <PenLine size={14}/> 技能
+            <Settings size={14}/> 配置
           </button>
         </div>
 
@@ -142,9 +142,7 @@ export default function AppLayout() {
           <div style={{ width: 22, height: 22, borderRadius: 11, background: '#333', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <User size={12} style={{color:'#666'}}/>
           </div>
-          <span style={{ fontSize: 11, color: '#666', flex: 1 }}>奇点</span>
-          <button onClick={() => navigate('/tasks')} style={iconBtn}><List size={13}/></button>
-          <button onClick={() => navigate('/config')} style={iconBtn}><Settings size={13}/></button>
+          <span style={{ fontSize: 11, color: '#666' }}>奇点</span>
         </div>
       </div>
 
