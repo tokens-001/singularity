@@ -197,12 +197,8 @@ export default function Chat() {
 
           {/* 第三行: 底部控件 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {/* 左侧: 附件/权限 */}
+            {/* 左侧: 附件按钮 */}
             <button style={{ ...zBtn, color: '#666' }}>+</button>
-            <span style={{ fontSize: 11, color: '#f0a060', display: 'flex', alignItems: 'center', gap: 2 }}>
-              <span style={{ width: 6, height: 6, borderRadius: 3, background: '#f0a060', display: 'inline-block' }}/>
-              完全访问
-            </span>
             <span style={{ flex: 1 }} />
 
             {/* 右侧: 模型选择 */}
@@ -223,9 +219,6 @@ export default function Chat() {
                 </div>
               )}
             </div>
-
-            {/* 算力档位 */}
-            <span style={{ fontSize: 10, color: '#666', background: '#2c2c2e', padding: '2px 6px', borderRadius: 4 }}>最高</span>
 
             {/* 发送 */}
             <button onClick={send} disabled={loading || !input.trim()}
