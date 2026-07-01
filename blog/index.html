@@ -1,27 +1,19 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>个人博客</title>
-  <link rel="stylesheet" href="css/style.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>个人博客</title>
+    <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <header>
-    <nav>
-      <a href="#/" class="logo">我的博客</a>
-    </nav>
-  </header>
-  <main id="app">
-    <!-- 由 JS 模块动态渲染 -->
-  </main>
-  <footer>
-    <p>&copy; 2024 个人博客</p>
-  </footer>
-  <script type="module" src="js/data.js"></script>
-  <script type="module" src="js/router.js"></script>
-  <script type="module" src="js/list.js"></script>
-  <script type="module" src="js/detail.js"></script>
-  <script type="module" src="js/app.js"></script>
+    <header class="site-header">
+        <h1 class="site-title"><a href="#/">我的博客</a></h1>
+    </header>
+    <main id="app"></main>
+    <footer class="site-footer">
+        <p>&copy; 2025 个人博客</p>
+    </footer>
+    <script type="module" src="js/main.js"></script>
 </body>
 </html>

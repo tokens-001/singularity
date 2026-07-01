@@ -1,17 +1,23 @@
-import { getRoute, onRouteChange } from './router.js';
-import { renderArticleList, renderArticleDetail } from './views.js';
+import { Router } from './router.js';
+import { renderArticleList } from './list.js';
+import { renderArticleDetail } from './detail.js';
 
-const app = document.getElementById('app');
-
-function render() {
-  const route = getRoute();
-
-  if (route.page === 'detail') {
-    renderArticleDetail(app, route.params.id);
-  } else {
-    renderArticleList(app);
-  }
+// 初始化应用
+function initApp() {
+    const router = new Router();
+    
+    // 注册路由
+    router.addRoute('list', () => {
+        renderArticleList();
+    });
+    
+    router.addRoute('detail', (route) => {
+        renderArticleDetail(route.id);
+    });
+    
+    // 启动路由
+    router.init();
 }
 
-onRouteChange(render);
-render();
+// 启动应用
+initApp();
