@@ -104,19 +104,21 @@ def _dispatch_ready(dispatched: set, pool, agents, runner: TaskRunner,
 
 def _reap_futures(running_futures: dict, pending_batches: dict,
                   mq, runner: TaskRunner, results: list) -> bool:
-    """_run_queue_v3 步骤④: 回收已完成 future → finalize 或入 pending。返回是否有回收。
-
-    修复: 不再用 FIRST_COMPLETED 误杀未完成的并发任务。
-    改为 ALL_COMPLETED + 短超时轮询，仅对超过 per-future deadline 的标记超时。
-    """
+    """_run_queue_v3 步骤④: 回收已完成 future → finalize 或入 pending。返回是否有回收。"""
     if not running_futures:
         return False
     now = time.time()
-    deadline = 600  # per-future 超时阈值
+    deadline = 300  # per-future 超时阈值 (5min, 常规 API 调用 1-3min)
     reaped = False
-    # 先收割已完成的
-    done_futs = [f for f in running_futures if f.done()]
-    for fut in done_futs:
+
+    # 如果有 future 但全都未完成, 先等第一个完成 (最多 10s)
+    if not any(f.done() for f in running_futures):
+        wait(running_futures.keys(), timeout=10, return_when=FIRST_COMPLETED)
+
+    # 收割所有已完成的
+    for fut in list(running_futures.keys()):
+        if not fut.done():
+            continue
         t, route, snap, pre, submitted_at = running_futures.pop(fut)
         reaped = True
         try:
@@ -127,36 +129,31 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
             except Exception:
                 pass
             results.append((t.id, f"worker_error: {e}", None))
-            try:
-                _save_trace(t, route, snap, None, None, False)
-            except Exception:
-                pass
+            _save_trace(t, route, snap, None, None, False)
             continue
         if batch.merge_request is not None:
             mq.submit(batch.merge_request)
             pending_batches[t.id] = (t, t_route, t_snap, batch)
         else:
             runner.finalize(t, batch, t_route, t_snap, results)
-    # 检查超时: 仅杀超过 deadline 的 future
+
+    # 超时检测
     for fut in list(running_futures.keys()):
-        if fut.done():
-            continue
         t, route, snap, pre, submitted_at = running_futures.get(fut, (None,)*5)
         if t is not None and now - submitted_at > deadline:
             running_futures.pop(fut)
+            try:
+                fut.cancel()
+            except Exception:
+                pass
             try:
                 tracker.transition(t.id, TaskStatus.FAILED, error=f"执行超时(>{deadline}s)")
             except Exception:
                 pass
             results.append((t.id, "timeout", None))
-            try:
-                _save_trace(t, route, snap, None, None, False)
-            except Exception:
-                pass
+            _save_trace(t, route, snap, None, None, False)
             reaped = True
-    # 如果无事可收但还有 running future, 短暂 block 等下一个完成
-    if not reaped and running_futures:
-        wait(running_futures.keys(), timeout=5, return_when=FIRST_COMPLETED)
+
     return reaped
 
 

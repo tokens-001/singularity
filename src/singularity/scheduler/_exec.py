@@ -333,7 +333,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     candidate=exec_result.raw_output,
                     gate_required=route_gate,
                     task_type=route_type,
-                    changed_files=exec_result.changed_files,
+                    changed_files=getattr(exec_result, 'changed_files', []),
                     snap=snap, turn=turn, max_turns=level_max,
                 )
                 # 补充质量信号
@@ -345,7 +345,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     quality = {"warnings": [], "failure_kind": "ok", "confidence": 0.5}
 
                 # ── v2: independent tests + multi-model review ──
-                changed = exec_result.changed_files or []
+                changed = getattr(exec_result, 'changed_files', []) or []
                 if changed:
                     from . import _review as rev_mod
                     rev_mod.run_post_exec_checks(

@@ -652,6 +652,7 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
                     raw_output = fused
                     success = True
                     error = ""
+                    changed_files: list = []
                 return DispatchResult(
                     level=level,
                     agent_cfg={"model": f"fusion({','.join(m for m,_ in outputs)})"},
