@@ -80,6 +80,15 @@ export default function Chat() {
           addChatMsg({ role: 'assistant', content: data.answer, ts: Date.now() })
           setLoading(false); setStatusText(''); pendingCid.current = ''
           fetchTasks(); fetchProjects()
+          // 检测 Observer 回复中是否提到了项目名，自动切换
+          setTimeout(() => {
+            const projs = projects
+            for (const p of projs) {
+              if (data.answer && data.answer.includes(p.name) && activePid === '_default') {
+                setActiveProject(p.id); break
+              }
+            }
+          }, 500)
         }
       } catch {}
     }
