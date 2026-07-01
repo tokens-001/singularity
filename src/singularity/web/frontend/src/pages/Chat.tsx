@@ -122,16 +122,23 @@ export default function Chat() {
 
       {/* 主体: 对话 + 进度 */}
       <div style={{ flex: 1, overflow: 'auto' }}>
-        {msgs.map((m, i) => (
-          <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'flex-start' }}>
-            <span style={{ marginTop: 2, color: m.role === 'user' ? 'var(--accent)' : 'var(--accent-green)', flexShrink: 0 }}>
-              {m.role === 'user' ? <User size={14}/> : <Bot size={14}/>}
+        {msgs.map((m, i) => {
+          const isUser = m.role === 'user'
+          return (
+          <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'flex-start', flexDirection: isUser ? 'row-reverse' : 'row' }}>
+            <span style={{ marginTop: 2, color: isUser ? 'var(--accent)' : 'var(--accent-green)', flexShrink: 0 }}>
+              {isUser ? <User size={14}/> : <Bot size={14}/>}
             </span>
-            <div style={{ flex: 1, fontSize: 13, color: 'var(--text-primary)', whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+            <div style={{
+              maxWidth: '75%', fontSize: 13, whiteSpace: 'pre-wrap', lineHeight: 1.6,
+              padding: '8px 12px', borderRadius: 10,
+              background: isUser ? 'var(--accent)' : 'var(--bg-secondary)',
+              color: isUser ? '#fff' : 'var(--text-primary)',
+            }}>
               {m.content}
             </div>
           </div>
-        ))}
+        )})}
 
         {/* 实时进度卡片 */}
         {tasks.length > 0 && (
@@ -163,9 +170,12 @@ export default function Chat() {
 
         {/* Observer 思考中 */}
         {loading && (
-          <div style={{ marginLeft: 22, display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-muted)', fontSize: 12 }}>
-            <Loader2 size={12} style={{animation:'spin 1s linear infinite'}}/>
-            {statusText || '思考中...'}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+            <Bot size={14} style={{ color: 'var(--accent-green)', flexShrink: 0 }}/>
+            <div style={{ padding: '8px 12px', borderRadius: 10, background: 'var(--bg-secondary)', fontSize: 13, color: 'var(--text-muted)' }}>
+              <Loader2 size={12} style={{animation:'spin 1s linear infinite', display:'inline', marginRight:6}}/>
+              {statusText || '思考中...'}
+            </div>
           </div>
         )}
 
