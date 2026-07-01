@@ -187,7 +187,7 @@ export default function Chat() {
           {/* 第二行: 输入框 */}
           <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-            placeholder="向奇点提问，@ 提及文件、/ 使用命令或子智能体，$ 使用技能，# 关联对话"
+            placeholder="发送消息..."
             rows={1}
             style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#fff', fontSize: 14, fontFamily: 'inherit', resize: 'none', padding: '4px 0', lineHeight: '22px', marginBottom: 8 }}/>
 
