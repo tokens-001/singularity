@@ -5,101 +5,132 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>番茄钟</title>
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
         body {
-            font-family: 'Arial', sans-serif;
-            background-color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            background-color: white;
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100vh;
-            margin: 0;
-            flex-direction: column;
+            min-height: 100vh;
+            padding: 20px;
         }
         
         .container {
             text-align: center;
-            padding: 30px;
-            border-radius: 15px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-            background-color: #fff;
+            max-width: 500px;
+            width: 100%;
         }
         
         h1 {
-            color: #333;
+            font-size: 2.5rem;
             margin-bottom: 30px;
+            color: #333;
         }
         
         .timer-display {
-            font-size: 6em;
+            font-size: 6rem;
             font-weight: bold;
             color: #333;
-            margin: 20px 0;
+            margin-bottom: 40px;
             font-family: 'Courier New', monospace;
         }
         
-        .status {
-            font-size: 1.5em;
-            color: #555;
+        .mode-indicator {
+            font-size: 1.5rem;
             margin-bottom: 30px;
-        }
-        
-        button {
-            background-color: #4CAF50;
-            border: none;
-            color: white;
-            padding: 12px 24px;
-            text-align: center;
-            text-decoration: none;
-            display: inline-block;
-            font-size: 16px;
-            margin: 10px 5px;
-            cursor: pointer;
-            border-radius: 5px;
-            transition: background-color 0.3s;
-        }
-        
-        button:hover {
-            background-color: #45a049;
-        }
-        
-        button:disabled {
-            background-color: #cccccc;
-            cursor: not-allowed;
+            color: #666;
+            height: 30px;
         }
         
         .controls {
-            margin-top: 20px;
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            padding: 15px 30px;
+            font-size: 1.1rem;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            min-width: 120px;
+        }
+        
+        #startPauseBtn {
+            background-color: #4CAF50;
+            color: white;
+        }
+        
+        #startPauseBtn:hover {
+            background-color: #45a049;
+        }
+        
+        #resetBtn {
+            background-color: #f44336;
+            color: white;
+        }
+        
+        #resetBtn:hover {
+            background-color: #da190b;
+        }
+        
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        @media (max-width: 600px) {
+            .timer-display {
+                font-size: 4rem;
+            }
+            
+            h1 {
+                font-size: 2rem;
+            }
+            
+            button {
+                padding: 12px 20px;
+                min-width: 100px;
+            }
         }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>番茄钟</h1>
-        <div class="status" id="status">专注时间</div>
-        <div class="timer-display" id="display">25:00</div>
+        <div class="mode-indicator" id="modeIndicator">专注时间</div>
+        <div class="timer-display" id="timerDisplay">25:00</div>
         <div class="controls">
-            <button id="startBtn">开始</button>
-            <button id="pauseBtn" disabled>暂停</button>
+            <button id="startPauseBtn">开始</button>
             <button id="resetBtn">重置</button>
         </div>
     </div>
 
     <script>
-        // 番茄钟配置
-        const POMODORO_TIME = 25 * 60; // 25分钟专注
-        const BREAK_TIME = 5 * 60;     // 5分钟休息
+        // 配置时间（秒）
+        const FOCUS_TIME = 25 * 60; // 25分钟专注
+        const BREAK_TIME = 5 * 60;  // 5分钟休息
         
-        let timeLeft = POMODORO_TIME;
-        let timerInterval = null;
+        // DOM元素
+        const timerDisplay = document.getElementById('timerDisplay');
+        const startPauseBtn = document.getElementById('startPauseBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const modeIndicator = document.getElementById('modeIndicator');
+        
+        // 状态变量
+        let timeLeft = FOCUS_TIME;
         let isRunning = false;
-        let isBreak = false;
-        
-        // 获取DOM元素
-        const displayElement = document.getElementById('display');
-        const statusElement = document.getElementById('status');
-        const startButton = document.getElementById('startBtn');
-        const pauseButton = document.getElementById('pauseBtn');
-        const resetButton = document.getElementById('resetBtn');
+        let intervalId = null;
+        let isFocusMode = true; // true为专注，false为休息
         
         // 格式化时间为 MM:SS
         function formatTime(seconds) {
@@ -110,67 +141,64 @@
         
         // 更新显示
         function updateDisplay() {
-            displayElement.textContent = formatTime(timeLeft);
+            timerDisplay.textContent = formatTime(timeLeft);
+            modeIndicator.textContent = isFocusMode ? '专注时间' : '休息时间';
         }
         
-        // 开始计时
-        function startTimer() {
-            if (isRunning) return;
-            
-            isRunning = true;
-            startButton.disabled = true;
-            pauseButton.disabled = false;
-            
-            timerInterval = setInterval(() => {
-                timeLeft--;
-                updateDisplay();
+        // 开始/暂停功能
+        function toggleTimer() {
+            if (isRunning) {
+                // 暂停
+                clearInterval(intervalId);
+                isRunning = false;
+                startPauseBtn.textContent = '开始';
+            } else {
+                // 开始
+                if (timeLeft <= 0) return; // 时间到了不能继续
                 
-                if (timeLeft <= 0) {
-                    clearInterval(timerInterval);
-                    // 切换到休息或专注
-                    isBreak = !isBreak;
-                    timeLeft = isBreak ? BREAK_TIME : POMODORO_TIME;
+                isRunning = true;
+                startPauseBtn.textContent = '暂停';
+                
+                intervalId = setInterval(() => {
+                    timeLeft--;
+                    updateDisplay();
                     
-                    // 更新状态
-                    statusElement.textContent = isBreak ? '休息时间' : '专注时间';
-                    
-                    // 播放提示音
-                    playNotificationSound();
-                    
-                    // 自动开始下一阶段
-                    setTimeout(() => {
-                        startTimer();
-                    }, 1000);
-                }
-            }, 1000);
+                    if (timeLeft <= 0) {
+                        // 播放提示音
+                        playBeep();
+                        
+                        // 切换模式
+                        if (isFocusMode) {
+                            // 从专注切换到休息
+                            isFocusMode = false;
+                            timeLeft = BREAK_TIME;
+                        } else {
+                            // 从休息切换到专注
+                            isFocusMode = true;
+                            timeLeft = FOCUS_TIME;
+                        }
+                        
+                        updateDisplay();
+                        clearInterval(intervalId);
+                        isRunning = false;
+                        startPauseBtn.textContent = '开始';
+                    }
+                }, 1000);
+            }
         }
         
-        // 暂停计时
-        function pauseTimer() {
-            if (!isRunning) return;
-            
-            clearInterval(timerInterval);
-            isRunning = false;
-            startButton.disabled = false;
-            pauseButton.disabled = true;
-        }
-        
-        // 重置计时器
+        // 重置功能
         function resetTimer() {
-            clearInterval(timerInterval);
+            clearInterval(intervalId);
             isRunning = false;
-            isBreak = false;
-            timeLeft = POMODORO_TIME;
-            
-            statusElement.textContent = '专注时间';
+            isFocusMode = true;
+            timeLeft = FOCUS_TIME;
             updateDisplay();
-            
-            startButton.disabled = false;
-            pauseButton.disabled = true;
+            startPauseBtn.textContent = '开始';
         }
         
-        // 播放提示音
-        function playNotificationSound() {
+        // 播放提示音（使用Web Audio API生成简单蜂鸣声）
+        function playBeep() {
             try {
                 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 const oscillator = audioContext.createOscillator();
@@ -188,17 +216,17 @@
                     oscillator.stop();
                 }, 500);
             } catch (e) {
-                // 如果浏览器不支持Web Audio API，则跳过声音
+                // 如果浏览器不支持Web Audio API，则忽略
+                console.log('音频API不可用，跳过提示音');
             }
         }
         
-        // 初始化显示
+        // 初始化
         updateDisplay();
         
-        // 绑定事件
-        startButton.addEventListener('click', startTimer);
-        pauseButton.addEventListener('click', pauseTimer);
-        resetButton.addEventListener('click', resetTimer);
+        // 事件监听器
+        startPauseBtn.addEventListener('click', toggleTimer);
+        resetBtn.addEventListener('click', resetTimer);
     </script>
 </body>
 </html>
