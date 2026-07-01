@@ -128,6 +128,38 @@ def _tool_create_task(description: str, level: str = "any") -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+def _tool_delete_task(task_id: str) -> dict:
+    """删除指定任务（谨慎使用）。"""
+    try:
+        from singularity.scheduler import tracker
+        t = tracker.read_task(task_id)
+        if t is None:
+            return {"ok": False, "error": f"任务 {task_id} 不存在"}
+        p = tracker._path(task_id)
+        if p.exists():
+            p.unlink()
+        return {"ok": True, "deleted": task_id, "description": t.description[:80]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def _tool_delete_failed_tasks() -> dict:
+    """批量清除所有失败任务。"""
+    try:
+        from singularity.scheduler import tracker
+        deleted = []
+        for p in tracker.tasks_dir().glob("*.json"):
+            try:
+                import json
+                d = json.loads(p.read_text())
+                if d.get("status") == "failed":
+                    deleted.append(d["id"][:8])
+                    p.unlink()
+            except Exception:
+                pass
+        return {"ok": True, "deleted_count": len(deleted), "deleted": deleted}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 def _tool_control_loop(action: str) -> dict:
     """控制调度循环：start/stop/status。"""
     try:
@@ -262,6 +294,28 @@ OBSERVER_TOOLS = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_task",
+            "description": "删除指定任务（不可恢复）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "要删除的任务ID"},
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_failed_tasks",
+            "description": "批量清除所有失败状态的任务。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 OBSERVER_SYSTEM_PROMPT = """你是 Singularity Dispatch 的主交互智能体，用户通过你管理系统的一切。
@@ -279,6 +333,8 @@ OBSERVER_SYSTEM_PROMPT = """你是 Singularity Dispatch 的主交互智能体，
 操作类（写）：
 - create_task: 创建新任务。用户说"帮我做xxx"时调用
 - control_loop: 启动/停止调度循环
+- delete_task: 删除指定任务
+- delete_failed_tasks: 批量清除所有失败任务
 
 回答要求：
 1. 简洁、准确，使用中文
@@ -504,6 +560,10 @@ def _execute_observer_tool(name: str, args: dict[str, Any]) -> str:
             result = _tool_control_loop(**args)
         elif name == "list_projects":
             result = _tool_list_projects()
+        elif name == "delete_task":
+            result = _tool_delete_task(**args)
+        elif name == "delete_failed_tasks":
+            result = _tool_delete_failed_tasks()
         else:
             result = {"error": f"unknown tool {name}"}
         return json.dumps(result, ensure_ascii=False, indent=2)
