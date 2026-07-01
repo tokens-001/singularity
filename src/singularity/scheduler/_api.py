@@ -380,7 +380,7 @@ def task_submit(desc: str, priority: int = 0, depends_on: list = None,
             kwargs["route_type"] = route_type
         tracker.transition(task.id, TaskStatus.PENDING, **kwargs)
     if push_event:
-        push_event("task_create", f"[{task.id[:8]}] {desc[:60]}")
+        push_event("task", json.dumps({"task_id": task.id, "status": "pending", "desc": desc[:120]}))
     return {"ok": True, "task_id": task.id, "description": desc[:120]}, 200
 
 

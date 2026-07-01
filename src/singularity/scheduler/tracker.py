@@ -179,6 +179,7 @@ def transition(task_id: str, new_status: TaskStatus, **kwargs) -> Optional[Task]
         task = read_task(task_id)
         if task is None:
             return None
+        old_status = task.status
         task.status = new_status
         for k, v in kwargs.items():
             if hasattr(task, k):
@@ -186,7 +187,23 @@ def transition(task_id: str, new_status: TaskStatus, **kwargs) -> Optional[Task]
         task.updated_at = time.time()
         _write(task)
         _invalidate_scan_cache()
+        # SSE 推送状态变更
+        _push_task_event(task_id, new_status.value if hasattr(new_status, 'value') else str(new_status), task.description)
         return task
+
+
+def _push_task_event(task_id: str, status: str, desc: str = "") -> None:
+    """推送任务状态变更到 SSE 队列。"""
+    try:
+        import json as _json
+        from singularity.scheduler._types import _pending_sse_events
+        import time as _time
+        _pending_sse_events.append({
+            "kind": "task", "task_id": task_id, "status": status,
+            "desc": (desc or "")[:120], "ts": _time.time(),
+        })
+    except Exception:
+        pass
 
 
 def _deps_satisfied(task: Task) -> bool:

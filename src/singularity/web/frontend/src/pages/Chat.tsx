@@ -37,14 +37,21 @@ export default function Chat() {
 
   useSSE((e: any) => {
     if (e.kind === 'task') {
-      // 实时更新任务进度
+      // 解析 task 事件: msg 字段可能是 JSON 字符串或直接在顶层
+      let td: any = e
+      if (e.msg && typeof e.msg === 'string') {
+        try { const p = JSON.parse(e.msg); if (p.task_id) td = p } catch {}
+      }
+      const tid = td.task_id || ''
+      const status = td.status || 'running'
+      const desc = td.desc || e.msg || ''
       setTasks(prev => {
         const next = [...prev]
-        const idx = next.findIndex(t => t.id === e.task_id)
+        const idx = next.findIndex(t => t.id === tid)
         if (idx >= 0) {
-          next[idx] = { ...next[idx], status: e.status || next[idx].status, ts: Date.now() }
-        } else if (e.desc) {
-          next.push({ id: e.task_id || '', desc: e.desc || e.msg || '', status: e.status || 'running', ts: Date.now() })
+          next[idx] = { ...next[idx], status, ts: Date.now() }
+        } else if (desc) {
+          next.push({ id: tid, desc, status, ts: Date.now() })
         }
         return next.slice(-20)
       })
