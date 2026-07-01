@@ -1,5 +1,6 @@
 import { Outlet, NavLink, useLocation } from 'react-router-dom'
 import { useAppStore } from '../stores/app'
+import { ToastContainer } from './Toast'
 import { MessageSquare, ListTodo, FolderKanban, Settings2, PanelLeftClose, PanelLeft } from 'lucide-react'
 
 const NAV = [
@@ -48,6 +49,7 @@ export default function AppLayout() {
           <Outlet />
         </div>
       </main>
+      <ToastContainer />
     </div>
   )
 }
