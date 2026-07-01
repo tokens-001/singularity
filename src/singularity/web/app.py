@@ -914,6 +914,12 @@ def api_projects():
         result, code = _api_handler.project_create(
             name, template=template, description=data.get("description", ""),
             scope=data.get("scope", ""), constraints=constraints, budget=budget)
+        if result.get("ok"):
+            _push_event("project", json.dumps({
+                "project_id": result["project"]["id"],
+                "name": result["project"]["name"],
+                "phase": "template", "task_count": 0,
+            }))
         return jsonify(result), code
     else:
         data, code = _api_handler.project_list()

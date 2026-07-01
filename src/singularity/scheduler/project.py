@@ -234,6 +234,28 @@ def save(project: ProjectState) -> None:
         encoding="utf-8",
     )
     tmp.replace(p)  # 原子写
+    # SSE 推送项目进度
+    _push_project_event(project)
+
+
+def _push_project_event(proj: "ProjectState") -> None:
+    """推送项目状态变更到 SSE (两个通道: pending queue + 直接广播)。"""
+    try:
+        import json as _json
+        phase = proj.phase.value if hasattr(proj.phase, 'value') else str(proj.phase)
+        task_count = len(proj.task_ids) if hasattr(proj, 'task_ids') else 0
+        payload = _json.dumps({
+            "project_id": proj.id, "name": proj.name,
+            "phase": phase, "task_count": task_count,
+        })
+        # Channel 1: pending queue (loop flush)
+        from singularity.scheduler._types import _pending_sse_events
+        _pending_sse_events.append({"kind": "project", "msg": payload, "ts": time.time()})
+        # Channel 2: direct broadcast
+        from singularity.web.app import _sse_broadcast
+        _sse_broadcast("project", payload)
+    except Exception:
+        pass
 
 
 def load(project_id: str) -> Optional[ProjectState]:
