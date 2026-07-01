@@ -977,6 +977,24 @@ def api_project_file_content(project_id, filepath):
     except Exception as e:
         return jsonify({"content": "", "error": str(e)})
 
+@app.route("/api/projects/<project_id>/diff")
+def api_project_diff(project_id):
+    """最近的 git diff (HEAD~1..HEAD)。"""
+    import subprocess, os
+    try:
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+        result = subprocess.run(
+            ['git', 'diff', 'HEAD~3..HEAD', '--stat'],
+            capture_output=True, text=True, cwd=root, timeout=5)
+        stat = result.stdout.strip()
+        result2 = subprocess.run(
+            ['git', 'diff', 'HEAD~3..HEAD', '--', ':(exclude).qidian', ':(exclude)node_modules', ':(exclude)*.pyc'],
+            capture_output=True, text=True, cwd=root, timeout=5)
+        diff = result2.stdout[:50000]
+        return jsonify({"stat": stat, "diff": diff})
+    except Exception as e:
+        return jsonify({"stat": "", "diff": "", "error": str(e)})
+
 @app.route("/api/projects/<project_id>/cost")
 def api_project_cost(project_id):
     data, code = _api_handler.project_cost(project_id)

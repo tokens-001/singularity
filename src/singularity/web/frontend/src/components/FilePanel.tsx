@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useAppStore } from '../stores/app'
 import { api } from '../lib/api'
-import { FileText, Folder, FolderOpen, X, PanelRightClose } from 'lucide-react'
+import { FileText, Folder, FolderOpen, X, PanelRightClose, GitBranch } from 'lucide-react'
 
 interface FileNode {
   name: string
@@ -15,18 +15,21 @@ export default function FilePanel({ onClose }: { onClose: () => void }) {
   const [selectedFile, setSelectedFile] = useState<string>('')
   const [fileContent, setFileContent] = useState<string>('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [activeTab, setActiveTab] = useState<'files'|'diff'>('files')
+  const [diffData, setDiffData] = useState<{stat: string, diff: string}>({stat:'',diff:''})
   const activePid = useAppStore(s => s.activeProjectId)
 
   useEffect(() => {
     if (activePid === '_default') return
-    // Fetch project files via git ls-files or similar
     fetch(`/api/projects/${activePid}/files`).then(r => r.json()).then(d => {
       if (d.files) {
         const nodes = buildTree(d.files)
         setTree(nodes)
-        // Auto-expand first level
         setExpanded(new Set(nodes.map(n => n.path)))
       }
+    }).catch(() => {})
+    fetch(`/api/projects/${activePid}/diff`).then(r => r.json()).then(d => {
+      setDiffData({ stat: d.stat || '', diff: d.diff || '' })
     }).catch(() => {})
   }, [activePid])
 
@@ -113,29 +116,59 @@ export default function FilePanel({ onClose }: { onClose: () => void }) {
 
   return (
     <div style={{ width: 320, background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px', borderBottom: '1px solid var(--border)' }}>
-        <span style={{ fontWeight: 600, fontSize: 12, flex: 1 }}>文件</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 2, padding: '6px 8px', borderBottom: '1px solid var(--border)' }}>
+        <button onClick={() => setActiveTab('files')} style={{
+          padding: '3px 8px', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 11,
+          background: activeTab === 'files' ? 'var(--bg-tertiary)' : 'transparent',
+          color: activeTab === 'files' ? 'var(--text-primary)' : 'var(--text-muted)',
+        }}><FileText size={12} style={{display:'inline',marginRight:4}}/>文件</button>
+        <button onClick={() => setActiveTab('diff')} style={{
+          padding: '3px 8px', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 11,
+          background: activeTab === 'diff' ? 'var(--bg-tertiary)' : 'transparent',
+          color: activeTab === 'diff' ? 'var(--text-primary)' : 'var(--text-muted)',
+        }}><GitBranch size={12} style={{display:'inline',marginRight:4}}/>Diff</button>
+        <span style={{ flex: 1 }} />
         <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 2 }}>
           <PanelRightClose size={14}/>
         </button>
       </div>
 
-      {/* 文件树 */}
-      <div style={{ flex: 1, overflow: 'auto', paddingBottom: 4 }}>
-        {tree.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 11 }}>暂无文件</div>}
-        {renderTree(tree)}
-      </div>
-
-      {/* 文件内容预览 */}
-      {selectedFile && (
-        <div style={{ borderTop: '1px solid var(--border)', maxHeight: '40%', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ padding: '4px 10px', fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', borderBottom: '1px solid var(--border)' }}>
-            {selectedFile}
+      {activeTab === 'files' && (
+        <>
+          {/* 文件树 */}
+          <div style={{ flex: 1, overflow: 'auto', paddingBottom: 4 }}>
+            {tree.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 11 }}>暂无文件</div>}
+            {renderTree(tree)}
           </div>
-          <pre style={{ flex: 1, overflow: 'auto', padding: '8px 10px', margin: 0, fontSize: 11, fontFamily: 'var(--font-mono)',
-            color: 'var(--text-primary)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
-            {fileContent}
-          </pre>
+          {/* 文件内容预览 */}
+          {selectedFile && (
+            <div style={{ borderTop: '1px solid var(--border)', maxHeight: '40%', display: 'flex', flexDirection: 'column' }}>
+              <div style={{ padding: '4px 10px', fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', borderBottom: '1px solid var(--border)' }}>
+                {selectedFile}
+              </div>
+              <pre style={{ flex: 1, overflow: 'auto', padding: '8px 10px', margin: 0, fontSize: 11, fontFamily: 'var(--font-mono)',
+                color: 'var(--text-primary)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                {fileContent}
+              </pre>
+            </div>
+          )}
+        </>
+      )}
+
+      {activeTab === 'diff' && (
+        <div style={{ flex: 1, overflow: 'auto', padding: '8px 10px' }}>
+          {diffData.stat ? (
+            <>
+              <pre style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', whiteSpace: 'pre-wrap', marginBottom: 8 }}>
+                {diffData.stat}
+              </pre>
+              <pre style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>
+                {diffData.diff || '(无详细差异)'}
+              </pre>
+            </>
+          ) : (
+            <div style={{ color: 'var(--text-muted)', fontSize: 11, textAlign: 'center', padding: 20 }}>无变更记录</div>
+          )}
         </div>
       )}
     </div>
