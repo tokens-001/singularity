@@ -195,12 +195,18 @@ def transition(task_id: str, new_status: TaskStatus, **kwargs) -> Optional[Task]
 def _push_task_event(task_id: str, status: str, desc: str = "") -> None:
     """推送任务状态变更到 SSE 队列。"""
     try:
-        import json as _json
         from singularity.scheduler._types import _pending_sse_events
         import time as _time
+        # 读取完整任务获取 project_id
+        pid = ""
+        try:
+            t = read_task(task_id)
+            if t: pid = getattr(t, 'project_id', '') or ''
+        except Exception:
+            pass
         _pending_sse_events.append({
             "kind": "task", "task_id": task_id, "status": status,
-            "desc": (desc or "")[:120], "ts": _time.time(),
+            "desc": (desc or "")[:120], "project_id": pid, "ts": _time.time(),
         })
     except Exception:
         pass

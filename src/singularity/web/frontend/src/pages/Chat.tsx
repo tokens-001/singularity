@@ -53,6 +53,10 @@ export default function Chat() {
       const tid = td.task_id || ''
       const status = td.status || 'running'
       const desc = td.desc || e.msg || ''
+      // 自动切到任务所属项目
+      if (td.project_id && activePid === '_default') {
+        setActiveProject(td.project_id)
+      }
       setTasks(prev => {
         const next = [...prev]
         const idx = next.findIndex(t => t.id === tid)
@@ -61,6 +65,10 @@ export default function Chat() {
         return next.slice(-20)
       })
     } else if (e.kind === 'system') {
+      // 自动切到消息关联的项目
+      if (e.project_id && activePid === '_default') {
+        setActiveProject(e.project_id)
+      }
       const last = msgs[msgs.length - 1]
       if (last?.role !== 'assistant' || last.content !== e.msg) {
         addChatMsg({ role: 'assistant', content: e.msg || '', ts: Date.now() })
