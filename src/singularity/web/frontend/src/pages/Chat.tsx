@@ -101,7 +101,7 @@ export default function Chat() {
   const active = tasks.filter(t => !['done','failed','cancelled'].includes(t.status)).length
   const info = activePid !== '_default' ? projects.find(p => p.id === activePid) : null
   const hasMsgs = msgs.length > 0
-  const isEmpty = !hasMsgs && !loading
+  const isEmpty = activePid === '_default' || (!hasMsgs && !loading)
 
   return (
     <div style={{ display: 'flex', height: '100%', flex: 1 }}>
