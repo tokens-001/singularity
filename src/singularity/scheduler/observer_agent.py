@@ -252,31 +252,23 @@ def _build_openai_tools() -> list[dict]:
     return tools
 
 OBSERVER_TOOLS = _build_openai_tools()
-OBSERVER_SYSTEM_PROMPT = """你是 Singularity Dispatch 的主交互智能体，用户通过你管理系统的一切。
+def _build_system_prompt() -> str:
+    """从 _TOOL_REGISTRY 自动生成 prompt, 加工具自动出现。"""
+    lines = ["你是奇点，一个 AI 软件开发助手。你帮用户写代码、查状态、管任务。",
+             "",
+             "原则:",
+             "1. 先理解用户意图，再行动",
+             "2. 能直接做的就做，不用问'确定吗'",
+             "3. 用口语化中文，像同事聊天一样",
+             "4. 主动给建议，不只回答问题",
+             "5. 调用工具后直接报告结果",
+             "",
+             "可用工具:"]
+    for t in _TOOL_REGISTRY:
+        lines.append(f"- {t['name']}: {t['description']}")
+    return "\n".join(lines)
 
-可用工具：
-查询类（只读）：
-- get_system_status: 系统整体状态
-- list_tasks: 任务列表，可按status/limit过滤
-- get_task_details: 单个任务详情+执行trace
-- list_stalled_tasks: 停滞任务
-- get_judge_stats: 裁判统计与异常
-- get_recent_events: 最近执行事件
-- list_projects: 项目列表及阶段
-
-操作类（写）：
-- create_task: 创建新任务。用户说"帮我做xxx"时调用
-- control_loop: 启动/停止调度循环
-- delete_task: 删除指定任务
-- delete_failed_tasks: 批量清除所有失败任务
-
-回答要求：
-1. 简洁、准确，使用中文
-2. 数据必须来自工具返回，不编造
-3. 异常时给出原因和建议
-4. 用户要求操作时主动执行（创建任务、控制循环等）
-5. 执行操作后报告结果
-"""
+OBSERVER_SYSTEM_PROMPT = _build_system_prompt()
 
 # ═══════════════════════════════════════════════════════════════
 # Step 3: 定义层 4 角色 (Observer → 搞清楚用户要什么)
@@ -501,16 +493,16 @@ def _get_observer_cfg() -> dict[str, Any]:
             "model": observer_cfg.get("model"),
             "api_key": observer_cfg.get("api_key", ""),
             "base_url": observer_cfg.get("base_url", "https://api.deepseek.com/v1"),
-            "temperature": observer_cfg.get("temperature", 0.3),
-            "max_tokens": observer_cfg.get("max_tokens", 1024),
+            "temperature": observer_cfg.get("temperature", 0.7),
+            "max_tokens": observer_cfg.get("max_tokens", 4096),
         }
-    # ponytail: 默认走 DeepSeek（已配置 DEEPSEEK_API_KEY）
+    # 默认走 DeepSeek
     return {
         "model": "deepseek-chat",
         "api_key": os.environ.get("DEEPSEEK_API_KEY", ""),
         "base_url": "https://api.deepseek.com/v1",
-        "temperature": 0.3,
-        "max_tokens": 1024,
+        "temperature": 0.7,
+        "max_tokens": 4096,
     }
 
 
