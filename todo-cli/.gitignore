@@ -1,4 +1,10 @@
 target/
-**/*.tmp.*
-**/*.bak
+**/*.rs.bk
 .DS_Store
+*.swp
+*~
+.vscode/
+.idea/
+
+# Data directory
+**/todo-cli/

@@ -1,28 +1,22 @@
 #!/bin/bash
 
-# Sample usage script for todo-cli
-
+# Sample usage of the todo-cli tool
 echo "Adding some sample tasks..."
-./target/debug/todo-cli add "Buy groceries"
-./target/debug/todo-cli add "Walk the dog"
-./target/debug/todo-cli add "Finish project documentation"
+./target/debug/todo add "Buy groceries"
+./target/debug/todo add "Walk the dog"
+./target/debug/todo add "Read a book"
 
-echo ""
-echo "Listing all tasks:"
-./target/debug/todo-cli list
+echo -e "\nListing all tasks:"
+./target/debug/todo list
 
-echo ""
-echo "Marking task #2 as completed..."
-./target/debug/todo-cli complete 2
+echo -e "\nMarking task #1 as completed:"
+./target/debug/todo complete 1
 
-echo ""
-echo "Listing all tasks after completing task #2:"
-./target/debug/todo-cli list
+echo -e "\nListing all tasks after completing task #1:"
+./target/debug/todo list
 
-echo ""
-echo "Removing task #3..."
-./target/debug/todo-cli remove 3
+echo -e "\nRemoving task #2:"
+./target/debug/todo remove 2
 
-echo ""
-echo "Final task list:"
-./target/debug/todo-cli list
+echo -e "\nFinal task list:"
+./target/debug/todo list
