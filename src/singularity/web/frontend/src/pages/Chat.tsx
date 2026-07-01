@@ -145,7 +145,7 @@ export default function Chat() {
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0', fontSize: 11, color: done ? 'var(--accent-green)' : fail ? 'var(--accent-red)' : 'var(--text-secondary)' }}>
                   {done ? <CheckCircle2 size={11}/> : fail ? <XCircle size={11}/> : <Loader2 size={11} style={{animation:'spin 1s linear infinite'}}/>}
                   <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {t.desc.length > 100 ? t.desc.slice(0,100)+'...' : t.desc}
+                    {t.desc.split('\n')[0].slice(0, 80)}
                   </span>
                   {fail && (
                     <button onClick={e => { e.stopPropagation(); retryFailed(t.id) }}

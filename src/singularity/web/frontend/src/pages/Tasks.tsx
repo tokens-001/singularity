@@ -103,7 +103,7 @@ export default function Tasks() {
                     borderLeft: `3px solid ${col.color}`, fontSize: 11, color: '#ccc',
                   }}>
                   <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 4, lineHeight: 1.4 }}>
-                    {t.description.length > 80 ? t.description.slice(0, 80) + '...' : t.description}
+                    {t.description.split('\n')[0].slice(0, 80)}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9, color: '#555' }}>
                     <span style={{ fontFamily: 'monospace' }}>{t.id.slice(0, 8)}</span>
