@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
-import { Send, Bot, User, RefreshCw, Loader2, CheckCircle2, XCircle } from 'lucide-react'
+import { Send, Bot, User, Loader2, CheckCircle2, XCircle } from 'lucide-react'
 
 interface Msg { role: 'user' | 'assistant'; content: string; ts: number }
 interface ProgressItem { id: string; desc: string; status: string; ts: number }
@@ -10,13 +10,12 @@ export default function Chat() {
   const [msgs, setMsgs] = useState<Msg[]>([{role:'assistant',content:'你好，我是奇点。直接跟我说你想做什么，我来搞定。',ts:Date.now()}])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [loopRunning, setLoopRunning] = useState(false)
   const [tasks, setTasks] = useState<ProgressItem[]>([])
   const [statusText, setStatusText] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
   const pendingCid = useRef<string>('')
 
-  useEffect(() => { refreshStatus(); fetchTasks() }, [])
+  useEffect(() => { fetchTasks() }, [])
   useEffect(() => { bottomRef.current?.scrollIntoView({behavior:'smooth'}) }, [msgs, tasks])
 
   const fetchTasks = async () => {
@@ -31,9 +30,7 @@ export default function Chat() {
   }
 
   useSSE((e: any) => {
-    if (e.kind === 'init') {
-      setLoopRunning(e.running)
-    } else if (e.kind === 'task') {
+    if (e.kind === 'task') {
       // 实时更新任务进度
       setTasks(prev => {
         const next = [...prev]
@@ -45,7 +42,6 @@ export default function Chat() {
         }
         return next.slice(-20)
       })
-      if (e.status) refreshStatus()
     } else if (e.kind === 'system') {
       setStatusText(e.msg || '')
       setMsgs(prev => {
@@ -67,13 +63,6 @@ export default function Chat() {
       } catch {}
     }
   })
-
-  const refreshStatus = async () => {
-    try {
-      const s = await api.status()
-      setLoopRunning(!!s.loop_running || !!s.running)
-    } catch {}
-  }
 
   const send = async () => {
     const q = input.trim(); if (!q || loading) return
@@ -103,16 +92,15 @@ export default function Chat() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', maxWidth: 800, margin: '0 auto', width: '100%' }}>
-      {/* 顶栏: 状态 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', marginBottom: 8, fontSize: 11, fontFamily: 'var(--font-mono)' }}>
-        <span style={{ color: loopRunning ? 'var(--accent-green)' : 'var(--text-muted)', fontSize: 10 }}>
-          {loopRunning ? '◆ 运行中' : '◇ 待机'}
-        </span>
-        {active > 0 && <span style={{ color: 'var(--accent)' }}>{active} 进行中</span>}
-        {completed > 0 && <span style={{ color: 'var(--accent-green)' }}>{completed} 完成</span>}
-        {failed > 0 && <span style={{ color: 'var(--accent-red)' }}>{failed} 失败</span>}
-        <span style={{ flex: 1 }} />
-      </div>
+      {/* 顶栏: 有任务时显示进度 */}
+      {(active > 0 || completed > 0 || failed > 0) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', marginBottom: 8, fontSize: 11, fontFamily: 'var(--font-mono)' }}>
+          {active > 0 && <span style={{ color: 'var(--accent)' }}>{active} 进行中</span>}
+          {completed > 0 && <span style={{ color: 'var(--accent-green)' }}>{completed} 完成</span>}
+          {failed > 0 && <span style={{ color: 'var(--accent-red)' }}>{failed} 失败</span>}
+          <span style={{ flex: 1 }} />
+        </div>
+      )}
 
       {/* 主体: 对话 + 进度 */}
       <div style={{ flex: 1, overflow: 'auto' }}>
