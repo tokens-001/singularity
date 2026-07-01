@@ -90,13 +90,13 @@ export default function AppLayout() {
         {/* 项目列表 */}
         {tab === 'project' && (
           <div style={{ flex: 1, overflow: 'auto', padding: '0 6px' }}>
-            {/* 根项目 */}
+            {/* 通用对话 */}
             <div onClick={() => selectProject('_default')} style={{
               display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px', margin: '2px 0', borderRadius: 6,
               cursor: 'pointer', color: activePid === '_default' ? '#fff' : '#999', fontSize: 12,
               background: activePid === '_default' ? '#1c1c1e' : 'transparent',
             }}>
-              <FolderIcon/><span style={{flex:1}}>ZCodeProject</span>
+              <FolderIcon/><span style={{flex:1}}>通用对话</span>
             </div>
 
             {/* 子项目 */}
@@ -137,7 +137,7 @@ export default function AppLayout() {
           <div style={{ width: 22, height: 22, borderRadius: 11, background: '#333', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <User size={12} style={{color:'#666'}}/>
           </div>
-          <span style={{ fontSize: 11, color: '#666', flex: 1 }}>uokynjka</span>
+          <span style={{ fontSize: 11, color: '#666', flex: 1 }}>奇点</span>
           <button onClick={() => navigate('/tasks')} style={iconBtn}><List size={13}/></button>
           <button onClick={() => navigate('/config')} style={iconBtn}><Settings size={13}/></button>
         </div>
