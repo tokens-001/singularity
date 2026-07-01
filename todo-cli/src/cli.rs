@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Deserialize, Serialize)]
-struct Task {
+pub struct Task {
     id: usize,
     description: String,
     completed: bool,
@@ -37,14 +37,15 @@ pub fn run(data_file: String) {
     let cli = Cli::parse();
     
     match &cli.command {
-        Commands::Add { description } => add_task(&cli.data_file, description),
-        Commands::List => list_tasks(&cli.data_file),
-        Commands::Complete { id } => complete_task(&cli.data_file, *id),
-        Commands::Delete { id } => delete_task(&cli.data_file, *id),
+        Commands::Add { description } => add_task(&data_file, description),
+        Commands::List => list_tasks(&data_file),
+        Commands::Complete { id } => complete_task(&data_file, *id),
+        Commands::Delete { id } => delete_task(&data_file, *id),
     }
 }
 
-fn load_tasks(data_file: &str) -> Vec<Task> {
+// Functions made public for testing
+pub fn load_tasks_for_test(data_file: &str) -> Vec<Task> {
     if !Path::new(data_file).exists() {
         return Vec::new();
     }
@@ -62,8 +63,8 @@ fn save_tasks(data_file: &str, tasks: &[Task]) {
     fs::write(data_file, json).expect("Failed to write to data file");
 }
 
-fn add_task(data_file: &str, description: &str) {
-    let mut tasks = load_tasks(data_file);
+pub fn add_task_for_test(data_file: &str, description: &str) {
+    let mut tasks = load_tasks_for_test(data_file);
     
     let new_id = if tasks.is_empty() {
         1
@@ -79,12 +80,35 @@ fn add_task(data_file: &str, description: &str) {
 
     tasks.push(new_task);
     save_tasks(data_file, &tasks);
+}
+
+pub fn complete_task_for_test(data_file: &str, id: usize) {
+    let mut tasks = load_tasks_for_test(data_file);
     
+    if let Some(task) = tasks.iter_mut().find(|task| task.id == id) {
+        task.completed = true;
+        save_tasks(data_file, &tasks);
+    }
+}
+
+pub fn delete_task_for_test(data_file: &str, id: usize) {
+    let mut tasks = load_tasks_for_test(data_file);
+    let initial_len = tasks.len();
+    
+    tasks.retain(|task| task.id != id);
+    
+    if tasks.len() != initial_len {
+        save_tasks(data_file, &tasks);
+    }
+}
+
+fn add_task(data_file: &str, description: &str) {
+    add_task_for_test(data_file, description);
     println!("Added task: {}", description);
 }
 
 fn list_tasks(data_file: &str) {
-    let tasks = load_tasks(data_file);
+    let tasks = load_tasks_for_test(data_file);
 
     if tasks.is_empty() {
         println!("No tasks found.");
@@ -98,11 +122,10 @@ fn list_tasks(data_file: &str) {
 }
 
 fn complete_task(data_file: &str, id: usize) {
-    let mut tasks = load_tasks(data_file);
+    let tasks = load_tasks_for_test(data_file);
     
-    if let Some(task) = tasks.iter_mut().find(|task| task.id == id) {
-        task.completed = true;
-        save_tasks(data_file, &tasks);
+    if let Some(task) = tasks.iter().find(|task| task.id == id) {
+        complete_task_for_test(data_file, id);
         println!("Completed task: {} - {}", id, task.description);
     } else {
         println!("Task with ID {} not found.", id);
@@ -110,15 +133,13 @@ fn complete_task(data_file: &str, id: usize) {
 }
 
 fn delete_task(data_file: &str, id: usize) {
-    let mut tasks = load_tasks(data_file);
+    let tasks = load_tasks_for_test(data_file);
     let initial_len = tasks.len();
     
-    tasks.retain(|task| task.id != id);
-    
-    if tasks.len() == initial_len {
-        println!("Task with ID {} not found.", id);
-    } else {
-        save_tasks(data_file, &tasks);
+    if tasks.iter().any(|task| task.id == id) {
+        delete_task_for_test(data_file, id);
         println!("Deleted task with ID: {}", id);
+    } else {
+        println!("Task with ID {} not found.", id);
     }
 }
