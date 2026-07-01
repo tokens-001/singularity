@@ -26,9 +26,6 @@ export default function Chat() {
 
   useEffect(() => {
     fetchProjects(); fetchTasks()
-    if (msgs.length === 0 && activePid === '_default') {
-      addChatMsg({role:'assistant',content:'你好，我是奇点。直接跟我说你想做什么，我来搞定。',ts:Date.now()})
-    }
   }, [activePid])
 
   useEffect(() => { requestAnimationFrame(() => { bottomRef.current?.scrollIntoView({behavior:'smooth'}) }) }, [msgs, tasks])
@@ -79,6 +76,21 @@ export default function Chat() {
   const send = async () => {
     const q = input.trim(); if (!q || loading) return
     addChatMsg({role:'user',content:q,ts:Date.now()}); setInput(''); setLoading(true)
+
+    // 无项目时自动创建
+    let pid = activePid
+    if (pid === '_default') {
+      try {
+        const name = q.slice(0, 30)
+        const r: any = await api.createProject({name, description: q, template: 'product_dev'})
+        if (r?.project?.id) {
+          pid = r.project.id
+          setActiveProject(pid)
+          await fetchProjects()
+        }
+      } catch {}
+    }
+
     try {
       const r = await api.observerChat(q)
       if (r.client_id) { pendingCid.current = r.client_id }
@@ -171,13 +183,11 @@ export default function Chat() {
       <div style={{ padding: '0 0 16px' }}>
         <div style={{ maxWidth: 860, margin: '0 auto', background: '#1c1c1e', borderRadius: 16, border: '1px solid #2c2c2e', padding: '8px 12px' }}>
 
-          {/* 第一行: 项目上下文 */}
+          {/* 第一行: 项目信息 + 文件按钮 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-            <select value={activePid} onChange={e => setActiveProject(e.target.value)}
-              style={{ background: '#2c2c2e', border: 'none', borderRadius: 6, color: '#fff', fontSize: 12, padding: '4px 8px', cursor: 'pointer', maxWidth: 200 }}>
-              <option value="_default">通用对话</option>
-              {projects.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            <span style={{ fontSize: 11, color: '#888' }}>
+              {info ? info.name : '新对话'}
+            </span>
             <span style={{ flex: 1 }} />
             <button onClick={() => setShowFiles(!showFiles)}
               style={{ background: 'none', border: 'none', color: showFiles ? 'var(--accent)' : '#666', cursor: 'pointer', padding: 2 }}>

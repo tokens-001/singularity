@@ -91,16 +91,7 @@ export default function AppLayout() {
         {/* 项目列表 */}
         {tab === 'project' && (
           <div style={{ flex: 1, overflow: 'auto', padding: '0 6px' }}>
-            {/* 通用对话 */}
-            <div onClick={() => selectProject('_default')} style={{
-              display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px', margin: '2px 0', borderRadius: 6,
-              cursor: 'pointer', color: activePid === '_default' ? '#fff' : '#999', fontSize: 12,
-              background: activePid === '_default' ? '#1c1c1e' : 'transparent',
-            }}>
-              <FolderIcon/><span style={{flex:1}}>通用对话</span>
-            </div>
-
-            {/* 子项目 */}
+            {/* 项目列表 */}
             {[...filteredProjects].sort((a, b) => {
               const aPin = pinned.includes(a.id) ? 0 : 1
               const bPin = pinned.includes(b.id) ? 0 : 1
