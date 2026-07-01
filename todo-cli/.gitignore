@@ -1,6 +1,7 @@
 target/
-**/tasks.json
-**/tasks.json.bak
-.DS_Store
-*.swp
-*.tmp
+**/*.rs.bk
+*.json
+!src/**/*.rs
+!Cargo.toml
+!Cargo.lock
+!README.md

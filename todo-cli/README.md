@@ -1,41 +1,36 @@
 # Todo CLI
 
-A simple command-line interface for managing your todos.
+A simple command-line interface tool for managing todos.
 
 ## Features
 
-- Add new todos
-- List all todos with their completion status
-- Mark todos as completed
-- Remove todos
-- Persistent storage using JSON files
+- Add new tasks
+- List all tasks
+- Mark tasks as completed
+- Delete tasks
 
 ## Installation
 
-To build and install this CLI tool, you'll need Rust and Cargo installed. Then:
-
 ```bash
-git clone <repository-url>
-cd todo-cli
-cargo build --release
+cargo install --path .
 ```
-
-The executable will be available at `target/release/todo-cli`.
 
 ## Usage
 
 ```bash
-# Add a new todo
+# Add a new task
 todo add "Buy groceries"
 
-# List all todos
+# List all tasks
 todo list
 
-# Mark a todo as completed (replace ID with actual number)
+# Mark a task as completed
 todo complete 1
 
-# Remove a todo (replace ID with actual number)
-todo remove 1
+# Delete a task
+todo delete 1
 ```
 
-Todos are stored in `~/.local/share/todo-cli/tasks.json` on Linux/macOS or `%APPDATA%\todo-cli\tasks.json` on Windows by default.
+## License
+
+MIT
