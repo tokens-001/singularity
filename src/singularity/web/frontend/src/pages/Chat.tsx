@@ -22,6 +22,7 @@ export default function Chat() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const pendingCid = useRef<string>('')
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const projectsRef = useRef<any[]>([])
 
   useEffect(() => {
     fetchProjects(); fetchTasks()
@@ -30,10 +31,10 @@ export default function Chat() {
     }
   }, [activePid])
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({behavior:'smooth'}) }, [msgs, tasks])
+  useEffect(() => { requestAnimationFrame(() => { bottomRef.current?.scrollIntoView({behavior:'smooth'}) }) }, [msgs, tasks])
 
   const fetchProjects = async () => {
-    try { const d: any = await api.projects(); setProjects(Array.isArray(d)?d:(d?.projects||[])) } catch {}
+    try { const d: any = await api.projects(); const list = Array.isArray(d)?d:(d?.projects||[]); setProjects(list); projectsRef.current = list } catch {}
   }
   const retryFailed = async (tid: string) => { try { await api.retryTask(tid); fetchTasks() } catch {} }
   const fetchTasks = async () => {
@@ -65,11 +66,11 @@ export default function Chat() {
         if (data.client_id === pendingCid.current && data.answer) {
           addChatMsg({ role: 'assistant', content: data.answer, ts: Date.now() })
           setLoading(false); pendingCid.current = ''; fetchTasks(); fetchProjects()
-          setTimeout(() => {
-            for (const p of projects) {
-              if (data.answer && data.answer.includes(p.name) && activePid === '_default') { setActiveProject(p.id); break }
-            }
-          }, 500)
+          // 自动切到 Observer 提到的项目
+          const list = projectsRef.current
+          for (const p of list) {
+            if (data.answer && data.answer.includes(p.name) && activePid === '_default') { setActiveProject(p.id); break }
+          }
         }
       } catch {}
     }

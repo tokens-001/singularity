@@ -963,7 +963,10 @@ def api_project_files(project_id):
             ['git', 'ls-files', '--cached', '--others', '--exclude-standard'],
             capture_output=True, text=True, cwd=root, timeout=5)
         files = [f.strip() for f in result.stdout.split('\n') if f.strip() and not f.strip().startswith('.qidian/')]
-        files = [f for f in files if not f.startswith('node_modules/') and not f.endswith('.pyc')]
+        # 只显示源代码, 排除文档/数据/配置/测试
+        skip_prefixes = ('node_modules/', 'docs/', 'data/', '.agents/', '.git/', '.claude/', '.codegraph/', '__pycache__/')
+        skip_suffixes = ('.pyc', '.md', '.html', '.json', '.toml', '.yaml', '.yml', '.lock', '.gitignore', '.txt')
+        files = [f for f in files if not any(f.startswith(p) for p in skip_prefixes) and not any(f.endswith(s) for s in skip_suffixes)]
         return jsonify({"files": sorted(files)})
     except Exception as e:
         return jsonify({"files": [], "error": str(e)})
