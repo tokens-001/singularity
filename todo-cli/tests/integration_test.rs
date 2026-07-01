@@ -1,75 +1,115 @@
 use std::fs;
+use std::process::Command;
 use tempfile::TempDir;
-use todo_cli::cli;
-use todo_cli::storage::Storage;
-use todo_cli::todo::Todo;
 
 #[test]
 fn test_add_and_list_todos() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TempDir::new().expect("Could not create temporary directory");
     let data_file = temp_dir.path().join("tasks.json");
-    let storage = Storage::new(data_file.clone());
 
     // Add a todo
-    let todo = Todo::new("Test task").with_id(1);
-    let mut todos = storage.load();
-    todos.push(todo);
-    storage.save(&todos).unwrap();
+    let output = Command::new("cargo")
+        .args(["run", "--", "add", "Integration test task"])
+        .env("TODO_DATA_FILE", &data_file)
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Added todo"));
 
-    // Verify it was saved correctly
-    let loaded_todos = storage.load();
-    assert_eq!(loaded_todos.len(), 1);
-    assert_eq!(loaded_todos[0].title, "Test task");
-    assert_eq!(loaded_todos[0].completed, false);
+    // List todos
+    let output = Command::new("cargo")
+        .args(["run", "--", "list"])
+        .env("TODO_DATA_FILE", &data_file)
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Integration test task"));
 }
 
 #[test]
 fn test_complete_todo() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TempDir::new().expect("Could not create temporary directory");
     let data_file = temp_dir.path().join("tasks.json");
-    let storage = Storage::new(data_file.clone());
 
     // Add a todo
-    let todo = Todo::new("Test task").with_id(1);
-    let mut todos = storage.load();
-    todos.push(todo);
-    storage.save(&todos).unwrap();
+    let output = Command::new("cargo")
+        .args(["run", "--", "add", "Task to complete"])
+        .env("TODO_DATA_FILE", &data_file)
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
 
-    // Complete the todo
-    let mut todos = storage.load();
-    if let Some(t) = todos.iter_mut().find(|t| t.id == Some(1)) {
-        t.completed = true;
-    }
-    storage.save(&todos).unwrap();
+    // Complete the todo (assuming it gets ID 1)
+    let output = Command::new("cargo")
+        .args(["run", "--", "complete", "1"])
+        .env("TODO_DATA_FILE", &data_file)
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Completed todo #1"));
 
-    // Verify it was updated
-    let loaded_todos = storage.load();
-    assert_eq!(loaded_todos.len(), 1);
-    assert_eq!(loaded_todos[0].title, "Test task");
-    assert_eq!(loaded_todos[0].completed, true);
+    // Verify it's marked as completed
+    let output = Command::new("cargo")
+        .args(["run", "--", "list"])
+        .env("TODO_DATA_FILE", &data_file)
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[x] 1 Task to complete"));
 }
 
 #[test]
 fn test_remove_todo() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TempDir::new().expect("Could not create temporary directory");
     let data_file = temp_dir.path().join("tasks.json");
-    let storage = Storage::new(data_file.clone());
 
-    // Add two todos
-    let todo1 = Todo::new("Test task 1").with_id(1);
-    let todo2 = Todo::new("Test task 2").with_id(2);
-    let mut todos = storage.load();
-    todos.push(todo1);
-    todos.push(todo2);
-    storage.save(&todos).unwrap();
+    // Add a todo
+    let output = Command::new("cargo")
+        .args(["run", "--", "add", "Task to remove"])
+        .env("TODO_DATA_FILE", &data_file)
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
 
-    // Remove one todo
-    let mut todos = storage.load();
-    todos.retain(|t| t.id != Some(1));
-    storage.save(&todos).unwrap();
+    // Remove the todo
+    let output = Command::new("cargo")
+        .args(["run", "--", "remove", "1"])
+        .env("TODO_DATA_FILE", &data_file)
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Removed todo #1"));
 
-    // Verify only one remains
-    let loaded_todos = storage.load();
-    assert_eq!(loaded_todos.len(), 1);
-    assert_eq!(loaded_todos[0].title, "Test task 2");
+    // Verify it's gone
+    let output = Command::new("cargo")
+        .args(["run", "--", "list"])
+        .env("TODO_DATA_FILE", &data_file)
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("Task to remove"));
+}
+
+#[test]
+fn test_list_empty_todos() {
+    let temp_dir = TempDir::new().expect("Could not create temporary directory");
+    let data_file = temp_dir.path().join("tasks.json");
+
+    let output = Command::new("cargo")
+        .args(["run", "--", "list"])
+        .env("TODO_DATA_FILE", &data_file)
+        .output()
+        .expect("Failed to execute command");
+    
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("No todos found."));
 }

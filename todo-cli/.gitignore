@@ -1,8 +1,6 @@
 target/
-**/*.rs.bk
+**/tasks.json
+**/tasks.json.bak
 .DS_Store
-.vscode/
-.idea/
+*.swp
 *.tmp
-*.log
-todo-cli/data/
