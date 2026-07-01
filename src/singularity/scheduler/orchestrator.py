@@ -131,7 +131,7 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
             results.append((t.id, f"worker_error: {e}", None))
             _save_trace(t, route, snap, None, None, False)
             continue
-        if batch.merge_request is not None:
+        if batch.merge_request:
             mq.submit(batch.merge_request)
             pending_batches[t.id] = (t, t_route, t_snap, batch)
         else:
