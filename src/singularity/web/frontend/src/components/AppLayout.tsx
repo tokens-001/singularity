@@ -61,10 +61,6 @@ export default function AppLayout() {
             style={{ ...sideBtn }}>
             <List size={14}/> 任务管理
           </button>
-          <button onClick={() => navigate('/config')}
-            style={{ ...sideBtn }}>
-            <Settings size={14}/> 配置
-          </button>
         </div>
 
         {/* 搜索 */}
@@ -137,12 +133,15 @@ export default function AppLayout() {
           </div>
         )}
 
-        {/* 底部用户区 */}
+        {/* 底部: 用户 + 配置 */}
         <div style={{ padding: '8px 12px', borderTop: '1px solid #1c1c1e', display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ width: 22, height: 22, borderRadius: 11, background: '#333', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <User size={12} style={{color:'#666'}}/>
           </div>
-          <span style={{ fontSize: 11, color: '#666' }}>奇点</span>
+          <span style={{ fontSize: 11, color: '#666', flex: 1 }}>奇点</span>
+          <button onClick={() => navigate('/config')} style={iconBtn} title="配置">
+            <Settings size={14}/>
+          </button>
         </div>
       </div>
 
