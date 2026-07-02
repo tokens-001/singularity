@@ -243,12 +243,29 @@ def _save_edges(edges: dict) -> None:
     _write_json(_EDGES_PATH, edges)
 
 
+def _infer_mem_type(description: str) -> str:
+    """从任务描述推断记忆类型。ponytail: 关键词匹配，够用。"""
+    desc = description.lower()
+    if any(w in desc for w in ("架构", "设计", "系统", "方案", "重构")):
+        return "architecture"
+    if any(w in desc for w in ("修", "bug", "fix", "报错", "异常", "崩溃")):
+        return "bug_fix"
+    if any(w in desc for w in ("决定", "选择", "方案", "决策")):
+        return "decision"
+    if any(w in desc for w in ("加", "新增", "实现", "功能", "模块", "feature")):
+        return "code_change"
+    if any(w in desc for w in ("文档", "readme", "注释", "doc")):
+        return "docs"
+    return "code_change"
+
+
 def index_task(
     task_id: str,
     description: str,
     changed_files: list[str] | None = None,
     depends_on: list[str] | None = None,
     created_at: float | None = None,
+    mem_type: str = "",
 ) -> None:
     """快通道摄入: 创建 EventNode + 更新四图边。
 
@@ -277,6 +294,10 @@ def index_task(
             if jaccard > 0.75:
                 return  # 高度重复，跳过 index
 
+    # ── 记忆类型: 显式传入或自动推断 ──
+    if not mem_type:
+        mem_type = _infer_mem_type(description)
+
     # ── EventNode ──
     tokens = _embed(description)
     node = EventNode(
@@ -284,7 +305,7 @@ def index_task(
         content=description,
         timestamp=created_at,
         emb=tokens,
-        attrs={"files": changed_files, "depends_on": depends_on},
+        attrs={"files": changed_files, "depends_on": depends_on, "mem_type": mem_type},
     )
     events[task_id] = node
     _save_events(events)
@@ -759,8 +780,11 @@ def query(
     beam_width: int = 3,
     max_hops: int = 3,
     max_depth: int = 1,
+    mem_type: str = "",
 ) -> dict:
     """MAGMA 完整查询流水线（金字塔渐进检索 — 受 Omni-SimpleMem 启发）。
+
+    mem_type: 可选过滤类型 (architecture/bug_fix/decision/code_change/docs)，空=不过滤
 
     Stage 1: 意图分类 → 边权重
     Stage 2: RRF 锚点识别
@@ -811,6 +835,14 @@ def query(
             ],
             "synthesis_model": "semantic_only",
         }
+
+    # ── 按记忆类型过滤 ──
+    if mem_type:
+        events = _load_events()
+        semantic_only = [
+            s for s in semantic_only
+            if events.get(s["task_id"], EventNode("", "", 0)).attrs.get("mem_type", "") == mem_type
+        ]
 
     return {
         "traversal": narrative,
