@@ -1,64 +1,126 @@
-"""router.py — 任务类型识别 (仅标注, 不分配层级)
-
-两档后弃用 E/E+/D 分级。router 只做 task_type 检测供 trace 标注。
-模型选择由用户指定或 dispatcher 从全池推荐。
-"""
+"""router.py — 任务类型识别 (LLM分类, 不再用正则)"""
 
 from __future__ import annotations
-import re
+import json
+import os
+import time
 from dataclasses import dataclass, field
+
+import httpx
+
+from singularity.scheduler import config
 from singularity.scheduler.log import timed
 
 
 @dataclass
 class RouteResult:
-    """路由结果: 仅 task_type + gate_required, 不分配层级。"""
-    task_type: str = "default"       # bugfix | feature | refactor | docs | default
-    gate_required: bool = False      # 命中引擎核心文件
+    """路由结果: task_type + gate_required。"""
+    task_type: str = "default"
+    gate_required: bool = False
     matched_signals: list = field(default_factory=list)
 
 
-# ── GATE 触发文件 ──
-_GATE_FILE_RE = re.compile(r"\b(core|tokenizer|graph|search)\.py\b", re.ASCII)
+# 任务分类缓存 (避免重复 LLM 调用)
+_CLASSIFY_CACHE: dict[str, RouteResult] = {}
+_CACHE_MAX = 200
 
-# ── 任务类型检测 ──
-_TYPE_PATTERNS = [
-    ("bugfix",   re.compile(r"修|报错|bug|坏了|不对|异常|崩溃")),
-    ("feature",  re.compile(r"加|新增|实现|功能|模块")),
-    ("refactor", re.compile(r"重构|重写|改架构|拆分|合并")),
-    ("docs",     re.compile(r"文档|README|注释|changelog|配置|\.yaml|\.yml")),
-    ("fusion",   re.compile(r"架构设计|系统设计|安全审计|架构方案|技术方案|多模块|跨模块|从零开始")),
-]
 
-# 消歧: 否定词+动作词
-_NEGATION_FILTER = re.compile(
-    r"(?:不|别|不要|不必|不用)(?:新建|创建|搭建|建立|写代码|编写|重写|实现|重构|审查|修改)"
-)
+_CACHE_EXPIRY = 3600  # 1 小时
+
+_CLASSIFY_PROMPT = """你是任务分类器。判断用户描述属于哪种类型,只输出JSON。
+
+类型:
+- bugfix: 修bug、报错、异常、坏了、不对
+- feature: 新增功能、模块、页面、组件
+- refactor: 重构、重写、改架构、拆分
+- docs: 文档、README、注释
+- default: 其他
+
+还要判断是否触及核心引擎文件(需要GATE门禁):
+core.py, tokenizer.py, graph.py, search.py, config.py
+
+只输出JSON,别说话:
+{"type": "bugfix|feature|refactor|docs|default", "gate": true|false, "signals": ["命中关键词1"]}"""
+
+
+def _llm_classify(task: str) -> RouteResult:
+    """用 LLM 分类任务类型。失败时回退 default。"""
+    # 先查缓存
+    if task in _CLASSIFY_CACHE:
+        cached = _CLASSIFY_CACHE[task]
+        if time.time() - cached.matched_signals[0] if cached.matched_signals and isinstance(cached.matched_signals[0], (int, float)) else True:
+            return cached
+
+    try:
+        # 从 agents.json 取任意可用模型
+        from singularity.scheduler.dispatcher import load_agents
+        agents = load_agents()
+        agent_cfg = None
+        for tier in ("any",):
+            for a in agents.get(tier, []):
+                if a.get("model"):
+                    agent_cfg = a
+                    break
+            if agent_cfg:
+                break
+
+        if not agent_cfg:
+            return RouteResult()
+
+        model = agent_cfg.get("request_template", {}).get("model", agent_cfg.get("model", "deepseek-chat"))
+        base_url = agent_cfg.get("entry", "https://api.deepseek.com/v1/chat/completions")
+        api_key_env = agent_cfg.get("api_key_env", "DEEPSEEK_API_KEY")
+        api_key = os.environ.get(api_key_env, "")
+
+        if not api_key:
+            return RouteResult()
+
+        body = {
+            "model": model,
+            "messages": [{"role": "user", "content": f"任务描述: {task}\n\n{_CLASSIFY_PROMPT}"}],
+            "max_tokens": 80, "temperature": 0,
+        }
+
+        client = httpx.Client(timeout=httpx.Timeout(10.0, connect=5.0))
+        resp = client.post(
+            f"{base_url.rstrip('/')}/chat/completions",
+            json=body,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+
+        # 提取 JSON
+        import re
+        m = re.search(r'\{[^}]+\}', content)
+        if m:
+            parsed = json.loads(m.group())
+            result = RouteResult(
+                task_type=parsed.get("type", "default"),
+                gate_required=parsed.get("gate", False),
+                matched_signals=parsed.get("signals", []),
+            )
+        else:
+            result = RouteResult(task_type="default")
+    except Exception:
+        result = RouteResult()
+
+    # 写缓存 (限制大小)
+    if len(_CLASSIFY_CACHE) >= _CACHE_MAX:
+        _CLASSIFY_CACHE.pop(next(iter(_CLASSIFY_CACHE)))
+    _CLASSIFY_CACHE[task] = result
+    return result
 
 
 @timed(name="router")
 def route(task: str) -> RouteResult:
-    """检测 task_type + gate_required。不分配层级。"""
-    task = _NEGATION_FILTER.sub("", task)
-    result = RouteResult()
+    """LLM 分类任务。失败时返回 default。"""
+    # ponytail: 短任务描述 (<20字) 直接用 default, 不值得调 LLM
+    if len(task) < 20:
+        return RouteResult()
+    return _llm_classify(task)
 
-    if _GATE_FILE_RE.search(task):
-        result.gate_required = True
-        result.matched_signals.append("gate_required: 引擎核心文件")
-
-    for ttype, pat in _TYPE_PATTERNS:
-        if pat.search(task):
-            result.task_type = ttype
-            result.matched_signals.append(f"task_type: {ttype}")
-            return result
-
-    result.task_type = "default"
-    return result
-
-
-# ═══════════════════════════════════════════════════
-# 拓扑路由 (AdaptOrch 论文) — 保留, 不涉及层级
-# ═══════════════════════════════════════════════════
 
 def select_topology() -> dict:
     """基于 DAG 结构指标选择执行拓扑。"""

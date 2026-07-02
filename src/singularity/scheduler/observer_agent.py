@@ -119,12 +119,28 @@ def _tool_get_recent_events(limit: int = 20) -> list[dict]:
 # ═══════════════════════════════════════════════════════════════
 
 def _tool_create_task(description: str, level: str = "any") -> dict:
-    """创建新任务。"""
+    """创建新任务,自动分类并启动调度循环。"""
     try:
         task = tracker.create(description)
-        if level:
-            tracker.transition(task.id, tracker.TaskStatus.PENDING, route_level=level, route_locked=True)
-        return {"ok": True, "task_id": task.id, "level": level, "description": description}
+        # LLM 分类任务类型
+        route_type = "default"
+        try:
+            from singularity.scheduler.router import route as classify_route
+            r = classify_route(description)
+            route_type = r.task_type
+            gate = r.gate_required
+        except Exception:
+            gate = False
+        tracker.transition(task.id, tracker.TaskStatus.PENDING, route_level=level,
+                          route_locked=True, route_type=route_type, route_gate=gate)
+        # 确保调度循环在跑
+        try:
+            import singularity.web.app as app_mod
+            if not app_mod._loop_running:
+                app_mod.start_loop(concurrent=2)
+        except Exception:
+            pass
+        return {"ok": True, "task_id": task.id, "type": route_type, "description": description}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -254,16 +270,19 @@ def _build_openai_tools() -> list[dict]:
 OBSERVER_TOOLS = _build_openai_tools()
 def _build_system_prompt() -> str:
     """从 _TOOL_REGISTRY 自动生成 prompt, 加工具自动出现。"""
-    lines = ["你是奇点，一个 AI 软件开发助手。你帮用户写代码、查状态、管任务。",
-             "",
-             "核心原则:",
-             "1. 用户说要做东西→直接调用 create_task，别问需求、别切角色",
-             "2. create_task 的 description 要写详细：功能+样式+技术要求+验收标准",
-             "    例: '番茄钟网页:25分钟倒计时+5分钟休息自动切换。白色背景,大号数字,圆形按钮,开始/暂停/重置。纯HTML+CSS+JS单文件,打开即用。验收:倒计时准确,休息自动切换,有声音提示'",
-             "3. 用口语化中文，像同事聊天",
-             "4. 调用工具后一句话报告结果",
-             "",
-             "可用工具:"]
+    lines = ['你是奇点，一个能直接干活的 AI 软件开发助手。用户找你是让你做事，不是聊天。',
+             '',
+             '行为规则（严格遵守）:',
+             '1. 用户说要做东西(无论什么形式)→必须调用 create_task，别先打招呼、别问"需要什么帮助"',
+             '2. 只有用户纯闲聊(你好/谢谢/你是谁)才回文字，否则必须调工具干活',
+             '3. create_task 的 description 必须详细具体:',
+             '   - 功能清单+交互细节+视觉效果+技术栈+验收标准',
+             "   - 例: '番茄钟网页:25分钟倒计时+5分钟休息自动切换。白色背景,大号数字,圆形按钮,开始/暂停/重置。纯HTML+CSS+JS单文件,打开即用。验收:倒计时准确,休息自动切换,有声音提示'",
+             "4. 如果用户说'直接做/别问了/快做'→一句话不说,直接 create_task",
+             '5. 回复格式: 做了什么事,一句话说清。例: "已创建任务:番茄钟网页。调度循环已启动,开始执行。"',
+             '6. 创建任务后自动启动调度循环(start loop)',
+             '',
+             '可用工具:']
     for t in _TOOL_REGISTRY:
         lines.append(f"- {t['name']}: {t['description']}")
     return "\n".join(lines)
