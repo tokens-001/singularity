@@ -367,6 +367,28 @@ def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
         k = a.get("model", "")
         if k not in seen:
             deduped.append(a); seen.add(k)
+
+    # ── 路由学习者权重排序 ──
+    # 按模型在所有任务类型下的平均 Hedge 权重降序,
+    # 权重>1=近期成功多, <1=近期失败多, 1=冷启动
+    if len(deduped) > 1:
+        try:
+            from singularity.scheduler.route_learner import load_learner
+            learner = load_learner()
+            if learner and learner._stats:
+                model_weights: dict[str, float] = {}
+                for stat in learner._stats.values():
+                    prev = model_weights.get(stat.model, 1.0)
+                    # avg across task_types for this model
+                    model_weights[stat.model] = (prev + stat.hedge_weight) / 2
+                if model_weights:
+                    deduped.sort(
+                        key=lambda a: model_weights.get(a.get("model", ""), 1.0),
+                        reverse=True,
+                    )
+        except Exception:
+            pass  # learner 挂了不阻塞选择
+
     return deduped
 
 
