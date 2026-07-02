@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
+import { useToast } from '../components/Toast'
 import { Activity, Zap, Clock, BarChart3 } from 'lucide-react'
 
 export default function StatusPanel() {
@@ -15,7 +16,7 @@ export default function StatusPanel() {
         api.projects().then((d: any) => Array.isArray(d) ? d : (d?.projects||[])),
       ])
       setStatus(s); setTokenUsage(t); setProjects(p)
-    } catch {}
+    } catch { useToast.getState().add('加载系统状态失败', 'error') }
   }
 
   useEffect(() => { fetch() }, [])

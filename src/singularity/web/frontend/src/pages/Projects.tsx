@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
+import { useToast } from '../components/Toast'
 import { Plus, RefreshCw, ChevronDown, ChevronRight, Check, X } from 'lucide-react'
 
 const PHASE_CN: Record<string,string> = {
@@ -18,12 +19,13 @@ export default function Projects() {
   const [expanded, setExpanded] = useState<string|null>(null)
   const [detail, setDetail] = useState<any>(null)
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm] = useState({ name: '', description: '', template: 'product_dev' })
+  const [form, setForm] = useState({ name: '', description: '', template: 'feature' })
   const [loading, setLoading] = useState(true)
+  const toast = useToast(s => s.add)
 
   const fetch = async () => {
     setLoading(true)
-    try { const d: any = await api.projects(); setProjects(Array.isArray(d)?d:(d?.projects||[])) } catch {}
+    try { const d: any = await api.projects(); setProjects(Array.isArray(d)?d:(d?.projects||[])) } catch { toast('加载项目失败', 'error') }
     setLoading(false)
   }
   useEffect(() => { fetch() }, [])
@@ -32,98 +34,102 @@ export default function Projects() {
   const toggle = async (id: string) => {
     if (expanded === id) { setExpanded(null); setDetail(null); return }
     setExpanded(id)
-    try { const d = await api.project(id); setDetail(d) } catch {}
+    try { const d = await api.project(id); setDetail(d) } catch { toast('加载项目详情失败', 'error') }
   }
 
   const create = async () => {
     if (!form.name) return
     await api.createProject(form)
-    setShowCreate(false); setForm({ name: '', description: '', template: 'product_dev' }); fetch()
+    setShowCreate(false); setForm({ name: '', description: '', template: 'feature' }); fetch()
   }
 
   const [confirming, setConfirming] = useState<string|null>(null)
   const handleGate = async (id: string, gate: string, decision: string) => {
     setConfirming(gate)
-    try { await api.gateConfirm(id, gate, decision); toggle(id) } catch {}
+    try { await api.gateConfirm(id, gate, decision); toggle(id) } catch { toast('操作失败', 'error') }
     setConfirming(null)
   }
 
   const phases = ['template','researching','gate1','planning','gate2','executing','integrating','reviewing','fixing','gate3','delivering','done']
 
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+    <div className="page-wrap-wide">
+      <div className="flex-center gap-8" style={{ marginBottom: 12 }}>
         <h2 style={{ fontSize: 16, fontWeight: 600 }}>项目</h2>
-        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{projects.length} 个</span>
-        <span style={{ flex: 1 }} />
-        <button onClick={fetch} style={{background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',padding:2}}><RefreshCw size={14}/></button>
-        <button onClick={()=>setShowCreate(!showCreate)} style={{background:'var(--accent-green)',color:'#fff',border:'none',borderRadius:'var(--radius)',padding:'6px 12px',cursor:'pointer',fontSize:12,display:'flex',alignItems:'center',gap:4}}><Plus size={14}/> 新建</button>
+        <span className="fs-11 text-muted">{projects.length} 个</span>
+        <span className="flex-1"/>
+        <button onClick={fetch} className="btn-icon"><RefreshCw size={14}/></button>
+        <button onClick={()=>setShowCreate(!showCreate)} className="btn-green" style={{ padding: '6px 12px', fontSize: 12, gap: 4 }}><Plus size={14}/> 新建</button>
       </div>
 
       {showCreate && (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 10, padding: 10, background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', flexWrap: 'wrap' }}>
-          <input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="项目名称" style={{background:'var(--bg-tertiary)',border:'1px solid var(--border)',borderRadius:4,padding:'6px 8px',color:'var(--text-primary)',fontSize:12,flex:1}} />
-          <input value={form.description} onChange={e=>setForm({...form,description:e.target.value})} placeholder="需求描述" style={{background:'var(--bg-tertiary)',border:'1px solid var(--border)',borderRadius:4,padding:'6px 8px',color:'var(--text-primary)',fontSize:12,flex:2}} />
-          <select value={form.template} onChange={e=>setForm({...form,template:e.target.value})} style={{background:'var(--bg-tertiary)',border:'1px solid var(--border)',borderRadius:4,padding:'6px 8px',color:'var(--text-primary)',fontSize:12,width:'auto'}}>
-            <option value="product_dev">产品开发</option><option value="bug_fix">Bug修复</option><option value="refactor">重构</option>
+        <div className="flex-center gap-8 flex-wrap" style={{ marginBottom: 10, padding: 10, background: 'var(--bg-secondary)', borderRadius: 'var(--radius)' }}>
+          <input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="项目名称" className="inp-sm" style={{ flex: 1 }}/>
+          <input value={form.description} onChange={e=>setForm({...form,description:e.target.value})} placeholder="需求描述" className="inp-sm" style={{ flex: 2 }}/>
+          <select value={form.template} onChange={e=>setForm({...form,template:e.target.value})} className="inp-sm" style={{ width: 'auto' }}>
+            <option value="feature">新功能</option><option value="bugfix">Bug修复</option><option value="refactor">重构</option><option value="test">写测试</option><option value="review">代码审查</option>
           </select>
-          <button onClick={create} style={{ background: 'var(--accent-green)', color: '#fff', border: 'none', borderRadius: 4, padding: '6px 14px', cursor: 'pointer', fontSize: 12 }}>创建</button>
+          <button onClick={create} className="btn-green" style={{ padding: '6px 14px', fontSize: 12 }}>创建</button>
         </div>
       )}
 
-      {loading && <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: 20 }}>加载中...</div>}
-      {!loading && projects.map((p: any) => (
-        <div key={p.id} style={{ marginBottom: 6 }}>
-          <div onClick={()=>toggle(p.id)}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', cursor: 'pointer' }}>
-            <span style={{ color: 'var(--text-muted)' }}>{expanded===p.id?<ChevronDown size={12}/>:<ChevronRight size={12}/>}</span>
-            <span style={{ fontWeight: 600, fontSize: 13, flex: 1 }}>{p.name}</span>
-            <span style={{ fontSize: 10, color: PC[p.phase]||'var(--text-muted)', fontWeight: 600 }}>{PHASE_CN[p.phase]||p.phase}</span>
-            <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{p.task_count||0} 任务</span>
-          </div>
-          {expanded === p.id && detail && (
-            <div style={{ marginLeft: 20, padding: '8px 14px', borderLeft: '1px solid var(--border)', fontSize: 12 }}>
-              <div style={{ display: 'flex', gap: 2, marginBottom: 8, flexWrap: 'wrap' }}>
-                {phases.map(ph => (
-                  <span key={ph} style={{
-                    padding: '2px 6px', borderRadius: 3, fontSize: 9, fontWeight: ph===detail.phase?700:400,
-                    color: ph===detail.phase?'#fff':(PC[ph]||'var(--text-muted)'),
-                    background: ph===detail.phase?PC[ph]:'transparent',
-                    border: '1px solid '+(PC[ph]||'var(--border)')
-                  }}>{PHASE_CN[ph]||ph}</span>
-                ))}
+      {loading ? (
+        <div>
+          {[1,2,3].map(i => <div key={i} className="skeleton skeleton-row"/>)}
+        </div>
+      ) : (
+        <>
+          {projects.map((p: any) => (
+            <div key={p.id} style={{ marginBottom: 6 }}>
+              <div onClick={()=>toggle(p.id)}
+                className="flex-center gap-8" style={{ padding: '8px 10px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', cursor: 'pointer' }}>
+                <span className="text-muted">{expanded===p.id?<ChevronDown size={12}/>:<ChevronRight size={12}/>}</span>
+                <span className="fw-600 fs-13 flex-1">{p.name}</span>
+                <span className="fs-10 fw-600" style={{ color: PC[p.phase]||'var(--text-muted)' }}>{PHASE_CN[p.phase]||p.phase}</span>
+                <span className="fs-10 text-muted">{p.task_count||0} 任务</span>
               </div>
-              <div style={{ color: 'var(--text-secondary)', marginBottom: 4 }}>{detail.description}</div>
-              {detail.phase && detail.phase.startsWith('gate') && (
-                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                  <button onClick={()=>handleGate(p.id, detail.phase, 'approved')}
-                    disabled={confirming===detail.phase}
-                    style={{ display:'flex',alignItems:'center',gap:4, padding:'5px 12px', background:'var(--accent-green)', color:'#fff',
-                      border:'none', borderRadius:'var(--radius)', cursor:'pointer', fontSize:12, fontWeight:600 }}>
-                    <Check size={14}/> 批准
-                  </button>
-                  <button onClick={()=>handleGate(p.id, detail.phase, 'rejected')}
-                    disabled={confirming===detail.phase}
-                    style={{ display:'flex',alignItems:'center',gap:4, padding:'5px 12px', background:'var(--accent-red)', color:'#fff',
-                      border:'none', borderRadius:'var(--radius)', cursor:'pointer', fontSize:12, fontWeight:600 }}>
-                    <X size={14}/> 驳回
-                  </button>
-                  <span style={{ fontSize:10, color:'var(--text-muted)', alignSelf:'center' }}>
-                    {PHASE_CN[detail.phase]} — 确认后自动推进
-                  </span>
-                </div>
-              )}
-              {detail.lineage && detail.lineage.length > 0 && (
-                <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-muted)' }}>
-                  {detail.lineage.slice(-5).map((l:any,i:number) => (
-                    <div key={i}>[{l.action}] {l.agent||''} {l.task_count?l.task_count+'任务':''}</div>
-                  ))}
+              {expanded === p.id && detail && (
+                <div style={{ marginLeft: 20, padding: '8px 14px', borderLeft: '1px solid var(--border)', fontSize: 12 }}>
+                  <div className="flex-center gap-4 flex-wrap" style={{ marginBottom: 8 }}>
+                    {phases.map(ph => (
+                      <span key={ph} style={{
+                        padding: '2px 6px', borderRadius: 3, fontSize: 9, fontWeight: ph===detail.phase?700:400,
+                        color: ph===detail.phase?'#fff':(PC[ph]||'var(--text-muted)'),
+                        background: ph===detail.phase?PC[ph]:'transparent',
+                        border: '1px solid '+(PC[ph]||'var(--border)')
+                      }}>{PHASE_CN[ph]||ph}</span>
+                    ))}
+                  </div>
+                  <div className="text-secondary" style={{ marginBottom: 4 }}>{detail.description}</div>
+                  {detail.phase && detail.phase.startsWith('gate') && (
+                    <div className="flex-center gap-8" style={{ marginBottom: 8 }}>
+                      <button onClick={()=>handleGate(p.id, detail.phase, 'approved')} disabled={confirming===detail.phase}
+                        className="btn-green" style={{ padding: '5px 12px', fontSize: 12, fontWeight: 600, gap: 4 }}>
+                        <Check size={14}/> 批准
+                      </button>
+                      <button onClick={()=>handleGate(p.id, detail.phase, 'rejected')} disabled={confirming===detail.phase}
+                        style={{ background:'var(--accent-red)',color:'#fff',border:'none',borderRadius:'var(--radius)',cursor:'pointer',fontSize:12,fontWeight:600,padding:'5px 12px',display:'flex',alignItems:'center',gap:4 }}>
+                        <X size={14}/> 驳回
+                      </button>
+                      <span className="fs-10 text-muted">{PHASE_CN[detail.phase]} — 确认后自动推进</span>
+                    </div>
+                  )}
+                  {detail.lineage && detail.lineage.length > 0 && (
+                    <div className="fs-10 text-muted" style={{ marginTop: 4 }}>
+                      {detail.lineage.slice(-5).map((l:any,i:number) => (
+                        <div key={i}>[{l.action}] {l.agent||''} {l.task_count?l.task_count+'任务':''}</div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
+          ))}
+          {!loading && projects.length === 0 && (
+            <div className="fs-11 text-muted" style={{ padding: 20, textAlign: 'center' }}>暂无项目，点"新建"创建</div>
           )}
-        </div>
-      ))}
+        </>
+      )}
     </div>
   )
 }

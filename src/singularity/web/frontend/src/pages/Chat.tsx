@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
 import { useAppStore, type ChatMsg } from '../stores/app'
+import { useToast } from '../components/Toast'
 import { Send, Loader2, CheckCircle2, XCircle, RotateCcw, FolderOpen, ArrowUp } from 'lucide-react'
 import FilePanel from '../components/FilePanel'
 
@@ -22,9 +23,9 @@ export default function Chat() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const pendingCid = useRef<string>('')
   const projectsRef = useRef<any[]>([])
+  const toast = useToast(s => s.add)
 
   useEffect(() => {
-    // 每次进 Chat 页切到 _default 显示空状态
     if (activePid !== '_default') { setActiveProject('_default') }
     useAppStore.getState().clearConversation('_default')
     fetchProjects(); fetchTasks()
@@ -32,7 +33,7 @@ export default function Chat() {
   useEffect(() => { requestAnimationFrame(() => { bottomRef.current?.scrollIntoView({behavior:'smooth'}) }) }, [msgs, tasks])
 
   const fetchProjects = async () => {
-    try { const d: any = await api.projects(); const list = Array.isArray(d)?d:(d?.projects||[]); setProjects(list); projectsRef.current = list } catch {}
+    try { const d: any = await api.projects(); const list = Array.isArray(d)?d:(d?.projects||[]); setProjects(list); projectsRef.current = list } catch { toast('加载项目失败', 'error') }
   }
   const fetchTasks = async () => {
     try {
@@ -41,9 +42,9 @@ export default function Chat() {
         const filtered = activePid !== '_default' ? t.filter((x: any) => x.project_id === activePid) : t
         setTasks(filtered.slice(0, 20).map((x: any) => ({ id: x.id, desc: x.description || '', status: x.status, ts: x.updated_at || Date.now() })))
       }
-    } catch {}
+    } catch { toast('加载任务失败', 'error') }
   }
-  const retryFailed = async (tid: string) => { try { await api.retryTask(tid); fetchTasks() } catch {} }
+  const retryFailed = async (tid: string) => { try { await api.retryTask(tid); fetchTasks() } catch { toast('重试失败', 'error') } }
 
   useSSE((e: any) => {
     if (e.kind === 'task') {
@@ -62,7 +63,6 @@ export default function Chat() {
       const last = msgs[msgs.length - 1]
       if (last?.role !== 'assistant' || last.content !== e.msg) addChatMsg({ role: 'assistant', content: e.msg || '', ts: Date.now() })
     } else if (e.kind === 'observer_answer' && pendingCid.current) {
-      // 只处理当前等待中的回复, 忽略历史回放
       try {
         const data = JSON.parse(e.msg || '{}')
         if (data.client_id === pendingCid.current && data.answer) {
@@ -81,12 +81,11 @@ export default function Chat() {
     const q = input.trim(); if (!q || loading) return
     addChatMsg({role:'user',content:q,ts:Date.now()}); setInput(''); setLoading(true)
 
-    // 无项目时自动创建
     if (activePid === '_default') {
       try {
         const r: any = await api.createProject({name: q.slice(0, 30), description: q, template: 'product_dev'})
         if (r?.project?.id) { setActiveProject(r.project.id); await fetchProjects() }
-      } catch {}
+      } catch { toast('创建项目失败', 'error') }
     }
 
     try {
@@ -108,69 +107,53 @@ export default function Chat() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', flex: 1, position: 'relative' }}>
 
       {isEmpty ? (
-        /* 空状态：输入框居中 */
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', paddingBottom: '10%' }}>
-          <div style={{ fontSize: 24, fontWeight: 600, color: '#ccc', marginBottom: 24 }}>
-            今天想做什么？
-          </div>
-          <div style={{ width: '100%', maxWidth: 600, background: '#1c1c1e', borderRadius: 16, border: '1px solid #2c2c2e', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="chat-empty">
+          <div style={{ fontSize: 24, fontWeight: 600, color: '#ccc', marginBottom: 24 }}>今天想做什么？</div>
+          <div style={{ width: '100%', maxWidth: 600 }} className="chat-input-wrap">
             <textarea value={input} onChange={e => setInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-              placeholder="发送消息..."
-              rows={1}
-              style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: '#fff', fontSize: 14, fontFamily: 'inherit', resize: 'none', padding: '8px 0', lineHeight: '22px' }}/>
-            <button onClick={send} disabled={!input.trim()}
-              style={{ background: input.trim() ? '#fff' : '#333', color: input.trim() ? '#000' : '#666', border: 'none', borderRadius: 6, width: 28, height: 28, cursor: input.trim() ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              placeholder="发送消息..." rows={1} className="chat-textarea"/>
+            <button onClick={send} disabled={!input.trim()} className="chat-send-btn"
+              style={{ background: input.trim() ? '#fff' : '#333', color: input.trim() ? '#000' : '#666', cursor: input.trim() ? 'pointer' : 'default' }}>
               <ArrowUp size={14}/>
             </button>
           </div>
-          {activePid !== '_default' && info && (
-            <div style={{ fontSize: 11, color: '#666', marginTop: 8 }}>{info.name}</div>
-          )}
+          {activePid !== '_default' && info && <div className="fs-11 text-muted" style={{ marginTop: 8 }}>{info.name}</div>}
         </div>
       ) : (
-        /* 有对话：常规布局 */
         <>
           <div style={{ flex: 1, overflow: 'auto', padding: '8px 0' }}>
             {msgs.map((m: ChatMsg, i: number) => {
-              const isUser = m.role === 'user'
-              if (isUser) {
+              if (m.role === 'user') {
                 return (
-                  <div key={i} style={{ padding: '4px 0', textAlign: 'right', maxWidth: 860, margin: '0 auto', width: '100%' }}>
-                    <span style={{ display: 'inline-block', textAlign: 'left', fontSize: 13, color: '#fff', background: '#2563eb', borderRadius: 12, padding: '6px 12px', maxWidth: '80%', whiteSpace: 'pre-wrap' }}>
-                      {m.content}
-                    </span>
+                  <div key={i} className="chat-msg-row" style={{ textAlign: 'right', padding: '4px 0' }}>
+                    <span className="chat-msg-user">{m.content}</span>
                   </div>
                 )
               }
-              return (
-                <div key={i} style={{ padding: '4px 0 12px', fontSize: 13, color: '#ccc', lineHeight: 1.7, whiteSpace: 'pre-wrap', maxWidth: 860, margin: '0 auto', width: '100%' }}>
-                  {m.content}
-                </div>
-              )
+              return <div key={i} className="chat-msg-row chat-msg-assistant">{m.content}</div>
             })}
 
-            {/* 任务进度 */}
             {tasks.length > 0 && (
-              <div style={{ maxWidth: 860, margin: '0 auto 16px', width: '100%' }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: '#666', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <div className="chat-msg-row" style={{ marginBottom: 16 }}>
+                <div className="flex-center gap-4" style={{ marginBottom: 6 }}>
                   {active > 0 ? <Loader2 size={10} style={{animation:'spin 1s linear infinite'}}/> : <CheckCircle2 size={10} style={{color:'#3fb950'}}/>}
-                  {active > 0 ? `${active} 个执行中` : completed === tasks.length ? '全部完成' : `进度 ${completed}/${tasks.length}`}
-                  {failed > 0 && <span style={{ color: '#f85149', marginLeft: 4 }}>{failed} 失败</span>}
+                  <span className="fw-600 fs-11 text-muted">
+                    {active > 0 ? `${active} 个执行中` : completed === tasks.length ? '全部完成' : `进度 ${completed}/${tasks.length}`}
+                    {failed > 0 && <span style={{ color: '#f85149', marginLeft: 4 }}>{failed} 失败</span>}
+                  </span>
                 </div>
                 {tasks.map((t, i) => {
                   const done = t.status === 'done'; const fail = t.status === 'failed' || t.status === 'cancelled'
                   return (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0', fontSize: 11, color: done ? '#3fb950' : fail ? '#f85149' : '#999' }}>
-                      {done ? <CheckCircle2 size={11}/> : fail ? <XCircle size={11}/> : <Loader2 size={11} style={{animation:'spin 1s linear infinite'}}/>}
-                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <div key={i} className="flex-center gap-6" style={{ padding: '2px 0' }}>
+                      {done ? <CheckCircle2 size={11} color="#3fb950"/> : fail ? <XCircle size={11} color="#f85149"/> : <Loader2 size={11} style={{animation:'spin 1s linear infinite',color:'#999'}}/>}
+                      <span className="truncate flex-1 fs-11" style={{ color: done ? '#3fb950' : fail ? '#f85149' : '#999' }}>
                         {t.desc.split('\n')[0].slice(0, 80)}
                       </span>
                       {fail && (
                         <button onClick={e => { e.stopPropagation(); retryFailed(t.id) }}
-                          style={{ background:'none',border:'none',color:'#58a6ff',cursor:'pointer',padding:'0 4px',fontSize:10 }}>
-                          <RotateCcw size={9}/> 重试
-                        </button>
+                          className="btn-icon" style={{ color:'#58a6ff',fontSize:10 }}><RotateCcw size={9}/> 重试</button>
                       )}
                     </div>
                   )
@@ -179,26 +162,24 @@ export default function Chat() {
             )}
 
             {loading && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#666', fontSize: 12, maxWidth: 860, margin: '0 auto' }}>
+              <div className="chat-msg-row flex-center gap-6 text-muted fs-12">
                 <Loader2 size={11} style={{animation:'spin 1s linear infinite'}}/>思考中...
               </div>
             )}
             <div ref={bottomRef} />
           </div>
 
-          {/* 底部输入 */}
           <div style={{ padding: '0 0 12px' }}>
-            <div style={{ maxWidth: 860, margin: '0 auto', background: '#1c1c1e', borderRadius: 12, border: '1px solid #2c2c2e', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
-              {info && <span style={{ fontSize: 11, color: '#666', whiteSpace: 'nowrap' }}>{info.name}</span>}
+            <div className="chat-input-wrap-bottom" style={{ maxWidth: 860, margin: '0 auto' }}>
+              {info && <span className="fs-11 text-muted" style={{ whiteSpace: 'nowrap' }}>{info.name}</span>}
               <textarea value={input} onChange={e => setInput(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-                placeholder="发送消息..."
-                rows={1}
-                style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: '#fff', fontSize: 14, fontFamily: 'inherit', resize: 'none', padding: '8px 0', lineHeight: '22px' }}/>
-              <button onClick={() => setShowFiles(!showFiles)}
-                style={{ background:'none',border:'none',color: showFiles?'#58a6ff':'#666',cursor:'pointer',padding:2 }}><FolderOpen size={15}/></button>
-              <button onClick={send} disabled={!input.trim()}
-                style={{ background: input.trim() ? '#fff' : '#333', color: input.trim() ? '#000' : '#666', border: 'none', borderRadius: 6, width: 28, height: 28, cursor: input.trim() ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                placeholder="发送消息..." rows={1} className="chat-textarea"/>
+              <button onClick={() => setShowFiles(!showFiles)} className="btn-icon" style={{ color: showFiles?'#58a6ff':'#666' }}>
+                <FolderOpen size={15}/>
+              </button>
+              <button onClick={send} disabled={!input.trim()} className="chat-send-btn"
+                style={{ background: input.trim() ? '#fff' : '#333', color: input.trim() ? '#000' : '#666', cursor: input.trim() ? 'pointer' : 'default' }}>
                 <ArrowUp size={14}/>
               </button>
             </div>

@@ -11,7 +11,8 @@
       "qwen3.7-plus",
       "gpt-5.5-pro",
       "glm-5.2",
-      "kimi-k2.7-code"
+      "kimi-k2.7-code",
+      "kimi-k2.6"
     ],
     "D": [
       "deepseek-v4-pro"

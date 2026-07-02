@@ -32,15 +32,10 @@ export function ToastContainer() {
   const remove = useToast((s) => s.remove)
   if (!toasts.length) return null
   return (
-    <div style={{ position: 'fixed', top: 12, right: 12, zIndex: 9999, display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div className="toast-container">
       {toasts.map((t) => (
-        <div key={t.id} onClick={() => remove(t.id)}
-          style={{
-            padding: '8px 14px', borderRadius: 'var(--radius)', fontSize: 13,
-            background: 'var(--bg-secondary)', border: `1px solid ${KC[t.kind]}`,
-            color: 'var(--text-primary)', cursor: 'pointer', maxWidth: 360,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-          }}>
+        <div key={t.id} onClick={() => remove(t.id)} className="toast-item"
+          style={{ border: `1px solid ${KC[t.kind]}` }}>
           {t.msg}
         </div>
       ))}

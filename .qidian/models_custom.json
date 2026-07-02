@@ -3,6 +3,7 @@
     "id": "deepseek-chat",
     "provider": "deepseek",
     "display": "DeepSeek V3 (Chat)",
+    "recommended_for": [],
     "speed": "fast",
     "cost": "budget",
     "rating": "A+",
@@ -13,13 +14,13 @@
       "bugfix",
       "查询"
     ],
-    "notes": "最便宜的A层首选。推理模型(reasoning_content)。适合简单单文件任务。",
-    "recommended_for": []
+    "notes": "最便宜的A层首选。推理模型(reasoning_content)。适合简单单文件任务。"
   },
   "glm-5-turbo": {
     "id": "glm-5-turbo",
     "provider": "zhipu",
     "display": "GLM-5 Turbo",
+    "recommended_for": [],
     "speed": "slow",
     "cost": "budget",
     "rating": "A",
@@ -30,13 +31,13 @@
       "推理",
       "仔细"
     ],
-    "notes": "便宜的推理模型。慢但仔细, 会自己验证产物。A层备选。",
-    "recommended_for": []
+    "notes": "便宜的推理模型。慢但仔细, 会自己验证产物。A层备选。"
   },
   "kimi-k2.5": {
     "id": "kimi-k2.5",
     "provider": "kimi",
     "display": "Kimi K2.5",
+    "recommended_for": [],
     "speed": "medium",
     "cost": "standard",
     "rating": "A",
@@ -47,13 +48,13 @@
       "多模态",
       "长上下文"
     ],
-    "notes": "上代次旗舰。262K上下文。视觉编码器MoonViT 400M。性价比尚可。",
-    "recommended_for": []
+    "notes": "上代次旗舰。262K上下文。视觉编码器MoonViT 400M。性价比尚可。"
   },
   "qwen3-flash": {
     "id": "qwen3-flash",
     "provider": "dashscope_api_key",
     "display": "Qwen3 Flash",
+    "recommended_for": [],
     "speed": "fast",
     "cost": "budget",
     "rating": "A",
@@ -65,13 +66,13 @@
       "简单任务",
       "高吞吐"
     ],
-    "notes": "最便宜($0.03/$0.13 per 1M)。1M上下文。A层高吞吐简单任务。",
-    "recommended_for": []
+    "notes": "最便宜($0.03/$0.13 per 1M)。1M上下文。A层高吞吐简单任务。"
   },
   "qwen3-coder-next": {
     "id": "qwen3-coder-next",
     "provider": "dashscope_api_key",
     "display": "Qwen3 Coder Next",
+    "recommended_for": [],
     "speed": "fast",
     "cost": "budget",
     "rating": "S",
@@ -83,58 +84,43 @@
       "重构",
       "批量任务"
     ],
-    "notes": "极便宜($0.07/$0.30 per 1M)。专项编程模型, A层批量首选。",
-    "recommended_for": []
-  },
-  "kimi-k2.6": {
-    "id": "kimi-k2.6",
-    "provider": "kimi",
-    "display": "Kimi K2.6",
-    "speed": "medium",
-    "cost": "premium",
-    "rating": "S",
-    "reasoning": false,
-    "max_turns": 5,
-    "strengths": [],
-    "notes": "SWE-bench Pro 58.6% | OJBench 60.6% | Terminal-Bench 66.7% | 300agent并行 | 12h自主编码。$0.6/$2.5(便宜!)。长程任务首选。",
-    "recommended_for": [
-      "定义"
-    ]
+    "notes": "极便宜($0.07/$0.30 per 1M)。专项编程模型, A层批量首选。"
   },
   "qwen3.7-plus": {
     "id": "qwen3.7-plus",
     "provider": "dashscope_api_key",
     "display": "Qwen3.7 Plus",
+    "recommended_for": [
+      "定义"
+    ],
     "speed": "medium",
     "cost": "standard",
     "rating": "",
     "reasoning": false,
     "max_turns": 5,
     "strengths": [],
-    "notes": "",
-    "recommended_for": [
-      "定义"
-    ]
+    "notes": ""
   },
   "claude-opus-4-8": {
     "id": "claude-opus-4-8",
     "provider": "anthropic",
     "display": "Claude Opus 4.8",
+    "recommended_for": [
+      "架构"
+    ],
     "speed": "slow",
     "cost": "premium",
     "rating": "",
     "reasoning": false,
     "max_turns": 5,
     "strengths": [],
-    "notes": "",
-    "recommended_for": [
-      "架构"
-    ]
+    "notes": ""
   },
   "kimi-k2.7-code-highspeed": {
     "id": "kimi-k2.7-code-highspeed",
     "provider": "kimi",
     "display": "Kimi K2.7 Code HS",
+    "recommended_for": [],
     "speed": "fast",
     "cost": "standard",
     "rating": "S",
@@ -145,23 +131,40 @@
       "简单任务",
       "高吞吐"
     ],
-    "notes": "K2.7高速版。~180 tok/s。适合E层批量快速执行。",
-    "recommended_for": []
+    "notes": "K2.7高速版。~180 tok/s。适合E层批量快速执行。"
   },
   "deepseek-v4-pro": {
     "id": "deepseek-v4-pro",
     "provider": "deepseek",
     "display": "DeepSeek V4 Pro",
+    "recommended_for": [
+      "定义",
+      "实现"
+    ],
     "speed": "medium",
     "cost": "standard",
     "rating": "",
     "reasoning": false,
     "max_turns": 5,
     "strengths": [],
-    "notes": "",
-    "recommended_for": [
-      "定义",
-      "实现"
-    ]
+    "notes": ""
+  },
+  "kimi-k2.6": {
+    "id": "kimi-k2.6",
+    "provider": "kimi",
+    "display": "Kimi K2.6",
+    "recommended_for": [],
+    "speed": "medium",
+    "cost": "premium",
+    "rating": "S",
+    "reasoning": true,
+    "max_turns": 5,
+    "strengths": [
+      "长程编码",
+      "架构设计",
+      "工具使用",
+      "多agent协作"
+    ],
+    "notes": "SWE-bench Pro 58.6% | OJBench 60.6% | Terminal-Bench 66.7% | 300agent并行 | 12h自主编码。$0.6/$2.5(便宜!)。长程任务首选。"
   }
 }
