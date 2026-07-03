@@ -25,6 +25,7 @@ PATCH_DIR = QIDIAN_DIR / "patches"  # E+ 智谱产出暂存, apply 前不落盘 
 TRACE_DIR = QIDIAN_DIR / "traces"
 HOLD_DIR = QIDIAN_DIR / "holds"      # 人工扣留标记
 CANCEL_DIR = QIDIAN_DIR / "cancels"  # 取消标记
+PAUSE_DIR = QIDIAN_DIR / "pauses"    # 暂停标记 (GATE 人审用)
 PARKED_DIR = QIDIAN_DIR / "parked"   # 合并冲突 parking 持久化
 AGENTS_TOML = SCHEDULER_DIR / "agents.toml"  # stdlib tomllib, 不依赖 pyyaml
 
@@ -70,7 +71,7 @@ def ensure_dirs() -> None:
 
     MEMORY_DIR = QIDIAN_DIR / "memory"
     WORKTREES_DIR = QIDIAN_DIR / "worktrees"
-    for d in (QIDIAN_DIR, SNAPSHOT_DIR, PATCH_DIR, TRACE_DIR, HOLD_DIR, CANCEL_DIR, PARKED_DIR, MEMORY_DIR, WORKTREES_DIR):
+    for d in (QIDIAN_DIR, SNAPSHOT_DIR, PATCH_DIR, TRACE_DIR, HOLD_DIR, CANCEL_DIR, PAUSE_DIR, PARKED_DIR, MEMORY_DIR, WORKTREES_DIR):
         d.mkdir(parents=True, exist_ok=True)
     free = shutil.disk_usage(QIDIAN_DIR).free / (1024 * 1024)
     if free < MIN_DISK_MB:

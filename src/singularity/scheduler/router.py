@@ -18,6 +18,7 @@ class RouteResult:
     task_type: str = "default"
     gate_required: bool = False
     matched_signals: list = field(default_factory=list)
+    cached_at: float = 0.0
 
 
 # 任务分类缓存 (避免重复 LLM 调用)
@@ -45,10 +46,10 @@ core.py, tokenizer.py, graph.py, search.py, config.py
 
 def _llm_classify(task: str) -> RouteResult:
     """用 LLM 分类任务类型。失败时回退 default。"""
-    # 先查缓存
+    # 先查缓存 (未过期则直接返回)
     if task in _CLASSIFY_CACHE:
         cached = _CLASSIFY_CACHE[task]
-        if time.time() - cached.matched_signals[0] if cached.matched_signals and isinstance(cached.matched_signals[0], (int, float)) else True:
+        if cached.cached_at and time.time() - cached.cached_at < _CACHE_EXPIRY:
             return cached
 
     try:
@@ -109,6 +110,7 @@ def _llm_classify(task: str) -> RouteResult:
     # 写缓存 (限制大小)
     if len(_CLASSIFY_CACHE) >= _CACHE_MAX:
         _CLASSIFY_CACHE.pop(next(iter(_CLASSIFY_CACHE)))
+    result.cached_at = time.time()
     _CLASSIFY_CACHE[task] = result
     return result
 

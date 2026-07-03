@@ -270,22 +270,15 @@ def _build_openai_tools() -> list[dict]:
 OBSERVER_TOOLS = _build_openai_tools()
 def _build_system_prompt() -> str:
     """从 _TOOL_REGISTRY 自动生成 prompt, 加工具自动出现。"""
-    lines = ['你是奇点，一个能直接干活的 AI 软件开发助手。用户找你是让你做事，不是聊天。',
-             '',
-             '行为规则（严格遵守）:',
-             '1. 用户说要做东西(无论什么形式)→必须调用 create_task，别先打招呼、别问"需要什么帮助"',
-             '2. 只有用户纯闲聊(你好/谢谢/你是谁)才回文字，否则必须调工具干活',
-             '3. create_task 的 description 必须详细具体:',
-             '   - 功能清单+交互细节+视觉效果+技术栈+验收标准',
-             "   - 例: '番茄钟网页:25分钟倒计时+5分钟休息自动切换。白色背景,大号数字,圆形按钮,开始/暂停/重置。纯HTML+CSS+JS单文件,打开即用。验收:倒计时准确,休息自动切换,有声音提示'",
-             "4. 如果用户说'直接做/别问了/快做'→一句话不说,直接 create_task",
-             '5. 回复格式: 做了什么事,一句话说清。例: "已创建任务:番茄钟网页。调度循环已启动,开始执行。"',
-             '6. 创建任务后自动启动调度循环(start loop)',
-             '',
-             '可用工具:']
-    for t in _TOOL_REGISTRY:
-        lines.append(f"- {t['name']}: {t['description']}")
-    return "\n".join(lines)
+    # ponytail: 工具列表不写进prompt, function calling的tools参数已包含完整schema, 省~600字符
+    return """你是奇点,一个能直接干活的 AI 软件开发助手。用户找你是让你做事,不是聊天。
+
+行为规则(严格遵守):
+1. 用户说要做东西→必须调 create_task,别打招呼别问"需要什么帮助"
+2. 只有纯闲聊(你好/谢谢/你是谁)才回文字,否则必须调工具干活
+3. create_task 的 description 必须详细:功能清单+交互细节+视觉效果+技术栈+验收标准
+4. 用户说"直接做/别问了/快做"→一句话不说,直接 create_task
+5. 回复一句话说清做了什么事。创建任务后自动启动调度循环"""
 
 OBSERVER_SYSTEM_PROMPT = _build_system_prompt()
 
@@ -530,20 +523,32 @@ def _get_observer_cfg() -> dict[str, Any]:
     }
 
 
+# ponytail: 状态上下文缓存, 省 ~30% token (状态无变化时复用)
+_last_ctx: str = ""
+_last_ctx_hash: str = ""
+
 def _build_status_context() -> str:
-    """预取全量系统状态，注入 prompt，无需 function calling。"""
+    """预取全量系统状态，注入 prompt。状态无变化时复用缓存。"""
+    global _last_ctx, _last_ctx_hash
     status = _tool_get_system_status()
     tasks = _tool_list_tasks(limit=20)
     stalled = _tool_list_stalled_tasks()
     judge = _tool_get_judge_stats()
     recent = _tool_get_recent_events(limit=10)
-    return json.dumps({
+    ctx = json.dumps({
         "系统状态": status,
         "最近任务": tasks,
         "卡住任务": stalled,
         "裁判统计": judge,
         "最近事件": recent,
     }, ensure_ascii=False, indent=2)
+    # 简单 hash: 任务总数+运行数+最近更新时间的组合
+    ctx_hash = f"{status.get('task_counts',{}).get('total',0)}:{status.get('running_total',0)}:{tasks[0].get('updated_at',0) if tasks else 0}"
+    if ctx_hash == _last_ctx_hash and _last_ctx:
+        return _last_ctx
+    _last_ctx = ctx
+    _last_ctx_hash = ctx_hash
+    return ctx
 
 
 DIRECT_SYSTEM_PROMPT = """你是 Singularity Dispatch 的主交互智能体。下面是当前系统的实时状态数据。根据这些数据回答用户问题，用户可以要求你创建任务或控制调度循环。

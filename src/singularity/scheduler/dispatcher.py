@@ -393,13 +393,35 @@ def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
 
 
 def _ntilc_filter(task_desc: str, skills: dict) -> dict:
-    """NTILC 神经工具检索: 关键词重叠过滤无关 skill，省 ~95% 上下文。
+    """NTILC 工具检索: 语义匹配过滤无关 skill，省 ~95% 上下文。
 
-    论文: NTILC (2026.06) — 不相关工具造成 semantic blur，嵌入匹配降 O(N)→O(log N)。
-    ponytail: 不做嵌入模型，关键词重叠已够。需要时加 sentence-transformers。
+    优先用 embedding (cosine 相似度), 模型不可用时降级为关键词重叠。
     """
     if not skills or len(skills) <= 3:
         return dict(skills)
+
+    # 尝试 embedding 语义匹配
+    try:
+        from singularity.scheduler.memory import _embed, _cosine_sim
+        task_emb = _embed(task_desc)
+        if task_emb:
+            scored = []
+            for name, skill in skills.items():
+                skill_text = f"{skill.description} {skill.name}"
+                skill_emb = _embed(skill_text)
+                if skill_emb:
+                    sim = _cosine_sim(task_emb, skill_emb)
+                    scored.append((sim, name, skill))
+            if scored:
+                scored.sort(key=lambda x: x[0], reverse=True)
+                relevant = [(n, s) for (o, n, s) in scored if o > 0.3]
+                if len(relevant) < 2:
+                    relevant = [(n, s) for (o, n, s) in scored[:2]]
+                return dict(relevant)
+    except Exception:
+        pass  # embedding 不可用, 降级关键词
+
+    # 关键词降级路径
     task_words = set(task_desc.lower().split())
     scored = []
     for name, skill in skills.items():

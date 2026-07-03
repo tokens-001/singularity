@@ -274,13 +274,43 @@ def task_cancel(task_id: str) -> tuple[dict, int]:
     if task.status in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.ROLLED_BACK, TaskStatus.DECOMPOSED):
         return {"error": f"终态任务 {task.status.value} 不可取消"}, 400
     config.ensure_dirs()
-    if task.status in (TaskStatus.RUNNING, TaskStatus.DISPATCHED):
+    if task.status in (TaskStatus.RUNNING, TaskStatus.DISPATCHED, TaskStatus.PAUSED):
+        # PAUSED 状态下也接受取消: 删 pause 文件 + 写 cancel 文件
+        pause_path = config.PAUSE_DIR / f"{task_id}.json"
+        if pause_path.exists():
+            pause_path.unlink()
         cancel_path = config.CANCEL_DIR / f"{task_id}.json"
         cancel_path.write_text(json.dumps({"task_id": task_id, "cancelled_at": time.time()}), encoding="utf-8")
-        return {"ok": True, "message": "已发送取消信号，将在当前 turn 结束后生效"}, 200
+        return {"ok": True, "message": "已发送取消信号"}, 200
     else:
         tracker.transition(task_id, TaskStatus.FAILED, error="用户手动取消")
         return {"ok": True, "message": "已取消"}, 200
+
+
+def task_pause(task_id: str) -> tuple[dict, int]:
+    """POST /api/tasks/<id>/pause — GATE 人审时暂停任务。"""
+    task = tracker.read_task(task_id)
+    if task is None:
+        return {"error": "任务不存在"}, 404
+    if task.status not in (TaskStatus.RUNNING, TaskStatus.DISPATCHED):
+        return {"error": f"只有运行中的任务可暂停, 当前状态: {task.status.value}"}, 400
+    config.ensure_dirs()
+    pause_path = config.PAUSE_DIR / f"{task_id}.json"
+    pause_path.write_text(json.dumps({"task_id": task_id, "paused_at": time.time()}), encoding="utf-8")
+    return {"ok": True, "message": "暂停信号已发送, 当前 turn 结束后生效"}, 200
+
+
+def task_resume(task_id: str) -> tuple[dict, int]:
+    """POST /api/tasks/<id>/resume — GATE 人审通过后恢复任务。"""
+    task = tracker.read_task(task_id)
+    if task is None:
+        return {"error": "任务不存在"}, 404
+    if task.status != TaskStatus.PAUSED:
+        return {"error": f"只有暂停中的任务可恢复, 当前状态: {task.status.value}"}, 400
+    pause_path = config.PAUSE_DIR / f"{task_id}.json"
+    if pause_path.exists():
+        pause_path.unlink()
+    return {"ok": True, "message": "已发送恢复信号"}, 200
 
 
 def task_delete(task_id: str) -> tuple[dict, int]:
