@@ -40,6 +40,7 @@ except ImportError:
 # 集成合并含 pytest/docker subprocess (最长 ~150s), 不能在调度循环线程同步跑,
 # 否则单项目合并期间全局任务派发/SSE 停摆。用独立线程池异步执行, 完成后回写 phase。
 _merge_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="integrate")
+_arch_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="architect")
 _merge_inflight: set[str] = set()  # 正在跑集成合并的 project_id, 防重入
 _arch_inflight: set[str] = set()   # 正在跑架构阶段的 project_id, 防重入
 
@@ -245,7 +246,7 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                 # P1: 架构阶段 — 3架构师并行 + 合成器 (异步提交, 防重入)
                 if proj.id not in _arch_inflight:
                     _arch_inflight.add(proj.id)
-                    _merge_executor.submit(_run_architecture_phase_async, proj.id, agents)
+                    _arch_executor.submit(_run_architecture_phase_async, proj.id, agents)
             elif proj.phase.value == "executing":
                 # P2: 首次进入 → 拆解架构为任务
                 if not proj.task_ids:

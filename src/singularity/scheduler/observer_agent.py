@@ -641,7 +641,7 @@ def _answer_question(question: str, project_id: str = "") -> str:
                     from singularity.scheduler.project import load as load_project, Phase
                     proj = load_project(project_id)
                     if proj:
-                        proj.advance_to(Phase.PLANNING)
+                        proj.confirm_gate(Phase.GATE1, "approved")
                 except Exception:
                     pass
                 return "✅ GATE1 已通过。进入架构阶段，系统架构师/AI架构师/前端架构师将并行设计方案。"
@@ -659,19 +659,17 @@ def _answer_question(question: str, project_id: str = "") -> str:
                 q = question.strip().lower()
                 if proj.phase == Phase.GATE2:
                     if any(w in q for w in ("通过", "继续", "确认", "同意", "ok", "yes", "好", "可以", "行")):
-                        proj.advance_to(Phase.EXECUTING)
+                        proj.confirm_gate(Phase.GATE2, "approved")
                         return "✅ GATE2 已通过。进入实现阶段，前端/后端/数据/DevOps工程师将并行开发。"
                     elif any(w in q for w in ("修改", "改", "不对", "重来", "不通过")):
-                        proj.phase = Phase.PLANNING
-                        save_project(proj)
+                        proj.confirm_gate(Phase.GATE2, "rejected")
                         return "已退回架构阶段。请描述需要修改的内容，将重新生成架构方案。"
                 elif proj.phase == Phase.GATE3:
                     if any(w in q for w in ("通过", "继续", "确认", "同意", "ok", "yes", "好", "可以", "行")):
-                        proj.advance_to(Phase.DELIVERING)
+                        proj.confirm_gate(Phase.GATE3, "approved")
                         return "✅ GATE3 已通过。进入交付阶段，DevOps工程师将打包归档。"
                     elif any(w in q for w in ("修改", "改", "不对", "重来", "不通过")):
-                        proj.phase = Phase.EXECUTING
-                        save_project(proj)
+                        proj.confirm_gate(Phase.GATE3, "rejected")
                         return "已退回实现阶段。请描述需要修复的问题。"
         except Exception:
             pass
@@ -682,6 +680,8 @@ def _answer_question(question: str, project_id: str = "") -> str:
 
     if def_role and project_id:
         # P0: 多轮定义会话 — 用会话状态驱动角色切换
+        session = _get_definition_session(project_id)
+        session["history"].append({"role": "user", "content": question})
         system_prompt, gate1_ready = _build_definition_prompt(project_id, question)
         use_tools = False
     elif def_role:
@@ -696,7 +696,13 @@ def _answer_question(question: str, project_id: str = "") -> str:
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": question},
     ]
-    max_turns = 5
+    # 根据任务复杂度自适应调整轮数
+    if len(question) < 10 and not any(w in question for w in ("做", "写", "创建", "修", "改", "加", "build", "create", "fix")):
+        max_turns = 1  # 纯闲聊/查询
+    elif len(question) > 100 or any(w in question for w in ("架构", "系统", "设计", "多步", "完整", "全栈")):
+        max_turns = 3  # 复杂任务, 可能需要多轮澄清
+    else:
+        max_turns = 2  # 常规任务
     with httpx.Client(timeout=60.0) as client:
         for _ in range(max_turns):
             body = {
@@ -858,12 +864,19 @@ def _build_definition_prompt(project_id: str, question: str) -> tuple[str, bool]
 
     context = "\n\n".join(completed_docs) if completed_docs else "（尚无上游产出）"
 
+    # 注入历史消息 (最近3轮)
+    history_text = ""
+    for h in session.get("history", [])[-3:]:
+        history_text += f"\n[{h.get('role','?')}]: {h.get('content','')[:300]}"
+
     system = f"""{role_prompt}
 
 ## 当前角色: {role}
 ## 已完成角色: {', '.join(session['completed_roles']) or '无'}
 ## 上游产出:
 {context}
+## 对话历史:
+{history_text or '（新对话）'}
 
 ## 规则
 - 你是定义层的 {role}，只做本角色职责范围内的事
