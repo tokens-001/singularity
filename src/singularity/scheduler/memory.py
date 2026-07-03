@@ -120,23 +120,26 @@ import logging as _hf_log
 _hf_log.getLogger("sentence_transformers").setLevel(_hf_log.ERROR)
 _hf_log.getLogger("transformers").setLevel(_hf_log.ERROR)
 def _get_embed_model():
-    """懒加载: 首次查询才下载/加载模型(420MB)。"""
+    """懒加载: 首次查询才下载/加载模型(420MB)。
+
+    默认启用。下载超时或 CI 环境 (QIDIAN_SKIP_EMBED=1) 时降级跳过。
+    """
     global _EMBED_MODEL
     if _EMBED_MODEL is None:
         import os, time
-        # 检查是否在 CI/快速模式 — 跳过模型加载
-        # ponytail: HuggingFace下载(~120MB)经常超时，默认跳过嵌入
-        if os.environ.get("QIDIAN_SKIP_EMBED", "1") == "1":
+        if os.environ.get("QIDIAN_SKIP_EMBED", "") == "1":
             _EMBED_MODEL = False
             return None
         import sys, io, logging as _log
         _log.getLogger("sentence_transformers").setLevel(_log.ERROR)
         _log.getLogger("transformers").setLevel(_log.ERROR)
-        from sentence_transformers import SentenceTransformer
         _stderr = sys.stderr
         try:
             sys.stderr = io.StringIO()
             _EMBED_MODEL = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+        except Exception:
+            # 下载失败/网络问题 → 降级跳过, 不阻塞
+            _EMBED_MODEL = False
         finally:
             sys.stderr = _stderr
     return _EMBED_MODEL if _EMBED_MODEL is not False else None

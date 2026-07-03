@@ -100,6 +100,30 @@ def _check_cancelled(task, all_tool_events: list) -> "BatchOutput | None":
     return None
 
 
+def _check_paused(task) -> bool:
+    """检查人工暂停标记。有暂停信号→切 PAUSED 状态→阻塞等待恢复。返回 True 表示已恢复继续; False 表示任务已终止。"""
+    pause_path = config.PAUSE_DIR / f"{task.id}.json"
+    if not pause_path.exists():
+        return True  # 无暂停信号, 继续执行
+
+    # 切到 PAUSED 状态
+    import tracker as tracker_mod
+    tracker_mod.transition(task.id, tracker_mod.TaskStatus.PAUSED)
+
+    # 阻塞等待: 轮询检测 pause 文件被删除=恢复信号
+    import time as _time
+    while pause_path.exists():
+        _time.sleep(1)
+        # 期间如果任务被取消, 退出等待
+        cancel_path = config.CANCEL_DIR / f"{task.id}.json"
+        if cancel_path.exists():
+            return False
+
+    # 恢复: 切回 RUNNING
+    tracker_mod.transition(task.id, tracker_mod.TaskStatus.RUNNING)
+    return True
+
+
 def _process_planner_or_merge(task, ctx, turn, level, is_planner, wt,
                               exec_result, disp_result, all_tool_events,
                               pending_merge_req_holder: list):
@@ -268,6 +292,16 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 cancelled = _check_cancelled(task, all_tool_events)
                 if cancelled is not None:
                     return cancelled
+
+                # 检查人工暂停标记 (GATE 人审)
+                if not _check_paused(task):
+                    # pause 期间被 cancel 了
+                    return _check_cancelled(task, all_tool_events) or BatchOutput(
+                        ok=False, task_id=task.id, term_reason="cancelled_during_pause",
+                        validation=val_mod.ValidationReport(verdict="阻断", action="abort",
+                            unverified=["暂停期间被取消"]),
+                        tool_events=all_tool_events, turn_count=turn,
+                    )
 
                 effective_task = _build_effective_task(task, turn, feedback, is_planner,
                                                         tool_events=all_tool_events,

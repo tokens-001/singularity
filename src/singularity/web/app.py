@@ -776,6 +776,18 @@ def api_cancel_task(task_id):
     data, code = _api_handler.task_cancel(task_id)
     return jsonify(data), code
 
+
+@app.route("/api/tasks/<task_id>/pause", methods=["POST"])
+def api_pause_task(task_id):
+    data, code = _api_handler.task_pause(task_id)
+    return jsonify(data), code
+
+
+@app.route("/api/tasks/<task_id>/resume", methods=["POST"])
+def api_resume_task(task_id):
+    data, code = _api_handler.task_resume(task_id)
+    return jsonify(data), code
+
 @app.route("/api/tasks/<task_id>/delete", methods=["POST"])
 def api_delete_task(task_id):
     data, code = _api_handler.task_delete(task_id)

@@ -32,18 +32,16 @@ class TaskStatus(Enum):
     DECOMPOSED = "decomposed"        # 子任务已入队, 等聚合
     BLOCKED = "blocked"              # 依赖未满足, 等前置 DONE
     CONFLICT_HELD = "conflict_held"  # merge 冲突, parking 等人
+    PAUSED = "paused"                # GATE 人审暂停, 可恢复
 
 
-# 三个新状态都不进 _INFLIGHT (recover 不该重启它们):
-#   BLOCKED 等依赖 / DECOMPOSED 等子任务 / CONFLICT_HELD 等人 —— 都不是"崩了要重跑"
-# 三个新状态都不进 _TERMINAL (都还能流转出去):
-#   BLOCKED→ROUTED / DECOMPOSED→DONE|FAILED / CONFLICT_HELD→DONE|FAILED
-# 故两个集合维持原样, 仅 Enum 扩展。
+# PAUSED: 不进 _INFLIGHT (不是崩了要重跑), 不进 _TERMINAL (能流转回 RUNNING)
+# 进 _SCHEDULABLE: resume 后调度循环能重新捡起
 _INFLIGHT = {TaskStatus.ROUTED, TaskStatus.DISPATCHED, TaskStatus.RUNNING, TaskStatus.VALIDATING}
 _TERMINAL = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.ROLLED_BACK}
 
 # ready_tasks 扫描的状态: 等待调度的入口态
-_SCHEDULABLE = {TaskStatus.PENDING, TaskStatus.ROUTED, TaskStatus.BLOCKED}
+_SCHEDULABLE = {TaskStatus.PENDING, TaskStatus.ROUTED, TaskStatus.BLOCKED, TaskStatus.PAUSED}
 
 
 @dataclass
