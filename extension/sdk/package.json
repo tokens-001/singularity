@@ -1,9 +1,0 @@
-{
-  "name": "@qidian/sdk",
-  "version": "0.1.0",
-  "description": "Singularity Dispatch SDK — TypeScript 类型定义 + 事件钩子",
-  "main": "index.ts",
-  "types": "index.ts",
-  "files": ["index.ts", "types.ts", "events.ts"],
-  "license": "MIT"
-}

@@ -1,7 +1,0 @@
-target/
-**/*.rs.bk
-*.json
-!src/**/*.rs
-!Cargo.toml
-!Cargo.lock
-!README.md
