@@ -1,0 +1,551 @@
+{
+  "meta": {
+    "project": "CodeSnippetHub",
+    "version": "1.0",
+    "principles": [
+      "单体外壳、模块内核 — 不拆微服务，但模块间通过接口契约隔离",
+      "PostgreSQL 一把梭 — 搜索/关系/全文全在 PG，不引入 ES",
+      "不做实时协作 — v1 只管 CRUD + 搜索，版本历史留给 v2",
+      "前端直连后端 — 不设 BFF 层，FastAPI 直接服务 SPA"
+    ]
+  },
+
+  "modules": [
+    {
+      "name": "auth",
+      "responsibility": "OAuth2 登录(GitHub/Google)、JWT 签发与验证、用户会话管理",
+      "depends_on": [],
+      "interfaces": [
+        "GET /api/auth/login/{provider} — 发起 OAuth2 流程",
+        "GET /api/auth/callback/{provider} — OAuth2 回调，签发 access_token + refresh_token",
+        "POST /api/auth/refresh — 刷新 token",
+        "GET /api/auth/me — 当前用户信息",
+        "middleware: require_auth — 依赖注入，解析 JWT 返回 current_user"
+      ]
+    },
+    {
+      "name": "snippets",
+      "responsibility": "代码片段的 CRUD、语法高亮元数据标记、可见性控制(私有/团队/公开)",
+      "depends_on": ["auth"],
+      "interfaces": [
+        "POST /api/snippets — 创建片段",
+        "GET /api/snippets/{id} — 获取片段详情",
+        "PUT /api/snippets/{id} — 更新片段(含语言切换)",
+        "DELETE /api/snippets/{id} — 软删除片段",
+        "GET /api/snippets — 分页列表(按用户/团队/公开过滤)"
+      ]
+    },
+    {
+      "name": "search",
+      "responsibility": "全文检索(pg_trgm + tsvector)、标签过滤、多条件组合查询",
+      "depends_on": ["snippets"],
+      "interfaces": [
+        "GET /api/search — 全文搜索(q=, lang=, tags=, team=, page=, size=)",
+        "GET /api/tags — 标签自动补全(prefix=, limit=10)",
+        "GET /api/tags/popular — 热门标签云"
+      ]
+    },
+    {
+      "name": "teams",
+      "responsibility": "团队 CRUD、成员邀请/移除、角色管理(owner/admin/member)",
+      "depends_on": ["auth"],
+      "interfaces": [
+        "POST /api/teams — 创建团队",
+        "GET /api/teams/{id} — 团队详情",
+        "PUT /api/teams/{id} — 更新团队信息",
+        "DELETE /api/teams/{id} — 解散团队",
+        "POST /api/teams/{id}/invite — 生成邀请链接(带过期)",
+        "POST /api/teams/{id}/join — 通过邀请码加入",
+        "DELETE /api/teams/{id}/members/{user_id} — 移除成员",
+        "GET /api/teams/{id}/members — 成员列表"
+      ]
+    },
+    {
+      "name": "social",
+      "responsibility": "片段收藏、评论(支持 markdown)、评论通知",
+      "depends_on": ["auth", "snippets"],
+      "interfaces": [
+        "POST /api/snippets/{id}/favorite — 收藏/取消收藏(toggle)",
+        "GET /api/favorites — 我的收藏列表",
+        "POST /api/snippets/{id}/comments — 添加评论",
+        "GET /api/snippets/{id}/comments — 评论列表(分页)",
+        "DELETE /api/comments/{id} — 删除自己的评论"
+      ]
+    }
+  ],
+
+  "data_model": {
+    "database": "PostgreSQL 16 — 单一数据库，所有关系+全文检索+时序数据统一存储。选型理由：硬约束要求 PG，且 PG 的 GIN 索引 + tsvector 在 10万片段级完全满足 <200ms 搜索",
+    "entities": [
+      {
+        "name": "users",
+        "fields": [
+          {"name": "id", "type": "UUID", "constraints": ["PK", "DEFAULT gen_random_uuid()"]},
+          {"name": "email", "type": "VARCHAR(255)", "constraints": ["UNIQUE", "NOT NULL"]},
+          {"name": "display_name", "type": "VARCHAR(100)", "constraints": ["NOT NULL"]},
+          {"name": "avatar_url", "type": "TEXT", "constraints": ["NULLABLE"]},
+          {"name": "oauth_provider", "type": "VARCHAR(20)", "constraints": ["NOT NULL", "CHECK IN ('github','google')"]},
+          {"name": "oauth_id", "type": "VARCHAR(100)", "constraints": ["NOT NULL"]},
+          {"name": "created_at", "type": "TIMESTAMPTZ", "constraints": ["DEFAULT now()"]},
+          {"name": "last_login_at", "type": "TIMESTAMPTZ", "constraints": ["NULLABLE"]}
+        ],
+        "indexes": [
+          "UNIQUE(oauth_provider, oauth_id)",
+          "INDEX(email)"
+        ]
+      },
+      {
+        "name": "snippets",
+        "fields": [
+          {"name": "id", "type": "UUID", "constraints": ["PK", "DEFAULT gen_random_uuid()"]},
+          {"name": "owner_id", "type": "UUID", "constraints": ["FK→users.id", "NOT NULL"]},
+          {"name": "team_id", "type": "UUID", "constraints": ["FK→teams.id", "NULLABLE — NULL=私有"]},
+          {"name": "title", "type": "VARCHAR(300)", "constraints": ["NOT NULL"]},
+          {"name": "description", "type": "TEXT", "constraints": ["NULLABLE"]},
+          {"name": "code", "type": "TEXT", "constraints": ["NOT NULL", "CHECK char_length(code) <= 50000 — 单片段上限5万字符"]},
+          {"name": "language", "type": "VARCHAR(50)", "constraints": ["NOT NULL — 如 'python','javascript','go'"]},
+          {"name": "visibility", "type": "VARCHAR(10)", "constraints": ["NOT NULL", "DEFAULT 'private'", "CHECK IN ('private','team','public')"]},
+          {"name": "search_vector", "type": "TSVECTOR", "constraints": ["GENERATED ALWAYS AS (to_tsvector('english', coalesce(title,'') || ' ' || coalesce(description,'') || ' ' || coalesce(code,''))) STORED"]},
+          {"name": "is_deleted", "type": "BOOLEAN", "constraints": ["DEFAULT false — 软删除"]},
+          {"name": "created_at", "type": "TIMESTAMPTZ", "constraints": ["DEFAULT now()"]},
+          {"name": "updated_at", "type": "TIMESTAMPTZ", "constraints": ["DEFAULT now()"]}
+        ],
+        "indexes": [
+          "INDEX(owner_id)",
+          "INDEX(team_id) WHERE team_id IS NOT NULL",
+          "INDEX(visibility)",
+          "GIN(search_vector)",
+          "INDEX(language)",
+          "INDEX(updated_at DESC) — 最新列表排序",
+          "INDEX(is_deleted) WHERE is_deleted = false"
+        ]
+      },
+      {
+        "name": "tags",
+        "fields": [
+          {"name": "id", "type": "UUID", "constraints": ["PK", "DEFAULT gen_random_uuid()"]},
+          {"name": "name", "type": "VARCHAR(100)", "constraints": ["UNIQUE", "NOT NULL", "CHECK name ~ '^[a-z0-9_\\-]+$' — 小写+数字+连字符"]},
+          {"name": "usage_count", "type": "INTEGER", "constraints": ["DEFAULT 0 — 触发器维护，加速热门标签查询"]}
+        ],
+        "indexes": [
+          "INDEX(name text_pattern_ops) — LIKE 前缀补全",
+          "INDEX(usage_count DESC)"
+        ]
+      },
+      {
+        "name": "snippet_tags",
+        "fields": [
+          {"name": "snippet_id", "type": "UUID", "constraints": ["FK→snippets.id ON DELETE CASCADE"]},
+          {"name": "tag_id", "type": "UUID", "constraints": ["FK→tags.id ON DELETE CASCADE"]}
+        ],
+        "indexes": [
+          "UNIQUE(snippet_id, tag_id)",
+          "INDEX(tag_id)"
+        ]
+      },
+      {
+        "name": "teams",
+        "fields": [
+          {"name": "id", "type": "UUID", "constraints": ["PK", "DEFAULT gen_random_uuid()"]},
+          {"name": "name", "type": "VARCHAR(100)", "constraints": ["NOT NULL"]},
+          {"name": "slug", "type": "VARCHAR(100)", "constraints": ["UNIQUE", "NOT NULL", "CHECK slug ~ '^[a-z0-9_\\-]+$'"]},
+          {"name": "description", "type": "TEXT", "constraints": ["NULLABLE"]},
+          {"name": "owner_id", "type": "UUID", "constraints": ["FK→users.id", "NOT NULL"]},
+          {"name": "created_at", "type": "TIMESTAMPTZ", "constraints": ["DEFAULT now()"]}
+        ],
+        "indexes": [
+          "INDEX(owner_id)"
+        ]
+      },
+      {
+        "name": "team_members",
+        "fields": [
+          {"name": "team_id", "type": "UUID", "constraints": ["FK→teams.id ON DELETE CASCADE"]},
+          {"name": "user_id", "type": "UUID", "constraints": ["FK→users.id ON DELETE CASCADE"]},
+          {"name": "role", "type": "VARCHAR(10)", "constraints": ["NOT NULL", "DEFAULT 'member'", "CHECK IN ('owner','admin','member')"]},
+          {"name": "joined_at", "type": "TIMESTAMPTZ", "constraints": ["DEFAULT now()"]}
+        ],
+        "indexes": [
+          "UNIQUE(team_id, user_id)",
+          "INDEX(user_id)"
+        ]
+      },
+      {
+        "name": "invitations",
+        "fields": [
+          {"name": "id", "type": "UUID", "constraints": ["PK", "DEFAULT gen_random_uuid()"]},
+          {"name": "team_id", "type": "UUID", "constraints": ["FK→teams.id ON DELETE CASCADE"]},
+          {"name": "inviter_id", "type": "UUID", "constraints": ["FK→users.id", "NOT NULL"]},
+          {"name": "code", "type": "VARCHAR(64)", "constraints": ["UNIQUE", "NOT NULL — bcrypt hash 或 random token"]},
+          {"name": "max_uses", "type": "INTEGER", "constraints": ["DEFAULT 50 — 邀请链接可复用次数"]},
+          {"name": "use_count", "type": "INTEGER", "constraints": ["DEFAULT 0"]},
+          {"name": "expires_at", "type": "TIMESTAMPTZ", "constraints": ["NOT NULL", "DEFAULT now() + interval '7 days'"]},
+          {"name": "created_at", "type": "TIMESTAMPTZ", "constraints": ["DEFAULT now()"]}
+        ],
+        "indexes": [
+          "INDEX(code)",
+          "INDEX(team_id)"
+        ]
+      },
+      {
+        "name": "favorites",
+        "fields": [
+          {"name": "user_id", "type": "UUID", "constraints": ["FK→users.id ON DELETE CASCADE"]},
+          {"name": "snippet_id", "type": "UUID", "constraints": ["FK→snippets.id ON DELETE CASCADE"]},
+          {"name": "created_at", "type": "TIMESTAMPTZ", "constraints": ["DEFAULT now()"]}
+        ],
+        "indexes": [
+          "UNIQUE(user_id, snippet_id)",
+          "INDEX(snippet_id)"
+        ]
+      },
+      {
+        "name": "comments",
+        "fields": [
+          {"name": "id", "type": "UUID", "constraints": ["PK", "DEFAULT gen_random_uuid()"]},
+          {"name": "snippet_id", "type": "UUID", "constraints": ["FK→snippets.id ON DELETE CASCADE"]},
+          {"name": "author_id", "type": "UUID", "constraints": ["FK→users.id", "NOT NULL"]},
+          {"name": "body", "type": "TEXT", "constraints": ["NOT NULL", "CHECK char_length(body) <= 5000"]},
+          {"name": "created_at", "type": "TIMESTAMPTZ", "constraints": ["DEFAULT now()"]},
+          {"name": "updated_at", "type": "TIMESTAMPTZ", "constraints": ["DEFAULT now()"]}
+        ],
+        "indexes": [
+          "INDEX(snippet_id, created_at) — 按片段查询评论时间线",
+          "INDEX(author_id)"
+        ]
+      }
+    ],
+    "relationships": [
+      {"from": "users", "to": "snippets", "type": "1:N", "via": "snippets.owner_id"},
+      {"from": "teams", "to": "snippets", "type": "1:N", "via": "snippets.team_id"},
+      {"from": "snippets", "to": "tags", "type": "N:M", "via": "snippet_tags"},
+      {"from": "teams", "to": "users", "type": "N:M", "via": "team_members"},
+      {"from": "users", "to": "snippets", "type": "N:M", "via": "favorites (收藏关系)"},
+      {"from": "users", "to": "comments", "type": "1:N", "via": "comments.author_id"},
+      {"from": "snippets", "to": "comments", "type": "1:N", "via": "comments.snippet_id"},
+      {"from": "teams", "to": "invitations", "type": "1:N", "via": "invitations.team_id"}
+    ]
+  },
+
+  "api_contracts": [
+    {
+      "method": "GET",
+      "path": "/api/auth/login/{provider}",
+      "description": "重定向到 GitHub/Google OAuth 授权页",
+      "input": {"provider": "github|google"},
+      "output": "302 重定向",
+      "errors": [{"code": 400, "meaning": "不支持的 provider"}]
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/callback/{provider}",
+      "description": "OAuth 回调，完成登录，返回 JWT token pair",
+      "input": {"query": {"code": "OAuth授权码"}},
+      "output": {"access_token": "JWT (15min)", "refresh_token": "JWT (7d)", "user": {"id": "uuid", "email": "str", "display_name": "str", "avatar_url": "str"}},
+      "errors": [{"code": 401, "meaning": "OAuth 授权失败"}]
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/refresh",
+      "description": "用 refresh_token 换新 access_token",
+      "input": {"body": {"refresh_token": "str"}},
+      "output": {"access_token": "JWT", "expires_in": 900},
+      "errors": [{"code": 401, "meaning": "refresh_token 过期或无效"}]
+    },
+    {
+      "method": "POST",
+      "path": "/api/snippets",
+      "description": "创建代码片段",
+      "input": {"body": {"title": "str", "description": "str?", "code": "str", "language": "str", "visibility": "private|team|public", "team_id": "uuid?", "tags": ["str"]}},
+      "output": {"id": "uuid", "title": "str", "...完整片段对象"},
+      "errors": [
+        {"code": 400, "meaning": "code 为空或超 50000 字符"},
+        {"code": 403, "meaning": "非团队成员无法设为 team 可见"},
+        {"code": 422, "meaning": "language 不在支持列表"}
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/snippets/{id}",
+      "description": "获取片段详情(含语法高亮语言标记)",
+      "input": {"path": {"id": "uuid"}},
+      "output": {"snippet": {"id": "uuid", "title": "str", "code": "str", "language": "str", "owner": "{id,name,avatar}", "tags": ["str"], "favorite_count": "int", "comment_count": "int", "created_at": "iso8601"}},
+      "errors": [
+        {"code": 404, "meaning": "片段不存在或已删除"},
+        {"code": 403, "meaning": "无权访问(私有片段非本人)"}
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/api/snippets/{id}",
+      "description": "更新片段",
+      "input": {"body": {"title": "str?", "description": "str?", "code": "str?", "language": "str?", "visibility": "str?", "tags": ["str"]?}},
+      "output": {"snippet": "更新后的完整对象"},
+      "errors": [{"code": 403, "meaning": "非所有者"}, {"code": 404, "meaning": "不存在"}]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/snippets/{id}",
+      "description": "软删除片段",
+      "input": {"path": {"id": "uuid"}},
+      "output": {"deleted": true},
+      "errors": [{"code": 403, "meaning": "非所有者"}, {"code": 404, "meaning": "不存在"}]
+    },
+    {
+      "method": "GET",
+      "path": "/api/snippets",
+      "description": "分页获取片段列表(我的/团队的/公开的)",
+      "input": {"query": {"scope": "mine|team|public (default mine)", "team_id": "uuid?", "language": "str?", "page": "int (default 1)", "size": "int (default 20, max 100)"}},
+      "output": {"items": ["snippet对象"], "total": "int", "page": "int", "size": "int"},
+      "errors": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/search",
+      "description": "全文搜索 + 标签联合过滤，按相关度排序",
+      "input": {"query": {"q": "搜索词", "language": "str?", "tags": "逗号分隔?", "team_id": "uuid?", "scope": "mine|team|public?", "page": "int", "size": "int"}},
+      "output": {"items": ["snippet对象(含 headline 高亮片段)"], "total": "int", "took_ms": "int"},
+      "errors": [{"code": 400, "meaning": "q 为空且无 tags"}]
+    },
+    {
+      "method": "GET",
+      "path": "/api/tags",
+      "description": "标签自动补全",
+      "input": {"query": {"prefix": "str (min 1 char)", "limit": "int (default 10, max 50)"}},
+      "output": {"tags": [{"name": "str", "count": "int"}]},
+      "errors": [{"code": 400, "meaning": "prefix 为空"}]
+    },
+    {
+      "method": "POST",
+      "path": "/api/teams",
+      "description": "创建团队",
+      "input": {"body": {"name": "str (1-100)", "slug": "str (2-30, a-z0-9-)", "description": "str?"}},
+      "output": {"team": {"id": "uuid", "name": "str", "slug": "str", "owner_id": "uuid"}},
+      "errors": [{"code": 409, "meaning": "slug 已被占用"}, {"code": 400, "meaning": "slug 格式无效"}]
+    },
+    {
+      "method": "POST",
+      "path": "/api/teams/{id}/invite",
+      "description": "生成邀请链接",
+      "input": {"body": {"max_uses": "int? (default 50)", "expires_in_hours": "int? (default 168=7天)"}},
+      "output": {"invite_code": "str (64位随机token)", "invite_url": "str", "expires_at": "iso8601"},
+      "errors": [{"code": 403, "meaning": "非 owner/admin 无法邀请"}]
+    },
+    {
+      "method": "POST",
+      "path": "/api/teams/{id}/join",
+      "description": "通过邀请码加入团队",
+      "input": {"body": {"code": "str"}},
+      "output": {"team": {"id": "uuid", "name": "str"}, "role": "member"},
+      "errors": [
+        {"code": 404, "meaning": "邀请码无效"},
+        {"code": 410, "meaning": "邀请已过期或已达使用上限"},
+        {"code": 409, "meaning": "已是团队成员"}
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/snippets/{id}/favorite",
+      "description": "切换收藏状态(toggle)",
+      "input": {"path": {"id": "uuid"}},
+      "output": {"favorited": "bool — 操作后的状态"},
+      "errors": [{"code": 404, "meaning": "片段不存在"}]
+    },
+    {
+      "method": "POST",
+      "path": "/api/snippets/{id}/comments",
+      "description": "添加评论",
+      "input": {"body": {"body": "str (1-5000)"}},
+      "output": {"comment": {"id": "uuid", "body": "str", "author": "{id,name,avatar}", "created_at": "iso8601"}},
+      "errors": [{"code": 400, "meaning": "body 为空或超长"}, {"code": 404, "meaning": "片段不存在"}]
+    },
+    {
+      "method": "GET",
+      "path": "/api/snippets/{id}/comments",
+      "description": "评论列表",
+      "input": {"query": {"page": "int", "size": "int (default 20)"}},
+      "output": {"items": ["comment对象"], "total": "int"},
+      "errors": [{"code": 404, "meaning": "片段不存在"}]
+    }
+  ],
+
+  "tech_stack": {
+    "language": "Python 3.12 — 团队主力语言，FastAPI 生态成熟，async/await 原生支持。前端 TypeScript 5.x",
+    "framework": "FastAPI (后端) — 异步、自动 OpenAPI 文档、Pydantic 校验、依赖注入。前端用 React 18 + Vite (TypeScript)，不做 SSR",
+    "database": "PostgreSQL 16 — 硬约束。全文检索用内置 tsvector/tsquery + GIN 索引，标签补全用 text_pattern_ops，不引入 ES/Meilisearch。连接池用 asyncpg + SQLAlchemy 2.0 async",
+    "cache": "Redis 7 — 仅用于：JWT refresh_token 黑名单、邀请码临时存储、搜索热点缓存(TTL 5min)、登录限流。不做业务数据缓存",
+    "mq": "不需要 — 100 并发用户场景，同步操作全部走数据库。v1 没有异步任务(邮件通知、批量导入等)需求。真需要时加 Redis Streams 或直接上 Celery，不预先引入"
+  },
+
+  "constraints": [
+    {
+      "type": "security",
+      "rule": "JWT access_token 15分钟过期，refresh_token 7天过期，refresh 轮换时旧 token 加入 Redis 黑名单",
+      "check": "集成测试：过期 token 返回 401，被黑名单 token 返回 401"
+    },
+    {
+      "type": "security",
+      "rule": "所有片段访问校验三层：登录校验 → 可见性校验(private/team/public) → 团队成员校验(team 可见时)",
+      "check": "集成测试：非成员访问 team 片段返回 403，访问 private 片段返回 403"
+    },
+    {
+      "type": "security",
+      "rule": "代码片段输入做长度上限(50000字符)和语言白名单校验(预定义 50+ 语言列表)",
+      "check": "单元测试：超长和未知语言返回 422"
+    },
+    {
+      "type": "performance",
+      "rule": "搜索接口 P99 < 200ms — GIN 索引 + ts_rank 排序，搜索结果分页上限 100 条",
+      "check": "pgbench 或 locust 压测：100 并发搜索，P99 < 200ms"
+    },
+    {
+      "type": "performance",
+      "rule": "热门标签查询缓存到 Redis(TTL 5min)，避免每次请求 count",
+      "check": "Redis 命中率监控 > 80%"
+    },
+    {
+      "type": "reliability",
+      "rule": "软删除代替硬删除，is_deleted 字段 + 30 天保留后 cron 清理",
+      "check": "集成测试：删除后 GET 返回 404，但数据库记录仍存在且 is_deleted=true"
+    },
+    {
+      "type": "reliability",
+      "rule": "数据库连接池 max=20，复用连接，事务隔离 READ COMMITTED",
+      "check": "压测中检查连接数 < 20，无连接泄漏"
+    }
+  ],
+
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "项目骨架 + Docker Compose 环境",
+      "description": "初始化 FastAPI 项目结构、SQLAlchemy async engine、Alembic 迁移目录、Docker Compose 编排(postgres+redis+app)、健康检查端点 /api/health",
+      "complexity": "low",
+      "layer": "backend",
+      "depends_on": [],
+      "acceptance": "docker compose up → /api/health 返回 200，数据库连接池正常"
+    },
+    {
+      "id": "T2",
+      "title": "数据库 Schema + Alembic 迁移",
+      "description": "创建 8 张表的 Alembic 初始迁移脚本、GIN 索引、tsvector 生成列、触发器(tags.usage_count 自动增减)",
+      "complexity": "medium",
+      "layer": "data",
+      "depends_on": ["T1"],
+      "acceptance": "alembic upgrade head 全部建表，psql 验证索引存在"
+    },
+    {
+      "id": "T3",
+      "title": "OAuth2 认证模块",
+      "description": "GitHub + Google OAuth2 登录流程、JWT 签发/验证/刷新、require_auth 依赖注入。用 httpx 调 OAuth provider API",
+      "complexity": "medium",
+      "layer": "backend",
+      "depends_on": ["T2"],
+      "acceptance": "浏览器走通 GitHub 登录 → 获取 access_token → 调 /api/auth/me 返回用户信息"
+    },
+    {
+      "id": "T4",
+      "title": "片段 CRUD 模块",
+      "description": "创建/编辑/删除/列表/详情 API、可见性校验、语言白名单校验、标签关联的增删改。Pydantic schema 定义",
+      "complexity": "medium",
+      "layer": "backend",
+      "depends_on": ["T3"],
+      "acceptance": "cURL 创建片段 → 列表可见 → 编辑标题 → 软删除后列表不可见"
+    },
+    {
+      "id": "T5",
+      "title": "全文搜索 + 标签系统",
+      "description": "PostgreSQL tsvector/tsquery 全文检索(含 ts_headline 高亮)、GIN 索引优化、标签 CRUD + 自动补全(text_pattern_ops)、多条件组合查询(snippet_search 函数封装)",
+      "complexity": "high",
+      "layer": "backend",
+      "depends_on": ["T4"],
+      "acceptance": "搜索 'python async' 命中标题/描述/代码中含相关词的片段；PG explain analyze 显示走 GIN 索引; 标签前缀 'py' 返回 ['python','pytest','pyspark']"
+    },
+    {
+      "id": "T6",
+      "title": "团队空间模块",
+      "description": "团队 CRUD、成员管理(owner/admin/member 三级角色)、邀请码生成/验证/加入、团队权限中间件(require_team_member)",
+      "complexity": "medium",
+      "layer": "backend",
+      "depends_on": ["T3"],
+      "acceptance": "创建团队 → 生成邀请 → 另一用户加入 → 创建 team 可见片段 → 两用户都能看到 → 移除成员后看不到"
+    },
+    {
+      "id": "T7",
+      "title": "收藏 + 评论模块",
+      "description": "收藏 toggle API、收藏列表、评论 CRUD(作者可删)、片段详情返回收藏数和评论数。评论通知 v1 跳过，留接口占位",
+      "complexity": "low",
+      "layer": "backend",
+      "depends_on": ["T4"],
+      "acceptance": "收藏片段 → 列表显示 → 再次请求取消收藏 → 添加评论 → 片段详情显示评论数"
+    },
+    {
+      "id": "T8",
+      "title": "前端项目初始化 + 路由 + 认证流",
+      "description": "Vite + React 18 + TypeScript 脚手架、React Router 路由定义、OAuth 登录页(重定向到后端)、JWT 存储(httpOnly cookie 优先，fallback localStorage)、AuthContext 全局状态",
+      "complexity": "low",
+      "layer": "frontend",
+      "depends_on": ["T3"],
+      "acceptance": "npm run dev → 首页加载 → 点击登录 → 跳转 GitHub → 回调后显示用户名头像"
+    },
+    {
+      "id": "T9",
+      "title": "前端片段编辑器 + 语法高亮",
+      "description": "代码编辑页(CodeMirror 6 或 Monaco Editor 的 minimal 包)、语言选择器(50+语言下拉)、标签输入(自动补全)、创建/编辑表单",
+      "complexity": "medium",
+      "layer": "frontend",
+      "depends_on": ["T4", "T8"],
+      "acceptance": "粘贴 Python 代码 → 选 Python 语言 → 实时高亮 → 保存 → 列表页可见"
+    },
+    {
+      "id": "T10",
+      "title": "前端片段列表 + 搜索 + 详情页",
+      "description": "片段卡片列表(分页)、搜索栏(关键词+语言+标签过滤)、搜索结果页(带高亮)、片段详情页(代码只读+语法高亮+评论区+收藏按钮)",
+      "complexity": "medium",
+      "layer": "frontend",
+      "depends_on": ["T5", "T7", "T8", "T9"],
+      "acceptance": "搜索 'sort' → 列表过滤 → 点击进入详情 → 代码高亮 → 添加评论 → 收藏"
+    },
+    {
+      "id": "T11",
+      "title": "前端团队管理界面",
+      "description": "团队列表、创建团队表单、团队设置页(邀请/移除成员)、团队片段 Tab",
+      "complexity": "medium",
+      "layer": "frontend",
+      "depends_on": ["T6", "T8"],
+      "acceptance": "创建团队 → 邀请成员 → 成员列表显示 → 移除成员"
+    },
+    {
+      "id": "T12",
+      "title": "集成测试 + 性能验证",
+      "description": "pytest + httpx 集成测试覆盖主要 API 流程、locust 压测脚本(100并发搜索)、API 响应时间监控",
+      "complexity": "medium",
+      "layer": "backend",
+      "depends_on": ["T7", "T6"],
+      "acceptance": "pytest 全绿(覆盖 auth/snippets/search/teams/social 的 happy path + error path)、locust 报告搜索 P99 < 200ms"
+    }
+  ],
+
+  "risks": [
+    {
+      "risk": "PG 全文检索中文分词不支持(tsvector 默认只处理英文分词)",
+      "impact": "medium",
+      "mitigation": "若团队主要写中文注释 → 装 zhparser 扩展或改用 pg_bigm。v1 先默认 english 配置，中文搜索走 LIKE/ILIKE 降级。用户反馈后再切换"
+    },
+    {
+      "risk": "OAuth 回调 URL 配置繁琐(本地开发 http，生产 https)",
+      "impact": "low",
+      "mitigation": "环境变量 OAUTH_REDIRECT_BASE 区分 dev/prod，`.env.example` 文档说明。GitHub OAuth App 创建指南写入 README"
+    },
+    {
+      "risk": "100 并发下 PG 连接池耗尽 (默认 max 20)",
+      "impact": "medium",
+      "mitigation": "连接池 max=20 对 100 并发够用(async 快速释放)，压测验证。若不够 → 读写分离或上 PgBouncer，但 v1 不引入"
+    },
+    {
+      "risk": "语法高亮在前端 vs 后端做？方案分歧",
+      "impact": "low",
+      "mitigation": "确定：语法高亮纯前端渲染(CodeMirror/Monaco)，后端只存语言标签。不做服务端高亮生成"
+    }
+  ]
+}
