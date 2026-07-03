@@ -44,9 +44,54 @@
 
 - **文件持久化**而非数据库 — `.qidian/` 下 JSON，可 grep、零依赖
 - **Worktree 隔离** — git worktree 做任务沙箱，类 Docker 但更轻
-- **GATE 人审断点** — G1/G2/G3 三处可暂停等人工确认
+- **GATE 人审断点** — G1/G2/G3 三处可暂停等人工确认，`_check_paused()` + `PAUSE_DIR` 实现
 - **两档模型**而非三层 — 废弃了 E/E+/D，场景匹配更好
 - **多模型碰撞不滥用** — 仅4个高风险角色用，其余单模型
+
+## 数据流（一个任务的完整路径）
+
+```
+1. 用户输入 (Chat/Observer) 
+2. Router._llm_classify() → 分类结果(任务类型+建议角色)
+3. Orchestrator 创建 task → 写入 .qidian/tasks/
+4. Workflow 按6阶段推进: 定义→G1→架构→G2→实现→集成→审查→G3→交付
+5. 每阶段: Planner 拆子任务 → Dispatcher 匹配 executor → 并行执行 → Validator GATE审查
+6. Validator 裁决: pass(进入下一阶段) / retry(重做) / abort(中止)
+7. Merge 合并多 executor 输出 → 最终代码+审查报告
+8. Memory.index_task() 归档记忆 → 后续任务可检索
+9. Observer 全程 WebSocket 推送状态 → 前端实时更新
+```
+
+## API 端点
+
+| 路径 | 方法 | 用途 |
+|------|------|------|
+| `/api/tasks` | GET/POST | 任务列表/创建 |
+| `/api/tasks/<id>` | GET/PUT/DELETE | 单个任务 CRUD |
+| `/api/tasks/<id>/pause\|resume` | POST | 暂停/恢复 |
+| `/api/projects` | GET/POST | 项目列表/创建 |
+| `/api/config/roles` | GET/PUT | 角色配置 |
+| `/api/config/models` | GET/PUT | 模型配置 |
+| `/api/admin/skills` | GET/PUT | 技能管理 |
+| `/api/memory/search` | GET | 记忆检索 |
+| `/ws` | WebSocket | Observer 实时连接 |
+
+## 前端页面
+
+| 路由 | 组件 | 功能 |
+|------|------|------|
+| `/` | `Chat.tsx` | 对话式任务入口，Observer 交互 |
+| `/tasks` | `Tasks.tsx` | 任务面板，6阶段进度+Gate状态 |
+| `/config` | `Config.tsx` | 角色/模型/技能配置，含ModelsTab/AgentsTab/SkillsTab |
+| `/projects` | `Projects.tsx` | 项目管理 |
+
+## 配置
+
+- `.env` — API Key（DeepSeek/Kimi/OpenAI/Zhipu/Anthropic）**不入 git**
+- `.qidian/` — 运行时数据（tasks/projects/memory/snapshots/traces）**gitignore**
+- `scheduler/config.py` — 路径常量+脚本配置
+- `scheduler/roles.py` + `roles.toml` — 13角色定义（name/level/prompt/model）
+- `scheduler/models.toml` — 模型注册（provider/model_id/api_base）
 
 ## 硬约束
 
