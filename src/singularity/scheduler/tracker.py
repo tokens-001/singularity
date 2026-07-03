@@ -35,6 +35,16 @@ class TaskStatus(Enum):
     PAUSED = "paused"                # GATE 人审暂停, 可恢复
 
 
+class ExecutionMode(str, Enum):
+    """任务执行模式 — 控制人工介入粒度。
+    auto_edit:       GATE 卡点暂停 (默认)
+    confirm_changes: GATE 卡点 + 文件写入前暂停
+    orchestrator 拿不准时可建议用户切换。
+    """
+    AUTO_EDIT = "auto_edit"
+    CONFIRM_CHANGES = "confirm_changes"
+
+
 # PAUSED: 不进 _INFLIGHT (不是崩了要重跑), 不进 _TERMINAL (能流转回 RUNNING)
 # 进 _SCHEDULABLE: resume 后调度循环能重新捡起
 _INFLIGHT = {TaskStatus.ROUTED, TaskStatus.DISPATCHED, TaskStatus.RUNNING, TaskStatus.VALIDATING}
@@ -66,6 +76,8 @@ class Task:
     route_locked: bool = False  # planner 已指定层级 → 跳过 re-route (建议 #6)
     held: bool = False           # 人工扣留, 不进调度队列
     held_reason: str = ""        # 扣留原因
+    attrs: dict = field(default_factory=dict)  # 扩展属性 (execution_mode/skip_gates 等)
+    execution_mode: str = "auto_edit"  # auto_edit | confirm_changes
     project_id: str = ""         # 所属项目 ID (空=独立任务)
 
     def to_dict(self) -> dict:
@@ -85,6 +97,8 @@ class Task:
         d.setdefault("held", False)
         d.setdefault("held_reason", "")
         d.setdefault("project_id", "")
+        d.setdefault("attrs", {})
+        d.setdefault("execution_mode", "auto_edit")
         return cls(**d)
 
     def compute_starvation(self) -> float:

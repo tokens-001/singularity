@@ -8,7 +8,7 @@ async function request<T>(url: string, opts?: RequestInit): Promise<T> {
   return res.json()
 }
 
-export interface Task { id: string; description: string; status: string; route_type: string; route_gate: string; route_role: string; project_id: string; updated_at: number; created_at: number }
+export interface Task { id: string; description: string; status: string; route_type: string; route_gate: string; route_role: string; project_id: string; execution_mode?: string; updated_at: number; created_at: number }
 export interface TaskDetail extends Task { trace?: any; timeline?: any }
 
 export const api = {
@@ -18,6 +18,9 @@ export const api = {
   taskTrace: (id: string) => request<any>(`/api/tasks/${id}/trace`),
   createTask: (desc: string) => request('/api/tasks',{method:'POST',body:JSON.stringify({description:desc})}),
   cancelTask: (id: string) => request(`/api/tasks/${id}/cancel`,{method:'POST'}),
+  pauseTask: (id: string) => request(`/api/tasks/${id}/pause`,{method:'POST'}),
+  resumeTask: (id: string) => request(`/api/tasks/${id}/resume`,{method:'POST'}),
+  setTaskMode: (id: string, mode: string) => request(`/api/tasks/${id}/mode`,{method:'POST',body:JSON.stringify({mode})}),
   retryTask: (id: string) => request(`/api/tasks/${id}/retry`,{method:'POST'}),
   holdTask: (id: string) => request(`/api/tasks/${id}/hold`,{method:'POST'}),
   releaseTask: (id: string) => request(`/api/tasks/${id}/release`,{method:'POST'}),
@@ -34,7 +37,7 @@ export const api = {
   gateConfirm: (id: string, gate: string, decision: string) =>
     request(`/api/projects/${id}/gate-confirm`,{method:'POST',body:JSON.stringify({gate,decision})}),
 
-  observerChat: (q: string) => request<any>('/api/observer/chat',{method:'POST',body:JSON.stringify({question:q})}),
+  observerChat: (q: string, mode?: string, pid?: string) => request<any>('/api/observer/chat',{method:'POST',body:JSON.stringify({question:q,execution_mode:mode||'auto_edit',project_id:pid||''})}),
 
   agents: () => request<any>('/api/agents'),
   deleteAgent: (model: string) => request(`/api/agents/any/${model}`,{method:'DELETE'}),

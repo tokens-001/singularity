@@ -210,6 +210,13 @@ def _projects_dir() -> Path:
     return d
 
 
+def get_project_dir(project_id: str) -> Path:
+    """获取项目工作目录 (存定义文档等)。"""
+    d = _projects_dir() / project_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _path(project_id: str) -> Path:
     return _projects_dir() / f"{project_id}.json"
 

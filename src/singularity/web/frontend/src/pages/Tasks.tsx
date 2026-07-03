@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api, Task } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
 import { useToast } from '../components/Toast'
-import { Play, Square, RotateCcw, XCircle, Plus, RefreshCw } from 'lucide-react'
+import { Play, Square, RotateCcw, XCircle, Plus, RefreshCw, Pause, Shield, ShieldCheck } from 'lucide-react'
 
 const COLUMNS = [
   { key: 'pending', label: '待处理', color: '#666' },
@@ -95,8 +95,16 @@ export default function Tasks() {
                   <div className="flex-center gap-4 fs-9" style={{ color: '#555' }}>
                     <span className="mono">{t.id.slice(0, 8)}</span>
                     <span className="flex-1"/>
+                    {/* 模式切换 */}
+                    <button onClick={e=>{e.stopPropagation();api.setTaskMode(t.id, t.execution_mode==='confirm_changes'?'auto_edit':'confirm_changes').then(fetch)}}
+                      className="btn-icon" style={{padding:1}} title={t.execution_mode==='confirm_changes'?'变更确认(点击切自动)':'自动编辑(点击切确认)'}>
+                      {t.execution_mode==='confirm_changes'?<ShieldCheck size={10} color="#3fb950"/>:<Shield size={10} color="#666"/>}
+                    </button>
+                    {/* pause/resume */}
+                    {t.status==='running'&&<button onClick={e=>{e.stopPropagation();act(api.pauseTask,t.id)}} className="btn-icon" style={{padding:1}} title="暂停"><Pause size={10}/></button>}
+                    {t.status==='paused'&&<button onClick={e=>{e.stopPropagation();act(api.resumeTask,t.id)}} className="btn-icon" style={{padding:1}} title="恢复"><Play size={10}/></button>}
                     {t.status === 'failed' && <button onClick={e=>{e.stopPropagation();act(api.retryTask,t.id)}} className="btn-icon" style={{padding:1}}><RotateCcw size={10}/></button>}
-                    {['pending','running'].includes(t.status) && <button onClick={e=>{e.stopPropagation();act(api.cancelTask,t.id)}} className="btn-icon" style={{padding:1}}><XCircle size={10}/></button>}
+                    {['pending','running','paused'].includes(t.status) && <button onClick={e=>{e.stopPropagation();act(api.cancelTask,t.id)}} className="btn-icon" style={{padding:1}}><XCircle size={10}/></button>}
                     {t.status === 'running' && <button onClick={e=>{e.stopPropagation();act(api.holdTask,t.id)}} className="btn-icon" style={{padding:1}}><Square size={10}/></button>}
                     {t.status === 'blocked' && <button onClick={e=>{e.stopPropagation();act(api.releaseTask,t.id)}} className="btn-icon" style={{padding:1}}><Play size={10}/></button>}
                   </div>

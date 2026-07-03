@@ -313,6 +313,18 @@ def task_resume(task_id: str) -> tuple[dict, int]:
     return {"ok": True, "message": "已发送恢复信号"}, 200
 
 
+def task_set_mode(task_id: str, mode: str) -> tuple[dict, int]:
+    """POST /api/tasks/<id>/mode — 切换执行模式 (auto_edit | confirm_changes)。"""
+    if mode not in ("auto_edit", "confirm_changes"):
+        return {"error": f"无效模式: {mode}，可选 auto_edit / confirm_changes"}, 400
+    task = tracker.read_task(task_id)
+    if task is None:
+        return {"error": "任务不存在"}, 404
+    task.execution_mode = mode
+    tracker._write(task)
+    return {"ok": True, "task_id": task_id, "execution_mode": mode}, 200
+
+
 def task_delete(task_id: str) -> tuple[dict, int]:
     """POST /api/tasks/<id>/delete"""
     config.ensure_dirs()

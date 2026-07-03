@@ -18,6 +18,7 @@ export default function Chat() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [showFiles, setShowFiles] = useState(false)
+  const [execMode, setExecMode] = useState<'auto_edit'|'confirm_changes'>('auto_edit')
   const [tasks, setTasks] = useState<ProgressItem[]>([])
   const [projects, setProjects] = useState<any[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -62,6 +63,8 @@ export default function Chat() {
       if (e.project_id && activePid === '_default') setActiveProject(e.project_id)
       const last = msgs[msgs.length - 1]
       if (last?.role !== 'assistant' || last.content !== e.msg) addChatMsg({ role: 'assistant', content: e.msg || '', ts: Date.now() })
+      // 刷新项目状态 (phase变化)
+      if (e.project_id) fetchProjects()
     } else if (e.kind === 'observer_answer' && pendingCid.current) {
       try {
         const data = JSON.parse(e.msg || '{}')
@@ -89,7 +92,7 @@ export default function Chat() {
     }
 
     try {
-      const r = await api.observerChat(q)
+      const r = await api.observerChat(q, execMode, activePid !== '_default' ? activePid : '')
       if (r.client_id) { pendingCid.current = r.client_id }
       else if (r.answer) { addChatMsg({role:'assistant',content:r.answer,ts:Date.now()}); setLoading(false) }
     } catch { addChatMsg({role:'assistant',content:'请求失败，请确认后端服务在运行。',ts:Date.now()}); setLoading(false) }
@@ -99,6 +102,11 @@ export default function Chat() {
   const failed = tasks.filter(t => t.status === 'failed').length
   const active = tasks.filter(t => !['done','failed','cancelled'].includes(t.status)).length
   const info = activePid !== '_default' ? projects.find(p => p.id === activePid) : null
+  const gatePhase = info?.phase || ''
+  const isGate = gatePhase.startsWith('gate')
+  const gateNum = isGate ? gatePhase.replace('gate','') : ''
+  const gateLabels: Record<string,string> = { '1':'定义完成·请审核PRD', '2':'架构完成·请审核方案', '3':'验收完成·请审核交付物' }
+  const phaseNames: Record<string,string> = { template:'待开始', researching:'调研中', planning:'架构设计中', executing:'实现中', integrating:'集成合并中', reviewing:'审查中', delivering:'交付中', done:'已完成' }
   const hasMsgs = msgs.length > 0
   const isEmpty = activePid === '_default' || (!hasMsgs && !loading)
 
@@ -161,6 +169,18 @@ export default function Chat() {
               </div>
             )}
 
+            {isGate && info && (
+              <div style={{ padding:'8px 0', textAlign:'center' }}>
+                <div style={{ display:'inline-flex',alignItems:'center',gap:8,background:'#1a2a1a',border:'1px solid #3fb950',borderRadius:8,padding:'8px 16px' }}>
+                  <span style={{fontSize:13,fontWeight:600,color:'#3fb950'}}>🛑 GATE{gateNum}</span>
+                  <span style={{fontSize:12,color:'#999'}}>{gateLabels[gateNum] || '等待审核'}</span>
+                  <button onClick={async e=>{e.stopPropagation();try{await api.gateConfirm(info.id,gatePhase,'approved');fetchProjects();fetchTasks()}catch{toast('操作失败','error')}}}
+                    style={{background:'#3fb950',color:'#000',border:'none',borderRadius:4,padding:'3px 10px',fontSize:11,fontWeight:600,cursor:'pointer'}}>✅ 通过</button>
+                  <button onClick={async e=>{e.stopPropagation();try{await api.gateConfirm(info.id,gatePhase,'rejected');fetchProjects();fetchTasks()}catch{toast('操作失败','error')}}}
+                    style={{background:'#444',color:'#f85149',border:'none',borderRadius:4,padding:'3px 10px',fontSize:11,cursor:'pointer'}}>↩ 打回</button>
+                </div>
+              </div>
+            )}
             {loading && (
               <div className="chat-msg-row flex-center gap-6 text-muted fs-12">
                 <Loader2 size={11} style={{animation:'spin 1s linear infinite'}}/>思考中...
@@ -171,7 +191,9 @@ export default function Chat() {
 
           <div style={{ padding: '0 0 12px' }}>
             <div className="chat-input-wrap-bottom" style={{ maxWidth: 860, margin: '0 auto' }}>
-              {info && <span className="fs-11 text-muted" style={{ whiteSpace: 'nowrap' }}>{info.name}</span>}
+              {info && <span className="fs-11 text-muted" style={{ whiteSpace: 'nowrap' }}>
+                {info.name} <span style={{color: isGate?'#3fb950':gatePhase==='done'?'#3fb950':'#666'}}>· {phaseNames[gatePhase] || gatePhase}</span>
+              </span>}
               <textarea value={input} onChange={e => setInput(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
                 placeholder="发送消息..." rows={1} className="chat-textarea"/>
@@ -182,6 +204,17 @@ export default function Chat() {
                 style={{ background: input.trim() ? '#fff' : '#333', color: input.trim() ? '#000' : '#666', cursor: input.trim() ? 'pointer' : 'default' }}>
                 <ArrowUp size={14}/>
               </button>
+            </div>
+            <div style={{ maxWidth: 860, margin: '6px auto 0' }}>
+              <select value={execMode} onChange={e => setExecMode(e.target.value as any)}
+                style={{
+                  background: '#1c1c1e', color: execMode==='confirm_changes'?'#3fb950':'#888',
+                  border: `1px solid ${execMode==='confirm_changes'?'#3fb950':'#333'}`, borderRadius: 6,
+                  padding: '2px 8px', fontSize: 11, cursor: 'pointer', outline: 'none',
+                }}>
+                <option value="auto_edit">⚡ 自动编辑 — GATE卡点暂停</option>
+                <option value="confirm_changes">🔒 逐步确认 — 每步暂停等确认</option>
+              </select>
             </div>
           </div>
         </>
