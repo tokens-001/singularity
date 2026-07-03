@@ -22,6 +22,16 @@
 - 架构：`docs/ARCHITECTURE.md`
 - 演化史：`docs/演化史.md` — 每次重要更新记录，旧文件不用留
 
+## 恢复
+
+```bash
+cd ~/奇点
+python3 -m singularity.web.app          # 本地
+docker compose up -d --build            # Docker
+```
+
+当前状态：v4.2 封存，6阶段流水线串通，276测试绿，13角色+3模型委员会。无进行中任务。
+
 ## 指针
 
 - 演化史 → `docs/演化史.md`
