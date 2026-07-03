@@ -30,7 +30,7 @@ from singularity.scheduler import config as sched_config
 from singularity.scheduler import witness
 from singularity.scheduler._types import _pending_sse_events
 
-__all__ = ['EdgeType', 'EventNode', '_EDGES_PATH', '_EMBED_MODEL', '_ENTITY_IDX_PATH', '_EVENTS_PATH', '_INTENT_EDGE_WEIGHTS', '_INTENT_PATTERNS', '_MEMORY_DIR', '_cosine_sim', '_embed', '_ensure_dir', '_get_embed_model', '_read_json', '_write_json', 'detect_intent']
+__all__ = ['EdgeType', 'EventNode', '_EDGES_PATH', '_EMBED_MODEL', '_ENTITY_IDX_PATH', '_EVENTS_PATH', '_INTENT_EDGE_WEIGHTS', '_INTENT_PATTERNS', '_MAX_EVENTS', '_MEMORY_DIR', '_calculate_importance', '_cosine_sim', '_embed', '_ensure_dir', '_evict_if_needed', '_get_embed_model', '_hf_log', '_infer_mem_type', '_load_edges', '_load_events', '_read_json', '_save_edges', '_save_events', '_write_json', 'detect_intent', 'index_task', 'update_attrs']
 # ═══════════════════════════════════════════════════════════
 # 存储路径 + I/O 原语 (ex _memory_io.py)
 # ═══════════════════════════════════════════════════════════
@@ -210,6 +210,252 @@ _INTENT_EDGE_WEIGHTS = {
     "entity":   {EdgeType.ENTITY: 1.0, EdgeType.SEMANTIC: 0.5, EdgeType.CAUSAL: 0.2, EdgeType.TEMPORAL: 0.2},
     "semantic": {EdgeType.SEMANTIC: 1.0, EdgeType.CAUSAL: 0.5, EdgeType.TEMPORAL: 0.5, EdgeType.ENTITY: 0.5},
 }
+
+
+# ═══════════════════════════════════════════════════════════
+
+# 快通道: 同步摄入 (Fast Path — "Synaptic Ingestion")
+# ═══════════════════════════════════════════════════════════
+
+def _load_events() -> dict[str, EventNode]:
+    """加载全部事件节点。"""
+    raw: dict = _read_json(_EVENTS_PATH) or {}
+    return {tid: EventNode.from_dict(d) for tid, d in raw.items()}
+
+
+def _save_events(events: dict[str, EventNode]) -> None:
+    _write_json(_EVENTS_PATH, {tid: n.to_dict() for tid, n in events.items()})
+
+
+def _load_edges() -> dict:
+    """加载边存储。
+
+    edges = {
+      "semantic":  [(src, dst, sim), ...],
+      "temporal":  [(src, dst), ...],      # 方向: 早→晚
+      "causal":    [(src, dst, source), ...],  # source: "explicit"|"inferred"
+      "entity":    [(task_id, file_path), ...],  # 任务→实体
+    }
+    """
+    default = {"semantic": [], "temporal": [], "causal": [], "entity": []}
+    raw: dict = _read_json(_EDGES_PATH) or {}
+    for k in default:
+        raw.setdefault(k, [])
+    return raw
+
+
+def _save_edges(edges: dict) -> None:
+    _write_json(_EDGES_PATH, edges)
+
+
+def _infer_mem_type(description: str) -> str:
+    """从任务描述推断记忆类型。ponytail: 关键词匹配，够用。"""
+    desc = description.lower()
+    if any(w in desc for w in ("架构", "设计", "系统", "方案", "重构")):
+        return "architecture"
+    if any(w in desc for w in ("修", "bug", "fix", "报错", "异常", "崩溃")):
+        return "bug_fix"
+    if any(w in desc for w in ("决定", "选择", "方案", "决策")):
+        return "decision"
+    if any(w in desc for w in ("加", "新增", "实现", "功能", "模块", "feature")):
+        return "code_change"
+    if any(w in desc for w in ("文档", "readme", "注释", "doc")):
+        return "docs"
+    return "code_change"
+
+
+def index_task(
+    task_id: str,
+    description: str,
+    changed_files: list[str] | None = None,
+    depends_on: list[str] | None = None,
+    created_at: float | None = None,
+    mem_type: str = "",
+) -> None:
+    """快通道摄入: 创建 EventNode + 更新四图边。
+
+    - embedding 向量 (384-dim)
+    - 追加时间链
+    - 添显式因果边 (depends_on)
+    - 连实体边 (changed_files)
+    - 重算语义边 (增量更新)
+    """
+    changed_files = changed_files or []
+    depends_on = depends_on or []
+    if created_at is None:
+        created_at = time.time()
+
+    _ensure_dir()
+
+    # ── 选择性摄入 (Omni-SimpleMem): Jaccard 对比最近摘要 ──
+    events = _load_events()
+    # 只看最近 20 条事件 (O(1), 原文用 "recent summaries")
+    recent = sorted(events.items(), key=lambda x: -x[1].timestamp)[:20]
+    desc_words = set(description.lower().split())
+    for existing_id, existing_node in recent:
+        existing_words = set(existing_node.content.lower().split())
+        if desc_words and existing_words:
+            jaccard = len(desc_words & existing_words) / len(desc_words | existing_words)
+            if jaccard > 0.75:
+                return  # 高度重复，跳过 index
+
+    # ── 记忆类型: 显式传入或自动推断 ──
+    if not mem_type:
+        mem_type = _infer_mem_type(description)
+
+    # ── EventNode ──
+    tokens = _embed(description)
+    node = EventNode(
+        task_id=task_id,
+        content=description,
+        timestamp=created_at,
+        emb=tokens,
+        attrs={"files": changed_files, "depends_on": depends_on, "mem_type": mem_type},
+    )
+    events[task_id] = node
+    _save_events(events)
+
+    # ── 边 ──
+    edges = _load_edges()
+
+    # 实体边: task → file
+    for fp in changed_files:
+        edges["entity"].append((task_id, fp))
+
+    # 因果边: dep_id → task_id (dep causes task)
+    for dep_id in depends_on:
+        if dep_id in events:
+            edges["causal"].append((dep_id, task_id, "explicit"))
+
+    # 时间边: 找前一个事件
+    sorted_events = sorted(events.items(), key=lambda x: x[1].timestamp)
+    idx = next((i for i, (tid, _) in enumerate(sorted_events) if tid == task_id), None)
+    if idx is not None and idx > 0:
+        prev_id = sorted_events[idx - 1][0]
+        # 去重
+        if not any(e[0] == prev_id and e[1] == task_id for e in edges["temporal"]):
+            edges["temporal"].append((prev_id, task_id))
+    if idx is not None and idx < len(sorted_events) - 1:
+        next_id = sorted_events[idx + 1][0]
+        if not any(e[0] == task_id and e[1] == next_id for e in edges["temporal"]):
+            edges["temporal"].append((task_id, next_id))
+
+    # 语义边: 增量更新 — 只算新节点 vs 最近 N 个 (防 O(n) 退化)
+    recent_for_sem = sorted(events.items(), key=lambda x: -x[1].timestamp)[:200]
+    for existing_id, existing_node in recent_for_sem:
+        if existing_id == task_id:
+            continue
+        sim = _cosine_sim(tokens, existing_node.emb)
+        if sim >= 0.6:
+            # 无向边, 去重
+            pair = sorted([task_id, existing_id])
+            if not any((e[0] == pair[0] and e[1] == pair[1]) for e in edges["semantic"]):
+                edges["semantic"].append((pair[0], pair[1], round(sim, 4)))
+
+    _save_edges(edges)
+
+    # ── 实体倒排索引 ──
+    entity_idx: dict[str, list[str]] = _read_json(_ENTITY_IDX_PATH) or {}
+    for fp in changed_files:
+        entity_idx.setdefault(fp, [])
+        if task_id not in entity_idx[fp]:
+            entity_idx[fp].append(task_id)
+    _write_json(_ENTITY_IDX_PATH, entity_idx)
+
+    # ── T12: LRU 驱逐检查 ──
+    evicted = _evict_if_needed(events, edges)
+    if evicted > 0:
+        _save_events(events)
+        _save_edges(edges)
+
+
+# ═══════════════════════════════════════════════════════════
+# 快通道辅助: 补充事件属性 (task 完成后更新 status 等)
+# ═══════════════════════════════════════════════════════════
+
+def update_attrs(task_id: str, **kwargs) -> None:
+    """更新事件节点的 attrs 字段。"""
+    events = _load_events()
+    if task_id in events:
+        events[task_id].attrs.update(kwargs)
+        _save_events(events)
+
+
+# ═══════════════════════════════════════════════════════════
+# T12: LRU 驱逐 + 重要性评分
+# ═══════════════════════════════════════════════════════════
+
+_MAX_EVENTS = 500  # ponytail: 内存上限，超此数触发 LRU 驱逐
+
+
+def _calculate_importance(
+    task_id: str,
+    node: EventNode,
+    events: dict[str, EventNode],
+    edges: dict,
+    now: float | None = None,
+) -> float:
+    """加权评分：引用数 + 成功奖励 + 新鲜度衰减。
+
+    score = α * ref_count + β * success_bonus + γ * recency
+    范围 [0, 1]，越高越值得保留。
+    """
+    if now is None:
+        now = time.time()
+
+    # ── 引用数 (被其他节点依赖/关联) ──
+    ref_count = 0
+    for edge_type in ("causal", "temporal", "semantic"):
+        for e in edges.get(edge_type, []):
+            if len(e) >= 2 and e[1] == task_id:
+                ref_count += 1
+    ref_score = min(ref_count / 10.0, 1.0)  # 10 引用满分
+
+    # ── 成功奖励 ──
+    attrs = node.attrs or {}
+    success = 1.0 if attrs.get("status") in ("done", "passed") else 0.0
+
+    # ── 新鲜度 (天级衰减) ──
+    days_ago = (now - node.timestamp) / 86400.0
+    recency = 1.0 / (1.0 + days_ago)
+
+    # 权重: α=0.4, β=0.35, γ=0.25
+    return 0.4 * ref_score + 0.35 * success + 0.25 * recency
+
+
+def _evict_if_needed(
+    events: dict[str, EventNode],
+    edges: dict,
+    max_events: int = _MAX_EVENTS,
+) -> int:
+    """超出上限时驱逐低分节点。返回驱逐数量。"""
+    if len(events) <= max_events:
+        return 0
+
+    now = time.time()
+    # 计算所有节点的重要性
+    scored = [
+        (tid, _calculate_importance(tid, node, events, edges, now))
+        for tid, node in events.items()
+    ]
+    # 按分数升序，低分在前
+    scored.sort(key=lambda x: x[1])
+    to_evict = len(events) - max_events
+    evicted_ids = {tid for tid, _ in scored[:to_evict]}
+
+    # 驱逐节点
+    for tid in evicted_ids:
+        del events[tid]
+
+    # 清理涉及的边
+    for etype in list(edges.keys()):
+        edges[etype] = [
+            e for e in edges[etype]
+            if (len(e) >= 2 and e[0] not in evicted_ids and e[1] not in evicted_ids)
+            or (len(e) == 1 and e[0] not in evicted_ids)
+        ]
+
+    return len(evicted_ids)
 
 
 # ═══════════════════════════════════════════════════════════
