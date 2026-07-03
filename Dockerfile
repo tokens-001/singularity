@@ -7,12 +7,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Python 依赖
-COPY pyproject.toml .
-RUN pip install --no-cache-dir . && pip uninstall -y singularity
-
 COPY . .
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir .
 
 # 数据目录 (挂载点)
 RUN mkdir -p /app/.qidian
