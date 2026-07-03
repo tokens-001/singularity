@@ -60,14 +60,21 @@ def _tool_get_system_status() -> dict[str, Any]:
     }
 
 
-def _tool_list_tasks(status: str | None = None, limit: int = 50) -> list[dict]:
+def _tool_list_tasks(status: str | None = None, limit: int = 50,
+                     project_id: str = "", active_only: bool = False) -> list[dict]:
+    """列出任务。active_only=True 时只返回非终态 (排除 DONE/FAILED/ROLLED_BACK)。"""
     tasks: list[dict] = []
+    terminal = {"done", "failed", "rolled_back"}
     for p in tracker.tasks_dir().glob("*.json"):
         try:
             t = tracker.Task.from_dict(json.loads(p.read_text(encoding="utf-8")))
         except Exception:
             continue
         if status and t.status.value != status:
+            continue
+        if active_only and t.status.value in terminal:
+            continue
+        if project_id and t.project_id != project_id:
             continue
         tasks.append(t.to_dict())
     tasks.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
@@ -119,9 +126,18 @@ def _tool_get_recent_events(limit: int = 20) -> list[dict]:
 # ═══════════════════════════════════════════════════════════════
 
 def _tool_create_task(description: str, level: str = "any") -> dict:
-    """创建新任务,自动分类并启动调度循环。"""
+    """创建新任务,自动分类并启动调度循环。
+
+    从用户描述中检测执行模式: "每一步确认/让我审"→confirm_changes, 否则 auto_edit。
+    """
     try:
         task = tracker.create(description)
+        # 检测执行模式
+        desc_lower = description.lower()
+        if any(w in desc_lower for w in ("每一步确认", "让我审", "步步确认", "每步确认", "变更确认")):
+            mode = "confirm_changes"
+        else:
+            mode = "auto_edit"
         # LLM 分类任务类型
         route_type = "default"
         try:
@@ -133,6 +149,11 @@ def _tool_create_task(description: str, level: str = "any") -> dict:
             gate = False
         tracker.transition(task.id, tracker.TaskStatus.PENDING, route_level=level,
                           route_locked=True, route_type=route_type, route_gate=gate)
+        # 写 execution_mode 到 task
+        t = tracker.read_task(task.id)
+        if t:
+            t.execution_mode = mode
+            tracker._write(t)
         # 确保调度循环在跑
         try:
             import singularity.web.app as app_mod
@@ -278,7 +299,10 @@ def _build_system_prompt() -> str:
 2. 只有纯闲聊(你好/谢谢/你是谁)才回文字,否则必须调工具干活
 3. create_task 的 description 必须详细:功能清单+交互细节+视觉效果+技术栈+验收标准
 4. 用户说"直接做/别问了/快做"→一句话不说,直接 create_task
-5. 回复一句话说清做了什么事。创建任务后自动启动调度循环"""
+5. 回复一句话说清做了什么事。创建任务后自动启动调度循环
+6. 用户输入很短(<20字,如"做个番茄钟")→不要追问,直接基于常识补全详细 description 然后 create_task
+7. 用户输入很长(有详细需求)→可简要确认关键点再 create_task,但最多一轮
+8. 用户说"每一步确认/让我审/步步确认"→create_task 的 description 里包含"每一步确认"关键词,系统会自动切到变更确认模式"""
 
 OBSERVER_SYSTEM_PROMPT = _build_system_prompt()
 
@@ -527,11 +551,11 @@ def _get_observer_cfg() -> dict[str, Any]:
 _last_ctx: str = ""
 _last_ctx_hash: str = ""
 
-def _build_status_context() -> str:
-    """预取全量系统状态，注入 prompt。状态无变化时复用缓存。"""
+def _build_status_context(project_id: str = "") -> str:
+    """预取全量系统状态，注入 prompt。只显示活跃任务，状态无变化时复用缓存。"""
     global _last_ctx, _last_ctx_hash
     status = _tool_get_system_status()
-    tasks = _tool_list_tasks(limit=20)
+    tasks = _tool_list_tasks(limit=20, active_only=True, project_id=project_id)
     stalled = _tool_list_stalled_tasks()
     judge = _tool_get_judge_stats()
     recent = _tool_get_recent_events(limit=10)
@@ -561,7 +585,7 @@ DIRECT_SYSTEM_PROMPT = """你是 Singularity Dispatch 的主交互智能体。�
 5. 用户要求创建任务时，引导他们使用完整功能模式"""
 
 
-def _answer_question(question: str) -> str:
+def _answer_question(question: str, project_id: str = "") -> str:
     cfg = _get_observer_cfg()
     api_key = cfg.get("api_key", "")
     base_url = cfg.get("base_url", "https://api.deepseek.com/v1").rstrip("/")
@@ -606,19 +630,73 @@ def _answer_question(question: str) -> str:
         "Content-Type": "application/json",
     }
 
+    # GATE1 确认检测: 定义阶段全部完成, 用户说通过 → 进入架构
+    if project_id:
+        session = _get_definition_session(project_id)
+        if session.get("phase") == "gate1_waiting":
+            q = question.strip().lower()
+            if any(w in q for w in ("通过", "继续", "确认", "同意", "ok", "yes", "好", "可以", "行")):
+                session["phase"] = "done"
+                try:
+                    from singularity.scheduler.project import load as load_project, Phase
+                    proj = load_project(project_id)
+                    if proj:
+                        proj.advance_to(Phase.PLANNING)
+                except Exception:
+                    pass
+                return "✅ GATE1 已通过。进入架构阶段，系统架构师/AI架构师/前端架构师将并行设计方案。"
+            elif any(w in q for w in ("修改", "改", "不对", "重来", "不通过")):
+                session["phase"] = "defining"
+                session["active_role"] = "product-manager"
+                return "已退回定义阶段。请描述需要修改的内容，我从产品经理角色重新开始。"
+
+    # GATE2/GATE3 确认检测
+    if project_id:
+        try:
+            from singularity.scheduler.project import load as load_project, Phase, save as save_project
+            proj = load_project(project_id)
+            if proj:
+                q = question.strip().lower()
+                if proj.phase == Phase.GATE2:
+                    if any(w in q for w in ("通过", "继续", "确认", "同意", "ok", "yes", "好", "可以", "行")):
+                        proj.advance_to(Phase.EXECUTING)
+                        return "✅ GATE2 已通过。进入实现阶段，前端/后端/数据/DevOps工程师将并行开发。"
+                    elif any(w in q for w in ("修改", "改", "不对", "重来", "不通过")):
+                        proj.phase = Phase.PLANNING
+                        save_project(proj)
+                        return "已退回架构阶段。请描述需要修改的内容，将重新生成架构方案。"
+                elif proj.phase == Phase.GATE3:
+                    if any(w in q for w in ("通过", "继续", "确认", "同意", "ok", "yes", "好", "可以", "行")):
+                        proj.advance_to(Phase.DELIVERING)
+                        return "✅ GATE3 已通过。进入交付阶段，DevOps工程师将打包归档。"
+                    elif any(w in q for w in ("修改", "改", "不对", "重来", "不通过")):
+                        proj.phase = Phase.EXECUTING
+                        save_project(proj)
+                        return "已退回实现阶段。请描述需要修复的问题。"
+        except Exception:
+            pass
+
     # Step 3: 检测定义层意图，注入角色 prompt
     def_role = _detect_definition_intent(question)
-    # D4: 检查是否有项目处于 GATE3, 注入 verdict schema
-    at_gate3 = _any_project_at_gate3()
-    system_prompt = _get_definition_context(def_role, include_verdict_schema=at_gate3) if def_role else OBSERVER_SYSTEM_PROMPT
+    gate1_ready = False
 
+    if def_role and project_id:
+        # P0: 多轮定义会话 — 用会话状态驱动角色切换
+        system_prompt, gate1_ready = _build_definition_prompt(project_id, question)
+        use_tools = False
+    elif def_role:
+        # 无 project_id 的兼容路径 (旧行为)
+        at_gate3 = _any_project_at_gate3()
+        system_prompt = _get_definition_context(def_role, include_verdict_schema=at_gate3)
+        use_tools = False
+    else:
+        system_prompt = OBSERVER_SYSTEM_PROMPT
+        use_tools = True
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": question},
     ]
     max_turns = 5
-    # 定义层模式不需要工具调用，简化对话
-    use_tools = not def_role
     with httpx.Client(timeout=60.0) as client:
         for _ in range(max_turns):
             body = {
@@ -648,9 +726,30 @@ def _answer_question(question: str) -> str:
             tool_calls = message.get("tool_calls") or []
             content = message.get("content")
 
-            # 定义层模式：直接返回文本
+            # 定义层模式：后处理 — 检测产出完成 + 角色推进 + GATE1
             if def_role:
-                return content.strip() if content else "（模型返回空内容）"
+                text = content.strip() if content else "（模型返回空内容）"
+                if not project_id:
+                    return text
+                session = _get_definition_session(project_id)
+                role = session["active_role"]
+
+                # 检测 [COMPLETE] 标记 → 保存产出 + 推进角色
+                if "[COMPLETE]" in text:
+                    # 提取 JSON 产出 (```json ... ``` 块)
+                    import re as _re
+                    json_match = _re.search(r'```json\s*(.*?)\s*```', text, _re.DOTALL)
+                    artifact = json_match.group(1) if json_match else text
+                    _save_definition_artifact(project_id, role, artifact)
+                    session["history"].append({"role": role, "content": artifact})
+
+                    next_role = _advance_definition_role(project_id, session)
+                    if next_role:
+                        text = text.replace("[COMPLETE]", "") + f"\n\n✅ {role} 产出已保存。接下来由 {next_role} 继续。"
+                    else:
+                        # 全部完成 → GATE1
+                        text = text.replace("[COMPLETE]", "") + "\n\n---\n## 🛑 GATE1：定义阶段完成\n\n4份文档已产出（PRD/交互/UI方向/调研），请审核。审核通过后进入架构阶段。\n- 输入 **通过** 或 **继续** → 进入架构阶段\n- 输入修改意见 → 回到对应角色修正"
+                return text
 
             # ponytail: 如果只有文本没有工具调用，直接返回
             if content and not tool_calls:
@@ -684,12 +783,107 @@ def _answer_question(question: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
+# P0: 定义阶段会话状态 (多轮对话, 角色切换, 文档产出)
+# ═══════════════════════════════════════════════════════════════
+
+_DEFINITION_SESSIONS: dict[str, dict] = {}
+_DEFINITION_ROLE_ORDER = ["product-manager", "interaction-designer", "ui-designer", "researcher"]
+_DEFINITION_DOC_KEYS = {
+    "product-manager": "prd",
+    "interaction-designer": "interaction",
+    "ui-designer": "ui_direction",
+    "researcher": "research",
+}
+
+
+def _get_definition_session(project_id: str) -> dict:
+    """获取或创建定义阶段会话状态。"""
+    if project_id not in _DEFINITION_SESSIONS:
+        _DEFINITION_SESSIONS[project_id] = {
+            "active_role": "product-manager",
+            "completed_roles": [],
+            "history": [],  # [{role, content}]
+            "phase": "defining",  # defining | gate1_waiting | done
+        }
+    return _DEFINITION_SESSIONS[project_id]
+
+
+def _save_definition_artifact(project_id: str, role: str, content: str) -> None:
+    """保存角色产出到项目目录。"""
+    try:
+        from singularity.scheduler.project import get_project_dir
+        proj_dir = get_project_dir(project_id)
+        doc_key = _DEFINITION_DOC_KEYS.get(role, role)
+        doc = {"role": role, "content": content, "saved_at": time.time()}
+        (proj_dir / f"{doc_key}.json").write_text(
+            json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        _log.warning("保存定义文档失败: %s/%s", project_id, role)
+
+
+def _advance_definition_role(project_id: str, session: dict) -> str | None:
+    """推进到下一个定义角色。返回下一个角色 key，全部完成返回 None。"""
+    current = session.get("active_role", "")
+    if current and current not in session.get("completed_roles", []):
+        session["completed_roles"].append(current)
+    # 找下一个未完成的角色
+    for role in _DEFINITION_ROLE_ORDER:
+        if role not in session["completed_roles"]:
+            session["active_role"] = role
+            return role
+    # 全部完成
+    session["phase"] = "gate1_waiting"
+    return None
+
+
+def _build_definition_prompt(project_id: str, question: str) -> tuple[str, bool]:
+    """构建定义阶段的多轮对话 prompt。返回 (system_prompt, gate1_ready)。"""
+    session = _get_definition_session(project_id)
+    role = session["active_role"]
+    role_prompt = _definition_role_prompt(role)
+
+    # 加载已完成角色的产出作为上下文
+    completed_docs = []
+    try:
+        from singularity.scheduler.project import get_project_dir
+        proj_dir = get_project_dir(project_id)
+        for completed_role in session.get("completed_roles", []):
+            doc_key = _DEFINITION_DOC_KEYS.get(completed_role, completed_role)
+            doc_path = proj_dir / f"{doc_key}.json"
+            if doc_path.exists():
+                doc = json.loads(doc_path.read_text(encoding="utf-8"))
+                completed_docs.append(f"## {completed_role} 产出\n{doc.get('content', '')[:1000]}")
+    except Exception:
+        pass
+
+    context = "\n\n".join(completed_docs) if completed_docs else "（尚无上游产出）"
+
+    system = f"""{role_prompt}
+
+## 当前角色: {role}
+## 已完成角色: {', '.join(session['completed_roles']) or '无'}
+## 上游产出:
+{context}
+
+## 规则
+- 你是定义层的 {role}，只做本角色职责范围内的事
+- 产出必须是结构化 JSON (```json 包裹)
+- 产出完成后,在回复末尾标注 [COMPLETE]
+- 不要做设计决策,给选项让用户选
+- 信息不足时追问,不编造"""
+
+    gate1_ready = session.get("phase") == "gate1_waiting"
+    return system, gate1_ready
+
+
+# ═══════════════════════════════════════════════════════════════
 # 公共 API：接收用户问题、返回回复回调
 # ═══════════════════════════════════════════════════════════════
 
-def submit_question(client_id: str, question: str, reply_callback: Callable[[dict], None]) -> None:
+def submit_question(client_id: str, question: str, reply_callback: Callable[[dict], None],
+                    project_id: str = "") -> None:
     """将用户问题提交给观察者队列。"""
-    _chat_queue.put((client_id, question, reply_callback))
+    _chat_queue.put((client_id, question, reply_callback, project_id))
 
 
 def register_client(client_id: str, reply_callback: Callable[[dict], None]) -> None:
@@ -778,14 +972,19 @@ def _observer_worker() -> None:
             # 1. 处理聊天消息
             while not _chat_queue.empty():
                 try:
-                    client_id, question, reply_callback = _chat_queue.get_nowait()
+                    item = _chat_queue.get_nowait()
+                    if len(item) == 4:
+                        client_id, question, reply_callback, project_id = item
+                    else:
+                        client_id, question, reply_callback = item
+                        project_id = ""
                 except queue.Empty:
                     break
                 # 如果没有注册 callback，用入参 callback
                 if client_id:
                     with _replies_lock:
                         _pending_replies[client_id] = reply_callback
-                answer = _answer_question(question)
+                answer = _answer_question(question, project_id=project_id)
                 payload = {
                     "jsonrpc": "2.0",
                     "method": "observer_chat",

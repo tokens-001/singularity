@@ -101,13 +101,25 @@ def _check_cancelled(task, all_tool_events: list) -> "BatchOutput | None":
 
 
 def _check_paused(task) -> bool:
-    """检查人工暂停标记。有暂停信号→切 PAUSED 状态→阻塞等待恢复。返回 True 表示已恢复继续; False 表示任务已终止。"""
+    """检查人工暂停标记。有暂停信号→切 PAUSED 状态→阻塞等待恢复。
+
+    confirm_changes 模式下, 每 turn 自动写暂停信号 (用户每步确认)。
+    返回 True 表示已恢复继续; False 表示任务已终止。
+    """
+    from singularity.scheduler import tracker as tracker_mod
+
+    # confirm_changes: 每 turn 自动暂停 (用户点了 resume 后下个 turn 再暂停)
+    mode = getattr(task, 'execution_mode', 'auto_edit') or 'auto_edit'
     pause_path = config.PAUSE_DIR / f"{task.id}.json"
+    if mode == "confirm_changes" and not pause_path.exists():
+        config.ensure_dirs()
+        pause_path.write_text(json.dumps({"task_id": task.id, "paused_at": time.time(), "auto": True}),
+                            encoding="utf-8")
+
     if not pause_path.exists():
         return True  # 无暂停信号, 继续执行
 
     # 切到 PAUSED 状态
-    import tracker as tracker_mod
     tracker_mod.transition(task.id, tracker_mod.TaskStatus.PAUSED)
 
     # 阻塞等待: 轮询检测 pause 文件被删除=恢复信号

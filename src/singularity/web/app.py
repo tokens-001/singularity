@@ -788,6 +788,14 @@ def api_resume_task(task_id):
     data, code = _api_handler.task_resume(task_id)
     return jsonify(data), code
 
+
+@app.route("/api/tasks/<task_id>/mode", methods=["POST"])
+def api_task_set_mode(task_id):
+    body = request.get_json(silent=True) or {}
+    data, code = _api_handler.task_set_mode(task_id, body.get("mode", ""))
+    return jsonify(data), code
+
+
 @app.route("/api/tasks/<task_id>/delete", methods=["POST"])
 def api_delete_task(task_id):
     data, code = _api_handler.task_delete(task_id)
@@ -1095,6 +1103,8 @@ def api_observer_chat():
     import uuid
     body = request.get_json(silent=True) or {}
     question = (body.get("question") or "").strip()
+    exec_mode = body.get("execution_mode", "auto_edit")
+    project_id = body.get("project_id", "")
     if not question:
         return jsonify({"ok": False, "error": "问题不能为空"}), 400
     cid = uuid.uuid4().hex[:12]
@@ -1103,7 +1113,10 @@ def api_observer_chat():
         _push_event("observer_answer", json.dumps({"client_id": cid, "answer": text}))
     try:
         from singularity.scheduler.observer_agent import submit_question
-        submit_question(cid, question, _on_reply)
+        # 注入执行模式到问题上下文
+        mode_hint = "【执行模式：每一步确认，变更前暂停】" if exec_mode == "confirm_changes" else ""
+        full_question = f"{question}\n{mode_hint}" if mode_hint else question
+        submit_question(cid, full_question, _on_reply, project_id=project_id)
         return jsonify({"ok": True, "client_id": cid, "question": question})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500

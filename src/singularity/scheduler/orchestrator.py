@@ -41,6 +41,7 @@ except ImportError:
 # 否则单项目合并期间全局任务派发/SSE 停摆。用独立线程池异步执行, 完成后回写 phase。
 _merge_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="integrate")
 _merge_inflight: set[str] = set()  # 正在跑集成合并的 project_id, 防重入
+_arch_inflight: set[str] = set()   # 正在跑架构阶段的 project_id, 防重入
 
 
 def run_queue(agents: dict, max_concurrent: int = 1) -> list[tuple]:
@@ -240,7 +241,15 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
     try:
         from singularity.scheduler import project as proj_mod
         for proj in proj_mod.list_all():
-            if proj.phase.value == "executing":
+            if proj.phase.value == "planning":
+                # P1: 架构阶段 — 3架构师并行 + 合成器 (异步提交, 防重入)
+                if proj.id not in _arch_inflight:
+                    _arch_inflight.add(proj.id)
+                    _merge_executor.submit(_run_architecture_phase_async, proj.id, agents)
+            elif proj.phase.value == "executing":
+                # P2: 首次进入 → 拆解架构为任务
+                if not proj.task_ids:
+                    _decompose_and_create_tasks(proj, agents)
                 pending = [tid for tid in proj.task_ids
                           if tracker.read_task(tid) and tracker.read_task(tid).status not in (
                               tracker.TaskStatus.DONE, tracker.TaskStatus.ROLLED_BACK,
@@ -271,6 +280,10 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                         "kind": "system", "msg": f"项目 {proj.name}: 交付失败, 需人工处理 - {detail[:100]}",
                         "ts": time.time(), "project_id": proj.id,
                     })
+            elif proj.phase.value in ("reviewing", "fixing"):
+                # P3: 审查/修复阶段 — 直接推GATE3等人审
+                from singularity.scheduler.workflow import run_test_fix_loop
+                run_test_fix_loop(proj, agents)
             elif proj.phase.value == "integrating":
                 # 重启恢复: 若没在跑则提交 (已在跑的跳过防重入)
                 if proj.id not in _merge_inflight:
@@ -282,6 +295,154 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
             witness.heartbeat('orch', f'warn:auto_trigger:{e}')
         except Exception:
             pass
+
+
+def _decompose_and_create_tasks(proj, agents: dict) -> None:
+    """P2: 从架构文档拆解任务并创建 tracker task。"""
+    import json as _json
+    try:
+        from singularity.scheduler.project import get_project_dir
+        arch_path = get_project_dir(proj.id) / "architecture.json"
+        if not arch_path.exists():
+            return
+        arch = _json.loads(arch_path.read_text(encoding="utf-8"))
+        fused = arch.get("unified_architecture", "")
+        if not fused:
+            return
+
+        # 解析 unified_architecture JSON
+        try:
+            arch_json = _json.loads(fused) if isinstance(fused, str) else fused
+        except (_json.JSONDecodeError, TypeError):
+            # 尝试提取 JSON 块
+            import re
+            m = re.search(r'\{[\s\S]*\}', str(fused))
+            arch_json = _json.loads(m.group()) if m else {}
+
+        from singularity.scheduler.execution_judge import decompose_architecture
+        tasks = decompose_architecture(arch_json)
+        if not tasks:
+            return
+
+        for t in tasks:
+            task = tracker.create(t["desc"])
+            tracker.transition(task.id, tracker.TaskStatus.PENDING,
+                             route_level=t.get("suggested_level", "any"),
+                             route_locked=True)
+            proj.task_ids.append(task.id)
+
+        from singularity.scheduler.project import save
+        save(proj)
+        _pending_sse_events.append({
+            "kind": "system", "msg": f"架构拆解完成: {len(tasks)} 个任务已入队",
+            "ts": time.time(), "project_id": proj.id,
+        })
+    except Exception as e:
+        try:
+            witness.heartbeat('orch', f'warn:decompose:{e}')
+        except Exception:
+            pass
+
+
+def _run_architecture_phase_async(project_id: str, agents: dict) -> None:
+    """P1: 后台线程跑架构阶段 — 3架构师并行 → 合成器 → GATE2。"""
+    import json as _json
+    try:
+        from singularity.scheduler import project as proj_mod
+        from singularity.scheduler import dispatcher as disp_mod
+        from singularity.scheduler.execution_judge import fuse_architecture, decompose_architecture
+
+        proj = proj_mod.load(project_id)
+        if not proj:
+            _arch_inflight.discard(project_id)
+            return
+
+        # 1. 加载定义阶段产出
+        proj_dir = proj_mod.get_project_dir(project_id)
+        docs = {}
+        for key in ("prd", "interaction", "ui_direction", "research"):
+            p = proj_dir / f"{key}.json"
+            if p.exists():
+                docs[key] = _json.loads(p.read_text(encoding="utf-8")).get("content", "")[:2000]
+
+        if not docs.get("prd"):
+            _pending_sse_events.append({"kind": "system", "msg": "架构阶段: 缺少PRD, 无法启动",
+                                         "ts": time.time(), "project_id": project_id})
+            _arch_inflight.discard(project_id)
+            return
+
+        prd_text = docs.get("prd", "")
+        context = f"PRD:\n{prd_text}\n\n"
+        if docs.get("interaction"): context += f"交互方案:\n{docs['interaction'][:1000]}\n\n"
+        if docs.get("ui_direction"): context += f"UI方向:\n{docs['ui_direction'][:800]}\n\n"
+
+        # 2. 并行派发 3 架构师
+        arch_roles = [
+            ("system-architect", f"基于以下PRD和需求文档，产出系统架构方案（模块划分/数据模型/API契约/技术栈选型）:\n\n{context}"),
+            ("ai-architect", f"基于以下PRD，产出AI架构方案（模型选型/Prompt体系/Agent拓扑/上下文策略）:\n\n{context}"),
+            ("frontend-architect", f"基于以下PRD和交互方案，产出前端架构方案（组件树/状态管理/路由设计/性能策略）:\n\n{context}"),
+        ]
+
+        import concurrent.futures
+        outputs: list[tuple[str, str]] = []  # [(role, output)]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+            futures = {}
+            for role, prompt in arch_roles:
+                futures[ex.submit(
+                    disp_mod.dispatch,
+                    prompt, "any", f"arch_{project_id}_{role}", agents,
+                )] = role
+
+            for fut in concurrent.futures.as_completed(futures, timeout=600):
+                role = futures[fut]
+                try:
+                    result = fut.result()
+                    if result and result.executor_result and result.executor_result.raw_output:
+                        outputs.append((role, result.executor_result.raw_output))
+                except Exception:
+                    pass
+
+        if not outputs:
+            _pending_sse_events.append({"kind": "system", "msg": "架构阶段: 所有架构师均无产出",
+                                         "ts": time.time(), "project_id": project_id})
+            _arch_inflight.discard(project_id)
+            return
+
+        # 3. 合成器融合
+        raw_outputs = [o for _, o in outputs]
+        fused = fuse_architecture(f"PRD: {prd_text[:1000]}", raw_outputs)
+
+        # 保存
+        arch_doc = {"unified_architecture": fused, "sources": [r for r, _ in outputs],
+                    "created_at": time.time()}
+        (proj_dir / "architecture.json").write_text(_json.dumps(arch_doc, ensure_ascii=False, indent=2))
+
+        # 顺便生成 test_cases
+        try:
+            test_cases_raw = fused  # fuse_architecture 输出包含 test_cases
+            parsed = _json.loads(test_cases_raw) if test_cases_raw.startswith("{") else {}
+            test_cases = parsed.get("test_cases", {})
+            if test_cases:
+                (proj_dir / "test_cases.json").write_text(_json.dumps(test_cases, ensure_ascii=False, indent=2))
+        except Exception:
+            pass
+
+        # 4. 推进到 GATE2
+        proj.phase = proj_mod.Phase.GATE2
+        proj_mod.save(proj)
+        _pending_sse_events.append({
+            "kind": "system",
+            "msg": f"架构方案已生成 (来源: {', '.join(r for r,_ in outputs)})。请审核后确认进入实现阶段。",
+            "ts": time.time(), "project_id": project_id,
+        })
+
+    except Exception as e:
+        try:
+            witness.heartbeat('orch', f'warn:arch_phase:{e}')
+        except Exception:
+            pass
+    finally:
+        _arch_inflight.discard(project_id)
 
 
 def _run_integration_merge_async(project_id: str, agents: dict) -> None:
