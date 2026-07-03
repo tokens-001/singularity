@@ -11,6 +11,7 @@ ponytail: 零新增行为，纯搬迁从 orchestrator.py。
 
 from __future__ import annotations
 
+import logging
 import re as _re
 import time
 from pathlib import Path
@@ -202,8 +203,8 @@ class TaskRunner:
                                         f"预估 ~{est['total_tokens']:,} tokens (${est['est_cost_usd']:.2f})"
                                     ), "ts": time.time(), "task_id": task.id, "estimate": est,
                                 })
-                            except Exception:
-                                pass
+                            except Exception as _e:
+                                logging.getLogger(__name__).warning("token estimate event failed: %s", _e)
                             child_ids = materialize_plan(task.id, subtasks)
                             tracker.transition(task.id, TaskStatus.DECOMPOSED,
                                 error=f"重试{retry_count}次后自动拆分→{len(child_ids)}个子任务")

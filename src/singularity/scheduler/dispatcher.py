@@ -120,8 +120,8 @@ def _ensure_agent_type(agent_cfg: dict) -> dict:
                         agent_cfg["api_key_env"] = api.api_key_env
                     if not agent_cfg.get("entry"):
                         agent_cfg["entry"] = api.base_url + "/chat/completions"
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.getLogger(__name__).warning("agent config scan failed: %s", _e)
 
     # ponytail: coding任务需≥15轮，不论是否已有配置都强制下限
     if model:
@@ -287,8 +287,8 @@ def pick_agent(agents: dict, level: str, role: str = None,
                           if model}
                 if any(w > 0 for w in weights.values()):
                     available.sort(key=lambda a: weights.get(a.get("model", ""), 1.0), reverse=True)
-    except Exception:
-        pass  # learner 挂了不阻塞
+    except Exception as _e:
+        logging.getLogger(__name__).warning("agent change event failed: %s", _e)  # learner 挂了不阻塞
 
     # default
     for a in candidates:
@@ -639,7 +639,8 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
             return result, agent_cfg
         except Exception:
             try: witness.heartbeat('dispatch', 'warn:run_one')
-            except Exception: pass
+            except Exception as _e:
+                logging.getLogger(__name__).warning("heartbeat failed: %s", _e)
             return None, agent_cfg
 
     # 并行派发

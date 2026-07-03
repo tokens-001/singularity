@@ -86,5 +86,5 @@ def ensure_dirs() -> None:
         if n:
             import logging
             logging.getLogger("scheduler").info(f"cleaned {n} orphan worktrees from previous run")
-    except Exception:
-        pass
+    except Exception as _e:
+        logging.getLogger(__name__).warning("worktree cleanup failed: %s", _e)

@@ -41,7 +41,17 @@ app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024  # 安全加固：拒绝 >2MB 的请求体
 app.config["TEMPLATES_AUTO_RELOAD"] = True           # ponytail: 开发时不缓存模板
-app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24).hex()
+# secret_key: env > 持久化文件 > 随机（仅首次）
+_secret_key = os.environ.get("FLASK_SECRET_KEY")
+if not _secret_key:
+    _key_file = Path(__file__).resolve().parents[3] / ".qidian" / "secret_key"
+    try:
+        _secret_key = _key_file.read_text().strip()
+    except Exception:
+        _secret_key = os.urandom(24).hex()
+        _key_file.parent.mkdir(parents=True, exist_ok=True)
+        _key_file.write_text(_secret_key)
+app.secret_key = _secret_key
 
 _CSRF_TOKEN = os.environ.get("QIDIAN_CSRF_TOKEN") or os.urandom(16).hex()
 

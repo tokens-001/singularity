@@ -47,7 +47,8 @@ def _read_task_file(path: Path) -> Optional[dict]:
     try: return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         try: witness.heartbeat('_api', 'warn:read_task_file')
-        except Exception: pass
+        except Exception as _e:
+            logging.getLogger(__name__).warning("task file read failed: %s", _e)
         return None
 
 
@@ -716,8 +717,8 @@ def models_import(models: list[dict], auto_assign: bool = False):
                 # 两档后: 直接添加, 不按层级
                 try:
                     disp_mod.add_agent(model=m["id"])
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logging.getLogger(__name__).warning("agent add during import failed: %s", _e)
         except Exception as e:
             errors.append(f"{m.get('id', '?')}: {e}")
             witness.heartbeat('_api', f'warn:{e}'[:80])

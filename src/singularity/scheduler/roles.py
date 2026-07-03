@@ -308,7 +308,7 @@ def _init():
                         r.persona = vals["persona"]
                     if "level" in vals:
                         r.level = vals["level"]
-    except Exception:
-        pass
+    except Exception as _e:
+        logging.getLogger(__name__).warning("role override load failed: %s", _e)
 
 _init()

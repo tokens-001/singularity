@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re as _re
 import time
@@ -42,8 +43,8 @@ def _materialize_in_main(batch: BatchOutput, parent_task) -> None:
                 f"预估 ~{est['total_tokens']:,} tokens (${est['est_cost_usd']:.2f}), "
                 f"拆分: " + ", ".join(f"{k}×{v['tokens']:,}" for k,v in est['level_breakdown'].items())
             ), "ts": time.time(), "task_id": parent_task.id, "estimate": est})
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.getLogger(__name__).warning("token estimate failed: %s", _e)
         materialize_plan(parent_task.id, subtasks)
 
 
@@ -130,7 +131,8 @@ def _run_committee(task, ctx: RunContext, agents: dict, d_agents: list) -> Batch
                     term_reason=f"committee全败→拆分{len(subtasks)}子任务")
         except Exception:
             try: witness.heartbeat('planner', 'warn:decompose_fallback')
-            except Exception: pass
+            except Exception as _e:
+                logging.getLogger(__name__).warning("heartbeat failed: %s", _e)
         # 拆分也失败 → 回退普通模式最后尝试
         return _run_with_retry(task, ctx, agents)
 

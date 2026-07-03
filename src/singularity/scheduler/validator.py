@@ -247,7 +247,8 @@ def crossover_review(task_desc, raw_output, changed_files, writer_level, writer_
             r2 = subprocess.run(["git","diff"]+changed_files,
                               capture_output=True,text=True,timeout=10,cwd=cwd or str(config.PROJECT_ROOT))
             diff_text += "\n" + (r2.stdout or "")[:5000]
-    except Exception: pass
+    except Exception as _e:
+        logging.getLogger(__name__).warning("git diff failed: %s", _e)
 
     if not diff_text.strip():
         return {"issues":[],"verdict":"pass","summary":"empty diff"}
@@ -285,7 +286,8 @@ JSON:"""
             d = json.loads(m.group())
             return {"issues":d.get("issues",[]),"verdict":d.get("verdict","pass"),
                     "summary":d.get("summary",raw[:200])}
-    except Exception: pass
+    except Exception as _e:
+        logging.getLogger(__name__).warning("JSON parse validation failed: %s", _e)
     return {"issues":[],"verdict":"pass","summary":raw[:200] if raw else "no result"}
 
 
@@ -387,8 +389,8 @@ JSON:"""
                            "issues": d.get("issues", []),
                            "verdict": d.get("verdict", "pass"),
                            "summary": d.get("summary", raw[:200])}
-            except Exception:
-                pass
+            except Exception as _e:
+                logging.getLogger(__name__).warning("model review failed: %s", _e)
             return {"model": cfg.get("model", "unknown"),
                    "issues": [], "verdict": "pass", "summary": raw[:200]}
         except Exception as e:
