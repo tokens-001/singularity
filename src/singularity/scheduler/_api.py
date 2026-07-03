@@ -426,6 +426,20 @@ def task_submit(desc: str, priority: int = 0, depends_on: list = None,
     return {"ok": True, "task_id": task.id, "description": desc[:120]}, 200
 
 
+def task_update(task_id: str, data: dict) -> tuple[dict, int]:
+    """PUT /api/tasks/<id> — 更新任务描述等字段。"""
+    task = tracker.read_task(task_id)
+    if task is None:
+        return {"error": "任务不存在"}, 404
+    kwargs = {}
+    if "description" in data:
+        kwargs["description"] = str(data["description"])[:8000]
+    if not kwargs:
+        return {"error": "无可更新字段"}, 400
+    tracker.transition(task_id, task.status, **kwargs)
+    return {"ok": True, "task_id": task_id}, 200
+
+
 # ═══════════════════════════════════════════════════════════════
 # 项目 CRUD + Workflow  (ex _api_projects.py)
 # ═══════════════════════════════════════════════════════════════

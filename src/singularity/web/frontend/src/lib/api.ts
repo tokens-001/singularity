@@ -21,6 +21,7 @@ export const api = {
   pauseTask: (id: string) => request(`/api/tasks/${id}/pause`,{method:'POST'}),
   resumeTask: (id: string) => request(`/api/tasks/${id}/resume`,{method:'POST'}),
   setTaskMode: (id: string, mode: string) => request(`/api/tasks/${id}/mode`,{method:'POST',body:JSON.stringify({mode})}),
+  updateTask: (id: string, data: any) => request(`/api/tasks/${id}`,{method:'PUT',body:JSON.stringify(data)}),
   retryTask: (id: string) => request(`/api/tasks/${id}/retry`,{method:'POST'}),
   holdTask: (id: string) => request(`/api/tasks/${id}/hold`,{method:'POST'}),
   releaseTask: (id: string) => request(`/api/tasks/${id}/release`,{method:'POST'}),

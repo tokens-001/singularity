@@ -812,6 +812,14 @@ def api_task_approval(task_id):
     data, code = _api_handler.task_approval(task_id, body.get("decision", "reject"), body.get("action", ""), _push_event)
     return jsonify(data), code
 
+@app.route("/api/tasks/<task_id>", methods=["PUT"])
+def api_task_update(task_id):
+    data = request.get_json(silent=True) or {}
+    _invalidate_task_cache()
+    result, code = _api_handler.task_update(task_id, data)
+    return jsonify(result), code
+
+
 @app.route("/api/tasks/<task_id>/apply", methods=["POST"])
 def api_apply_patch(task_id):
     data, code = _api_handler.task_apply(task_id, _push_event)

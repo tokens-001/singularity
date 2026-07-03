@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api, Task } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
 import { useToast } from '../components/Toast'
-import { Play, Square, RotateCcw, XCircle, Plus, RefreshCw, Pause, Shield, ShieldCheck } from 'lucide-react'
+import { Play, Square, RotateCcw, XCircle, Plus, RefreshCw, Pause, Shield, ShieldCheck, Trash2, Pencil } from 'lucide-react'
 
 const COLUMNS = [
   { key: 'pending', label: '待处理', color: '#666' },
@@ -20,6 +20,8 @@ export default function Tasks() {
   const [detail, setDetail] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [dragOver, setDragOver] = useState<string>('')
+  const [editingId, setEditingId] = useState<string|null>(null)
+  const [editDesc, setEditDesc] = useState('')
   const toast = useToast(s => s.add)
 
   const fetch = useCallback(() => {
@@ -36,6 +38,12 @@ export default function Tasks() {
     try { const d = await api.task(id); setDetail(d) } catch { toast('加载任务详情失败', 'error'); setDetail(null) }
   }
   const create = () => { if (desc.trim()) { api.createTask(desc).then(()=>{setShowCreate(false);setDesc('');fetch()}) } }
+  const startEdit = (t: Task) => { setEditingId(t.id); setEditDesc(t.description) }
+  const saveEdit = async () => {
+    if (!editingId || !editDesc.trim()) return
+    await api.updateTask(editingId, { description: editDesc.trim() })
+    setEditingId(null); setEditDesc(''); fetch()
+  }
   const act = (fn: (id:string)=>Promise<any>, id: string) => { fn(id).then(fetch) }
 
   const handleDragStart = (e: React.DragEvent, tid: string) => { e.dataTransfer.setData('taskId', tid) }
@@ -91,10 +99,18 @@ export default function Tasks() {
               {tasksByStatus(col.key).map((t: Task) => (
                 <div key={t.id} draggable onDragStart={e => handleDragStart(e, t.id)} onClick={() => toggle(t.id)}
                   className="kanban-card" style={{ borderLeft: `3px solid ${col.color}` }}>
-                  <div className="truncate" style={{ marginBottom: 4, lineHeight: 1.4 }}>{t.description.split('\n')[0].slice(0, 80)}</div>
+                  {editingId === t.id ? (
+                    <input value={editDesc} onChange={e=>setEditDesc(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')saveEdit();if(e.key==='Escape')setEditingId(null)}}
+                      onBlur={saveEdit} autoFocus className="inp-dark" style={{marginBottom:4,width:'100%',fontSize:11}} onClick={e=>e.stopPropagation()}/>
+                  ) : (
+                    <div className="truncate" style={{ marginBottom: 4, lineHeight: 1.4, cursor: 'text' }}
+                      onDoubleClick={e=>{e.stopPropagation();startEdit(t)}} title="双击编辑">{t.description.split('\n')[0].slice(0, 80)}</div>
+                  )}
                   <div className="flex-center gap-4 fs-9" style={{ color: '#555' }}>
                     <span className="mono">{t.id.slice(0, 8)}</span>
                     <span className="flex-1"/>
+                    {/* 编辑 */}
+                    <button onClick={e=>{e.stopPropagation();startEdit(t)}} className="btn-icon" style={{padding:1}} title="编辑描述"><Pencil size={10}/></button>
                     {/* 模式切换 */}
                     <button onClick={e=>{e.stopPropagation();api.setTaskMode(t.id, t.execution_mode==='confirm_changes'?'auto_edit':'confirm_changes').then(fetch)}}
                       className="btn-icon" style={{padding:1}} title={t.execution_mode==='confirm_changes'?'变更确认(点击切自动)':'自动编辑(点击切确认)'}>
@@ -107,6 +123,7 @@ export default function Tasks() {
                     {['pending','running','paused'].includes(t.status) && <button onClick={e=>{e.stopPropagation();act(api.cancelTask,t.id)}} className="btn-icon" style={{padding:1}}><XCircle size={10}/></button>}
                     {t.status === 'running' && <button onClick={e=>{e.stopPropagation();act(api.holdTask,t.id)}} className="btn-icon" style={{padding:1}}><Square size={10}/></button>}
                     {t.status === 'blocked' && <button onClick={e=>{e.stopPropagation();act(api.releaseTask,t.id)}} className="btn-icon" style={{padding:1}}><Play size={10}/></button>}
+                    {!['running'].includes(t.status) && <button onClick={e=>{e.stopPropagation();act(api.deleteTask,t.id)}} className="btn-icon" style={{padding:1}} title="删除"><Trash2 size={10} color="#f85149"/></button>}
                   </div>
                 </div>
               ))}
@@ -123,7 +140,10 @@ export default function Tasks() {
           background: '#1c1c1e', border: '1px solid #2c2c2e', borderRadius: 12, padding: 16, boxShadow: '0 16px 48px rgba(0,0,0,0.6)', zIndex: 100 }}>
           <div className="flex-between" style={{ marginBottom: 8 }}>
             <span className="fw-600 fs-13 mono" style={{ color: '#fff' }}>{detail.id}</span>
-            <button onClick={() => {setExpanded(null); setDetail(null)}} className="btn-icon"><XCircle size={14}/></button>
+            <div style={{display:'flex',gap:8}}>
+              {!['running'].includes(detail.status) && <button onClick={()=>{api.deleteTask(detail.id).then(()=>{setExpanded(null);setDetail(null);fetch()})}} className="btn-white" style={{fontSize:11,color:'#f85149'}}><Trash2 size={12}/> 删除</button>}
+              <button onClick={() => {setExpanded(null); setDetail(null)}} className="btn-icon"><XCircle size={14}/></button>
+            </div>
           </div>
           <div className="fs-12 text-muted" style={{ marginBottom: 8, lineHeight: 1.5 }}>{detail.description}</div>
           <div className="fs-10 mono" style={{ color: '#555' }}>
