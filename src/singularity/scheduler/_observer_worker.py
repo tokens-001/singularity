@@ -1,42 +1,15 @@
-"""observer_agent.py — 观察者智能体
+"""观察者智能体 — Worker 线程 + 启动/停止"""
 
-旁路守护线程，通过只读工具查询系统状态并回答用户自然语言问题。
-不修改 scheduler / dispatcher / executor 的任何执行逻辑。
-
-Step 3: 支持定义层4角色 (产品经理/交互设计师/UI设计师/研究员)。
-Observer 负责搞清楚用户要什么，不做设计决策。
-"""
 from __future__ import annotations
 
-import json
 import logging
-import os
 import queue
 import threading
 import time
-from pathlib import Path
-from typing import Any, Callable
 
-import httpx
-
-from singularity.scheduler import config, tracker, witness
-
-_log = logging.getLogger("observer")
-
-# 待处理的用户消息队列：元素为 (client_id, question, reply_callback)
-_chat_queue: queue.Queue[tuple[str, str, Callable[[dict], None]]] = queue.Queue()
-
-# 已连接客户端的回复回调注册表
-_pending_replies: dict[str, Callable[[dict], None]] = {}
-_replies_lock = threading.Lock()
-
-# 守护线程控制
-_stop_event = threading.Event()
-_worker_thread: threading.Thread | None = None
-
-# 异常告警去重：key -> last_alert_timestamp
-_alert_history: dict[str, float] = {}
-_alert_lock = threading.Lock()
+from singularity.scheduler._observer_shared import _log, _chat_queue, _stop_event, _worker_thread, _pending_replies, _replies_lock
+from singularity.scheduler._observer_client import _check_anomalies
+from singularity.scheduler._observer_answer import _answer_question
 
 
 # ═══════════════════════════════════════════════════════════════

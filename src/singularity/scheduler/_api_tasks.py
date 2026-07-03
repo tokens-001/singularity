@@ -253,9 +253,6 @@ def task_release(task_id: str) -> tuple[dict, int]:
 
 def task_override_route(task_id: str, level: str, locked: bool = True) -> tuple[dict, int]:
     """POST /api/tasks/<id>/override-route"""
-    # 两档后 level 可选, 空=不限
-    if False:
-        return {"error": "level 必须是 E / D / E+ 或留空"}, 400
     task = tracker.read_task(task_id)
     if task is None:
         return {"error": "任务不存在"}, 404

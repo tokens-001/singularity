@@ -6,7 +6,7 @@ import pytest
 class TestLearnerStats:
     def test_record_success_updates_ewma(self):
         from singularity.scheduler.route_learner import LearnerStats
-        s = LearnerStats(task_type="bugfix", model="claude", level="E")
+        s = LearnerStats(task_type="bugfix", model="claude", level="any")
         s.record(success=True, elapsed_ms=100, tokens=50)
         assert s.success_count == 1
         assert s.failure_count == 0
@@ -16,7 +16,7 @@ class TestLearnerStats:
 
     def test_record_failure_drops_ewma(self):
         from singularity.scheduler.route_learner import LearnerStats
-        s = LearnerStats(task_type="bugfix", model="claude", level="E")
+        s = LearnerStats(task_type="bugfix", model="claude", level="any")
         s.record(success=False)
         assert s.success_count == 0
         assert s.failure_count == 1
@@ -25,33 +25,33 @@ class TestLearnerStats:
 
     def test_hedge_weight_success_up(self):
         from singularity.scheduler.route_learner import LearnerStats
-        s = LearnerStats(task_type="bugfix", model="claude", level="E")
+        s = LearnerStats(task_type="bugfix", model="claude", level="any")
         s.record(success=True)
         assert s.hedge_weight > 1.0  # 1.0 * 1.1 = 1.1
 
     def test_hedge_weight_failure_down(self):
         from singularity.scheduler.route_learner import LearnerStats
-        s = LearnerStats(task_type="bugfix", model="claude", level="E")
+        s = LearnerStats(task_type="bugfix", model="claude", level="any")
         s.record(success=False)
         assert s.hedge_weight < 1.0  # 1.0 * 0.9 = 0.9
 
     def test_hedge_weight_clamped_max(self):
         from singularity.scheduler.route_learner import LearnerStats
-        s = LearnerStats(task_type="bugfix", model="claude", level="E")
+        s = LearnerStats(task_type="bugfix", model="claude", level="any")
         for _ in range(30):
             s.record(success=True)
         assert s.hedge_weight <= 10.0
 
     def test_hedge_weight_clamped_min(self):
         from singularity.scheduler.route_learner import LearnerStats
-        s = LearnerStats(task_type="bugfix", model="claude", level="E")
+        s = LearnerStats(task_type="bugfix", model="claude", level="any")
         for _ in range(30):
             s.record(success=False)
         assert s.hedge_weight >= 0.1
 
     def test_multiple_records_accumulate(self):
         from singularity.scheduler.route_learner import LearnerStats
-        s = LearnerStats(task_type="bugfix", model="claude", level="E")
+        s = LearnerStats(task_type="bugfix", model="claude", level="any")
         for i in range(5):
             s.record(success=i % 2 == 0, elapsed_ms=100, tokens=50)
         assert s.sample_count == 5
@@ -61,7 +61,7 @@ class TestLearnerStats:
     def test_ewma_converges(self):
         """连续成功 → EWMA 趋近 1。"""
         from singularity.scheduler.route_learner import LearnerStats
-        s = LearnerStats(task_type="bugfix", model="claude", level="E")
+        s = LearnerStats(task_type="bugfix", model="claude", level="any")
         for _ in range(20):
             s.record(success=True)
         assert s.ewma_success_rate > 0.95
@@ -81,14 +81,14 @@ class TestRouteLearner:
     def test_record_then_retrieve(self):
         from singularity.scheduler.route_learner import RouteLearner
         rl = RouteLearner()
-        rl.record("bugfix", "claude", "E", success=True)
+        rl.record("bugfix", "claude", "any", success=True)
         assert rl.get_weight("bugfix", "claude") > 1.0
 
     def test_rank_candidates_sorts_by_weight(self):
         from singularity.scheduler.route_learner import RouteLearner
         rl = RouteLearner()
-        rl.record("bugfix", "gpt-4", "E", success=True)    # weight up >1
-        rl.record("bugfix", "claude", "E", success=False)  # weight down <1
+        rl.record("bugfix", "gpt-4", "any", success=True)    # weight up >1
+        rl.record("bugfix", "claude", "any", success=False)  # weight down <1
         # deepseek 未记录 weight=1.0, 排在 claude(<1) 前面
         ranked = rl.rank_candidates("bugfix", ["claude", "gpt-4", "deepseek"])
         assert ranked[0] == "gpt-4"  # highest weight = success
@@ -105,14 +105,14 @@ class TestRouteLearner:
         from singularity.scheduler.route_learner import RouteLearner
         rl = RouteLearner()
         for m in ["a", "b", "c", "d"]:
-            rl.record("fix", m, "E", success=(m == "a"))  # a wins
+            rl.record("fix", m, "any", success=(m == "a"))  # a wins
         ranked = rl.rank_candidates("fix", ["a", "b", "c", "d"], top_n=2)
         assert len(ranked) == 2
 
     def test_get_stats_returns_dict(self):
         from singularity.scheduler.route_learner import RouteLearner
         rl = RouteLearner()
-        rl.record("bugfix", "claude", "E", success=True, elapsed_ms=100, tokens=50)
+        rl.record("bugfix", "claude", "any", success=True, elapsed_ms=100, tokens=50)
         stats = rl.get_stats()
         assert "bugfix::claude" in stats
         assert stats["bugfix::claude"]["samples"] == 1
@@ -120,6 +120,6 @@ class TestRouteLearner:
     def test_to_dict_serializable(self):
         from singularity.scheduler.route_learner import RouteLearner
         rl = RouteLearner()
-        rl.record("feature", "gpt-4", "D", success=True)
+        rl.record("feature", "gpt-4", "any", success=True)
         d = rl.to_dict()
         assert "feature::gpt-4" in d

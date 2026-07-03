@@ -1,11 +1,4 @@
-"""observer_agent.py — 观察者智能体
-
-旁路守护线程，通过只读工具查询系统状态并回答用户自然语言问题。
-不修改 scheduler / dispatcher / executor 的任何执行逻辑。
-
-Step 3: 支持定义层4角色 (产品经理/交互设计师/UI设计师/研究员)。
-Observer 负责搞清楚用户要什么，不做设计决策。
-"""
+"""观察者智能体 — 工具注册表 + 工具实现函数"""
 from __future__ import annotations
 
 import json

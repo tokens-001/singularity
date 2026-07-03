@@ -101,9 +101,9 @@ class TokenBudget:
         if self._budget_daily > 0:
             pct = self.daily_cost / self._budget_daily
             if pct > 0.9:
-                return f"日预算已用 {pct*100:.0f}% (${self.daily_cost:.2f}/${self._budget_daily:.2f})，建议暂停D层任务"
+                return f"日预算已用 {pct*100:.0f}% (${self.daily_cost:.2f}/${self._budget_daily:.2f})，建议暂停强力层任务"
             if pct > 0.7:
-                return f"日预算已用 {pct*100:.0f}%，建议优先使用E层模型"
+                return f"日预算已用 {pct*100:.0f}%，建议优先使用廉价层模型"
         return ""
 
     def per_project_usage(self) -> list[dict]:

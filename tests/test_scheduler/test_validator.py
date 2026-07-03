@@ -35,7 +35,7 @@ class TestValidatorV2:
         assert r["passed"]
 
     def test_crossover_review_no_files(self):
-        r = crossover_review("test", "output", [], "E", "test")
+        r = crossover_review("test", "output", [], "any", "test")
         assert r["verdict"] == "pass"
 
     def test_post_execution_hook(self):

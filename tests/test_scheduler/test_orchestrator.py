@@ -7,7 +7,7 @@ class TestSchedulePolicy:
     """调度策略: 4维复合评分排序。"""
 
     @staticmethod
-    def _task(tid, priority=0, wait_sec=0, depth=0, route_level="E",
+    def _task(tid, priority=0, wait_sec=0, depth=0, route_level="any",
               starvation_score=0, children=None):
         return type("T", (), {
             "id": tid, "priority": priority, "wait_sec": wait_sec,
@@ -35,7 +35,7 @@ class TestSchedulePolicy:
 
 class TestScheduleMonotonicity:
     @staticmethod
-    def _t(tid, priority=0, starvation=0, level="E", children=None):
+    def _t(tid, priority=0, starvation=0, level="any", children=None):
         return type("T", (), {
             "id": tid, "priority": priority, "starvation_score": starvation,
             "route_level": level, "children": children or [],
@@ -71,7 +71,7 @@ class TestScheduleMonotonicity:
 
 class TestChaosResilience:
     @staticmethod
-    def _t(tid, priority=0, starvation=0, level="E", children=None):
+    def _t(tid, priority=0, starvation=0, level="any", children=None):
         return type("T", (), {"id": tid, "priority": priority, "starvation_score": starvation,
                               "route_level": level, "children": children or []})()
 
@@ -83,7 +83,7 @@ class TestChaosResilience:
 
     def test_decompose_valid(self):
         from singularity.scheduler._exec import decompose
-        raw = '```json\n[{"desc": "task1", "suggested_level": "E", "depends_on_local_id": []}]\n```'
+        raw = '```json\n[{"desc": "task1", "suggested_level": "any", "depends_on_local_id": []}]\n```'
         r = decompose(raw)
         assert len(r) == 1
         assert r[0]["desc"] == "task1"
@@ -93,7 +93,7 @@ class TestChaosResilience:
         assert read_task("nonexistent_99999") is None
 
     def test_schedule_policy_1k_under_50ms(self):
-        tasks = [self._t(str(i), priority=i % 10, starvation=(1000 - i) * 0.1, level=["E", "E+", "D"][i % 3]) for i in range(1000)]
+        tasks = [self._t(str(i), priority=i % 10, starvation=(1000 - i) * 0.1, level="any") for i in range(1000)]
         t0 = time.perf_counter()
         schedule_policy(tasks)
         assert time.perf_counter() - t0 < 0.05
@@ -108,7 +108,7 @@ class TestBenchmark:
             t = type("T", (), {
                 "id": str(i), "priority": i % 10,
                 "starvation_score": (1000 - i) * 0.1,
-                "route_level": ["E", "E+", "D"][i % 3],
+                "route_level": "any",
                 "children": [],
                 "status": "pending",
             })()
@@ -122,7 +122,7 @@ class TestBenchmark:
     def test_decompose_100_tasks(self):
         from singularity.scheduler._exec import decompose
         import json
-        subtasks = [{"desc": f"task {i}", "suggested_level": "E",
+        subtasks = [{"desc": f"task {i}", "suggested_level": "any",
                       "depends_on_local_id": [i - 1] if i > 0 else []}
                     for i in range(100)]
         raw = "```json\n" + json.dumps(subtasks) + "\n```"

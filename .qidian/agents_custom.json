@@ -11,9 +11,6 @@
       "gpt-5.5-pro",
       "kimi-k2.6",
       "kimi-k2.7-code-highspeed"
-    ],
-    "D": [
-      "deepseek-v4-pro"
     ]
   },
   "_order": {
@@ -66,6 +63,5 @@
       ],
       "sandbox": "worktree"
     }
-  ],
-  "D": []
+  ]
 }

@@ -52,7 +52,7 @@ class FakeExec:
 class FakeDispResult:
     def __init__(self, exec_result):
         self.executor_result = exec_result
-        self.agent_cfg = {"model": "fake"}; self.level = "E"; self.attempts = 1
+        self.agent_cfg = {"model": "fake"}; self.level = "any"; self.attempts = 1
 
 class FakeVal:
     """模拟 val_mod.ValidationReport 的最小接口。"""
@@ -122,7 +122,7 @@ def install_stubs():
 
 def make_task():
     return type("T", (), {
-        "id": "1234567890123", "description": "测试任务", "route_level": "E",
+        "id": "1234567890123", "description": "测试任务", "route_level": "any",
         "route_gate": False, "route_type": "default", "depends_on": [],
         "retry_count": 0, "max_retries": 0, "depth": 0, "project_id": "",
         "status": None,
@@ -134,7 +134,7 @@ def make_ctx(v3=True):
 
 def run_case(v3=True):
     S.task = make_task()
-    return _exec.run(S.task, make_ctx(v3), {"E": list(S.chain)})
+    return _exec.run(S.task, make_ctx(v3), {"any": list(S.chain)})
 
 # ═══════════════════════════════════════════════════════════
 # 用例
@@ -157,7 +157,7 @@ if __name__ == "__main__":
     S.task = make_task()
     (_exec.config.CANCEL_DIR / f"{S.task.id}.json").write_text("{}")
     S.dispatch_queue = []; S.validate_queue = []
-    b = _exec.run(S.task, make_ctx(), {"E": list(S.chain)})
+    b = _exec.run(S.task, make_ctx(), {"any": list(S.chain)})
     check("term_reason=cancelled", b.term_reason == "cancelled_by_user")
     check("turn_count=0", b.turn_count == 0)
     check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
@@ -188,7 +188,7 @@ if __name__ == "__main__":
     print("── 路径5: planner 分解 → planner_decomposed ──")
     reset_wt()
     S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2, "mode": "planner"}]
-    plan = '方案\n```json\n[{"desc":"子任务A","suggested_level":"E"}]\n```'
+    plan = '方案\n```json\n[{"desc":"子任务A","suggested_level":"any"}]\n```'
     S.dispatch_queue = [("ok", FakeExec(success=True, raw_output=plan))]
     S.validate_queue = []
     b = run_case()

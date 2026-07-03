@@ -22,7 +22,7 @@ class TestDecideCascade:
         task = self._make_task()
         validation = val_mod.ValidationReport(verdict="通过", action="pass", unverified=[])
         action, result = _decide_cascade(
-            task, "E", 1, validation, self._make_disp(), [], None,
+            task, "any", 1, validation, self._make_disp(), [], None,
             ["E_model1"], set(), {"warnings": [], "failure_kind": "ok", "confidence": 0.0}
         )
         assert action == "return"
@@ -35,7 +35,7 @@ class TestDecideCascade:
             evidence={"issues": ["minor"]}, unverified=[]
         )
         action, result = _decide_cascade(
-            task, "E", 1, validation, self._make_disp(), [], None,
+            task, "any", 1, validation, self._make_disp(), [], None,
             ["E_model1"], set(), {"warnings": [], "failure_kind": "ok", "confidence": 0.0}
         )
         # 高置信 retry → 接受当前结果，不浪费重试
@@ -49,7 +49,7 @@ class TestDecideCascade:
             evidence={"issues": ["serious"]}, unverified=[]
         )
         action, _ = _decide_cascade(
-            task, "E", 1, validation, self._make_disp(), [], None,
+            task, "any", 1, validation, self._make_disp(), [], None,
             ["E_model1", "E+_model2"], set(), {"warnings": [], "failure_kind": "ok", "confidence": 0.0}
         )
         # 低置信 + 有 fallback → 立即升级
@@ -59,7 +59,7 @@ class TestDecideCascade:
         task = self._make_task()
         validation = val_mod.ValidationReport(verdict="阻断", action="abort", unverified=["fatal"])
         action, result = _decide_cascade(
-            task, "E", 1, validation, self._make_disp(), [], None,
+            task, "any", 1, validation, self._make_disp(), [], None,
             ["E_model1"], set(), {"warnings": [], "failure_kind": "ok", "confidence": 0.0}
         )
         assert action == "return"
@@ -71,7 +71,7 @@ class TestPickAgent:
 
     def test_pick_returns_agent_for_level(self):
         agents = load_agents()
-        for level in ("E", "E+", "D"):
+        for level in ("any",):
             if level in agents and agents[level]:
                 # 检查该层级是否有可用的代理
                 available_agents = [agent for agent in agents[level] if agent_api_available(agent)]
@@ -100,7 +100,7 @@ class TestPickAgent:
     def test_fallback_chain_returns_list(self):
         from singularity.scheduler.dispatcher import pick_agent_fallback_chain
         agents = load_agents()
-        chain = pick_agent_fallback_chain(agents, "E")
+        chain = pick_agent_fallback_chain(agents, "any")
         assert isinstance(chain, list)
 
 

@@ -17,7 +17,7 @@ from singularity.scheduler.workflow import (
 )
 
 def _run_research(project: ProjectState, agents: dict) -> str:
-    """调 Researcher(E层) 搜集可借鉴方案 → GATE1。"""
+    """调 Researcher(廉价层) 搜集可借鉴方案 → GATE1。"""
     if _should_skip(project, "gate1"):
         project.phase = Phase.GATE1
         save(project)
@@ -68,7 +68,7 @@ def _run_research(project: ProjectState, agents: dict) -> str:
 # ═══════════════════════════════════════════════════════════
 
 def _run_planning(project: ProjectState, agents: dict) -> str:
-    """调 Architect(D层) 出方案+任务清单 → GATE2。"""
+    """调 Architect(强力层) 出方案+任务清单 → GATE2。"""
     if _should_skip(project, "gate2"):
         project.phase = Phase.GATE2
         save(project)

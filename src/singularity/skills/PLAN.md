@@ -12,7 +12,7 @@
 
 ## 不改的
 
-- claude-cli (D层) 有自己的 skill 系统，不碰
+- claude-cli 有自己的 skill 系统，不碰
 - 现有 4 个内置工具不动，skill 是追加
 - 路由/调度逻辑不动
 
@@ -56,10 +56,10 @@ python/skills/          ← 系统内置 (Git 管理)
 ## 工作流
 
 ```
-Web 端: 给 Kimi(E层) 勾选 code-review
+Web 端: 给 Kimi 勾选 code-review
   │
   ▼
-agents_custom.json: _skills: {"E": {"kimi-k2.7-code": ["code-review"]}}
+agents_custom.json: _skills: {"any": {"kimi-k2.7-code": ["code-review"]}}
   │
   ▼
 openai-agent 启动时:

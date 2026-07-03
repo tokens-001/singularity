@@ -323,7 +323,7 @@ class QidianTUI(App):
         # Token summary
         total_tokens = sum(tokens.values())
         token_parts = []
-        for lvl in ["E", "E+", "D"]:
+        for lvl in ["any"]:
             t = tokens.get(lvl, 0)
             label = f"{t/1e6:.2f}M" if t > 1e6 else f"{t/1e3:.0f}K"
             token_parts.append(f"{lvl}: {label}")
@@ -518,7 +518,7 @@ class QidianTUI(App):
         lines.append("")
         lines.append("[bold]Agent 编组[/]")
         if agents and not agents.get("error"):
-            for tier_label, tier_key in [("D·架构", "D"), ("E+·复杂", "E+"), ("E·执行", "E")]:
+            for tier_label, tier_key in [("any·通用", "any")]:
                 tier_agents = [a for a in agents.values() if isinstance(a, dict) and a.get("level") == tier_key]
                 models = [a.get("model","?") for a in tier_agents]
                 lines.append(f"  [{tier_key}] {tier_label}: {', '.join(models) if models else '[dim]无[/]'}")

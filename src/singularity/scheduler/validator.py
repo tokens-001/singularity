@@ -297,7 +297,7 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
 
     Args:
         filepath: 要审查的文件路径(相对项目根)
-        models: 模型名列表, 默认用D层前3个可用模型
+        models: 模型名列表, 默认用强力层前3个可用模型
         cwd: 工作目录
         max_chunk_lines: 每段最大行数
         diff_only: True=只审查 git diff (轻量,互补 crossover), False=审查全文
@@ -338,7 +338,7 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
     from . import dispatcher as _disp
     agents = _disp.load_agents()
 
-    # 选模型: 指定 > D层可用 > 前3个
+    # 选模型: 指定 > 强力层可用 > 前3个
     if models:
         model_cfgs = []
         for name in models:

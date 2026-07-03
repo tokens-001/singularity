@@ -1,6 +1,6 @@
-"""内部模块 — Planner 分解 & D层委员会。
+"""内部模块 — Planner 分解 & 多模型委员会。
 
-子任务分解物化 + D层多 agent 并行规划 + LLM/机械合成。
+子任务分解物化 + 多模型 agent 并行规划 + LLM/机械合成。
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ def _maybe_complete_parents(task_id: str) -> None:
 
 
 def _run_committee(task, ctx: RunContext, agents: dict, d_agents: list) -> BatchOutput:
-    """D层委员会: 所有D agent并行出方案，独立不互看，合成最优。
+    """多模型委员会: 所有强力 agent并行出方案，独立不互看，合成最优。
 
     每个人扮演不同视角:
       - Opus: 稳——风险、边界、回滚
@@ -81,8 +81,7 @@ def _run_committee(task, ctx: RunContext, agents: dict, d_agents: list) -> Batch
     futures = {}
     with ThreadPoolExecutor(max_workers=len(d_agents)) as pool:
         for agent_cfg in d_agents:
-            single = dict(agents)
-            single["any"] = [agent_cfg]
+            single = {"any": [agent_cfg]}
             # ── subagent 事件: 启动 ──
             _pending_sse_events.append({
                 "kind": "subagent", "msg": f"委员会成员启动: {agent_cfg.get('model','?')}",
@@ -166,7 +165,7 @@ def _run_committee_member(task, ctx, agents, agent_cfg):
     perspectives = {
         "opus": "你关注: 风险点、边界条件、回滚策略。方案必须稳健，不能炸。",
         "gpt": "你关注: 有没有完全不同的思路？业界最新实践是什么？大胆提替代方案。",
-        "deepseek": "你关注: 这方案E/E+能落地吗？需要多少个文件？现有代码风格兼容吗？复杂度实际是多少？",
+        "deepseek": "你关注: 这方案能落地吗？需要多少个文件？现有代码风格兼容吗？复杂度实际是多少？",
         "glm": "你关注: 和现有架构的一致性。不要引入不兼容的变更。",
     }
     extra = ""
@@ -190,7 +189,7 @@ def _run_committee_member(task, ctx, agents, agent_cfg):
 def _synthesize_plans(task_desc: str, plans: list, models: list) -> str:
     """委员会真合成: LLM 分析各方方案，提取共识+冲突+择优合并。
 
-    先尝试调 DeepSeek (E层廉价) 做语义合成。
+    先尝试调 DeepSeek (廉价层廉价) 做语义合成。
     LLM 失败时回退到机械拼接。
     """
     # 把各方方案压缩为摘要
@@ -230,7 +229,7 @@ def _synthesize_plans(task_desc: str, plans: list, models: list) -> str:
 
 
 def _llm_synthesize(task_desc: str, summary_text: str, models: list) -> str | None:
-    """用 DeepSeek (E层) 分析多方方案，输出结构化合成。
+    """用 DeepSeek (廉价层) 分析多方方案，输出结构化合成。
 
     返回: 合成文本, 或 None (LLM不可用时回退机械拼接)
     """
@@ -262,7 +261,7 @@ def _llm_synthesize(task_desc: str, summary_text: str, models: list) -> str | No
 直接输出markdown，不要JSON包裹。"""
 
     try:
-        # 获取 E 层 agent 配置
+        # 获取 廉价层 agent 配置
         agents = disp_mod.load_agents()
         e_agents = agents.get("any", [])
         if not e_agents:
@@ -385,7 +384,7 @@ def estimate_tokens(subtasks: list[dict], parent_desc: str = "") -> dict:
     """
     # 估算参数
     TOKENS_PER_CHAR = 0.6          # 中英混合平均
-    COST_PER_M = {"any": 0.30, "E": 0.15, "E+": 0.50, "D": 1.50}  # $/M tokens (any=两档统一均价, E/E+/D 旧兼容)
+    COST_PER_M = {"any": 0.30}  # $/M tokens; 旧 E/E+/D 回退到 default=0.30
     RESPONSE_MULTIPLIER = 2.0      # prompt + completion + retry buffer
 
     total = 0

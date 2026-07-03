@@ -60,7 +60,7 @@ class TestPropertyEventNode:
 
     def test_to_dict_roundtrip(self):
         n1 = EventNode(task_id="t1", content="test desc", timestamp=100.0,
-                       emb=[0.1, 0.2], attrs={"status": "done", "level": "D"})
+                       emb=[0.1, 0.2], attrs={"status": "done", "level": "any"})
         d = n1.to_dict()
         n2 = EventNode.from_dict(d)
         assert n1.task_id == n2.task_id

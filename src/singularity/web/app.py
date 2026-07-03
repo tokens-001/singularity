@@ -85,8 +85,8 @@ _VALID_SANDBOXES = frozenset({"worktree", "inline", "none"})
 _VALID_ROLES = frozenset({"admin", "operator", "viewer"})
 _VALID_SPEEDS = frozenset({"fast", "medium", "slow"})
 _VALID_COSTS = frozenset({"budget", "standard", "premium"})
-_VALID_TIERS = frozenset({"any", "定义", "架构", "实现", "审查", "验收", "交付", "E", "E+", "D"})  # 两档后推荐阶段 + 旧兼容
-_VALID_TEMPLATES = frozenset({"product_dev", "bug_fix", "refactor", "agent_dev"})
+_VALID_TIERS = frozenset({"any", "定义", "架构", "实现", "审查", "验收", "交付"})
+_VALID_TEMPLATES = frozenset({"product_dev", "bug_fix", "refactor", "agent_dev", "feature", "bugfix", "test", "review"})
 _VALID_DECISIONS = frozenset({"approved", "rejected"})
 
 import re as _re_valid

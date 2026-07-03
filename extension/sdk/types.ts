@@ -4,7 +4,7 @@ export interface QidianTask {
     id: string;
     description: string;
     status: 'pending' | 'routed' | 'dispatched' | 'running' | 'done' | 'failed' | 'rolled_back' | 'decomposed' | 'blocked';
-    route_level?: 'E' | 'E+' | 'D';
+    route_level?: 'any';
     route_type?: string;
     priority: number;
     depth: number;
@@ -34,7 +34,7 @@ export interface QidianProject {
 export interface QidianAgent {
     model: string;
     type: 'openai-agent' | 'claude-cli' | 'zhipu-api';
-    level: 'E' | 'E+' | 'D';
+    level: 'any';
     max_turns: number;
     default: boolean;
     sandbox: 'worktree' | 'inline' | 'none';

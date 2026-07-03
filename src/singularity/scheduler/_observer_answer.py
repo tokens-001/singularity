@@ -1,42 +1,21 @@
-"""observer_agent.py — 观察者智能体
+"""观察者智能体 — 回答生成 + 定义层会话 + GATE 确认"""
 
-旁路守护线程，通过只读工具查询系统状态并回答用户自然语言问题。
-不修改 scheduler / dispatcher / executor 的任何执行逻辑。
-
-Step 3: 支持定义层4角色 (产品经理/交互设计师/UI设计师/研究员)。
-Observer 负责搞清楚用户要什么，不做设计决策。
-"""
 from __future__ import annotations
 
 import json
 import logging
-import os
-import queue
-import threading
 import time
-from pathlib import Path
-from typing import Any, Callable
 
 import httpx
 
-from singularity.scheduler import config, tracker, witness
+from singularity.scheduler._observer_definition import (
+    _get_observer_cfg, _build_status_context, DIRECT_SYSTEM_PROMPT,
+    _detect_definition_intent, _any_project_at_gate3, _get_definition_context,
+    _execute_observer_tool, _definition_role_prompt,
+)
+from singularity.scheduler._observer_tools import OBSERVER_SYSTEM_PROMPT, OBSERVER_TOOLS
 
 _log = logging.getLogger("observer")
-
-# 待处理的用户消息队列：元素为 (client_id, question, reply_callback)
-_chat_queue: queue.Queue[tuple[str, str, Callable[[dict], None]]] = queue.Queue()
-
-# 已连接客户端的回复回调注册表
-_pending_replies: dict[str, Callable[[dict], None]] = {}
-_replies_lock = threading.Lock()
-
-# 守护线程控制
-_stop_event = threading.Event()
-_worker_thread: threading.Thread | None = None
-
-# 异常告警去重：key -> last_alert_timestamp
-_alert_history: dict[str, float] = {}
-_alert_lock = threading.Lock()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -155,13 +134,8 @@ def _answer_question(question: str, project_id: str = "") -> str:
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": question},
     ]
-    # 根据任务复杂度自适应调整轮数
-    if len(question) < 10 and not any(w in question for w in ("做", "写", "创建", "修", "改", "加", "build", "create", "fix")):
-        max_turns = 1  # 纯闲聊/查询
-    elif len(question) > 100 or any(w in question for w in ("架构", "系统", "设计", "多步", "完整", "全栈")):
-        max_turns = 3  # 复杂任务, 可能需要多轮澄清
-    else:
-        max_turns = 2  # 常规任务
+    # 从 agent 配置读取 max_turns，默认工具模式 3、纯文本 1
+    max_turns = int(cfg.get("max_turns", 3 if use_tools else 1))
     with httpx.Client(timeout=60.0) as client:
         for _ in range(max_turns):
             body = {

@@ -7,7 +7,7 @@ class TestDecompose:
     """Planner JSON 解析。"""
 
     def test_valid_decomposition(self):
-        raw = '```json\n[{"desc": "task A", "suggested_level": "E", "depends_on_local_id": []}]\n```'
+        raw = '```json\n[{"desc": "task A", "suggested_level": "any", "depends_on_local_id": []}]\n```'
         tasks = decompose(raw)
         assert len(tasks) == 1
         assert tasks[0]["desc"] == "task A"
@@ -19,8 +19,8 @@ class TestDecompose:
     def test_multiple_tasks_with_deps(self):
         raw = """```json
 [
-  {"desc": "task 1", "suggested_level": "E", "depends_on_local_id": []},
-  {"desc": "task 2", "suggested_level": "E+", "depends_on_local_id": [0]}
+  {"desc": "task 1", "suggested_level": "any", "depends_on_local_id": []},
+  {"desc": "task 2", "suggested_level": "any", "depends_on_local_id": [0]}
 ]
 ```"""
         tasks = decompose(raw)

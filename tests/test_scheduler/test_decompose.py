@@ -10,11 +10,11 @@ class TestDecompose:
     """decompose() 是纯函数: planner output → 子任务列表。"""
 
     def test_valid_json_array(self):
-        raw = '```json\n[{"desc": "add login", "suggested_level": "E"}, {"desc": "add tests", "suggested_level": "E+"}]\n```'
+        raw = '```json\n[{"desc": "add login", "suggested_level": "any"}, {"desc": "add tests", "suggested_level": "any"}]\n```'
         result = decompose(raw)
         assert len(result) == 2
         assert result[0]["desc"] == "add login"
-        assert result[0]["suggested_level"] == "E"
+        assert result[0]["suggested_level"] == "any"
 
     def test_empty_input(self):
         assert decompose("") == []
@@ -37,8 +37,8 @@ class TestDecompose:
 
     def test_depends_on_mapping(self):
         raw = '''```json
-[{"desc": "task 0", "suggested_level": "E"},
- {"desc": "task 1", "depends_on_local_id": 0, "suggested_level": "E+"}]
+[{"desc": "task 0", "suggested_level": "any"},
+ {"desc": "task 1", "depends_on_local_id": 0, "suggested_level": "any"}]
 ```'''
         result = decompose(raw)
         assert len(result) == 2

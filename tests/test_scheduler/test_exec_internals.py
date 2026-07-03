@@ -23,7 +23,7 @@ from singularity.scheduler._types import RunContext, BatchOutput
 def _task(**kw):
     defaults = {
         "id": "1234567890", "description": "测试任务",
-        "route_level": "E", "route_gate": False, "route_type": "default",
+        "route_level": "any", "route_gate": False, "route_type": "default",
         "depends_on": [], "retry_count": 0, "max_retries": 2, "depth": 0,
         "project_id": "", "status": None,
     }
@@ -50,7 +50,7 @@ def _disp(agent_cfg=None):
     return type("D", (), {
         "executor_result": exec_result,
         "agent_cfg": agent_cfg or {"model": "test-model"},
-        "level": "E", "attempts": 1,
+        "level": "any", "attempts": 1,
     })()
 
 
@@ -64,7 +64,7 @@ class TestDecideCascade:
     def _call(self, validation, quality=None, fallback_chain=None):
         return _decide_cascade(
             task=_task(),
-            level="E",
+            level="any",
             turn=1,
             validation=validation,
             disp_result=_disp(),
@@ -211,7 +211,7 @@ class TestCheckCancelled:
 
 
 # ═══════════════════════════════════════════════════════════════
-# _save_planner_patch / _read_planner_patch — D层方案持久化
+# _save_planner_patch / _read_planner_patch — 规划方案持久化
 # ═══════════════════════════════════════════════════════════════
 
 class TestPlannerPatch:
@@ -347,7 +347,7 @@ class TestFinalizeResult:
         from singularity.scheduler._task_runner import TaskRunner
         task = task or self._make_task()
         batch = batch or self._make_batch()
-        route = route or type("R", (), {"level": "E", "task_type": "default"})()
+        route = route or type("R", (), {"level": "any", "task_type": "default"})()
 
         from singularity.scheduler.snapshot import Snapshot
         snap = snap or Snapshot(id="s1", method="git", ref="abc", created_at=0.0)
@@ -413,9 +413,9 @@ class TestFinalizeResult:
 
         reason, results, _ = self._call(
             monkeypatch,
-            batch=self._make_batch(validation=val, term_reason="escalation_exhausted (level=E)"),
+            batch=self._make_batch(validation=val, term_reason="escalation_exhausted (level=any)"),
             **{
-                "_read_planner_patch": lambda tid: "D层分析方案内容",
+                "_read_planner_patch": lambda tid: "规划方案内容",
                 "tracker.transition": record_transition,
             },
         )
@@ -499,7 +499,7 @@ class TestFinalizeResult:
             reason = runner.finalize(
                 self._make_task(),
                 self._make_batch(validation=val, term_reason="pass"),
-                type("R", (), {"level": "E", "task_type": "default"})(),
+                type("R", (), {"level": "any", "task_type": "default"})(),
                 snap, results,
             )
         assert "; QA:fail" in reason

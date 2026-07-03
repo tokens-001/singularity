@@ -20,7 +20,7 @@ def tmp_workdir():
     d.cleanup()
 
 
-def make_task(tid, priority=0, starvation=0, level="E", children=None):
+def make_task(tid, priority=0, starvation=0, level="any", children=None):
     """快捷构造 task 对象。"""
     return type("T", (), {
         "id": tid,

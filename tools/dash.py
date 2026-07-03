@@ -49,7 +49,7 @@ def main():
     if tokens:
         total = sum(tokens.values())
         print(f"\n{BOLD}  Token 消耗{RESET}")
-        for lvl in ["E", "E+", "D"]:
+        for lvl in ["any"]:
             t = tokens.get(lvl, 0)
             if t:
                 label = f"{t/1e6:.2f}M" if t > 1e6 else f"{t/1e3:.0f}K"

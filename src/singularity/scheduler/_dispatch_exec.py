@@ -92,7 +92,7 @@ def _run_executor(executor_cls, agent_cfg: dict, full_task: str, task_id: str,
 def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
                         chain: list[dict], feedback: str = "",
                         baseline_ref: str = "", cwd: str = "") -> DispatchResult:
-    """D层委员会: 所有可用D模型并行产出→合成。"""
+    """多模型委员会: 所有可用D模型并行产出→合成。"""
     import concurrent.futures
 
     def _run_one(agent_cfg):

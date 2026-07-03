@@ -56,7 +56,7 @@ class TestCriticalFixes:
     def test_goal_check_no_agent_returns_false(self):
         from singularity.scheduler.goal_loop import GoalLoop
         gl = GoalLoop.__new__(GoalLoop)
-        gl._agents = {"E": []}
+        gl._agents = {"any": []}
         result = gl._check_goal("test output", "test goal", "test task")
         assert not result.get("met", True)
 
@@ -93,8 +93,8 @@ class TestPropertyHeartbeat:
 
     def test_heartbeat_staleness_monotonic(self):
         from singularity.scheduler.witness import _hb_path, heartbeat
-        heartbeat("old_task", "E", "running")
-        hb_file = _hb_path("old_task", "E")
+        heartbeat("old_task", "any", "running")
+        hb_file = _hb_path("old_task", "any")
         assert hb_file.exists()
         hb_file.unlink(missing_ok=True)
 
@@ -106,8 +106,8 @@ class TestPropertyHeartbeat:
         task_dir.mkdir(parents=True, exist_ok=True)
         task_file = task_dir / f"{tid}.json"
         task_file.write_text(json.dumps({"status": "done"}))
-        heartbeat(tid, "D", "running")
-        hb_file = _hb_path(tid, "D")
+        heartbeat(tid, "any", "running")
+        hb_file = _hb_path(tid, "any")
         assert hb_file.exists()
         cleaned = _cleanup_terminal_heartbeat(hb_file, tid)
         assert cleaned
@@ -135,9 +135,9 @@ class TestPropertyWorktree:
 
     def test_dir_naming_pattern(self):
         import re
-        tid, lvl = "1782000001", "E"
+        tid, lvl = "1782000001", "any"
         name = f"{tid}_{lvl}"
-        assert re.match(r"^\d+_[DE]\+?$", name)
+        assert re.match(r"^\d+_\w+$", name)
 
 
 class TestPropertyTokenBudget:

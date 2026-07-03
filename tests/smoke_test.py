@@ -83,8 +83,7 @@ def main():
 
     print("── Agent ──")
     r = api("/api/agents")
-    check("Agent E层", "E" in r)
-    check("Agent D层", "D" in r)
+    check("Agent 层", "any" in r)
     check("模型 ≥5", len(api("/api/models")) >= 5)
 
     print("── CLI ──")
@@ -136,12 +135,12 @@ def main():
     # Agent toggle — 保存并恢复
     _saved = api("/api/agents")
     _disabled_saved = _saved.get("_disabled", {})
-    _d4_was_disabled = "deepseek-v4-pro" in _disabled_saved.get("D", [])
-    _d4_was_active = any(a.get("model") == "deepseek-v4-pro" for a in _saved.get("D", []))
+    _d4_was_disabled = "deepseek-v4-pro" in _disabled_saved.get("any", [])
+    _d4_was_active = any(a.get("model") == "deepseek-v4-pro" for a in _saved.get("any", []))
 
-    check("禁用agent", api("/api/agents/D/deepseek-v4-pro", method="DELETE").get("ok") == True)
+    check("禁用agent", api("/api/agents/any/deepseek-v4-pro", method="DELETE").get("ok") == True)
     check("启用agent", api("/api/agents", method="POST",
-        body={"level":"D","model":"deepseek-v4-pro"}).get("ok") == True)
+        body={"level":"any","model":"deepseek-v4-pro"}).get("ok") == True)
 
     # 恢复：重新应用保存的禁用列表
     for _lvl, _models in _disabled_saved.items():

@@ -23,7 +23,7 @@ class Phase(str, Enum):
     GATE2 = "gate2"          # 用户审架构+任务分配
     EXECUTING = "executing"
     INTEGRATING = "integrating"  # D2: 多路worktree合并+集成测试(非用户门)
-    REVIEWING = "reviewing"      # 内部: D层审查(非用户门)
+    REVIEWING = "reviewing"      # 内部: 强力层审查(非用户门)
     FIXING = "fixing"            # 内部: 修复任务(非用户门)
     GATE3 = "gate3"              # 用户最终交付审核
     DELIVERING = "delivering"    # S1: 打包归档 (GATE3通过后)

@@ -128,7 +128,7 @@ _ARCHITECT_PREAMBLE = """你是资深系统架构师。基于 PRD + 交互/UI方
 
 Schema 规则:
 - tasks 至少 1 个, 最多 20 个
-- complexity: low→E层, medium→E+层, high→D层
+- complexity: low→廉价层, medium→中档层, high→强力层
 - layer 标注任务所属层: frontend/backend/data/devops
 - depends_on 填其他任务的 id, 可为空数组
 - 每个任务改不相交的文件 (并行 merge 的前提)

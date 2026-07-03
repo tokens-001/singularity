@@ -14,7 +14,7 @@ from types import SimpleNamespace as NS
 def _make_task(**kw):
     d = {"id": "test12345678", "description": "测试任务", "depends_on": [],
          "retry_count": 0, "max_retries": 3, "depth": 0, "project_id": "",
-         "route_locked": False, "route_level": "E", "route_gate": None,
+         "route_locked": False, "route_level": "any", "route_gate": None,
          "route_type": "default"}
     d.update(kw)
     return type("Task", (), d)()
@@ -22,8 +22,7 @@ def _make_task(**kw):
 
 def _make_agents():
     return {
-        "E": [{"model": "gpt-4"}, {"model": "claude"}],
-        "D": [{"model": "claude-opus"}, {"model": "gpt-5.5"}],
+        "any": [{"model": "gpt-4"}, {"model": "claude"}, {"model": "claude-opus"}, {"model": "gpt-5.5"}],
     }
 
 
@@ -38,7 +37,7 @@ def _make_batch_stub():
     b.validation = type("V", (), {"verdict": "通过", "action": "pass", "unverified": []})()
     b.dispatch_result = type("D", (), {
         "executor_result": type("E", (), {"success": True, "raw_output": "ok", "elapsed": 0.1, "tokens": 100, "changed_files": []})(),
-        "agent_cfg": {"model": "test"}, "level": "E",
+        "agent_cfg": {"model": "test"}, "level": "any",
     })()
     return b
 
@@ -54,7 +53,7 @@ def _make_pre_stub(**kw):
 
 
 def _make_route_stub(**kw):
-    d = {"level": "E", "gate_required": None, "task_type": "default"}
+    d = {"level": "any", "gate_required": None, "task_type": "default"}
     d.update(kw)
     return type("Route", (), d)()
 
@@ -173,7 +172,7 @@ class TestTaskRunnerExecute:
         monkeypatch.setattr(tr.router_mod, "route", lambda d: route_called.append(1) or route)
 
         from singularity.scheduler._task_runner import TaskRunner
-        task = _make_task(route_locked=True, route_level="D",
+        task = _make_task(route_locked=True, route_level="any",
                           route_gate="security", route_type="fix")
         runner = TaskRunner()
         result_batch, result_route, result_snap = runner.execute(task, _make_agents())
@@ -282,8 +281,8 @@ class TestTaskRunnerExecute:
         runner.execute(task, agents)
 
         # agents 保持传入时的结构
-        assert "E" in retry_agents[0]
-        assert "D" in retry_agents[0]
+        assert "any" in retry_agents[0]
+        assert "any" in retry_agents[0]
 
     def test_code_context_injected(self, monkeypatch):
         """pre.code_context 非空 → 追加到 task.description。"""
