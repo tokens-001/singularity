@@ -1,4 +1,4 @@
-from singularity.scheduler.dispatcher import load_agents
+from singularity.scheduler.dispatcher import load_agents, _ESCALATION
 
 __all__ = ['_custom_agents_path', '_load_custom_agents', '_notify_agent_change', '_save_custom_agents', 'add_agent', 'escalate', 'remove_agent', 'update_agent']
 # ── Agent CRUD (写入自定义 JSON overlay) ──
