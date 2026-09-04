@@ -13,7 +13,7 @@ from singularity.scheduler import orchestrator
 from singularity.scheduler.workflow import (
     _safe_dispatch, _needs_research, _should_skip, _collect_changed_files,
     _phase_output_path, _save_phase_output, _read_phase_output,
-    _ARCHITECT_PREAMBLE,
+    _ARCHITECT_PREAMBLE, _RESEARCHER_PREAMBLE,
 )
 
 def _run_research(project: ProjectState, agents: dict) -> str:

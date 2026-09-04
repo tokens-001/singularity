@@ -110,7 +110,7 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
     if not running_futures:
         return False
     now = time.time()
-    deadline = 300  # per-future 超时阈值 (5min, 常规 API 调用 1-3min)
+    deadline = 900  # per-future 超时阈值 (15min, 单模型写代码需多轮 读→写→测→改)
     reaped = False
 
     # 如果有 future 但全都未完成, 先等第一个完成 (最多 10s)

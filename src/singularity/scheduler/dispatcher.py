@@ -134,7 +134,7 @@ def _ensure_agent_type(agent_cfg: dict) -> dict:
         current_max = agent_cfg.get("max_turns", 0)
         agent_cfg["max_turns"] = max(current_max, registry_max, 15)
     agent_cfg.setdefault("max_tool_turns", 5)
-    agent_cfg.setdefault("request_template", {"model": model, "max_tokens": 8192})
+    agent_cfg.setdefault("request_template", {"model": model, "max_tokens": 20000})
     return agent_cfg
 
 
@@ -213,7 +213,7 @@ def _build_agent_from_registry(model_name: str) -> dict | None:
             "default": False,
             "roles": ["daily"],
             "sandbox": "worktree",
-            "request_template": {"model": model_name, "max_tokens": 8192},
+            "request_template": {"model": model_name, "max_tokens": 20000},
         }
     except Exception as e:
         from . import witness; witness.heartbeat("dispatch", "warn", status="error", detail=f"build_agent:{e}")
