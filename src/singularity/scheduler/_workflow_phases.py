@@ -234,26 +234,33 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
     }
 
     created = 0
-    id_map = {}  # architecture task_id → tracker task_id
-    for tdef in exec_tasks:
+    id_map = {}  # 本地任务 id (T1..Tn) → tracker task_id
+    for idx, tdef in enumerate(exec_tasks):
         # ── 按 layer 路由到对应角色 ──
-        layer = tdef.get("layer", "")
+        # 拆解器用 suggested_level 存 layer (backend/data/frontend/devops)
+        layer = tdef.get("layer", "") or tdef.get("suggested_level", "")
         role_key = LAYER_ROLE_MAP.get(layer, "implementer")
 
-        # 自动生成任务 ID (如果架构师没提供)
-        tid = tdef.get("id", "") or f"T{created+1}"
-        tdef["id"] = tid
+        # 本地任务 id = T{idx+1} (拆解器不产 id 字段，depends_on_local_id 引用此 id)
+        tid = tdef.get("id", "") or f"T{idx+1}"
 
-        # 解析真正的依赖关系 (架构中定义的 depends_on)
-        arch_deps = tdef.get("depends_on", [])
+        # 解析依赖 (拆解器用 depends_on_local_id 引用本地 id)
+        arch_deps = tdef.get("depends_on", []) or tdef.get("depends_on_local_id", [])
         dep_ids = [id_map[d] for d in arch_deps if d in id_map]
+
+        # 拆解器用 desc 存描述 (拆成 title + description)
+        desc = tdef.get("description", "") or tdef.get("desc", "")
+        title = tdef.get("title", "")
+        if not title and ":" in desc:
+            title, desc = desc.split(":", 1)
+            title, desc = title.strip(), desc.strip()
 
         # 注入项目上下文 + 角色信息 + 拆解器上下文片段
         ctx_snippet = tdef.get("context_snippet", "")
         acceptance = tdef.get("acceptance", "") or tdef.get("acceptance_criteria", "")
         task_desc = (
-            f"[{tid}] {tdef.get('title', '')}\n"
-            f"{tdef.get('description', '')}\n"
+            f"[{tid}] {title}\n"
+            f"{desc}\n"
             f"验收标准: {acceptance or '代码可运行，功能完整'}\n"
             + (f"相关上下文:\n{ctx_snippet}\n" if ctx_snippet else "")
             + f"角色: {role_key}\n"
@@ -270,7 +277,7 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
                            route_role=role_key,  # 绑定角色
                            project_id=project.id)
         project.task_ids.append(child.id)
-        id_map[tdef.get("id", "")] = child.id
+        id_map[tid] = child.id
         created += 1
 
     project.fix_round = 0
