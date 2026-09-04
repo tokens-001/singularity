@@ -30,43 +30,46 @@ class Snapshot:
     method: str            # "git" | "copy"
     ref: str               # git: stash ref; copy: 目录路径
     created_at: float
+    repo_root: str = ""    # 所属仓库根 (修复 #1: 手动回滚需知道回滚哪个 repo)
 
 
-def take(task_id: str) -> Snapshot:
+def take(task_id: str, repo_root: Path = None) -> Snapshot:
     """写入前快照。git 优先, 文件拷贝兜底。"""
     snap_id = f"{int(time.time())}_{task_id}"
+    root = repo_root or config.PROJECT_ROOT
 
-    if _is_git_repo():
-        return _take_git(snap_id)
-    return _take_copy(snap_id)
+    if _is_git_repo(root):
+        return _take_git(snap_id, root)
+    return _take_copy(snap_id, root)
 
 
-def rollback(snap: Snapshot) -> bool:
+def rollback(snap: Snapshot, repo_root: Path = None) -> bool:
     """回滚到快照。失败返回 False, 调用方负责报告 + 退出 (审计 4.4)。"""
+    root = repo_root or config.PROJECT_ROOT
     if snap.method == "git":
-        return _rollback_git(snap)
-    return _rollback_copy(snap)
+        return _rollback_git(snap, root)
+    return _rollback_copy(snap, root)
 
 
 # ── git 路径 ──────────────────────────────────────────────────────────
-def _is_git_repo() -> bool:
+def _is_git_repo(root: Path) -> bool:
     try:
         r = subprocess.run(
             ["git", "rev-parse", "--is-inside-work-tree"],
             capture_output=True, text=True,
-            cwd=str(config.PROJECT_ROOT),
+            cwd=str(root),
         )
         return r.returncode == 0 and r.stdout.strip() == "true"
     except Exception:  # noqa: BLE001
         return False
 
 
-def _take_git(snap_id: str) -> Snapshot:
+def _take_git(snap_id: str, root: Path) -> Snapshot:
     """git stash create 生成临时 commit, 不进 stash list, 零残留。"""
     r = subprocess.run(
         ["git", "stash", "create"],
         capture_output=True, text=True,
-        cwd=str(config.PROJECT_ROOT),
+        cwd=str(root),
     )
     ref = r.stdout.strip()
     if r.returncode != 0 or not ref:
@@ -74,53 +77,53 @@ def _take_git(snap_id: str) -> Snapshot:
         ref = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             capture_output=True, text=True,
-            cwd=str(config.PROJECT_ROOT),
+            cwd=str(root),
         ).stdout.strip()
-    snap = Snapshot(id=snap_id, method="git", ref=ref, created_at=time.time())
+    snap = Snapshot(id=snap_id, method="git", ref=ref, created_at=time.time(), repo_root=str(root))
     _save_meta(snap)
     return snap
 
 
-def _rollback_git(snap: Snapshot) -> bool:
+def _rollback_git(snap: Snapshot, root: Path) -> bool:
     """回滚: 用快照 ref 重建工作区状态。"""
     # 丢弃当前未提交改动 ("--" 和 "." 是两个独立 arg, 不是 "-- .")
     subprocess.run(
         ["git", "checkout", "--", "."],
         capture_output=True, text=True,
-        cwd=str(config.PROJECT_ROOT),
+        cwd=str(root),
     )
     # 清未跟踪文件 (agent 新建的文件 checkout 删不掉)
     subprocess.run(
         ["git", "clean", "-fd"],
         capture_output=True, text=True,
-        cwd=str(config.PROJECT_ROOT),
+        cwd=str(root),
     )
     # 再把快照的改动恢复出来 (stash ref 可直接 apply)
-    if snap.ref and snap.ref != _current_head():
+    if snap.ref and snap.ref != _current_head(root):
         r = subprocess.run(
             ["git", "stash", "apply", snap.ref],
             capture_output=True, text=True,
-            cwd=str(config.PROJECT_ROOT),
+            cwd=str(root),
         )
         if r.returncode != 0:
             return False
     return True  # 干净快照, 无需恢复
 
 
-def _current_head() -> str:
+def _current_head(root: Path) -> str:
     return subprocess.run(
         ["git", "rev-parse", "HEAD"],
         capture_output=True, text=True,
-        cwd=str(config.PROJECT_ROOT),
+        cwd=str(root),
     ).stdout.strip()
 
 
 # ── 文件拷贝兜底 (非 git 项目) ────────────────────────────────────────
-def _take_copy(snap_id: str) -> Snapshot:
+def _take_copy(snap_id: str, root: Path) -> Snapshot:
     snap_dir = config.SNAPSHOT_DIR / snap_id
     snap_dir.mkdir(parents=True, exist_ok=True)
     # 拷贝项目文件 (排除 .git / .qidian / venv)
-    for item in config.PROJECT_ROOT.iterdir():
+    for item in root.iterdir():
         if item.name in {".git", ".qidian", "venv", "__pycache__"}:
             continue
         dst = snap_dir / item.name
@@ -129,17 +132,17 @@ def _take_copy(snap_id: str) -> Snapshot:
         else:
             shutil.copy2(item, dst)
     _purge_old_copies()
-    snap = Snapshot(id=snap_id, method="copy", ref=str(snap_dir), created_at=time.time())
+    snap = Snapshot(id=snap_id, method="copy", ref=str(snap_dir), created_at=time.time(), repo_root=str(root))
     _save_meta(snap)
     return snap
 
 
-def _rollback_copy(snap: Snapshot) -> bool:
+def _rollback_copy(snap: Snapshot, root: Path) -> bool:
     snap_dir = Path(snap.ref)
     if not snap_dir.exists():
         return False
     for item in snap_dir.iterdir():
-        dst = config.PROJECT_ROOT / item.name
+        dst = root / item.name
         if dst.exists():
             if dst.is_dir():
                 shutil.rmtree(dst)
@@ -196,4 +199,5 @@ def _save_meta(snap: Snapshot) -> None:
     meta.write_text(json.dumps({
         "id": snap.id, "method": snap.method,
         "ref": snap.ref, "created_at": snap.created_at,
+        "repo_root": snap.repo_root,
     }, ensure_ascii=False, indent=2), encoding="utf-8")

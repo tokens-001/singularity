@@ -121,8 +121,9 @@ def _cmd_rollback(snap_id: str) -> int:
     snap = snap_mod.Snapshot(
         id=meta["id"], method=meta["method"],
         ref=meta["ref"], created_at=meta["created_at"],
+        repo_root=meta.get("repo_root", ""),
     )
-    if snap_mod.rollback(snap):
+    if snap_mod.rollback(snap, repo_root=snap.repo_root or None):
         print(f"已回滚到 {snap_id} ({snap.method})")
         return 0
     print(f"回滚失败, snapshot_id={snap_id}, method={snap.method}", file=sys.stderr)

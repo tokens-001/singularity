@@ -138,7 +138,7 @@ def _check_paused(task) -> bool:
 
 def _process_planner_or_merge(task, ctx, turn, level, is_planner, wt,
                               exec_result, disp_result, all_tool_events,
-                              pending_merge_req_holder: list):
+                              pending_merge_req_holder: list, repo_root=None):
     """处理 executor 成功后的 planner 分解 / v3-v2 merge 分支。
 
     返回信号:
@@ -167,13 +167,13 @@ def _process_planner_or_merge(task, ctx, turn, level, is_planner, wt,
             # v3: commit_wt 拿含改动的 commit (修复 #2), 不直接 merge
             branch_ref = commit_wt(wt)
             if branch_ref:
-                _anchor_ref(task.id, branch_ref)  # 防 gc 回收 (重要 #3)
+                _anchor_ref(task.id, branch_ref, repo_root=repo_root)  # 防 gc 回收 (重要 #3)
                 pending_merge_req_holder[0] = _build_merge_request(
-                    task, branch_ref, ctx.snapshot_ref,
+                    task, branch_ref, ctx.snapshot_ref, repo_root=repo_root,
                 )
         else:
             # v2: 直接 merge_back
-            mr = wt_merge_back(wt)
+            mr = wt_merge_back(wt, repo_root=repo_root)
             if not mr.ok:
                 reason = mr.reason or f"冲突文件: {mr.conflicts}"
                 return ("merge_conflict", level, turn, disp_result, all_tool_events, reason)
@@ -278,6 +278,10 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
         fallback_chain = premium + cheap
     tried_models: set[str] = set()
 
+    # 修复 #1: 项目任务写进项目独立 repo, 独立任务写奇点仓库
+    from . import project as proj_mod
+    repo_root = proj_mod.repo_root_for(task)
+
     while True:
         if not fallback_chain:
             break
@@ -285,8 +289,8 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
         level_max = agent_cfg.get("max_turns", config.DEFAULT_MAX_TURNS)
         is_planner = agent_cfg.get("mode") == "planner"
 
-        wt = _maybe_create_worktree(task.id, level, agent_cfg, ctx.snapshot_ref)
-        cwd = str(wt.path) if wt else str(config.PROJECT_ROOT)  # ponytail: 无worktree时直接用项目根
+        wt = _maybe_create_worktree(task.id, level, agent_cfg, ctx.snapshot_ref, repo_root=repo_root)
+        cwd = str(wt.path) if wt else str(repo_root)  # ponytail: 无worktree时直接用仓库根
 
         # 修复 P1-1: worktree 生命周期对称。
         # try/finally 套在 while 迭代体内（非函数级）——fallback 切 agent 会重建 wt,
@@ -350,7 +354,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 pm_signal = _process_planner_or_merge(
                     task, ctx, turn, level, is_planner, wt,
                     exec_result, disp_result, all_tool_events,
-                    pending_merge_req_holder,
+                    pending_merge_req_holder, repo_root=repo_root,
                 )
                 pending_merge_req = pending_merge_req_holder[0]
                 if pm_signal is not None:
@@ -474,7 +478,8 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
             # v2: 主仓库 rollback 到快照基线 (只在主线程, 不并发)
             try:
                 snap = snap_mod.Snapshot(id=ctx.batch_id, method="git", ref=ctx.snapshot_ref, created_at=0.0)
-                snap_mod.rollback(snap)
+                from . import project as proj_mod
+                snap_mod.rollback(snap, repo_root=proj_mod.repo_root_for(task))
             except Exception as e:
                 witness.heartbeat('exec', f'warn:{e}')
         # v3: 不碰 PROJECT_ROOT —— 主仓库未动, worktree 已由 run() 内部 _cleanup_wt 清理

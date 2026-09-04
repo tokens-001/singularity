@@ -12,6 +12,7 @@ class Worktree:
     path: Path
     name: str
     baseline_ref: str  # worktree 创建时的主仓库 HEAD
+    repo_root: Path = None  # 所属仓库根 (修复 #1: cleanup 需从所属 repo 移除)
 
 
 @dataclass
@@ -48,37 +49,40 @@ def _worktrees_dir() -> Path:
     return d
 
 
-def _head_ref() -> str:
-    r = _run(["rev-parse", "HEAD"], config.PROJECT_ROOT)
+def _head_ref(repo_root: Path = None) -> str:
+    root = repo_root or config.PROJECT_ROOT
+    r = _run(["rev-parse", "HEAD"], root)
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
-def create(task_id: str, agent_level: str, base_ref: str = "") -> Worktree:
+def create(task_id: str, agent_level: str, base_ref: str = "", repo_root: Path = None) -> Worktree:
+    root = repo_root or config.PROJECT_ROOT
     name = f"{task_id}_{agent_level}"
     wt_path = _worktrees_dir() / name
 
     # 幂等: 已存在同名 worktree → 返回已有的
-    existing = _run(["worktree", "list", "--porcelain"], config.PROJECT_ROOT)
+    existing = _run(["worktree", "list", "--porcelain"], root)
     if existing.returncode == 0:
         for line in existing.stdout.splitlines():
             if line.startswith("worktree ") and line.split(maxsplit=1)[1] == str(wt_path):
-                return Worktree(path=wt_path, name=name, baseline_ref=_head_ref())
+                return Worktree(path=wt_path, name=name, baseline_ref=_head_ref(root), repo_root=root)
 
-    baseline = base_ref if base_ref else _head_ref()
+    baseline = base_ref if base_ref else _head_ref(root)
     # --detach 从指定 ref 建分离 worktree (未指定则当前 HEAD)
     r = _run(
         ["worktree", "add", "--detach", str(wt_path), baseline],
-        config.PROJECT_ROOT,
+        root,
     )
     if r.returncode != 0:
         raise RuntimeError(f"worktree add 失败: {r.stderr.strip()}")
 
-    return Worktree(path=wt_path, name=name, baseline_ref=baseline)
+    return Worktree(path=wt_path, name=name, baseline_ref=baseline, repo_root=root)
 
 
 def cleanup(wt: Worktree) -> bool:
+    root = wt.repo_root or config.PROJECT_ROOT  # 修复 #1: 从所属 repo 移除, 否则项目 worktree 变孤儿
     # git worktree remove --force
-    r = _run(["worktree", "remove", "--force", str(wt.path)], config.PROJECT_ROOT)
+    r = _run(["worktree", "remove", "--force", str(wt.path)], root)
     orphan = False
     if r.returncode != 0:
         stderr = (r.stderr or "").lower()
@@ -87,9 +91,9 @@ def cleanup(wt: Worktree) -> bool:
             orphan = True
         else:
             # 兜底: prune 后再试
-            _run(["worktree", "prune"], config.PROJECT_ROOT)
+            _run(["worktree", "prune"], root)
             r = _run(
-                ["worktree", "remove", "--force", str(wt.path)], config.PROJECT_ROOT
+                ["worktree", "remove", "--force", str(wt.path)], root
             )
             if r.returncode != 0:
                 stderr2 = (r.stderr or "").lower()
@@ -152,72 +156,73 @@ def commit_wt(wt: Worktree) -> str:
     return _wt_head(wt)
 
 
-def _do_merge(src_ref: str, onto: str, merge_msg: str) -> MergeResult:
+def _do_merge(src_ref: str, onto: str, merge_msg: str, repo_root: Path = None) -> MergeResult:
     """合并原语 (修复 #11): merge_back 和 merge_ref 共用。
 
     主工作区有改动时自动 stash，merge 后 pop 恢复。
     """
+    root = repo_root or config.PROJECT_ROOT
     # -uno 排除 untracked 文件 (如 .qidian/ .claude/ 等), 只检查 tracked 文件是否脏
-    status_r = _run(["status", "--porcelain", "-uno"], config.PROJECT_ROOT)
+    status_r = _run(["status", "--porcelain", "-uno"], root)
     stashed = False
     if status_r.stdout.strip():
         # ponytail: auto-stash, merge, pop — 避免每次开发都得先 commit
-        stash_r = _run(["stash", "push", "-m", "auto-stash before merge"], config.PROJECT_ROOT)
+        stash_r = _run(["stash", "push", "-m", "auto-stash before merge"], root)
         if stash_r.returncode != 0:
             return MergeResult(ok=False, reason="工作区不干净且 stash 失败, 拒绝 merge")
         stashed = True
 
-    target_ref = _run(["rev-parse", onto], config.PROJECT_ROOT)
+    target_ref = _run(["rev-parse", onto], root)
     if target_ref.returncode != 0:
         if stashed:
-            _run(["stash", "pop"], config.PROJECT_ROOT)
+            _run(["stash", "pop"], root)
         return MergeResult(ok=False, reason=f"目标分支不存在: {onto}")
 
     try:
-        r = _run(["merge", "--no-commit", "--no-ff", src_ref], config.PROJECT_ROOT)
-        diff = _run(["diff", "--name-only", "--diff-filter=U"], config.PROJECT_ROOT)
+        r = _run(["merge", "--no-commit", "--no-ff", src_ref], root)
+        diff = _run(["diff", "--name-only", "--diff-filter=U"], root)
         conflicts = [f for f in diff.stdout.strip().splitlines() if f]
 
         if conflicts or r.returncode != 0:
-            _run(["merge", "--abort"], config.PROJECT_ROOT)
+            _run(["merge", "--abort"], root)
             reason = "冲突" if conflicts else f"merge 失败: {r.stderr.strip()[:120]}"
             return MergeResult(ok=False, conflicts=conflicts, reason=reason)
 
-        commit_r = _run(["commit", "-m", merge_msg], config.PROJECT_ROOT)
+        commit_r = _run(["commit", "-m", merge_msg], root)
         if commit_r.returncode != 0:
             # ponytail: git commit 非零可能因为 nothing-to-commit，HEAD 未变
             return MergeResult(ok=False, reason=f"commit 失败: {commit_r.stderr.strip()[:120]}")
-        return MergeResult(ok=True, merged_ref=_head_ref())
+        return MergeResult(ok=True, merged_ref=_head_ref(root))
     finally:
         if stashed:
             # ponytail: merge 后恢复开发者未提交的改动
-            pop_r = _run(["stash", "pop"], config.PROJECT_ROOT)
+            pop_r = _run(["stash", "pop"], root)
             if pop_r.returncode != 0:
                 # 冲突了: 保留 stash, 任务产出优先
-                _run(["stash", "apply", "--index"], config.PROJECT_ROOT)
-                _run(["checkout", "--theirs", "."], config.PROJECT_ROOT)
-                _run(["stash", "drop"], config.PROJECT_ROOT)
+                _run(["stash", "apply", "--index"], root)
+                _run(["checkout", "--theirs", "."], root)
+                _run(["stash", "drop"], root)
 
 
-def merge_back(wt: Worktree, onto: str = "") -> MergeResult:
+def merge_back(wt: Worktree, onto: str = "", repo_root: Path = None) -> MergeResult:
     """worktree 产出合并回主仓库 (v2 路径)。"""
     # worktree 里若有未提交改动, 先 commit
     src_ref = commit_wt(wt)
     if not src_ref:
         return MergeResult(ok=False, reason="worktree 无 HEAD 引用")
     target = onto if onto else "main"
-    return _do_merge(src_ref, target, f"merge {wt.name} ({src_ref[:8]})")
+    return _do_merge(src_ref, target, f"merge {wt.name} ({src_ref[:8]})", repo_root=repo_root)
 
 
-def merge_ref(src_ref: str, onto: str = "main") -> MergeResult:
+def merge_ref(src_ref: str, onto: str = "main", repo_root: Path = None) -> MergeResult:
     """把任意 commit ref 合并到 onto (供 MergeQueue.drain 用)。
 
     src_ref 必须是已 commit 的稳定 ref (v3 路径 run() 已调 commit_wt)。
     """
-    return _do_merge(src_ref, onto, f"merge {src_ref[:8]} via queue")
+    return _do_merge(src_ref, onto, f"merge {src_ref[:8]} via queue", repo_root=repo_root)
 
 
-def merge_tree_probe(base_ref: str, ours_ref: str, theirs_ref: str) -> tuple[bool, list[str]]:
+def merge_tree_probe(base_ref: str, ours_ref: str, theirs_ref: str, repo_root: Path = None) -> tuple[bool, list[str]]:
     """三方合并预探测 (不碰工作树)。
 
     修复 #11: 区分"真冲突"和"命令错误"。
@@ -225,10 +230,11 @@ def merge_tree_probe(base_ref: str, ours_ref: str, theirs_ref: str) -> tuple[boo
     - 真冲突 (退出码 1, 输出含冲突文件) → (False, [冲突文件])
     - 命令错误 (ref 不存在等) → (False, []) + 调用方按空冲突+非零判定
     """
+    root = repo_root or config.PROJECT_ROOT
     # git 2.38+: --merge-base=<ref> 必须等号式, 且选项在位置参之前
     r = _run(
         ["merge-tree", "--write-tree", "--name-only", f"--merge-base={base_ref}", ours_ref, theirs_ref],
-        config.PROJECT_ROOT,
+        root,
     )
     if r.returncode == 0:
         return True, []
@@ -289,9 +295,10 @@ def cleanup_orphans() -> int:
     return cleaned
 
 
-def changed_files_between(base_ref: str, branch_ref: str) -> list[str]:
+def changed_files_between(base_ref: str, branch_ref: str, repo_root: Path = None) -> list[str]:
     """git diff base..branch --name-only, 供 MergeRequest 构造 changed_files。"""
-    r = _run(["diff", "--name-only", base_ref, branch_ref], config.PROJECT_ROOT)
+    root = repo_root or config.PROJECT_ROOT
+    r = _run(["diff", "--name-only", base_ref, branch_ref], root)
     if r.returncode != 0:
         return []
     return [f for f in r.stdout.strip().splitlines() if f]

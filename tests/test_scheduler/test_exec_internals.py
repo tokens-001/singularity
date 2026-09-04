@@ -313,7 +313,7 @@ class TestFinalizeResult:
             "rl_mod.save_learner": lambda l: None,
             "chan_mod.assess": lambda desc, reason, files: type("R", (), {"severity": "info"})(),
             "chan_mod.save_report": lambda r: None,
-            "snap_mod.rollback": lambda s: None,
+            "snap_mod.rollback": lambda s, **kw: None,
             "tracker.transition": lambda tid, status, **kw: None,
             "tracker.create": lambda desc, **kw: type("NT", (), {"id": "fix00001"})(),
             "tracker.TaskStatus": TaskStatus,
@@ -392,7 +392,7 @@ class TestFinalizeResult:
         val = type("V", (), {"action": "rollback", "verdict": "阻断"})()
 
         rollback_called = []
-        def record_rollback(s):
+        def record_rollback(s, **kw):
             rollback_called.append(s)
 
         reason, results, _ = self._call(

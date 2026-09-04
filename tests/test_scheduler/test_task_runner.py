@@ -85,7 +85,7 @@ def _setup(monkeypatch, **overrides):
     monkeypatch.setattr(tr, "pre_mod", _o2)
 
     _o3 = NS()
-    _o3.take = lambda tid: snap
+    _o3.take = lambda tid, **kw: snap
     monkeypatch.setattr(tr, "snap_mod", _o3)
 
     _o4 = NS()
@@ -331,7 +331,7 @@ class TestTaskRunnerExecute:
         tr, batch, pre, route, snap = _setup(monkeypatch)
 
         snap_ids = []
-        monkeypatch.setattr(tr.snap_mod, "take", lambda tid: snap_ids.append(tid) or snap)
+        monkeypatch.setattr(tr.snap_mod, "take", lambda tid, **kw: snap_ids.append(tid) or snap)
 
         from singularity.scheduler._task_runner import TaskRunner
         task = _make_task(id="abc123")

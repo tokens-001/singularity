@@ -44,7 +44,9 @@ from singularity.scheduler.project import Phase
 _LOOP_POLL_SECS = 3  # 队列空时的轮询间隔
 
 
-def main(argv: list) -> int:
+def main(argv: list = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
     if not argv:
         print(
             "用法: python3 -m scheduler add|run|loop|rollback|apply|status|merge|memory [参数]",
@@ -106,3 +108,7 @@ def _parse_concurrent(args: list) -> tuple:
 from singularity.scheduler._cli_tasks import *  # noqa: F401,F403
 from singularity.scheduler._cli_memory import *  # noqa: F401,F403
 from singularity.scheduler._cli_projects import *  # noqa: F401,F403
+
+
+if __name__ == "__main__":
+    sys.exit(main())

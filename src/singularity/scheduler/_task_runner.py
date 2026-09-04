@@ -113,8 +113,9 @@ class TaskRunner:
                     project_phase = proj.phase.value
         except Exception as e:
             witness.heartbeat('orch', f'warn:{e}')
-        # 快照
-        snap = snap_mod.take(task.id)
+        # 快照 (修复 #1: 项目任务快照项目 repo)
+        from . import project as proj_mod
+        snap = snap_mod.take(task.id, repo_root=proj_mod.repo_root_for(task))
         ctx = RunContext(batch_id=task.id, snapshot_ref=snap.ref, merge_queue=merge_queue)
         # ── 代码上下文注入 (codegraph) ──
         if pre.code_context:
@@ -171,7 +172,8 @@ class TaskRunner:
             _maybe_complete_parents(task.id)
             reason = f"pass: {term_reason}"
         elif validation.action == "rollback":
-            snap_mod.rollback(snap)
+            from . import project as proj_mod
+            snap_mod.rollback(snap, repo_root=proj_mod.repo_root_for(task))
             tracker.transition(task.id, TaskStatus.ROLLED_BACK,
                              error=f"{validation.verdict}: {term_reason}")
             reason = f"rolled_back: {term_reason}"

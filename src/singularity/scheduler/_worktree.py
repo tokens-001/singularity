@@ -20,22 +20,24 @@ except ImportError:
     MergeRequest = None  # type: ignore
 
 
-def _build_merge_request(task, branch_ref: str, base_ref: str) -> "MergeRequest":
-    changed = set(changed_files_between(base_ref, branch_ref))
+def _build_merge_request(task, branch_ref: str, base_ref: str, repo_root=None) -> "MergeRequest":
+    changed = set(changed_files_between(base_ref, branch_ref, repo_root=repo_root))
     deps = list(task.depends_on) if task.depends_on else []
     return MergeRequest(
         task_id=task.id, branch=branch_ref, base_ref=base_ref,
         changed_files=changed, depends_on=deps,
+        repo_root=str(repo_root) if repo_root else "",
     )
 
 
-def _anchor_ref(task_id: str, commit_sha: str) -> bool:
+def _anchor_ref(task_id: str, commit_sha: str, repo_root=None) -> bool:
     """给悬空 commit 打锚定 ref, 防 git gc 回收。返回是否成功。"""
     import subprocess as _sp
+    root = repo_root or config.PROJECT_ROOT
     ref = f"refs/qidian/pending/{task_id}"
     r = _sp.run(
         ["git", "update-ref", ref, commit_sha],
-        cwd=str(config.PROJECT_ROOT), capture_output=True, timeout=15,
+        cwd=str(root), capture_output=True, timeout=15,
     )
     if r.returncode != 0:
         from singularity.scheduler import witness
@@ -44,13 +46,14 @@ def _anchor_ref(task_id: str, commit_sha: str) -> bool:
     return True
 
 
-def _release_ref(task_id: str) -> bool:
+def _release_ref(task_id: str, repo_root=None) -> bool:
     """清理锚定 ref。返回是否成功。"""
     import subprocess as _sp
+    root = repo_root or config.PROJECT_ROOT
     ref = f"refs/qidian/pending/{task_id}"
     r = _sp.run(
         ["git", "update-ref", "-d", ref],
-        cwd=str(config.PROJECT_ROOT), capture_output=True, timeout=15,
+        cwd=str(root), capture_output=True, timeout=15,
     )
     if r.returncode != 0:
         # 可能 ref 已不存在（被 gc 或已释放），不算错误
@@ -60,7 +63,7 @@ def _release_ref(task_id: str) -> bool:
 
 _MAX_WORKTREES = 50
 
-def _maybe_create_worktree(task_id: str, level: str, agent_cfg: dict, snapshot_ref: str = ""):
+def _maybe_create_worktree(task_id: str, level: str, agent_cfg: dict, snapshot_ref: str = "", repo_root=None):
     if agent_cfg.get("sandbox") != "worktree":
         return None
     # worktree 数量上限检查
@@ -75,7 +78,7 @@ def _maybe_create_worktree(task_id: str, level: str, agent_cfg: dict, snapshot_r
     except Exception as e:
         witness.heartbeat('_worktree', f'warn:{e}')
     try:
-        return wt_create(task_id, level, base_ref=snapshot_ref)  # 修复 #8
+        return wt_create(task_id, level, base_ref=snapshot_ref, repo_root=repo_root)  # 修复 #8
     except Exception:  # noqa: BLE001
         return None
 

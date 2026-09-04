@@ -508,11 +508,11 @@ class OpenAIAgentExecutor(BaseExecutor):
             return f"搜索错误: {e}"
 
     def _track_changed_files(self):
-        """通过 git diff 追踪改动的文件。"""
+        """通过 git diff 追踪改动的文件 (cwd = executor 工作目录, 修复 #1)。"""
         try:
             r = subprocess.run(
                 ["git", "diff", "--name-only"],
-                capture_output=True, text=True, cwd=str(config.PROJECT_ROOT),
+                capture_output=True, text=True, cwd=str(self._cwd),
             )
             if r.returncode == 0:
                 for f in r.stdout.strip().splitlines():

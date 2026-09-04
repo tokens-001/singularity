@@ -40,6 +40,12 @@ def validate(candidate, gate_required, task_type, changed_files, snap, turn, max
         if pat.search(candidate):
             report.verdict = "阻断"; report.action = "abort"
             report.unverified.append(f"L1: {pat.pattern}"); return report
+    # 修复 #2: 执行器未产出任何文件 → 硬判失败逼重试, 不默认通过
+    if not changed_files:
+        report.verdict = "信息不足"
+        report.action = "retry" if turn < max_turns else "abort"
+        report.unverified.append("执行器未产出任何文件 (changed_files 空)")
+        return report
     if gate_required or _gate_check_by_files(changed_files):
         g = _run_gate(); report.gate_passed = g.get("passed"); report.gate_message = g.get("message","")
         if not g.get("passed"):

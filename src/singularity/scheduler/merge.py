@@ -36,6 +36,7 @@ class MergeRequest:
     changed_files: set[str] = field(default_factory=set)
     depends_on: list[str] = field(default_factory=list)
     status: str = "queued"  # queued | merging | merged | conflict | failed
+    repo_root: str = ""     # 目标仓库根 (空=奇点仓库); 项目任务用项目 repo (修复 #1)
 
     def to_dict(self) -> dict:
         return {
@@ -43,6 +44,7 @@ class MergeRequest:
             "base_ref": self.base_ref,
             "changed_files": sorted(self.changed_files),
             "depends_on": self.depends_on, "status": self.status,
+            "repo_root": self.repo_root,
         }
 
     @classmethod
@@ -53,6 +55,7 @@ class MergeRequest:
             changed_files=set(d.get("changed_files", [])),
             depends_on=d.get("depends_on", []),
             status=d.get("status", "conflict"),
+            repo_root=d.get("repo_root", ""),
         )
 
 
@@ -62,6 +65,7 @@ class MergeResult:
     status: str             # merged | conflict | failed
     new_head: str = ""
     conflict_files: list[str] = field(default_factory=list)
+    reason: str = ""        # 非空时说明真实失败原因 (修复 #3: conflict:[] 误报)
 
 
 def _parked_path(task_id: str):
@@ -133,10 +137,11 @@ class MergeQueue:
 
     def _drain_one(self, req: MergeRequest) -> MergeResult:
         req.status = "merging"
+        root = req.repo_root or str(config.PROJECT_ROOT)  # 修复 #1: 项目任务合进项目 repo
 
         # Layer 1 快速路径: changed_files 与已合文件集不重叠 → 直接合
         if not (req.changed_files & self._merged_files):
-            mr = merge_ref(req.branch, onto=self.target_branch)
+            mr = merge_ref(req.branch, onto=self.target_branch, repo_root=root)
             if mr.ok:
                 return self._mark_merged(req, mr.merged_ref)
             if not mr.conflicts:
@@ -146,13 +151,13 @@ class MergeQueue:
         import subprocess
         ours_r = subprocess.run(
             ["git", "rev-parse", self.target_branch],
-            cwd=str(config.PROJECT_ROOT), capture_output=True, text=True,
+            cwd=root, capture_output=True, text=True,
         )
         ours = ours_r.stdout.strip()
         if not ours:
             return self._park(req, [], reason=f"无法解析 {self.target_branch}")
 
-        clean, conflict_files = merge_tree_probe(req.base_ref, ours, req.branch)
+        clean, conflict_files = merge_tree_probe(req.base_ref, ours, req.branch, repo_root=root)
         if not clean:
             # 区分真冲突和命令错误 (dangling ref, bad object, etc.)
             if not conflict_files:
@@ -161,7 +166,7 @@ class MergeQueue:
                                    reason=f"merge probe 命令错误 (ref 可能已过期: {req.branch[:8]})")
             return self._park(req, conflict_files)
 
-        mr = merge_ref(req.branch, onto=self.target_branch)
+        mr = merge_ref(req.branch, onto=self.target_branch, repo_root=root)
         if mr.ok:
             return self._mark_merged(req, mr.merged_ref)
         return self._park(req, mr.conflicts, reason=mr.reason)
@@ -190,6 +195,7 @@ class MergeQueue:
         )
         return MergeResult(
             task_id=req.task_id, status="conflict", conflict_files=conflicts,
+            reason=reason,
         )
 
     def resolve(self, task_id: str, strategy: str = "manual") -> MergeResult:
@@ -207,7 +213,8 @@ class MergeQueue:
             tracker.transition(task_id, TaskStatus.FAILED, error="merge 冲突, 人工放弃")
             return MergeResult(task_id=task_id, status="failed")
 
-        mr = merge_ref(req.branch, onto=self.target_branch)
+        mr = merge_ref(req.branch, onto=self.target_branch,
+                       repo_root=req.repo_root or str(config.PROJECT_ROOT))
         if mr.ok:
             return self._mark_merged(req, mr.merged_ref)
         return self._park(req, mr.conflicts, reason="resolve 后仍冲突")

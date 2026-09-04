@@ -159,6 +159,7 @@ def create(
     depends_on: list[str] = None,
     parent_id: str = "",
     depth: int = 0,
+    project_id: str = "",
 ) -> Task:
     """建任务。设了 parent_id → child 继承 parent.depth+1。校验 depends_on 引用有效性。"""
     now = time.time()
@@ -180,6 +181,7 @@ def create(
         created_at=now,
         updated_at=now,
         depth=depth,
+        project_id=project_id,
     )
     _write(task)
     _invalidate_scan_cache()

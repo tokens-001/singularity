@@ -217,6 +217,33 @@ def get_project_dir(project_id: str) -> Path:
     return d
 
 
+def repo_dir(project_id: str) -> Path:
+    """项目自己的代码 git 仓库根 (.qidian/projects/<id>/repo)。与奇点仓库隔离。"""
+    return get_project_dir(project_id) / "repo"
+
+
+def repo_root_for(task) -> Path:
+    """task 的代码仓库根：项目任务 → 项目 repo；独立任务 → 奇点仓库。"""
+    pid = getattr(task, "project_id", "") or ""
+    return repo_dir(pid) if pid else config.PROJECT_ROOT
+
+
+def ensure_repo(project_id: str) -> Path:
+    """确保项目有独立 git 仓库 (git init + main 初始提交)。幂等。"""
+    import subprocess
+    d = repo_dir(project_id)
+    d.mkdir(parents=True, exist_ok=True)
+    if (d / ".git").exists():
+        return d
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=str(d), capture_output=True, text=True)
+    # 全局无 git 身份，只在奇点仓库配了本地身份 → 项目 repo 也配一份
+    subprocess.run(["git", "config", "user.name", "singularity"], cwd=str(d), capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "singularity@local"], cwd=str(d), capture_output=True, text=True)
+    subprocess.run(["git", "commit", "--allow-empty", "-m", "init project repo"],
+                   cwd=str(d), capture_output=True, text=True)
+    return d
+
+
 def _path(project_id: str) -> Path:
     return _projects_dir() / f"{project_id}.json"
 

@@ -95,7 +95,8 @@ def _dispatch_ready(dispatched: set, pool, agents, runner: TaskRunner,
         if tracker.cas(t.id, TaskStatus.ROUTED, TaskStatus.DISPATCHED,
                        route_level=t.route_level, route_gate=route.gate_required,
                        route_type=route.task_type):
-            snap = snap_mod.take(t.id)
+            from singularity.scheduler.project import repo_root_for
+            snap = snap_mod.take(t.id, repo_root=repo_root_for(t))
             tracker.transition(t.id, TaskStatus.RUNNING, snapshot_id=snap.id)
             dispatched.add(t.id)
             fut = pool.submit(runner.execute, t, agents, mq)
@@ -163,6 +164,7 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
     """_run_queue_v3 步骤⑥: drain merge queue → 合成功的标 DONE。返回 drain 数。"""
     if not pending_batches:
         return 0
+    from singularity.scheduler.project import repo_root_for
     drained = 0
     merge_results = mq.drain()
     for mr in merge_results:
@@ -171,7 +173,7 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
             if mr.status == "merged":
                 tracker.transition(t.id, TaskStatus.DONE)
                 _maybe_complete_parents(t.id)
-                _release_ref(t.id)
+                _release_ref(t.id, repo_root=repo_root_for(t))
                 _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
                             pre_search_skipped=batch.pre_search_skipped,
                             pre_search_reason=batch.pre_search_reason,
@@ -179,9 +181,10 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
                             pre_search_memory=batch.pre_search_memory)
                 results.append((t.id, f"merged: {mr.new_head[:8]}", batch.validation))
             elif mr.status == "conflict":
+                err = mr.conflict_files or mr.reason or "未知冲突"
                 tracker.transition(t.id, TaskStatus.CONFLICT_HELD,
-                                 error=f"conflict: {mr.conflict_files}")
-                _release_ref(t.id)
+                                 error=f"conflict: {err}")
+                _release_ref(t.id, repo_root=repo_root_for(t))
                 _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
                             pre_search_skipped=batch.pre_search_skipped,
                             pre_search_reason=batch.pre_search_reason,
@@ -190,7 +193,7 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
                 results.append((t.id, f"conflict: {mr.conflict_files}", batch.validation))
             else:
                 tracker.transition(t.id, TaskStatus.FAILED, error=f"merge {mr.status}")
-                _release_ref(t.id)
+                _release_ref(t.id, repo_root=repo_root_for(t))
                 _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
                             pre_search_skipped=batch.pre_search_skipped,
                             pre_search_reason=batch.pre_search_reason,
@@ -325,8 +328,12 @@ def _decompose_and_create_tasks(proj, agents: dict) -> None:
         if not tasks:
             return
 
+        # 项目代码写进独立 git 仓库 (与奇点仓库隔离, 修复 #1)
+        from singularity.scheduler.project import ensure_repo
+        ensure_repo(proj.id)
+
         for t in tasks:
-            task = tracker.create(t["desc"])
+            task = tracker.create(t["desc"], project_id=proj.id)
             tracker.transition(task.id, tracker.TaskStatus.PENDING,
                              route_level=t.get("suggested_level", "any"),
                              route_locked=True)

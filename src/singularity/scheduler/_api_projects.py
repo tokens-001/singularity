@@ -162,9 +162,10 @@ def project_lineage(project_id: str) -> tuple[dict, int]:
 
 
 def project_snapshot(project_id: str) -> tuple[dict, int]:
-    """POST /api/projects/<id>/snapshot"""
+    """POST /api/projects/<id>/snapshot — 快照项目 repo (修复 #1 遗漏: 原先快照的是奇点仓库)。"""
     from . import snapshot as snap_mod
-    snap = snap_mod.take(project_id)
+    from . import project as proj_mod
+    snap = snap_mod.take(project_id, repo_root=proj_mod.repo_dir(project_id))
     return {"ok": True, "snapshot_id": snap.id, "ref": snap.ref}, 200
 
 
