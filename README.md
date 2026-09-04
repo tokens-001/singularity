@@ -89,7 +89,6 @@ git status
 | `docs/frontend-spec.md` | 前端规范 |
 | `docs/ARCHITECTURE.md` | 审计 + 架构文档 |
 | `docs/日常执行.md` | 日常工作流 |
-| `CLAUDE.md` | Claude Code 上下文 |
 
 ## 技术栈
 
