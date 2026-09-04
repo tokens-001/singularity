@@ -1,9 +1,21 @@
 import { useState, useEffect } from 'react'
-import { Outlet, useNavigate } from 'react-router-dom'
+import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAppStore } from '../stores/app'
 import { ToastContainer, useToast } from './Toast'
 import { api } from '../lib/api'
-import { MessageSquare, Plus, Search, List, Settings, User } from 'lucide-react'
+import { MessageSquare, List, Settings, User, Boxes } from 'lucide-react'
+
+const NAV = [
+  { path: '/', label: '对话', icon: MessageSquare },
+  { path: '/projects', label: '项目', icon: Boxes },
+  { path: '/tasks', label: '任务', icon: List },
+  { path: '/config', label: '配置', icon: Settings },
+]
+
+const PHASE_CN: Record<string,string> = {
+  template:'待开始', researching:'调研', gate1:'G1 审核', planning:'架构', gate2:'G2 审核',
+  executing:'执行中', integrating:'集成', reviewing:'审查', fixing:'修复', gate3:'G3 审核', delivering:'交付', done:'完成'
+}
 
 function getPinned(): string[] {
   try { return JSON.parse(localStorage.getItem('qidian-pinned') || '[]') } catch { return [] }
@@ -19,14 +31,11 @@ export default function AppLayout() {
   const setActiveProject = useAppStore(s => s.setActiveProject)
   const activePid = useAppStore(s => s.activeProjectId)
   const navigate = useNavigate()
+  const location = useLocation()
+  const pathname = location.pathname
   const [projects, setProjects] = useState<any[]>([])
-  const [showSearch, setShowSearch] = useState(false)
-  const [searchQuery, setSearchQuery] = useState('')
   const [hovered, setHovered] = useState<string>('')
   const [pinned, setPinned] = useState<string[]>(getPinned)
-  const [showCreate, setShowCreate] = useState(false)
-  const [createForm, setCreateForm] = useState({ name: '', description: '', template: 'feature' })
-  const [creating, setCreating] = useState(false)
   const addToast = useToast(s => s.add)
   const sidebarWidth = sidebarCollapsed ? 0 : 260
 
@@ -38,19 +47,6 @@ export default function AppLayout() {
   }, [])
 
   const selectProject = (pid: string) => { setActiveProject(pid); navigate('/') }
-  const handleCreate = async () => {
-    if (!createForm.name || creating) return
-    setCreating(true)
-    try {
-      const r: any = await api.createProject(createForm)
-      if (r?.project?.id) {
-        addToast('项目已创建', 'success')
-        setActiveProject(r.project.id); navigate('/')
-        setShowCreate(false); setCreateForm({ name: '', description: '', template: 'feature' })
-      }
-    } catch { addToast('创建失败', 'error') }
-    setCreating(false)
-  }
   const deleteProject = async (p: any) => {
     if (confirm(`删除 "${p.name}"?`)) {
       await api.deleteProject(p.id)
@@ -59,50 +55,27 @@ export default function AppLayout() {
     }
   }
 
-  const filteredProjects = projects.filter(p => !searchQuery || p.name.includes(searchQuery))
-
   return (
     <div className="app-shell">
       <div className="sidebar" style={{ width: sidebarWidth }}>
-        <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <button onClick={() => setShowCreate(!showCreate)} className="btn-side">
-            <Plus size={14}/> 新建项目
-          </button>
-          <button onClick={() => navigate('/tasks')} className="btn-side">
-            <List size={14}/> 任务管理
-          </button>
+        <div style={{ padding: '16px 14px 12px' }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: '#141413', letterSpacing: 1.5 }}>SINGULARITY</span>
         </div>
 
-        {showSearch && (
-          <div style={{ padding: '0 12px 6px' }}>
-            <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-              placeholder="搜索..." className="inp-dark"/>
-          </div>
-        )}
+        <div style={{ padding: '4px 8px', display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {NAV.map(n => {
+            const active = pathname === n.path
+            return (
+              <button key={n.path} onClick={() => { if (n.path === '/') setActiveProject('_default'); navigate(n.path) }} className={active ? 'nav-item nav-active' : 'nav-item'}>
+                <n.icon size={15}/> {n.label}
+              </button>
+            )
+          })}
+        </div>
 
-        {showCreate && (
-          <div style={{ padding: '0 12px 8px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: 8, background: '#1c1c1e', borderRadius: 8 }}>
-              <input value={createForm.name} onChange={e=>setCreateForm({...createForm,name:e.target.value})}
-                placeholder="项目名称" className="inp-dark"
-                onKeyDown={e=>{if(e.key==='Enter'&&createForm.name){e.preventDefault();handleCreate()}}}/>
-              <input value={createForm.description} onChange={e=>setCreateForm({...createForm,description:e.target.value})}
-                placeholder="需求描述（可选）" className="inp-dark"/>
-              <div style={{ display: 'flex', gap: 4 }}>
-                <button onClick={handleCreate} disabled={!createForm.name||creating}
-                  style={{ flex:1,background: createForm.name?'#fff':'#333',color: createForm.name?'#000':'#666',border:'none',borderRadius:4,padding:'5px 8px',cursor: createForm.name?'pointer':'default',fontSize:11,fontWeight:600 }}>
-                  {creating?'创建中...':'创建'}
-                </button>
-                <button onClick={()=>setShowCreate(false)}
-                  style={{ background:'none',border:'1px solid #333',borderRadius:4,padding:'5px 8px',color:'#666',cursor:'pointer',fontSize:11 }}>取消</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div style={{ padding: '6px 12px 4px', fontSize: 10, color: '#555', fontWeight: 600 }}>项目</div>
+        <div style={{ padding: '6px 12px 4px', fontSize: 10, color: '#9a9993', fontWeight: 600 }}>项目列表</div>
         <div style={{ flex: 1, overflow: 'auto', padding: '0 6px' }}>
-          {[...filteredProjects].sort((a, b) => {
+          {[...projects].sort((a, b) => {
               const aPin = pinned.includes(a.id) ? 0 : 1
               const bPin = pinned.includes(b.id) ? 0 : 1
               return aPin - bPin || a.name.localeCompare(b.name)
@@ -113,17 +86,17 @@ export default function AppLayout() {
                 <div key={p.id} onClick={() => selectProject(p.id)}
                   onMouseEnter={() => setHovered(p.id)} onMouseLeave={() => setHovered('')}
                   style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', margin: '1px 0',
-                    borderRadius: 6, cursor: 'pointer', fontSize: 12, color: isActive ? '#fff' : '#999',
-                    background: isActive ? '#1c1c1e' : 'transparent' }}>
-                  <span style={{ color: isPinned ? '#f0a060' : '#444', fontSize: 10 }}>#</span>
+                    borderRadius: 6, cursor: 'pointer', fontSize: 12, color: isActive ? '#141413' : '#6b6b68',
+                    background: isActive ? '#f3f2ec' : 'transparent' }}>
+                  <span style={{ color: isPinned ? '#d97706' : '#b5b2a8', fontSize: 10 }}>#</span>
                   <span className="truncate" style={{ flex: 1 }}>{p.name}</span>
-                  <span className="fs-10" style={{ color: '#444' }}>{p.phase === 'done' ? '完成' : p.phase === 'executing' ? '执行中' : p.phase}</span>
+                  <span className="fs-10" style={{ color: '#b5b2a8' }}>{PHASE_CN[p.phase] || p.phase}</span>
                   {hovered === p.id && (
                     <span className="flex-center gap-4">
                       <button onClick={e => { e.stopPropagation(); togglePin(p.id); setPinned(getPinned()) }}
-                        style={{ background:'none',border:'none',cursor:'pointer',padding:1,fontSize:10,color: isPinned?'#f0a060':'#555' }}>📌</button>
+                        style={{ background:'none',border:'none',cursor:'pointer',padding:1,fontSize:10,color: isPinned?'#d97706':'#9a9993' }}>📌</button>
                       <button onClick={e => { e.stopPropagation(); deleteProject(p) }}
-                        style={{ background:'none',border:'none',cursor:'pointer',padding:1,fontSize:10,color:'#555' }}>×</button>
+                        style={{ background:'none',border:'none',cursor:'pointer',padding:1,fontSize:10,color:'#9a9993' }}>×</button>
                     </span>
                   )}
                 </div>
@@ -131,17 +104,17 @@ export default function AppLayout() {
             })}
         </div>
 
-        <div style={{ padding: '8px 12px', borderTop: '1px solid #1c1c1e', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ width: 22, height: 22, borderRadius: 11, background: '#333', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <User size={12} style={{color:'#666'}}/>
+        <div style={{ padding: '8px 12px', borderTop: '1px solid #f3f2ec', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 22, height: 22, borderRadius: 11, background: '#d8d5cb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <User size={12} style={{color:'#9a9993'}}/>
           </div>
-          <span style={{ fontSize: 11, color: '#666', flex: 1 }}>奇点</span>
+          <span style={{ fontSize: 11, color: '#9a9993', flex: 1 }}>local</span>
           <button onClick={() => navigate('/config')} className="btn-icon" title="配置"><Settings size={14}/></button>
         </div>
       </div>
 
       {sidebarCollapsed && (
-        <button onClick={toggleSidebar} style={{ position:'fixed',left:8,top:10,zIndex:10,background:'#1c1c1e',border:'none',borderRadius:6,color:'#666',cursor:'pointer',padding:6 }}>
+        <button onClick={toggleSidebar} style={{ position:'fixed',left:8,top:10,zIndex:10,background:'#f3f2ec',border:'none',borderRadius:6,color:'#9a9993',cursor:'pointer',padding:6 }}>
           <MessageSquare size={14}/>
         </button>
       )}

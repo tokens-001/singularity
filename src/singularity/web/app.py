@@ -728,6 +728,26 @@ def api_token_budget():
     result, code = _api_handler.token_budget_set(budget)
     return jsonify(result), code
 
+@app.route("/api/files/reveal", methods=["POST"])
+def api_files_reveal():
+    """在访达/文件管理器中定位文件 (macOS open -R)。路径限制在项目根目录内。"""
+    import subprocess
+    body = request.get_json(silent=True) or {}
+    rel = (body.get("path") or "").strip()
+    if not rel:
+        return jsonify({"ok": False, "error": "路径为空"}), 400
+    root = Path(sched_config.PROJECT_ROOT).resolve()
+    target = (root / rel).resolve()
+    if not str(target).startswith(str(root) + os.sep):
+        return jsonify({"ok": False, "error": "路径越界"}), 403
+    if not target.exists():
+        return jsonify({"ok": False, "error": "文件不存在"}), 404
+    try:
+        subprocess.run(["open", "-R", str(target)], check=False, timeout=5)
+        return jsonify({"ok": True, "path": str(target)})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 @app.route("/api/perf")
 def api_perf():
     data, code = _api_handler.perf_stats()
