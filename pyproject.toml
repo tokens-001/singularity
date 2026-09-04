@@ -34,11 +34,6 @@ singularity-cli = "singularity.scheduler.__main__:main"
 where = ["src", "."]
 include = ["singularity*", "observer*"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py", "smoke_test.py"]
-addopts = "-q --tb=short"
-
 [tool.ruff]
 target-version = "py311"
 line-length = 120

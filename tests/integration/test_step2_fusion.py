@@ -2,7 +2,7 @@
 
 用法:
   cd /Users/jingzhe/奇点
-  python3 tests/test_scheduler/test_step2_fusion.py
+  python3 tests/integration/test_step2_fusion.py
 """
 import sys, json, os, subprocess
 

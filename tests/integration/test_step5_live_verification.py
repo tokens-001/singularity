@@ -2,8 +2,8 @@
 
 用法:
   cd /Users/jingzhe/奇点
-  python3 tests/test_scheduler/test_step5_live_verification.py
-  python3 tests/test_scheduler/test_step5_live_verification.py --claude  # 用本地Claude
+  python3 tests/integration/test_step5_live_verification.py
+  python3 tests/integration/test_step5_live_verification.py --claude  # 用本地Claude
 """
 import sys, json, os, subprocess
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
