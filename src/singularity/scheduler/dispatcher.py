@@ -231,6 +231,19 @@ def _find_agent_by_model(agents: dict, model_name: str) -> dict | None:
 
 
 
+_RR_COUNTER: dict[str, int] = {}  # level -> 下次轮询起点
+
+
+def _round_robin(level: str, agents_list: list) -> dict:
+    """轮询选 agent，同层多模型分摊负载。
+
+    ponytail: 全局计数不加锁，低并发下偶发重复无害（只是分摊，非正确性）。
+    """
+    idx = _RR_COUNTER.get(level, 0) % len(agents_list)
+    _RR_COUNTER[level] = idx + 1
+    return agents_list[idx]
+
+
 def pick_agent(agents: dict, level: str, role: str = None,
                project_lineup: dict[str, list[str]] = None) -> dict:
     """选 agent: project_lineup > role > default。
@@ -272,7 +285,7 @@ def pick_agent(agents: dict, level: str, role: str = None,
         available = [a for a in candidates if agent_api_available(a)]
         available.sort(key=lambda a: rank.get(a.get("model", ""), 999))
         if available:
-            return available[0]
+            return _round_robin(level, available)
 
     # ── 路由学习者权重 ──
     try:
