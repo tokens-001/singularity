@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
 import { useToast } from '../components/Toast'
-import { Plus, RefreshCw, ChevronDown, ChevronRight, Check, X } from 'lucide-react'
+import { Plus, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react'
 
 const PHASE_CN: Record<string,string> = {
   template:'模板', researching:'调研', gate1:'G1确认', planning:'规划', gate2:'G2确认',
@@ -11,7 +11,7 @@ const PHASE_CN: Record<string,string> = {
 const PC: Record<string,string> = {
   template:'var(--text-muted)', researching:'var(--accent)', gate1:'var(--accent-yellow)', planning:'var(--accent-purple)',
   gate2:'var(--accent-yellow)', executing:'var(--accent-green)', integrating:'var(--accent-green)',
-  reviewing:'#f0883e', fixing:'var(--accent-red)', gate3:'var(--accent-yellow)', delivering:'var(--accent)', done:'var(--accent-green)'
+  reviewing:'#ea580c', fixing:'var(--accent-red)', gate3:'var(--accent-yellow)', delivering:'var(--accent)', done:'var(--accent-green)'
 }
 
 function ReportBlock({ data }: { data: any }) {
@@ -86,13 +86,6 @@ export default function Projects() {
     setShowCreate(false); setForm({ name: '', description: '', template: 'feature' }); fetch()
   }
 
-  const [confirming, setConfirming] = useState<string|null>(null)
-  const handleGate = async (id: string, gate: string, decision: string) => {
-    setConfirming(gate)
-    try { await api.gateConfirm(id, gate, decision); toggle(id) } catch { toast('操作失败', 'error') }
-    setConfirming(null)
-  }
-
   const phases = ['template','researching','gate1','planning','gate2','executing','integrating','reviewing','fixing','gate3','delivering','done']
 
   return (
@@ -147,16 +140,8 @@ export default function Projects() {
                   {detail.research_report && <ReportBlock data={detail.research_report} />}
                   {detail.architecture && <ArchBlock data={detail.architecture} />}
                   {detail.phase && detail.phase.startsWith('gate') && (
-                    <div className="flex-center gap-8" style={{ marginBottom: 8 }}>
-                      <button onClick={()=>handleGate(p.id, detail.phase, 'approved')} disabled={confirming===detail.phase}
-                        className="btn-green" style={{ padding: '5px 12px', fontSize: 12, fontWeight: 600, gap: 4 }}>
-                        <Check size={14}/> 批准
-                      </button>
-                      <button onClick={()=>handleGate(p.id, detail.phase, 'rejected')} disabled={confirming===detail.phase}
-                        style={{ background:'var(--accent-red)',color:'#fff',border:'none',borderRadius:'var(--radius)',cursor:'pointer',fontSize:12,fontWeight:600,padding:'5px 12px',display:'flex',alignItems:'center',gap:4 }}>
-                        <X size={14}/> 驳回
-                      </button>
-                      <span className="fs-10 text-muted">{PHASE_CN[detail.phase]} — 确认后自动推进</span>
+                    <div className="fs-10 text-muted" style={{ marginBottom: 8, color: 'var(--accent-yellow)' }}>
+                      🛑 {PHASE_CN[detail.phase]} — 到「对话」里审批
                     </div>
                   )}
                   {detail.lineage && detail.lineage.length > 0 && (

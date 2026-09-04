@@ -350,7 +350,8 @@ def status_overview():
     return {"counts": counts, "heartbeat_levels": loads, "running_total": sum(loads.values()),
         "avg_wait": f"{sum(pw)/len(pw):.1f}s" if pw else "--",
         "avg_done": f"{sum(dd)/len(dd):.1f}s" if dd else "--",
-        "token_totals": tt, "stalled": stalled, "agents": agents}, 200
+        "token_totals": tt, "stalled": stalled, "agents": agents,
+        "workdir": str(config.PROJECT_ROOT)}, 200
 
 
 def cleanup():

@@ -46,7 +46,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'qidian-chat-v2',
-      partialize: (s) => ({ sidebarCollapsed: s.sidebarCollapsed, conversations: s.conversations, activeProjectId: s.activeProjectId }),
+      partialize: (s) => ({ sidebarCollapsed: s.sidebarCollapsed, conversations: s.conversations }),
     }
   )
 )
