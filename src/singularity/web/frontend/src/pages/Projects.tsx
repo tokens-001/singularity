@@ -14,6 +14,49 @@ const PC: Record<string,string> = {
   reviewing:'#f0883e', fixing:'var(--accent-red)', gate3:'var(--accent-yellow)', delivering:'var(--accent)', done:'var(--accent-green)'
 }
 
+function ReportBlock({ data }: { data: any }) {
+  if (!data) return null
+  const products = data.competitive_analysis?.products || []
+  const pitfalls = data.pitfalls || []
+  return (
+    <div style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', padding: '8px 10px', marginBottom: 8 }}>
+      <div className="fw-600 fs-11" style={{ marginBottom: 4 }}>📋 调研报告</div>
+      {data.recommendation && <div className="fs-11" style={{ marginBottom: 4 }}><b>推荐方案：</b>{data.recommendation}</div>}
+      {products.length > 0 && (
+        <div className="fs-11" style={{ marginBottom: 4 }}>
+          <b>竞品分析：</b>
+          {products.map((x: any, i: number) => <div key={i}>· {x.name}（{x.type}）：{x.strengths}</div>)}
+        </div>
+      )}
+      {pitfalls.length > 0 && <div className="fs-11"><b>关键坑：</b>{pitfalls.join('；')}</div>}
+    </div>
+  )
+}
+
+function ArchBlock({ data }: { data: any }) {
+  if (!data) return null
+  const modules = data.modules || []
+  const tasks = data.tasks || []
+  return (
+    <div style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', padding: '8px 10px', marginBottom: 8 }}>
+      <div className="fw-600 fs-11" style={{ marginBottom: 4 }}>🏗 架构方案</div>
+      {data.architecture && <div className="fs-11" style={{ marginBottom: 4 }}>{data.architecture}</div>}
+      {modules.length > 0 && (
+        <div className="fs-11" style={{ marginBottom: 4 }}>
+          <b>模块（{modules.length}）：</b>
+          {modules.map((m: any, i: number) => <div key={i}>· {m.name} — {m.responsibility}</div>)}
+        </div>
+      )}
+      {tasks.length > 0 && (
+        <div className="fs-11">
+          <b>任务（{tasks.length}）：</b>
+          {tasks.map((t: any, i: number) => <div key={i}>· {t.id} {t.title}</div>)}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Projects() {
   const [projects, setProjects] = useState<any[]>([])
   const [expanded, setExpanded] = useState<string|null>(null)
@@ -101,6 +144,8 @@ export default function Projects() {
                     ))}
                   </div>
                   <div className="text-secondary" style={{ marginBottom: 4 }}>{detail.description}</div>
+                  {detail.research_report && <ReportBlock data={detail.research_report} />}
+                  {detail.architecture && <ArchBlock data={detail.architecture} />}
                   {detail.phase && detail.phase.startsWith('gate') && (
                     <div className="flex-center gap-8" style={{ marginBottom: 8 }}>
                       <button onClick={()=>handleGate(p.id, detail.phase, 'approved')} disabled={confirming===detail.phase}

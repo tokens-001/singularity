@@ -179,6 +179,158 @@ export default function Chat() {
                   <button onClick={async e=>{e.stopPropagation();try{await api.gateConfirm(info.id,gatePhase,'rejected');fetchProjects();fetchTasks()}catch{toast('操作失败','error')}}}
                     style={{background:'#444',color:'#f85149',border:'none',borderRadius:4,padding:'3px 10px',fontSize:11,cursor:'pointer'}}>↩ 打回</button>
                 </div>
+                <div style={{ maxWidth: 760, margin: '12px auto 0', textAlign: 'left' }}>
+                  {info.research_report && (
+                    <details style={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 10, marginBottom: 10, overflow: 'hidden' }}>
+                      <summary style={{ cursor: 'pointer', padding: '12px 14px', fontSize: 13, fontWeight: 700, color: '#58a6ff', listStyle: 'none', display: 'flex', alignItems: 'center', gap: 8, userSelect: 'none' }}>
+                        <span>📋 调研报告</span>
+                        <span style={{ marginLeft: 'auto', color: '#8b949e', fontSize: 11, fontWeight: 400 }}>点击展开 ▾</span>
+                      </summary>
+                      <div style={{ padding: '0 14px 14px' }}>
+                        {info.research_report.recommendation && (
+                          <div style={{ marginBottom: 10 }}>
+                            <div style={{ fontSize: 11, color: '#8b949e', fontWeight: 600, marginBottom: 4 }}>推荐方案</div>
+                            <div style={{ fontSize: 12, color: '#e6edf3', lineHeight: 1.6 }}>{info.research_report.recommendation}</div>
+                          </div>
+                        )}
+                        {(info.research_report.competitive_analysis?.products || []).length > 0 && (
+                          <div style={{ marginBottom: 10 }}>
+                            <div style={{ fontSize: 11, color: '#8b949e', fontWeight: 600, marginBottom: 4 }}>竞品分析</div>
+                            {(info.research_report.competitive_analysis?.products || []).map((p: any, i: number) => (
+                              <div key={i} style={{ fontSize: 12, color: '#e6edf3', padding: '6px 8px', background: '#0d1117', borderRadius: 6, marginBottom: 4, lineHeight: 1.5 }}>
+                                <b style={{ color: '#fff' }}>{p.name}</b> <span style={{ color: '#8b949e' }}>· {p.type}</span><br/>
+                                <span style={{ color: '#7ee787' }}>优：</span>{p.strengths}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {(info.research_report.pitfalls || []).length > 0 && (
+                          <div>
+                            <div style={{ fontSize: 11, color: '#8b949e', fontWeight: 600, marginBottom: 4 }}>关键坑</div>
+                            {(info.research_report.pitfalls || []).map((p: string, i: number) => (
+                              <div key={i} style={{ fontSize: 12, color: '#f85149', lineHeight: 1.5, marginBottom: 2 }}>⚠ {p}</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </details>
+                  )}
+                  {info.architecture && (
+                    <details style={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 10, overflow: 'hidden' }}>
+                      <summary style={{ cursor: 'pointer', padding: '12px 14px', fontSize: 13, fontWeight: 700, color: '#a371f7', listStyle: 'none', display: 'flex', alignItems: 'center', gap: 8, userSelect: 'none' }}>
+                        <span>🏗 架构方案</span>
+                        <span style={{ marginLeft: 'auto', color: '#8b949e', fontSize: 11, fontWeight: 400 }}>点击展开 ▾</span>
+                      </summary>
+                      <div style={{ padding: '0 14px 14px' }}>
+                        {info.architecture.architecture && (
+                          <div style={{ fontSize: 12, color: '#e6edf3', lineHeight: 1.6, marginBottom: 10, padding: '8px 10px', background: '#0d1117', borderRadius: 6 }}>
+                            {info.architecture.architecture}
+                          </div>
+                        )}
+                        {(info.architecture.modules || []).length > 0 && (
+                          <div style={{ marginBottom: 10 }}>
+                            <div style={{ fontSize: 11, color: '#8b949e', fontWeight: 600, marginBottom: 6 }}>模块（{(info.architecture.modules || []).length}）</div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                              {(info.architecture.modules || []).map((m: any, i: number) => (
+                                <span key={i} style={{ fontSize: 11, color: '#e6edf3', background: '#0d1117', border: '1px solid #30363d', borderRadius: 6, padding: '3px 9px' }}>{m.name}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {(info.architecture.tasks || []).length > 0 && (
+                          <div>
+                            <div style={{ fontSize: 11, color: '#8b949e', fontWeight: 600, marginBottom: 4 }}>任务（{(info.architecture.tasks || []).length}）</div>
+                            {(info.architecture.tasks || []).map((t: any, i: number) => (
+                              <div key={i} style={{ fontSize: 11, color: '#e6edf3', padding: '4px 0', borderBottom: '1px solid #21262d' }}>
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                  <span style={{ color: '#8b949e', fontFamily: 'monospace' }}>{t.id}</span>
+                                  <span style={{ flex: 1 }}>{t.title}</span>
+                                  <span style={{ fontSize: 10, color: t.complexity === 'high' ? '#f85149' : t.complexity === 'medium' ? '#d29922' : '#7ee787' }}>{t.complexity}</span>
+                                </div>
+                                {(t.depends_on?.length > 0 || t.acceptance) && (
+                                  <div style={{ fontSize: 10, color: '#8b949e', marginTop: 2 }}>
+                                    {t.depends_on?.length > 0 && <span>依赖：{t.depends_on.join(', ')}</span>}
+                                    {t.depends_on?.length > 0 && t.acceptance && <span> · </span>}
+                                    {t.acceptance && <span>验收：{t.acceptance}</span>}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {(info.architecture.data_model?.entities || []).length > 0 && (
+                          <div style={{ marginBottom: 10 }}>
+                            <div style={{ fontSize: 11, color: '#8b949e', fontWeight: 600, marginBottom: 4 }}>数据模型（{(info.architecture.data_model?.entities || []).length}）</div>
+                            {(info.architecture.data_model?.entities || []).map((e: any, i: number) => (
+                              <div key={i} style={{ fontSize: 11, color: '#e6edf3', padding: '4px 8px', background: '#0d1117', borderRadius: 6, marginBottom: 4 }}>
+                                <b style={{ color: '#fff' }}>{e.name}</b> <span style={{ color: '#8b949e' }}>（{e.fields?.length || 0} 字段）</span> {(e.fields || []).map((f: any) => f.name).join(', ')}
+                              </div>
+                            ))}
+                            {(info.architecture.data_model?.relationships || []).length > 0 && (
+                              <div style={{ fontSize: 11, color: '#8b949e', lineHeight: 1.6 }}>
+                                <b>关系：</b>{(info.architecture.data_model?.relationships || []).map((r: any, i: number) => (
+                                  <span key={i}>{r.from}→{r.to}({r.type}) </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {(info.architecture.api_contracts || []).length > 0 && (
+                          <div>
+                            <div style={{ fontSize: 11, color: '#8b949e', fontWeight: 600, marginBottom: 4 }}>API 契约（{(info.architecture.api_contracts || []).length}）</div>
+                            {(info.architecture.api_contracts || []).map((a: any, i: number) => (
+                              <div key={i} style={{ fontSize: 11, color: '#e6edf3', padding: '3px 0', borderBottom: '1px solid #21262d' }}>
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                  <span style={{ color: '#7ee787', fontFamily: 'monospace', fontWeight: 600, minWidth: 36 }}>{a.method}</span>
+                                  <span style={{ color: '#58a6ff', fontFamily: 'monospace' }}>{a.path}</span>
+                                  <span style={{ color: '#8b949e', flex: 1 }}>{a.description}</span>
+                                </div>
+                                {(a.input || a.output) && (
+                                  <div style={{ fontSize: 10, color: '#8b949e', paddingLeft: 44, marginTop: 2 }}>
+                                    {a.input && <div>入参：{JSON.stringify(a.input)}</div>}
+                                    {a.output && <div>返回：{JSON.stringify(a.output)}</div>}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {info.architecture.tech_stack && (
+                          <div style={{ marginBottom: 10 }}>
+                            <div style={{ fontSize: 11, color: '#8b949e', fontWeight: 600, marginBottom: 4 }}>技术栈</div>
+                            {Object.entries(info.architecture.tech_stack).map(([k, v]: [string, any], i: number) => (
+                              <div key={i} style={{ fontSize: 11, color: '#e6edf3', padding: '3px 0' }}>
+                                <b style={{ color: '#8b949e' }}>{k}：</b>{v}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {(info.architecture.constraints || []).length > 0 && (
+                          <div style={{ marginBottom: 10 }}>
+                            <div style={{ fontSize: 11, color: '#8b949e', fontWeight: 600, marginBottom: 4 }}>约束（{(info.architecture.constraints || []).length}）</div>
+                            {(info.architecture.constraints || []).map((c: any, i: number) => (
+                              <div key={i} style={{ fontSize: 11, color: '#e6edf3', padding: '3px 0', borderBottom: '1px solid #21262d' }}>
+                                <span style={{ color: '#d29922', fontWeight: 600 }}>[{c.type}]</span> {c.rule}
+                                {c.check && <span style={{ color: '#8b949e' }}> → 验证：{c.check}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {(info.architecture.risks || []).length > 0 && (
+                          <div>
+                            <div style={{ fontSize: 11, color: '#8b949e', fontWeight: 600, marginBottom: 4 }}>风险（{(info.architecture.risks || []).length}）</div>
+                            {(info.architecture.risks || []).map((r: any, i: number) => (
+                              <div key={i} style={{ fontSize: 11, color: '#e6edf3', padding: '3px 0', borderBottom: '1px solid #21262d' }}>
+                                <span style={{ color: r.impact === 'high' ? '#f85149' : r.impact === 'medium' ? '#d29922' : '#7ee787', fontWeight: 600 }}>[{r.impact}]</span> {r.risk}
+                                {r.mitigation && <span style={{ color: '#8b949e' }}> → {r.mitigation}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </details>
+                  )}
+                </div>
               </div>
             )}
             {loading && (
