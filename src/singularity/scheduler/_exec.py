@@ -286,7 +286,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
         if not fallback_chain:
             break
         agent_cfg = fallback_chain[0]
-        level_max = agent_cfg.get("max_turns", config.DEFAULT_MAX_TURNS)
+        level_max = config.DEFAULT_MAX_TURNS  # 打回上限；agent 的 max_turns 是模型推理轮数(openai_agent 内部用)，语义不同
         is_planner = agent_cfg.get("mode") == "planner"
 
         wt = _maybe_create_worktree(task.id, level, agent_cfg, ctx.snapshot_ref, repo_root=repo_root)

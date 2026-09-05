@@ -200,7 +200,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                     "model": self._model,
                     "messages": messages,
                     "tools": tools,
-                    "tool_choice": "auto",
+                    "tool_choice": "required",
                 }
                 # GPT-5.5+ 用 max_completion_tokens, 旧模型用 max_tokens
                 if "max_completion_tokens" in tmpl:

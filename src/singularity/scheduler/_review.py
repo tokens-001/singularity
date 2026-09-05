@@ -65,7 +65,8 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             pass
 
     # 1) run project tests (S2: 带超时包装)
-    if validation.action == "pass" and changed:
+    # 小改动(单文件<50行)跳过项目全量测试：独立小任务(如写 hello.py)跟项目测试套件无关，跑了会误判
+    if validation.action == "pass" and changed and not _is_trivial_change(changed, cwd):
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
                 fut = ex.submit(val_mod.run_project_tests, cwd=cwd)
