@@ -88,3 +88,15 @@ def ensure_dirs() -> None:
             logging.getLogger("scheduler").info(f"cleaned {n} orphan worktrees from previous run")
     except Exception as _e:
         logging.getLogger(__name__).warning("worktree cleanup failed: %s", _e)
+
+
+def missing_deps() -> list:
+    """环境自检: 返回核心依赖中无法 import 的包名 (跑任务/测试必需)。"""
+    import importlib
+    missing = []
+    for m in ("pytest", "psutil", "httpx", "flask"):
+        try:
+            importlib.import_module(m)
+        except ImportError:
+            missing.append(m)
+    return missing

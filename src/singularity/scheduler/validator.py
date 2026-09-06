@@ -75,8 +75,12 @@ def validate(candidate, gate_required, task_type, changed_files, snap, turn, max
         # S5: 校验脚本超时/解析失败/不存在 → 不默认通过, 重试或阻断 (D1: 安全项绝不放行)
         report.verdict = "未知"; report.action = "retry" if turn < max_turns else "abort"
         report.unverified.append(f"validate 未知结果: {report.validate_reason}")
-    elif report.validate_verdict == "注意": report.verdict = "通过"; report.action = "pass"
-    else: report.verdict = "通过"; report.action = "pass"
+    elif report.validate_verdict in ("注意", "通过"):
+        report.verdict = "通过"; report.action = "pass"
+    else:
+        # 兜底不再无条件放行: 意外 verdict 值 → 保守判未知, 不默认通过
+        report.verdict = "未知"; report.action = "retry" if turn < max_turns else "abort"
+        report.unverified.append(f"validate 意外结果: {report.validate_reason}")
     return report
 
 def _run_validate(candidate):
@@ -88,11 +92,12 @@ def _run_validate(candidate):
     except (json.JSONDecodeError,Exception): return {"verdict":"未知","verdict_reason":"parse error"}
 
 def _run_gate():
-    if not config.EVAL_SCRIPT.exists(): return {"passed":True,"message":"no eval.py"}
+    # 保守化: eval.py 不存在 = gate 未执行, 不是 gate 通过; 缺 passed 字段也默认不通过
+    if not config.EVAL_SCRIPT.exists(): return {"passed":False,"message":"eval.py 不存在 (gate 未执行)"}
     try:
         p = subprocess.run(["python3",str(config.EVAL_SCRIPT),"--gate","--json"], capture_output=True,text=True,timeout=config.GATE_TIMEOUT)
         d = json.loads(p.stdout) if p.stdout else {}; g = d.get("gate",{})
-        return {"passed":g.get("passed",True),"message":g.get("message",f"exit={p.returncode}")}
+        return {"passed":g.get("passed",False),"message":g.get("message",f"exit={p.returncode}")}
     except subprocess.TimeoutExpired: return {"passed":False,"message":f"gate timeout"}
     except Exception as e: return {"passed":False,"message":f"gate error:{e}"}
 

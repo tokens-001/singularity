@@ -8,6 +8,14 @@ from singularity.scheduler import dispatcher as disp_mod
 from singularity.scheduler import orchestrator
 from singularity.scheduler.tracker import TaskStatus
 
+
+def _check_env() -> None:
+    """环境自检: 核心依赖缺失时提示补装。"""
+    missing = config.missing_deps()
+    if missing:
+        print(f"[env] 缺依赖: {', '.join(missing)} — 补装: .venv/bin/python -m pip install {' '.join(missing)}", file=sys.stderr)
+
+
 def _cmd_status() -> int:
     from . import witness
     config.ensure_dirs()
@@ -30,6 +38,7 @@ def _cmd_add(task: str) -> int:
 def _cmd_run(task: str, max_concurrent: int = 1) -> int:
     """入队 + 立即跑队列 (单次, 跑完退出)。修复 #4: 支持 --concurrent。"""
     config.ensure_dirs()
+    _check_env()
     agents = disp_mod.load_agents()
 
     t = tracker.create(task, priority=0)
@@ -42,6 +51,7 @@ def _cmd_run(task: str, max_concurrent: int = 1) -> int:
 def _cmd_loop(max_concurrent: int = 1) -> int:
     """常驻循环: 持续取队→执行, 队列空时轮询等待。Ctrl+C 优雅退出。修复 #4。"""
     config.ensure_dirs()
+    _check_env()
     agents = disp_mod.load_agents()
 
     # 启动时先恢复崩溃残留的 inflight 任务
