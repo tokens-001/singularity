@@ -112,9 +112,10 @@ def _drain_queue(agents: dict, max_concurrent: int = 1) -> tuple[int, int]:
     for tid, reason, validation in results:
         t = tracker.read_task(tid)
         level = t.route_level if t else "?"
-        icon = "✅" if validation.action == "pass" else "❌"
+        action = getattr(validation, "action", "") or ""
+        icon = "✅" if action == "pass" else "❌"
         print(f"  {icon} [{tid[:8]}] level={level} {reason}", file=sys.stderr)
-        if validation.action not in ("pass",):
+        if action != "pass":
             exit_code = 1
     return exit_code, len(results)
 
