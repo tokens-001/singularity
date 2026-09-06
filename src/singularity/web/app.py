@@ -24,6 +24,23 @@ if _ENV_PATH.exists():
             _k, _v = _line.split("=", 1)
             os.environ.setdefault(_k.strip(), _v.strip())
 
+
+def _write_env(key: str, value: str) -> None:
+    """把 key=value 写入项目 .env（已存在则更新，否则追加），并注入当前进程 os.environ。"""
+    lines = _ENV_PATH.read_text().splitlines() if _ENV_PATH.exists() else []
+    out, seen = [], False
+    for ln in lines:
+        if ln.strip().startswith(f"{key}="):
+            out.append(f"{key}={value}")
+            seen = True
+        else:
+            out.append(ln)
+    if not seen:
+        out.append(f"{key}={value}")
+    _ENV_PATH.write_text("\n".join(out) + "\n")
+    os.environ[key] = value
+
+
 # ── 调度器模块路径 ──────────────────────────────────────────
 from singularity.scheduler import tracker
 from singularity.scheduler.tracker import TaskStatus
@@ -1278,8 +1295,12 @@ def api_store_add():
     base_url = data.get("base_url", "")
     if base_url and not _is_safe_api_url(base_url):
         return jsonify({"error": "不允许的 base_url"}), 400
+    api_key_env = data.get("api_key_env", "")
+    api_key = data.get("api_key", "")
+    if api_key and api_key_env:
+        _write_env(api_key_env, api_key)
     result, code = _api_handler.api_store_add(data["id"], data.get("provider", data["id"]),
-        base_url, data.get("api_key_env", ""), data.get("notes", ""))
+        base_url, api_key_env, data.get("notes", ""))
     return jsonify(result), code
 
 @app.route("/api/api-store/<api_id>", methods=["DELETE"])
