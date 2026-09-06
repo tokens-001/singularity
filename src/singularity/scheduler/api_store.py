@@ -351,7 +351,8 @@ def scan_models(api_id: str, include_capabilities: bool = True) -> list[dict]:
                 filtered.append(m)
             return filtered
     except Exception:
-        return []
+        # 网络/解析失败不再静默返回空, 抛给上层报出真实原因 (api_store_scan 会捕获返回 500)
+        raise
 
 
 # ═══════════════════════════════════════════
