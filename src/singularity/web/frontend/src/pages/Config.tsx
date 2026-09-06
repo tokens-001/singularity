@@ -12,15 +12,28 @@ const TABS = [
 
 export const ALL_ROLES = ['builder','ai_architect','ai_engineer','qa_engineer','security_auditor','reviewer','generic']
 export const ROLE_LABELS: Record<string,string> = { builder:'构建者', ai_architect:'AI架构师', ai_engineer:'AI工程师', qa_engineer:'QA工程师', security_auditor:'安全审计师', reviewer:'审查者', generic:'通用' }
-const MODEL_CN: Record<string,string> = {
-  'claude-opus-4-8':'Claude Opus 4.8','deepseek-v4-pro':'DeepSeek V4 Pro','deepseek-chat':'深度求索 V3 Chat',
-  'glm-5.2':'智谱 GLM-5.2','glm-5-turbo':'智谱 GLM-5 Turbo',
-  'gpt-5.5':'GPT-5.5','gpt-5.5-pro':'GPT-5.5 Pro',
-  'kimi-k2.5':'Kimi K2.5','kimi-k2.6':'Kimi K2.6','kimi-k2.7-code':'Kimi K2.7 Code','kimi-k2.7-code-highspeed':'Kimi K2.7 Code 高速',
-  'qwen3-coder-plus':'通义千问 Coder Plus','qwen3-coder-next':'通义千问 Coder Next',
-  'qwen3.7-max':'通义千问 3.7 Max','qwen3.7-plus':'通义千问 3.7 Plus','qwen3-flash':'通义千问 Flash',
+const VENDOR_DISPLAY: Record<string,string> = {
+  deepseek: 'DeepSeek', kimi: 'Kimi', claude: 'Claude', moonshot: 'Moonshot',
+  glm: 'GLM', gpt: 'GPT', qwen: 'Qwen', openai: 'OpenAI', anthropic: 'Anthropic',
 }
-export const mcn = (m:any) => MODEL_CN[m.id] || m.display || m.id
+
+// 统一模型名显示：厂商名规范映射 + 连字符转空格 + 每段首字母大写
+export const modelDisplay = (id: string) => {
+  if (!id) return id
+  const parts = id.split('-')
+  const vendor = parts[0].toLowerCase()
+  const head = VENDOR_DISPLAY[vendor] || (parts[0].charAt(0).toUpperCase() + parts[0].slice(1))
+  const rest = parts.slice(1).map(p => p ? p.charAt(0).toUpperCase() + p.slice(1) : p)
+  // 连续纯数字段用点号连接（claude-opus-4-8 → 4.8）
+  const joined: string[] = []
+  for (const p of rest) {
+    const prev = joined[joined.length - 1]
+    if (prev && /^\d+$/.test(prev) && /^\d+$/.test(p)) joined[joined.length - 1] = prev + '.' + p
+    else joined.push(p)
+  }
+  return [head, ...joined].join(' ')
+}
+export const mcn = (m:any) => modelDisplay(m.id) || m.display || m.id
 
 export default function Config() {
   const [tab, setTab] = useState('models')
