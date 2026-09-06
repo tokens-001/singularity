@@ -85,7 +85,10 @@ export default function SkillsTab() {
             <tbody>
               {skills.map(s => (
                 <tr key={s.name} style={{ borderBottom: '1px solid var(--border)' }}>
-                  <td className="fw-500" style={{ padding: '4px 8px' }}>{s.name}</td>
+                  <td style={{ padding: '4px 8px' }}>
+                    <div className="fw-500">{s.description || s.name}</div>
+                    {s.description && <div className="fs-9 text-muted">{s.name}</div>}
+                  </td>
                   {agents.slice(0,8).map(a => {
                     const has = (matrix[a.model]||[]).includes(s.name)
                     return (
