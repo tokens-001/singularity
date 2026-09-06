@@ -117,7 +117,7 @@ def models_import(models: list[dict], auto_assign: bool = False):
             api_store.save_custom_model(
                 model_id=m["id"], provider=m.get("provider", ""),
                 display=m.get("display", m["id"]),
-                recommended_for=m.get("recommended_for") or m.get("tiers", []),
+                tiers=m.get("recommended_for") or m.get("tiers", []),
                 speed=m.get("speed", "medium"), cost=m.get("cost", "standard"),
                 rating=m.get("rating", "?"), strengths=m.get("strengths", []),
                 notes=m.get("notes", ""),
