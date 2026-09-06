@@ -19,7 +19,7 @@ python3 -m pytest tests/test_scheduler/ -q
 ## 配置
 
 1. 打开 http://127.0.0.1:5050/config
-2. 在「API 连接」添加 API key（DeepSeek/智谱/Kimi/通义千问）
+2. 在「API 连接」添加 API key（DeepSeek/智谱/Kimi/通义千问/OpenAI/Anthropic）
 3. 在「智能体」启用模型
 4. 回到「对话」，说「帮我做一个xxx」开始
 
@@ -37,8 +37,8 @@ export DASHSCOPE_API_KEY=sk-xxx
 用户 → Observer 对话
      → 六阶段流水线
         定义(GATE1) → 架构(GATE2) → 实现 → 集成合并 → 审查(GATE3) → 验收 → 交付
-     → 13 个角色专家团队
-     → 两档模型（便宜/强力）
+     → 16 个角色专家团队
+     → 模型能力推荐制（rating 评级 + recommended_for 推荐）
 ```
 
 详见 `docs/专家团队架构.md`。
@@ -47,7 +47,7 @@ export DASHSCOPE_API_KEY=sk-xxx
 
 ```
 src/singularity/
-├── scheduler/       # 核心调度引擎（53 文件，~16K 行）
+├── scheduler/       # 核心调度引擎（76 文件，~19K 行）
 │   ├── orchestrator.py   # 六阶段流水线主控
 │   ├── workflow.py       # 阶段执行器
 │   ├── dispatcher.py     # Agent 调度 + 模型选择
@@ -58,7 +58,7 @@ src/singularity/
 ├── web/             # Flask + React SPA
 │   ├── app.py              # Flask API（~1600 行）
 │   └── frontend/src/       # React（10 文件，~800 行）
-├── skills/          # 19 个角色技能包
+├── skills/          # 6 个方法型技能
 └── tests/           # 36 个测试文件
 ```
 
@@ -88,18 +88,18 @@ git status
 | `docs/专家团队架构.md` | 完整架构设计（36KB） |
 | `docs/frontend-spec.md` | 前端规范 |
 | `docs/ARCHITECTURE.md` | 审计 + 架构文档 |
-| `docs/日常执行.md` | 日常工作流 |
+| `docs/现状速写.md` | 当前现状速写（权威） |
 
 ## 技术栈
 
-**后端：** Python 3.11+, Flask, httpx, ChromaDB
+**后端：** Python 3.14, Flask, httpx, ChromaDB
 **前端：** React 19, react-router-dom 7, zustand 5, Vite 6
 **模型：** DeepSeek / 智谱 GLM / Kimi / 通义千问 / OpenAI / Anthropic
 
 ## 当前状态
 
-- 39 单元测试全绿
-- E/E+/D 三层体系已完全替换为六阶段流水线
-- 10/10 模型 API key 已配置
-- 前端 4 页面（对话/任务/项目/配置）
-- 待端到端验证
+- 276 测试全绿（`pytest tests/test_scheduler/ -q`）
+- 模型能力快照 + 推荐制（rating 评级 SSS+~A + recommended_for 推荐用途），已替代旧 E/E+/D 三层与 cheap/strong 两档
+- 出厂零模型：用户自选厂家、输 key、扫描导入
+- 端到端已验证（hello.py 任务 5s 交付、3 模型委员会碰撞、Observer 对话→执行）
+- 自部署：Dockerfile + docker-compose
