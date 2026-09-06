@@ -303,7 +303,8 @@ JSON:"""
 
 
 def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
-                       max_chunk_lines: int = 300, diff_only: bool = False) -> dict:
+                       max_chunk_lines: int = 300, diff_only: bool = False,
+                       requirements: str = "") -> dict:
     """多模型并行独立审查一个文件。分段→并行派发→汇总。
 
     Args:
@@ -376,14 +377,15 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
     def review_chunk(chunk_data):
         chunk_label, chunk_content = chunk_data
         try:
-            chunk_prompt = f"""File review for {filepath} ({chunk_label}):
+            req_block = f"\nTask requirements:\n{requirements[:500]}\n" if requirements else ""
+            chunk_prompt = f"""File review for {filepath} ({chunk_label}):{req_block}
 
 Code:
 ```
 {chunk_content[:3000]}
 ```
 
-Check: logic errors, security, style, performance, correctness.
+Check: logic errors, security, style, performance, correctness; AND requirement completeness — 逐条核对 Task requirements，需求明确要求但产出未实现或明显缩水的标 critical(含风格/响应式/适配等软性要求)，实现不完美但不影响需求的标 warning.
 Output ONLY JSON: {{"issues":[{{"severity":"critical|warning|info","line":approx,"detail":"..."}}],"verdict":"pass|retry|abort","summary":"one line"}}
 No issues? {{"issues":[],"verdict":"pass","summary":"no issues"}}
 JSON:"""

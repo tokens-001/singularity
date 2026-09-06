@@ -116,7 +116,8 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                     try:
                         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
                             fut = ex.submit(val_mod.multi_model_review,
-                                filepath=f, models=reviewer_models, cwd=cwd, diff_only=True)
+                                filepath=f, models=reviewer_models, cwd=cwd, diff_only=True,
+                                requirements=task.description)
                             review = fut.result(timeout=_REVIEW_TIMEOUT_SEC)
                     except concurrent.futures.TimeoutExpired:
                         quality["warnings"].append("多模型审查超时 — 不默认通过")
