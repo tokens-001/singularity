@@ -143,10 +143,13 @@ export default function ModelsTab() {
           return (
             <div key={m.id} className="card-row" style={{ opacity: disabled?0.5:1 }}>
               <span style={{ color: dotColor, fontSize: 8 }}>{disabled?'○':'●'}</span>
-              <span className="fw-500 flex-1">{mcn(m)}</span>
+              <span className="fw-500 flex-1">{mcn(m)}{m.rating && m.rating !== '?' && <span className="fs-10 text-muted" style={{marginLeft:6}}>{m.rating}</span>}</span>
               <span className="fs-10 text-muted">{COST_CN[m.cost||'']||m.cost} · {SPEED_CN[m.speed||'']||m.speed}</span>
               {rf.length > 0 && !(rf.length === 1 && rf[0] === 'any') && (
                 <span className="flex-center gap-4">{rf.slice(0,3).map(p=><span key={p} className="card-tag">{p}</span>)}</span>
+              )}
+              {(m.strengths||[]).length > 0 && (
+                <span className="flex-center gap-4">{(m.strengths||[]).slice(0,2).map(s=><span key={s} className="card-tag">{s}</span>)}</span>
               )}
               <button onClick={()=>api.deleteModel(m.id).then(fetch)} className="btn-ghost-danger"><Trash2 size={10}/></button>
             </div>

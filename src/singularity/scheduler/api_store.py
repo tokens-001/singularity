@@ -360,6 +360,8 @@ def scan_models(api_id: str, include_capabilities: bool = True) -> list[dict]:
                         "id": mid,
                         "display": item.get("id", mid),
                         "provider": provider,
+                        # 自动兜底: 快照里没有的新模型, 默认推荐到定义/实现(低风险阶段), rating 仍诚实标 ?
+                        "recommended_for": cap.recommended_for if cap else ["定义", "实现"],
                         "rating": cap.rating if cap else "?",
                         "speed": cap.speed if cap else "medium",
                         "cost": cap.cost if cap else "standard",
