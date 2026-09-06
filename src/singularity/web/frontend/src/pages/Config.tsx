@@ -10,8 +10,8 @@ const TABS = [
   { key: 'skills', icon: Wrench, label: '技能' },
 ]
 
-export const ALL_ROLES = ['builder','architect','ai_architect','qa_engineer','security_auditor','reviewer','daily']
-export const ROLE_LABELS: Record<string,string> = { builder:'构建者', architect:'架构师', ai_architect:'AI架构师', qa_engineer:'QA工程师', security_auditor:'安全审计师', reviewer:'审查者', daily:'日常' }
+export const ALL_ROLES = ['builder','ai_architect','ai_engineer','qa_engineer','security_auditor','reviewer','generic']
+export const ROLE_LABELS: Record<string,string> = { builder:'构建者', ai_architect:'AI架构师', ai_engineer:'AI工程师', qa_engineer:'QA工程师', security_auditor:'安全审计师', reviewer:'审查者', generic:'通用' }
 const MODEL_CN: Record<string,string> = {
   'claude-opus-4-8':'Claude Opus 4.8','deepseek-v4-pro':'DeepSeek V4 Pro','deepseek-chat':'深度求索 V3 Chat',
   'glm-5.2':'智谱 GLM-5.2','glm-5-turbo':'智谱 GLM-5 Turbo',

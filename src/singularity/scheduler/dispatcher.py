@@ -211,7 +211,7 @@ def _build_agent_from_registry(model_name: str) -> dict | None:
             "api_key_env": getattr(api, "api_key_env", ""),
             "max_turns": m.max_turns,
             "default": False,
-            "roles": ["daily"],
+            "roles": ["generic"],
             "sandbox": "worktree",
             "request_template": {"model": model_name, "max_tokens": 20000},
         }

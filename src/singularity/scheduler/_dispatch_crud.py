@@ -54,7 +54,7 @@ def add_agent(level: str = "", model: str = "", agent_type: str = "openai-agent"
         "model": model, "type": agent_type,
         "entry": entry, "api_key_env": api_key_env,
         "max_turns": max_turns, "default": False,
-        "roles": roles or ["daily"], "sandbox": sandbox,
+        "roles": roles or ["generic"], "sandbox": sandbox,
     }
     if mode:
         cfg["mode"] = mode

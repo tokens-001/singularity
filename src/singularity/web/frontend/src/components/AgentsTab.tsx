@@ -27,7 +27,7 @@ export default function AgentsTab() {
     await api.updateAgent(model, { roles: next }); fetch()
   }
   const disable = async (model: string) => { await api.deleteAgent(model); fetch() }
-  const enable = async (model: string) => { await api.addAgent({model, roles:['daily']}); fetch() }
+  const enable = async (model: string) => { await api.addAgent({model, roles:['generic']}); fetch() }
 
   return (
     <div>
