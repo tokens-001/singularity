@@ -39,10 +39,26 @@ except ImportError:
 # ── F1: 集成合并异步化 — 解除调度循环阻塞 ──
 # 集成合并含 pytest/docker subprocess (最长 ~150s), 不能在调度循环线程同步跑,
 # 否则单项目合并期间全局任务派发/SSE 停摆。用独立线程池异步执行, 完成后回写 phase。
-_merge_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="integrate")
-_arch_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="architect")
+_merge_executor = None  # 惰性重建: 进程重启/shutdown 后 submit 会报 cannot schedule new futures
+_arch_executor = None
 _merge_inflight: set[str] = set()  # 正在跑集成合并的 project_id, 防重入
 _arch_inflight: set[str] = set()   # 正在跑架构阶段的 project_id, 防重入
+
+
+def _get_merge_executor() -> ThreadPoolExecutor:
+    """惰性获取合并线程池，进程重启/shutdown 后自动重建。"""
+    global _merge_executor
+    if _merge_executor is None or getattr(_merge_executor, "_shutdown", False):
+        _merge_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="integrate")
+    return _merge_executor
+
+
+def _get_arch_executor() -> ThreadPoolExecutor:
+    """惰性获取架构线程池，进程重启/shutdown 后自动重建。"""
+    global _arch_executor
+    if _arch_executor is None or getattr(_arch_executor, "_shutdown", False):
+        _arch_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="architect")
+    return _arch_executor
 
 
 def run_queue(agents: dict, max_concurrent: int = 1) -> list[tuple]:
@@ -249,7 +265,7 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                 # P1: 架构阶段 — 3架构师并行 + 合成器 (异步提交, 防重入)
                 if proj.id not in _arch_inflight:
                     _arch_inflight.add(proj.id)
-                    _arch_executor.submit(_run_architecture_phase_async, proj.id, agents)
+                    _get_arch_executor().submit(_run_architecture_phase_async, proj.id, agents)
             elif proj.phase.value == "executing":
                 # P2: 首次进入 → 拆解架构为任务
                 if not proj.task_ids:
@@ -268,7 +284,7 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                     })
                     if proj.id not in _merge_inflight:
                         _merge_inflight.add(proj.id)
-                        _merge_executor.submit(_run_integration_merge_async, proj.id, agents)
+                        _get_merge_executor().submit(_run_integration_merge_async, proj.id, agents)
             elif proj.phase.value == "delivering":
                 # S1: 自动交付打包 (轻量, 同步即可)
                 ok, detail = _run_delivery(proj)
@@ -292,7 +308,7 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                 # 重启恢复: 若没在跑则提交 (已在跑的跳过防重入)
                 if proj.id not in _merge_inflight:
                     _merge_inflight.add(proj.id)
-                    _merge_executor.submit(_run_integration_merge_async, proj.id, agents)
+                    _get_merge_executor().submit(_run_integration_merge_async, proj.id, agents)
     except Exception as e:
         # S6: 不再静默吞错 — 记录并通知, 避免项目卡死无反馈
         try:

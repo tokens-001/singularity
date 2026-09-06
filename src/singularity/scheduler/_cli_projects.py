@@ -1,4 +1,4 @@
-__all__ = ['_cmd_project', '_cmd_project_advance', '_cmd_project_create', '_cmd_project_list', '_cmd_project_reject', '_cmd_project_show', '_phase_agent_level', '_phase_cost_estimate']
+__all__ = ['_cmd_project', '_cmd_project_advance', '_cmd_project_create', '_cmd_project_delete', '_cmd_project_list', '_cmd_project_reject', '_cmd_project_show', '_phase_agent_level', '_phase_cost_estimate']
 
 """CLI sub-commands."""
 import json, os, sys, time
@@ -214,6 +214,21 @@ def _cmd_project_reject(project_id: str) -> int:
     proj.confirm_gate(phase, "rejected")
     save_proj(proj)
     print(f"[project] {proj.id[:8]}  {phase.value} REJECTED → {proj.phase.value}")
+    return 0
+
+
+def _cmd_project_delete(project_id: str) -> int:
+    from .project import load as load_proj, delete as delete_proj
+    proj = load_proj(project_id)
+    if proj is None:
+        print(f"项目不存在: {project_id}", file=sys.stderr)
+        return 1
+    # 删关联任务及全部残留 (复用 task_delete: trace/worktree/snapshot/pending ref)
+    from ._api_tasks import task_delete
+    for tid in list(proj.task_ids):
+        task_delete(tid)
+    delete_proj(project_id)
+    print(f"[project] 已删除: {proj.id[:8]} {proj.name}")
     return 0
 
 

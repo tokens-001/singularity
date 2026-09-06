@@ -321,15 +321,8 @@ def task_set_mode(task_id: str, mode: str) -> tuple[dict, int]:
     return {"ok": True, "task_id": task_id, "execution_mode": mode}, 200
 
 
-def task_delete(task_id: str) -> tuple[dict, int]:
-    """POST /api/tasks/<id>/delete — 清任务本体 + 衍生残留 (worktree/snapshot/标记/ref)。"""
-    config.ensure_dirs()
-    task = tracker.read_task(task_id)  # 先读: worktree/ref 清理需要 repo_root
-    try:
-        from singularity.scheduler.project import repo_root_for
-        repo_root = repo_root_for(task) if task else config.PROJECT_ROOT
-    except Exception:
-        repo_root = config.PROJECT_ROOT
+def _cleanup_task_artifacts(task_id: str, repo_root) -> int:
+    """清任务衍生残留 (patch/snapshot/worktree/pending ref)，不动任务本体 json。返回删除数。"""
     deleted = 0
 
     def _rm(p: Path) -> None:
@@ -341,21 +334,15 @@ def task_delete(task_id: str) -> tuple[dict, int]:
         except Exception as e:
             witness.heartbeat('_api', f'warn:del:{e}')
 
-    # 1. {task_id}.json 单文件: 任务本体/取消/暂停/parking/扣留
-    for d in (tracker.tasks_dir(), config.CANCEL_DIR, config.PAUSE_DIR,
-              config.PARKED_DIR, config.HOLD_DIR):
-        _rm(d / f"{task_id}.json")
-    _rm(config.TRACE_DIR / f"{task_id}.json")
-
-    # 2. E+ patch 暂存 (.md)
+    # E+ patch 暂存 (.md)
     _rm(config.PATCH_DIR / f"{task_id}.md")
     _rm(config.PATCH_DIR / f"{task_id}_plan.md")
 
-    # 3. snapshot ({ts}_{task_id}.json)
+    # snapshot ({ts}_{task_id}.json)
     for p in config.SNAPSHOT_DIR.glob(f"*_{task_id}.json"):
         _rm(p)
 
-    # 4. worktree ({task_id}_{level} 目录) — 复用 cleanup 处理 git 元数据/孤儿/权限
+    # worktree ({task_id}_{level} 目录) — 复用 cleanup 处理 git 元数据/孤儿/权限
     try:
         from singularity.scheduler._git_worktree import (
             Worktree, cleanup as _wt_cleanup, _worktrees_dir)
@@ -368,12 +355,40 @@ def task_delete(task_id: str) -> tuple[dict, int]:
     except Exception as e:
         witness.heartbeat('_api', f'warn:wt_del:{e}')
 
-    # 5. 锚定 ref (refs/qidian/pending/{task_id})
+    # 锚定 ref (refs/qidian/pending/{task_id})
     try:
         from ._worktree import _release_ref
         _release_ref(task_id, repo_root=repo_root)
     except Exception:
         pass
+    return deleted
+
+
+def task_delete(task_id: str) -> tuple[dict, int]:
+    """POST /api/tasks/<id>/delete — 清任务本体 + 衍生残留 (worktree/snapshot/标记/ref)。"""
+    config.ensure_dirs()
+    task = tracker.read_task(task_id)  # 先读: worktree/ref 清理需要 repo_root
+    try:
+        from singularity.scheduler.project import repo_root_for
+        repo_root = repo_root_for(task) if task else config.PROJECT_ROOT
+    except Exception:
+        repo_root = config.PROJECT_ROOT
+
+    deleted = _cleanup_task_artifacts(task_id, repo_root)
+
+    # 任务本体/取消/暂停/parking/扣留 单文件 (delete 一并清, retry 不动)
+    def _rm(p: Path) -> None:
+        nonlocal deleted
+        try:
+            if p.exists():
+                p.unlink()
+                deleted += 1
+        except Exception as e:
+            witness.heartbeat('_api', f'warn:del:{e}')
+    for d in (tracker.tasks_dir(), config.CANCEL_DIR, config.PAUSE_DIR,
+              config.PARKED_DIR, config.HOLD_DIR):
+        _rm(d / f"{task_id}.json")
+    _rm(config.TRACE_DIR / f"{task_id}.json")
 
     if deleted:
         return {"ok": True, "message": f"已删除 {deleted} 个文件"}, 200
@@ -387,6 +402,13 @@ def task_retry(task_id: str) -> tuple[dict, int]:
         return {"error": "任务不存在"}, 404
     if task.status not in (TaskStatus.FAILED, TaskStatus.ROLLED_BACK):
         return {"error": f"当前状态 {task.status.value} 不支持重试"}, 400
+    # 重跑前清衍生残留 (worktree/pending ref/snapshot)，避免 anchor_ref 冲突 + 脏 worktree
+    try:
+        from singularity.scheduler.project import repo_root_for
+        repo_root = repo_root_for(task) if task else config.PROJECT_ROOT
+    except Exception:
+        repo_root = config.PROJECT_ROOT
+    _cleanup_task_artifacts(task_id, repo_root)
     tracker.transition(task_id, TaskStatus.PENDING, error="", retry_count=0)
     return {"ok": True, "new_status": "pending"}, 200
 

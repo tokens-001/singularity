@@ -437,7 +437,7 @@ def fuse_architecture(task_desc: str, outputs: list[str],
     stage2_prompt = _ARCH_FUSION_STAGE2.format(
         task=task_desc[:1500], analysis=analysis_text, outputs=outputs_text
     )
-    fused = _call_model(stage2_prompt, synthesizer_model, max_tokens=8000)
+    fused = _call_model(stage2_prompt, synthesizer_model, max_tokens=16000)
     return fused if fused else outputs[0]
 
 

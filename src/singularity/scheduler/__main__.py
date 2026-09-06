@@ -21,24 +21,6 @@ from singularity.scheduler import snapshot as snap_mod
 from singularity.scheduler import orchestrator
 from singularity.scheduler import tracker
 from singularity.scheduler.tracker import TaskStatus
-def _cmd_project_delete(project_id: str) -> int:
-    from .project import load as load_proj
-    proj = load_proj(project_id)
-    if proj is None:
-        print(f"项目不存在: {project_id}", file=sys.stderr)
-        return 1
-    # 删除关联的任务文件
-    from . import tracker as _tk
-    for tid in proj.task_ids:
-        p = _tk._path(tid)
-        if p.exists():
-            p.unlink()
-    # 删除项目文件
-    from .project import _path as _proj_path
-    _proj_path(project_id).unlink()
-    print(f"[project] 已删除: {proj.id[:8]} {proj.name}")
-    return 0
-
 from singularity.scheduler.project import Phase
 
 _LOOP_POLL_SECS = 3  # 队列空时的轮询间隔

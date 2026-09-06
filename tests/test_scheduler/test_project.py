@@ -60,6 +60,8 @@ class TestProjectWorkflow:
 
     def teardown_method(self):
         from singularity.scheduler import tracker
+        from singularity.scheduler.project import get_projects_root
+        import shutil
         for tid in list(self.p.task_ids):
             tp = tracker._path(tid)
             if tp.exists():
@@ -67,6 +69,8 @@ class TestProjectWorkflow:
         pp = _path(self.p.id)
         if pp.exists():
             pp.unlink()
+        # 删成品目录 (git repo)，否则下次 create("test-wf") 重名校验失败
+        shutil.rmtree(get_projects_root() / self.p.name, ignore_errors=True)
 
     def test_run_execution_creates_real_tasks(self):
         from singularity.scheduler.workflow import _run_execution

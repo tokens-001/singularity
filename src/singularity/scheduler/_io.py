@@ -99,6 +99,9 @@ def try_parse_json(raw: str, try_repair: bool = False) -> dict:
         if m:
             candidates.append(m.group().strip())
     for c in candidates:
+        # 修复模型 JSON 瑕疵: 用 `?` 标注可选字段但位置错 (}? 和 ]? 非法)
+        c = _re.sub(r'\}\?', '}', c)
+        c = _re.sub(r'\]\?', ']', c)
         try:
             return json.loads(c)
         except json.JSONDecodeError:
