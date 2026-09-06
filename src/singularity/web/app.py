@@ -1393,10 +1393,14 @@ def api_models_add():
 @app.route("/api/models/import", methods=["POST"])
 def api_models_import():
     data = request.get_json(silent=True)
-    if not data or not isinstance(data.get("models"), list):
+    # 兼容两种格式: 前端传数组 [m...] 或对象 {"models":[m...]}
+    if isinstance(data, list):
+        models, auto_assign = data, False
+    elif isinstance(data, dict) and isinstance(data.get("models"), list):
+        models, auto_assign = data["models"], data.get("auto_assign", False)
+    else:
         return jsonify({"error": "缺少 models 数组"}), 400
-    auto_assign = data.get("auto_assign", False)
-    result, code = _api_handler.models_import(data["models"], auto_assign=auto_assign)
+    result, code = _api_handler.models_import(models, auto_assign=auto_assign)
     return jsonify(result), code
 
 @app.route("/api/models/<model_id>", methods=["DELETE"])
