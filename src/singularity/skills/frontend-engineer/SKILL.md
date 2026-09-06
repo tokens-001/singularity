@@ -2,6 +2,7 @@
 name: frontend-engineer
 description: 前端工程师 — UI实现·交互逻辑·可访问性·动画
 type: prompt
+category: role
 ---
 
 # 前端工程师

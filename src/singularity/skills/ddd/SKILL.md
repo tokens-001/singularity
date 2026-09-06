@@ -2,6 +2,7 @@
 name: ddd
 description: Doubt-Driven Development — 五步反证法：CLAIM→EXTRACT→DOUBT→RECONCILE→STOP
 type: prompt
+category: practice
 ---
 
 # Doubt-Driven Development

@@ -207,14 +207,14 @@ def skill_list():
         from singularity.skills.skill_loader import load_skills
         all_skills = load_skills()
         return {"skills": [{"name": s.name, "description": s.description, "type": s.type,
-            "args": s.arguments, "source": s.source, "body": s.body[:200]} for s in all_skills.values()]}, 200
+            "category": s.category, "args": s.arguments, "source": s.source, "body": s.body[:200]} for s in all_skills.values()]}, 200
     except Exception as e: return {"error": str(e)}, 500
 
 
-def skill_add(name, description="", skill_type="prompt", args=None, body=""):
+def skill_add(name, description="", skill_type="prompt", args=None, body="", category=""):
     from singularity.skills.skill_loader import create_user_skill
     from . import dispatcher as disp_mod
-    create_user_skill(name, description, skill_type, args or [], body)
+    create_user_skill(name, description, skill_type, args or [], body, category)
     disp_mod.invalidate_skill_cache(); return {"ok": True, "name": name}, 200
 
 

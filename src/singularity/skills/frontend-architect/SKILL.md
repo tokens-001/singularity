@@ -2,6 +2,7 @@
 name: frontend-architect
 description: 前端架构师 — 组件树·状态管理·路由设计·性能策略·包选型
 type: prompt
+category: role
 ---
 
 # 前端架构师

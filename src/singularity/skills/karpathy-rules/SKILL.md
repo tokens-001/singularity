@@ -2,6 +2,7 @@
 name: karpathy-rules
 description: Karpathy 编程行为约束 — 不自作主张、简洁优先、精准修改、目标驱动
 type: prompt
+category: practice
 ---
 
 # 编程行为准则

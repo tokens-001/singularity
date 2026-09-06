@@ -2,6 +2,7 @@
 name: system-architect
 description: 系统架构设计 — 模块划分·数据模型·接口契约·技术栈·任务拆解
 type: prompt
+category: role
 ---
 
 # 系统架构师

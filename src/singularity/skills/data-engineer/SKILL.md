@@ -2,6 +2,7 @@
 name: data-engineer
 description: 数据/AI工程师 — 向量库·RAG·Prompt工程·Agent拓扑·数据管道
 type: prompt
+category: role
 ---
 
 # 数据/AI 工程师

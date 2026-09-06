@@ -2,6 +2,7 @@
 name: devops-engineer
 description: DevOps工程师 — CI/CD·容器化·部署·监控·日志
 type: prompt
+category: role
 ---
 
 # DevOps 工程师

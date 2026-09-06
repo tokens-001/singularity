@@ -2,6 +2,7 @@
 name: code-review
 description: 审查代码的 bug、性能和风格问题
 type: tool
+category: practice
 arguments: file_path focus
 ---
 

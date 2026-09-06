@@ -1,7 +1,12 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { api } from '../lib/api'
 import { Plus, Check } from 'lucide-react'
 import type { ModelInfo, AgentItem, AgentsData, SkillInfo } from '../lib/types'
+
+const CATEGORIES = [
+  { key: 'role', label: '角色' },
+  { key: 'practice', label: '实践' },
+]
 
 export default function SkillsTab() {
   const [skills, setSkills] = useState<SkillInfo[]>([])
@@ -9,7 +14,7 @@ export default function SkillsTab() {
   const [models, setModels] = useState<ModelInfo[]>([])
   const [matrix, setMatrix] = useState<Record<string,string[]>>({})
   const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState({ name: '', description: '', type: 'prompt', content: '' })
+  const [form, setForm] = useState({ name: '', description: '', type: 'prompt', category: 'practice', content: '' })
 
   const fetch = async () => {
     const [s, a, m] = await Promise.all([api.skills() as Promise<SkillInfo[]>, api.agents() as Promise<AgentsData>, api.models() as Promise<ModelInfo[]>])
@@ -43,7 +48,7 @@ export default function SkillsTab() {
     setMatrix(prev=>({...prev,[model]:allSkillNames}))
     try { await api.updateAgentSkills(model, allSkillNames) } catch { fetch() }
   }
-  const create = async () => { await api.addSkill(form); setShowForm(false); setForm({name:'',description:'',type:'prompt',content:''}); fetch() }
+  const create = async () => { await api.addSkill(form); setShowForm(false); setForm({name:'',description:'',type:'prompt',category:'practice',content:''}); fetch() }
 
   return (
     <div>
@@ -57,6 +62,9 @@ export default function SkillsTab() {
           <input placeholder="描述" value={form.description} onChange={e=>setForm({...form,description:e.target.value})} className="inp-sm"/>
           <select value={form.type} onChange={e=>setForm({...form,type:e.target.value})} className="inp-sm" style={{width:'auto'}}>
             <option value="prompt">prompt</option><option value="tool">tool</option>
+          </select>
+          <select value={form.category} onChange={e=>setForm({...form,category:e.target.value})} className="inp-sm" style={{width:'auto'}}>
+            {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
           </select>
           <button onClick={create} className="btn-green">创建</button>
         </div>
@@ -83,26 +91,37 @@ export default function SkillsTab() {
               </tr>
             </thead>
             <tbody>
-              {skills.map(s => (
-                <tr key={s.name} style={{ borderBottom: '1px solid var(--border)' }}>
-                  <td style={{ padding: '4px 8px' }}>
-                    <div className="fw-500">{s.description || s.name}</div>
-                    {s.description && <div className="fs-9 text-muted">{s.name}</div>}
-                  </td>
-                  {agents.slice(0,8).map(a => {
-                    const has = (matrix[a.model]||[]).includes(s.name)
-                    return (
-                      <td key={a.model} style={{ textAlign: 'center', padding: '2px' }}>
-                        <button onClick={()=>toggleSkill(a.model, s.name)}
-                          style={{ width: 20, height: 20, border: 'none', borderRadius: 3, cursor: 'pointer',
-                            background: has?'var(--accent-green)':'var(--bg-tertiary)', color: has?'#fff':'var(--text-muted)', fontSize: 10 }}>
-                          {has?<Check size={10}/>:'—'}
-                        </button>
-                      </td>
-                    )
-                  })}
-                </tr>
-              ))}
+              {[...CATEGORIES, { key: '', label: '其他' }].map(cat => {
+                const list = skills.filter(s => (s.category || '') === cat.key)
+                if (!list.length) return null
+                return (
+                  <Fragment key={cat.key || 'other'}>
+                    <tr style={{ background: 'var(--bg-secondary)' }}>
+                      <td colSpan={1 + Math.min(agents.length, 8)} className="fw-600 fs-10 text-secondary" style={{ padding: '4px 8px' }}>{cat.label} · {list.length}</td>
+                    </tr>
+                    {list.map(s => (
+                      <tr key={s.name} style={{ borderBottom: '1px solid var(--border)' }}>
+                        <td style={{ padding: '4px 8px' }}>
+                          <div className="fw-500">{s.description || s.name}</div>
+                          {s.description && <div className="fs-9 text-muted">{s.name}</div>}
+                        </td>
+                        {agents.slice(0,8).map(a => {
+                          const has = (matrix[a.model]||[]).includes(s.name)
+                          return (
+                            <td key={a.model} style={{ textAlign: 'center', padding: '2px' }}>
+                              <button onClick={()=>toggleSkill(a.model, s.name)}
+                                style={{ width: 20, height: 20, border: 'none', borderRadius: 3, cursor: 'pointer',
+                                  background: has?'var(--accent-green)':'var(--bg-tertiary)', color: has?'#fff':'var(--text-muted)', fontSize: 10 }}>
+                                {has?<Check size={10}/>:'—'}
+                              </button>
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    ))}
+                  </Fragment>
+                )
+              })}
             </tbody>
           </table>
         </div>

@@ -2,6 +2,7 @@
 name: interaction-designer
 description: 交互设计师 — 用户流程·信息架构·页面结构·状态流转
 type: prompt
+category: observer
 ---
 
 # 交互设计师

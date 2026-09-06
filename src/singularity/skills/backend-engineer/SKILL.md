@@ -2,6 +2,7 @@
 name: backend-engineer
 description: 后端工程师 — API·数据库·业务逻辑·中间件
 type: prompt
+category: role
 ---
 
 # 后端工程师

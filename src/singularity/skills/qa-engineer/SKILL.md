@@ -2,6 +2,7 @@
 name: qa-engineer
 description: QA工程师 — 验收验证·回归测试·边界覆盖·测试用例补充
 type: prompt
+category: role
 ---
 
 # QA 工程师

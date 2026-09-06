@@ -2,6 +2,7 @@
 name: ui-designer
 description: UI设计师 — 视觉偏好收集·风格参考·品牌调性
 type: prompt
+category: observer
 ---
 
 # UI 设计师

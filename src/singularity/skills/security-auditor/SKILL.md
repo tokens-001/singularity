@@ -2,6 +2,7 @@
 name: security-auditor
 description: 安全审计师 — 权限·注入·密钥·依赖漏洞·隐私合规
 type: prompt
+category: role
 ---
 
 # 安全审计师

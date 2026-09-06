@@ -2,6 +2,7 @@
 name: codegraph
 description: 代码地图——查函数调用链、影响范围、复杂度、项目结构（CodeGraph CLI）
 type: prompt
+category: practice
 ---
 
 # CodeGraph 代码地图

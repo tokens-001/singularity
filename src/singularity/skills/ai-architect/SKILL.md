@@ -2,6 +2,7 @@
 name: ai-architect
 description: AI架构师 — 模型选型·Prompt体系·Agent拓扑·上下文策略
 type: prompt
+category: role
 ---
 
 # AI 架构师

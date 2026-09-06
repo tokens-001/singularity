@@ -1490,7 +1490,8 @@ def api_skills_add():
     if not name:
         return jsonify({"error": "缺少 name"}), 400
     data, code = _api_handler.skill_add(name, body.get("description", ""),
-        body.get("type", "prompt"), body.get("args", []), body.get("body", ""))
+        body.get("type", "prompt"), body.get("args", []), body.get("body", ""),
+        body.get("category", ""))
     return jsonify(data), code
 
 @app.route("/api/skills/<name>", methods=["DELETE"])

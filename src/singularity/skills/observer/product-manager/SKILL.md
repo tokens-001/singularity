@@ -2,6 +2,7 @@
 name: product-manager
 description: 产品经理 — 需求分析·用户故事·竞品调研·PRD
 type: prompt
+category: observer
 ---
 
 # 产品经理
