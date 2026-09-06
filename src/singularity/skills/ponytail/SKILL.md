@@ -2,7 +2,6 @@
 name: ponytail
 description: Ponytail 懒惰检查 — 写代码前先过6步：能不能不写/标准库有吗/系统原生/已有依赖/一行够吗/最小实现
 type: prompt
-category: practice
 ---
 
 # Ponytail 懒惰检查

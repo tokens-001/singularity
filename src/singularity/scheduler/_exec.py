@@ -39,6 +39,14 @@ from singularity.scheduler._exec_context import (
     _CONSTRUCT_WINDOW, _summarize_events, _construct_context,
 )
 
+# 全局底线：所有任务的约束，首轮无条件注入（原 karpathy-rules 技能，从技能层提升到全局层）
+_GLOBAL_CONSTRAINTS = """全局底线（所有任务必须遵守）：
+1. 不自作主张：不确定需求先澄清，不猜测；只做需求明确要求的
+2. 简洁优先：用最少代码解决问题，优先标准库，不引入不必要的抽象
+3. 精准修改：只改任务直接相关的代码，不顺手重构，diff 只含必要变更
+4. 目标驱动：先定位根因再动手，改完验证，任务完成就停
+"""
+
 
 def _build_effective_task(task, turn: int, feedback: str, is_planner: bool,
                           tool_events: list = None, route_role: str = "") -> str:
@@ -47,6 +55,9 @@ def _build_effective_task(task, turn: int, feedback: str, is_planner: bool,
     Step 4: route_role 非空时注入角色 system_prompt。
     """
     effective_task = task.description
+    # ── 全局底线：所有任务首轮无条件注入 ──
+    if turn == 1:
+        effective_task = _GLOBAL_CONSTRAINTS + "\n\n" + effective_task
     # ── Step 4: 角色上下文注入 (首轮) ──
     if turn == 1 and route_role:
         role_ctx = _inject_role_context(route_role)
@@ -72,12 +83,12 @@ def _build_effective_task(task, turn: int, feedback: str, is_planner: bool,
 
 
 def _inject_role_context(route_role: str) -> str:
-    """Step 4: 从 roles.toml 加载角色 system_prompt 作为执行上下文。"""
+    """Step 4: 从 roles.toml 加载角色（system_prompt + persona 人格）作为执行上下文。"""
     try:
         from singularity.scheduler.roles import get_role
         role = get_role(route_role)
-        if role and role.system_prompt:
-            return role.system_prompt
+        if role:
+            return role.get_full_prompt()
     except Exception:
         pass
     return ""

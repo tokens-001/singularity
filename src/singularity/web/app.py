@@ -1321,6 +1321,17 @@ def api_store_status(api_id):
     data, code = _api_handler.api_store_set_status(api_id, body["status"], body.get("notes", ""))
     return jsonify(data), code
 
+@app.route("/api/observer/model")
+def api_observer_model_get():
+    data, code = _api_handler.observer_model_get()
+    return jsonify(data), code
+
+@app.route("/api/observer/model", methods=["PUT"])
+def api_observer_model_set():
+    body = request.get_json(silent=True) or {}
+    data, code = _api_handler.observer_model_set(body.get("model_id", ""))
+    return jsonify(data), code
+
 # ═══════════════════════════════════════════════════════════
 # 认证
 # ═══════════════════════════════════════════════════════════
@@ -1490,8 +1501,7 @@ def api_skills_add():
     if not name:
         return jsonify({"error": "缺少 name"}), 400
     data, code = _api_handler.skill_add(name, body.get("description", ""),
-        body.get("type", "prompt"), body.get("args", []), body.get("body", ""),
-        body.get("category", ""))
+        body.get("type", "prompt"), body.get("args", []), body.get("body", ""))
     return jsonify(data), code
 
 @app.route("/api/skills/<name>", methods=["DELETE"])

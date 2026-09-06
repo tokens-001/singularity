@@ -41,5 +41,5 @@ export interface TaskDetail extends TaskInfo {
 }
 
 export interface SkillInfo {
-  name: string; description?: string; type?: string; category?: string; content?: string
+  name: string; description?: string; type?: string; content?: string
 }

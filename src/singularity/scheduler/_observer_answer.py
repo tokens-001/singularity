@@ -26,8 +26,11 @@ _log = logging.getLogger("observer")
 def _answer_question(question: str, project_id: str = "") -> str:
     cfg = _get_observer_cfg()
     api_key = cfg.get("api_key", "")
-    base_url = cfg.get("base_url", "https://api.deepseek.com/v1").rstrip("/")
+    base_url = (cfg.get("base_url") or "").rstrip("/")
     model = cfg.get("model", "deepseek-chat")
+
+    if not base_url:
+        return "观察者尚未指定模型，请先在「模型」页导入模型并设为观察者所用。"
 
     # ponytail: Ollama 本地模型默认无 api_key，用 direct 模式
     use_direct = not api_key or "ollama" in base_url or "localhost" in base_url

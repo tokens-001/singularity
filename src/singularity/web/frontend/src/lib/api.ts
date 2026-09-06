@@ -56,6 +56,8 @@ export const api = {
   addApiStore: (data: any) => request('/api/api-store',{method:'POST',body:JSON.stringify(data)}),
   deleteApiStore: (id: string) => request(`/api/api-store/${id}`,{method:'DELETE'}),
   scanApiStore: (id: string) => request(`/api/api-store/${id}/scan`,{method:'POST'}),
+  observerModel: async () => { const d = await request<any>('/api/observer/model'); return d?.model_id || '' },
+  setObserverModel: (modelId: string) => request('/api/observer/model',{method:'PUT',body:JSON.stringify({model_id: modelId})}),
 
   skills: async () => { const d = await request<any>('/api/skills'); return (d?.skills||d||[]) as any[] },
   addSkill: (data: any) => request('/api/skills',{method:'POST',body:JSON.stringify(data)}),

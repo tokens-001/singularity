@@ -94,6 +94,17 @@ def api_store_set_status(api_id, status, notes=""):
     return {"ok": True, "entry": entry.to_dict()}, 200
 
 
+def observer_model_get():
+    from . import api_store
+    return {"model_id": api_store.get_observer_model()}, 200
+
+
+def observer_model_set(model_id):
+    from . import api_store
+    api_store.set_observer_model(model_id)
+    return {"ok": True, "model_id": model_id}, 200
+
+
 def api_store_scan(api_id):
     """扫描 API 厂商的模型列表（预览，不导入）。"""
     from . import api_store
@@ -207,14 +218,14 @@ def skill_list():
         from singularity.skills.skill_loader import load_skills
         all_skills = load_skills()
         return {"skills": [{"name": s.name, "description": s.description, "type": s.type,
-            "category": s.category, "args": s.arguments, "source": s.source, "body": s.body[:200]} for s in all_skills.values()]}, 200
+            "args": s.arguments, "source": s.source, "body": s.body[:200]} for s in all_skills.values()]}, 200
     except Exception as e: return {"error": str(e)}, 500
 
 
-def skill_add(name, description="", skill_type="prompt", args=None, body="", category=""):
+def skill_add(name, description="", skill_type="prompt", args=None, body=""):
     from singularity.skills.skill_loader import create_user_skill
     from . import dispatcher as disp_mod
-    create_user_skill(name, description, skill_type, args or [], body, category)
+    create_user_skill(name, description, skill_type, args or [], body)
     disp_mod.invalidate_skill_cache(); return {"ok": True, "name": name}, 200
 
 

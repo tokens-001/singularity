@@ -255,22 +255,25 @@ def _execute_observer_tool(name: str, args: dict[str, Any]) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 def _get_observer_cfg() -> dict[str, Any]:
-    """优先复用配置中 observer / E 模型，否则默认走本地 Ollama。"""
-    agents = getattr(config, "AGENTS", {}) or {}
-    observer_cfg = agents.get("observer") or agents.get("any") or {}
-    if observer_cfg.get("model"):
-        return {
-            "model": observer_cfg.get("model"),
-            "api_key": observer_cfg.get("api_key", ""),
-            "base_url": observer_cfg.get("base_url", "https://api.deepseek.com/v1"),
-            "temperature": observer_cfg.get("temperature", 0.7),
-            "max_tokens": observer_cfg.get("max_tokens", 4096),
-        }
-    # 默认走 DeepSeek
+    """观察者按模型粒度配置：_observer 指定模型 id → 从模型的 provider 反查 api_store 拿 key/base_url。"""
+    from . import api_store, model_registry
+    model_id = api_store.get_observer_model()
+    if model_id:
+        m = model_registry.load_models().get(model_id)
+        if m and m.provider:
+            entry = api_store.get(m.provider)
+            if entry:
+                return {
+                    "model": model_id,
+                    "api_key": os.environ.get(entry.api_key_env, ""),
+                    "base_url": entry.base_url,
+                    "temperature": 0.7,
+                    "max_tokens": 4096,
+                }
     return {
-        "model": "deepseek-chat",
-        "api_key": os.environ.get("DEEPSEEK_API_KEY", ""),
-        "base_url": "https://api.deepseek.com/v1",
+        "model": "",
+        "api_key": "",
+        "base_url": "",
         "temperature": 0.7,
         "max_tokens": 4096,
     }

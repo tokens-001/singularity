@@ -2,7 +2,6 @@
 name: observer-researcher
 description: 研究员(Observer) — 市场调研·技术调研·可行性分析
 type: prompt
-category: observer
 ---
 
 # 研究员

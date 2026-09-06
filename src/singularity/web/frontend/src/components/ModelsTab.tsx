@@ -22,11 +22,12 @@ export default function ModelsTab() {
   const [showAddApi, setShowAddApi] = useState(false)
   const [apiForm, setApiForm] = useState({ mode: '', id: '', provider: '', base_url: '', api_key_env: '', api_key: '' })
   const [disabledSet, setDisabledSet] = useState<Set<string>>(new Set())
+  const [observerModelId, setObserverModelId] = useState('')
   const addToast = useToast(s => s.add)
 
   const fetch = async () => {
-    const [m, a, ag] = await Promise.all([api.models(), api.apiStore() as Promise<ApiStoreItem[]>, api.agents()])
-    setModels(m); setApis(a)
+    const [m, a, ag, obs] = await Promise.all([api.models(), api.apiStore() as Promise<ApiStoreItem[]>, api.agents(), api.observerModel()])
+    setModels(m); setApis(a); setObserverModelId(obs as string)
     const ds = new Set<string>()
     for (const d of (ag?._disabled?.any||[])) ds.add(d)
     setDisabledSet(ds)
@@ -128,12 +129,14 @@ export default function ModelsTab() {
           const rf = m.recommended_for||[]
           const disabled = disabledSet.has(m.id)
           const dotColor = disabled ? 'var(--text-muted)' : (m.api_available?'var(--accent-green)':'var(--text-muted)')
+          const isObserver = m.id === observerModelId
           return (
             <div key={m.id} className="card-row" style={{ opacity: disabled?0.5:1 }}>
               <span style={{ color: dotColor, fontSize: 8 }}>{disabled?'○':'●'}</span>
               <span className="fw-500 flex-1">{mcn(m)}</span>
               <span className="fs-10 text-muted">{m.cost} · {m.speed}</span>
               <span className="flex-center gap-4">{rf.slice(0,3).map(p=><span key={p} className="card-tag">{p}</span>)}</span>
+              <button onClick={async ()=>{ await api.setObserverModel(isObserver?'':m.id); fetch() }} className="btn-sm" style={isObserver?{background:'var(--accent-green)',color:'#fff'}:{}}>{isObserver?'观察者✓':'设为观察者'}</button>
               <button onClick={()=>api.deleteModel(m.id).then(fetch)} className="btn-ghost-danger"><Trash2 size={10}/></button>
             </div>
           )

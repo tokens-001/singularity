@@ -48,13 +48,25 @@ def _store_path() -> Path:
     return config.QIDIAN_DIR / "api_store.json"
 
 
+def _load_raw() -> dict:
+    """读 api_store.json 原始 dict（含 _observer 等元数据键）。不存在返回 {}。"""
+    path = _store_path()
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except (json.JSONDecodeError, KeyError):
+            pass
+    return {}
+
+
 def _load() -> dict[str, APIEntry]:
-    """读 API 库。不存在则用内置种子数据初始化。"""
+    """读 API 库。不存在则用内置种子数据初始化。跳过 _ 前缀元数据键。"""
     path = _store_path()
     if path.exists():
         try:
             data = json.loads(path.read_text())
-            return {k: APIEntry.from_dict(v) for k, v in data.items()}
+            return {k: APIEntry.from_dict(v) for k, v in data.items()
+                    if not k.startswith("_") and isinstance(v, dict)}
         except (json.JSONDecodeError, KeyError):
             pass
     return _seed()
@@ -154,6 +166,10 @@ def _guess_base_url(entry_url: str) -> str:
 
 def _save(entries: dict[str, APIEntry]) -> None:
     data = {k: v.to_dict() for k, v in entries.items()}
+    # 保留元数据键（如 _observer），避免被 API 增删改覆盖丢失
+    for k, v in _load_raw().items():
+        if k.startswith("_") and k not in data:
+            data[k] = v
     _store_path().write_text(json.dumps(data, ensure_ascii=False, indent=2))
 
 
@@ -225,6 +241,21 @@ def is_available(api_id: str) -> bool:
 def available_apis() -> list[APIEntry]:
     """返回所有当前可用的 API。"""
     return [e for e in _load().values() if is_available(e.id)]
+
+
+def get_observer_model() -> str:
+    """观察者用的模型 id（api_store.json 的 _observer 键，值为模型 id）。"""
+    return _load_raw().get("_observer", "")
+
+
+def set_observer_model(model_id: str) -> None:
+    """设置观察者模型。空串 = 清除。"""
+    data = _load_raw()
+    if model_id:
+        data["_observer"] = model_id
+    else:
+        data.pop("_observer", None)
+    _store_path().write_text(json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def _is_major_model(model_id: str) -> bool:

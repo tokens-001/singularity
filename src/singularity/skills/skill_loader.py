@@ -37,7 +37,6 @@ class SkillDef:
     name: str
     description: str = ""
     type: str = "tool"          # tool | prompt | flow
-    category: str = ""          # role | practice | observer
     arguments: str = ""         # 空格分隔的参数名，如 "file_path focus"
     source: str = "system"      # system | user
     dir_path: str = ""          # SKILL.md 所在目录路径
@@ -114,7 +113,6 @@ def _validate_skill(meta: dict, body: str, source: str, dir_path: str) -> tuple[
         name=name,
         description=meta.get("description", "").strip(),
         type=skill_type,
-        category=meta.get("category", "").strip(),
         arguments=meta.get("arguments", "").strip(),
         source=source,
         dir_path=dir_path,
@@ -222,7 +220,6 @@ def list_skills(skills: dict[str, SkillDef] = None) -> list[dict]:
             "name": s.name,
             "description": s.description,
             "type": s.type,
-            "category": s.category,
             "arguments": s.arguments,
             "source": s.source,
             "errors": s.errors,
@@ -231,7 +228,7 @@ def list_skills(skills: dict[str, SkillDef] = None) -> list[dict]:
 
 
 def create_user_skill(name: str, description: str, skill_type: str,
-                      arguments: str, body: str, category: str = "") -> SkillDef:
+                      arguments: str, body: str) -> SkillDef:
     """创建用户 skill，写入 .qidian/skills/<name>/SKILL.md。"""
     if skill_type not in _VALID_TYPES:
         raise ValueError(f"type 无效: {skill_type}")
@@ -246,8 +243,6 @@ def create_user_skill(name: str, description: str, skill_type: str,
         f"description: {description}",
         f"type: {skill_type}",
     ]
-    if category:
-        frontmatter_lines.append(f"category: {category}")
     if arguments:
         frontmatter_lines.append(f"arguments: {arguments}")
     frontmatter_lines.append("---")

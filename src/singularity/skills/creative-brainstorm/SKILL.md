@@ -2,7 +2,6 @@
 name: creative-brainstorm
 description: 多角度头脑风暴，生成创意方案
 type: prompt
-category: practice
 ---
 
 # Creative Brainstorm
