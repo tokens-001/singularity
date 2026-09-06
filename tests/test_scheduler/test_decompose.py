@@ -65,9 +65,15 @@ class TestDAGMetrics:
         a = create("task A")
         b = create("task B", depends_on=[a.id], depth=1)
         c = create("task C", depends_on=[b.id], depth=2)
-
-        metrics = dag_metrics()
-        assert metrics["delta"] >= 2  # 至少 B→C 路径长度
+        try:
+            metrics = dag_metrics()
+            assert metrics["delta"] >= 2  # 至少 B→C 路径长度
+        finally:
+            # 清理: 用真实 create() 会写 .qidian/tasks, 不留残留
+            for t in (a, b, c):
+                p = tasks_dir() / f"{t.id}.json"
+                if p.exists():
+                    p.unlink()
 
 
 # ═══════════════════════════════════════════════════════════

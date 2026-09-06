@@ -36,6 +36,7 @@ def consolidate_memory() -> int:
         except Exception as e: witness.heartbeat('memory', f'warn:consolidate:{e}')
 
     try:
+        from singularity.scheduler._memory_graph import find_candidate_latent_edges
         candidates = find_candidate_latent_edges()
         added = 0
         tier3_all = [c for c in candidates if 0.55 <= c.get("semantic_sim", 0) < 0.85]

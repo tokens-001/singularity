@@ -51,6 +51,7 @@ def memory_rebuild():
 
 
 def conflict_list():
+    from ._api_tasks import _list_all_tasks
     all_tasks = _list_all_tasks()
     conflicts = [t for t in all_tasks if t.get("status") == TaskStatus.CONFLICT_HELD.value]
     return {"conflicts": [{"id": t.get("id", t["_filename"]), "description": (t.get("description","") or "")[:120],

@@ -156,6 +156,7 @@ def project_lineage(project_id: str) -> tuple[dict, int]:
     tpl = _get_template(project_id)
     if tpl:
         return {"lineage": tpl}, 200
+    from ._api_tasks import _list_all_tasks
     all_tasks = _list_all_tasks()
     proj_tasks = [t for t in all_tasks if t.get("project_id") == project_id]
     return {"tasks": proj_tasks, "total": len(proj_tasks)}, 200

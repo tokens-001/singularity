@@ -40,7 +40,7 @@ def cleanup():
             _path(p.id).unlink()
 
 def cli(args):
-    return subprocess.run(["python3", "-m", "scheduler"] + args,
+    return subprocess.run(["python3", "-m", "singularity.scheduler"] + args,
                           capture_output=True, text=True)
 
 def main():
@@ -96,12 +96,12 @@ def main():
         r = subprocess.run(["curl", "-s", "-m", "5", BASE + "/"],
                            capture_output=True, text=True)
         html = r.stdout
-        check("首页", "tab-bar" in html or "Singularity" in html)
-        for tab in ["tab-dashboard", "tab-tasks", "tab-project", "tab-config"]:
-            check(f"  {tab}", tab in html)
-        check("  toast CSS", ".toast" in html or "style.css" in html)
-        check("  SSE JS", "EventSource" in html or "app.js" in html)
-    except Exception: check("首页", False)
+        # CSR 前端: tab 元素由 React 运行时渲染, 不在静态 HTML 里。
+        # 正确检查 = 首页返回挂载点 + 引用了编译后的 js/css 产物。
+        check("首页挂载点", "Singularity" in html or 'id="root"' in html)
+        check("  js 产物", ".js" in html)
+        check("  css 产物", ".css" in html)
+    except Exception: check("首页挂载点", False)
     try:
         check("SSE 端点", "data:" in subprocess.run(
             ["curl", "-s", "-m", "4", f"{BASE}/api/events"],
@@ -114,7 +114,8 @@ def main():
 
     print("── API 端点全覆盖 ──")
     for path, method in [("/api/conflicts","GET"), ("/api/loop/status","GET")]:
-        check(f"端点 {path}", "error" not in api(path, method))
+        # conflict_list 返回数据里有 "error" 字段(存冲突详情), 不能子串匹配
+        check(f"端点 {path}", api(path, method).get("error") is None)
 
     # ═══ 边界 19 项 ═══
     print("\n── 边界情况 ──")

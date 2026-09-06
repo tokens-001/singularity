@@ -13,6 +13,7 @@ __all__ = ['_COLD_MAX', '_HOT_WINDOW', '_INSIGHTS_PATH', '_WARM_WINDOW', '_get_a
 
 def stats() -> dict:
     """各图统计。"""
+    from singularity.scheduler._memory_graph import find_candidate_latent_edges
     events = _load_events()
     edges = _load_edges()
     entity_idx: dict[str, list[str]] = _read_json(_ENTITY_IDX_PATH) or {}
