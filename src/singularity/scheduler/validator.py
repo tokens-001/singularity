@@ -241,6 +241,18 @@ def _hard_diff_rules(changed_files: list[str], diff_text: str = "", cwd=None) ->
     return {"issues": issues, "passed": len([i for i in issues if i["severity"] == "critical"]) == 0}
 
 
+def _extract_json_obj(text: str):
+    """从模型输出提取首个 JSON 对象(支持嵌套 issues 数组)。失败返回 None。"""
+    start = text.find('{')
+    end = text.rfind('}')
+    if start == -1 or end <= start:
+        return None
+    try:
+        return json.loads(text[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+
+
 def crossover_review(task_desc, raw_output, changed_files, writer_level, writer_model="", cwd=None):
     """Use a DIFFERENT model to review agent output. Returns {issues,verdict,summary}."""
     if not changed_files:
@@ -291,14 +303,10 @@ JSON:"""
     except Exception as e:
         return {"issues":[],"verdict":"pass","summary":f"review call failed: {e}"}
 
-    try:
-        m = re.search(r'\{[^{}]*"issues"[^{}]*\}', raw, re.DOTALL)
-        if m:
-            d = json.loads(m.group())
-            return {"issues":d.get("issues",[]),"verdict":d.get("verdict","pass"),
-                    "summary":d.get("summary",raw[:200])}
-    except Exception as _e:
-        logging.getLogger(__name__).warning("JSON parse validation failed: %s", _e)
+    d = _extract_json_obj(raw)
+    if d:
+        return {"issues":d.get("issues",[]),"verdict":d.get("verdict","pass"),
+                "summary":d.get("summary",raw[:200])}
     return {"issues":[],"verdict":"pass","summary":raw[:200] if raw else "no result"}
 
 
@@ -374,8 +382,9 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
     reviews = []
     start_time = _time.time()
     
-    def review_chunk(chunk_data):
+    def review_chunk(chunk_data, cfg):
         chunk_label, chunk_content = chunk_data
+        model_name = cfg.get("model", "unknown")
         try:
             req_block = f"\nTask requirements:\n{requirements[:500]}\n" if requirements else ""
             chunk_prompt = f"""File review for {filepath} ({chunk_label}):{req_block}
@@ -390,21 +399,17 @@ Output ONLY JSON: {{"issues":[{{"severity":"critical|warning|info","line":approx
 No issues? {{"issues":[],"verdict":"pass","summary":"no issues"}}
 JSON:"""
             
-            result = _disp.dispatch(chunk_prompt, review_level, f"mmr_{name[:8]}",
+            result = _disp.dispatch(chunk_prompt, review_level, f"mmr_{model_name[:8]}",
                                    {review_level:[cfg]}, cwd=root)
             raw = result.executor_result.raw_output if result and result.executor_result else ""
             
-            try:
-                m = re.search(r'\{[^{}]*"issues"[^{}]*\}', raw, re.DOTALL)
-                if m:
-                    d = json.loads(m.group())
-                    return {"model": cfg.get("model", "unknown"),
-                           "issues": d.get("issues", []),
-                           "verdict": d.get("verdict", "pass"),
-                           "summary": d.get("summary", raw[:200])}
-            except Exception as _e:
-                logging.getLogger(__name__).warning("model review failed: %s", _e)
-            return {"model": cfg.get("model", "unknown"),
+            d = _extract_json_obj(raw)
+            if d:
+                return {"model": model_name,
+                       "issues": d.get("issues", []),
+                       "verdict": d.get("verdict", "pass"),
+                       "summary": d.get("summary", raw[:200])}
+            return {"model": model_name,
                    "issues": [], "verdict": "pass", "summary": raw[:200]}
         except Exception as e:
             return {"model": cfg.get("model", "unknown"),
@@ -412,7 +417,7 @@ JSON:"""
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(model_cfgs)) as executor:
         future_to_model = {
-            executor.submit(review_chunk, chunk_data): cfg.get("model", "unknown")
+            executor.submit(review_chunk, chunk_data, cfg): cfg.get("model", "unknown")
             for chunk_data in chunks
             for cfg in model_cfgs
         }
