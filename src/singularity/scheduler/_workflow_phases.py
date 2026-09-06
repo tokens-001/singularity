@@ -233,6 +233,10 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
         "devops": "devops_engineer",
     }
 
+    # 分发前先确保项目独立 git 仓库存在 (否则任务 dispatch 时 snap.take 会卡住)
+    from singularity.scheduler.project import ensure_repo
+    ensure_repo(project.id)
+
     created = 0
     id_map = {}  # 本地任务 id (T1..Tn) → tracker task_id
     for idx, tdef in enumerate(exec_tasks):

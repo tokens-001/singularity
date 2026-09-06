@@ -15,7 +15,10 @@ def _heartbeat_dir() -> Path:
 
 
 def _hb_path(task_id: str, agent_level: str) -> Path:
-    return _heartbeat_dir() / f"{task_id}_{agent_level}.json"
+    # sanitize: agent_level 常被塞进 stderr/异常文本(含 /、换行、冒号等非法文件名字符)
+    raw = f"{task_id}_{agent_level}"
+    safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in raw)[:150]
+    return _heartbeat_dir() / f"{safe}.json"
 
 
 def heartbeat(task_id: str, agent_level: str, status: str = "running", detail: str = "") -> None:

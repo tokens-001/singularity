@@ -1,7 +1,7 @@
 __all__ = ['_cmd_add', '_cmd_apply', '_cmd_loop', '_cmd_merge', '_cmd_rollback', '_cmd_run', '_cmd_status', '_drain_queue', '_is_merged_to_main', '_release_pending_ref']
 
 """CLI sub-commands."""
-import json, os, sys, time
+import json, os, signal, sys, time
 from pathlib import Path
 from singularity.scheduler import config, tracker
 from singularity.scheduler import dispatcher as disp_mod

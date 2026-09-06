@@ -6,6 +6,7 @@ from pathlib import Path
 from singularity.scheduler import config, tracker
 from singularity.scheduler import dispatcher as disp_mod
 from singularity.scheduler import orchestrator
+from singularity.scheduler.project import Phase
 from singularity.scheduler.tracker import TaskStatus
 
 def _cmd_project(argv: list) -> int:
