@@ -138,7 +138,9 @@ def models_import(models: list[dict], auto_assign: bool = False):
 def model_list():
     from . import model_registry, api_store
     from . import dispatcher as disp_mod
-    models = model_registry.load_models()
+    # 前端模型目录只显示扫描导入的模型(models_custom); 内置能力快照(models.toml)只供调度/扫描填能力, 不出现在目录
+    custom_ids = set(model_registry._load_custom().keys())
+    models = {mid: m for mid, m in model_registry.load_models().items() if mid in custom_ids}
     custom = disp_mod._load_custom_agents()
     disabled_by_tier = custom.get("_disabled", {})
     return {mid: {"id": m.id, "provider": m.provider, "display": m.display,

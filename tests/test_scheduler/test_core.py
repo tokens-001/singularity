@@ -12,7 +12,7 @@ class TestModelRegistry:
 
     def test_load_models(self):
         models = load_models()
-        assert len(models) > 3
+        assert len(models) > 3  # 能力快照(models.toml)必须在
         assert "deepseek-v4-pro" in models
 
     def test_for_phase(self):
