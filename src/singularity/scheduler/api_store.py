@@ -190,6 +190,13 @@ def remove(api_id: str) -> bool:
         return False
     del entries[api_id]
     _save(entries)
+    # 同步清理该 API 关联的扫描模型 (否则删了 API 模型还在, 不同步)
+    custom = load_custom_models()
+    dropped = [mid for mid, m in custom.items() if m.get("provider") == api_id]
+    if dropped:
+        for mid in dropped:
+            del custom[mid]
+        _custom_models_path().write_text(json.dumps(custom, ensure_ascii=False, indent=2))
     return True
 
 
