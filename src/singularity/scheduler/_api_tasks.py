@@ -322,17 +322,59 @@ def task_set_mode(task_id: str, mode: str) -> tuple[dict, int]:
 
 
 def task_delete(task_id: str) -> tuple[dict, int]:
-    """POST /api/tasks/<id>/delete"""
+    """POST /api/tasks/<id>/delete — 清任务本体 + 衍生残留 (worktree/snapshot/标记/ref)。"""
     config.ensure_dirs()
+    task = tracker.read_task(task_id)  # 先读: worktree/ref 清理需要 repo_root
+    try:
+        from singularity.scheduler.project import repo_root_for
+        repo_root = repo_root_for(task) if task else config.PROJECT_ROOT
+    except Exception:
+        repo_root = config.PROJECT_ROOT
     deleted = 0
-    for d in [config.CANCEL_DIR, config.TRACE_DIR, tracker.tasks_dir()]:
-        p = d / f"{task_id}.json"
+
+    def _rm(p: Path) -> None:
+        nonlocal deleted
         try:
             if p.exists():
                 p.unlink()
                 deleted += 1
         except Exception as e:
-            witness.heartbeat('_api', f'warn:{e}')
+            witness.heartbeat('_api', f'warn:del:{e}')
+
+    # 1. {task_id}.json 单文件: 任务本体/取消/暂停/parking/扣留
+    for d in (tracker.tasks_dir(), config.CANCEL_DIR, config.PAUSE_DIR,
+              config.PARKED_DIR, config.HOLD_DIR):
+        _rm(d / f"{task_id}.json")
+    _rm(config.TRACE_DIR / f"{task_id}.json")
+
+    # 2. E+ patch 暂存 (.md)
+    _rm(config.PATCH_DIR / f"{task_id}.md")
+    _rm(config.PATCH_DIR / f"{task_id}_plan.md")
+
+    # 3. snapshot ({ts}_{task_id}.json)
+    for p in config.SNAPSHOT_DIR.glob(f"*_{task_id}.json"):
+        _rm(p)
+
+    # 4. worktree ({task_id}_{level} 目录) — 复用 cleanup 处理 git 元数据/孤儿/权限
+    try:
+        from singularity.scheduler._git_worktree import (
+            Worktree, cleanup as _wt_cleanup, _worktrees_dir)
+        for wt_path in _worktrees_dir().glob(f"{task_id}_*"):
+            if wt_path.is_dir():
+                _wt_cleanup(Worktree(path=wt_path, name=wt_path.name,
+                                     baseline_ref="", repo_root=repo_root))
+                if not wt_path.exists():
+                    deleted += 1
+    except Exception as e:
+        witness.heartbeat('_api', f'warn:wt_del:{e}')
+
+    # 5. 锚定 ref (refs/qidian/pending/{task_id})
+    try:
+        from ._worktree import _release_ref
+        _release_ref(task_id, repo_root=repo_root)
+    except Exception:
+        pass
+
     if deleted:
         return {"ok": True, "message": f"已删除 {deleted} 个文件"}, 200
     return {"error": "任务文件不存在"}, 404
