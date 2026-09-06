@@ -217,7 +217,24 @@ class OpenAIAgentExecutor(BaseExecutor):
             except _RateLimitError:
                 time.sleep(2 ** turn)
                 continue
-            except (_NetworkError, _FormatError) as e:
+            except _FormatError as e:
+                # thinking 模型(DeepSeek V4 等)不接受 tool_choice=required → 降级 auto 重试一次
+                if body.get("tool_choice") == "required" and "tool_choice" in str(e):
+                    body["tool_choice"] = "auto"
+                    try:
+                        resp_data = self._api_call(body)
+                    except _RateLimitError:
+                        time.sleep(2 ** turn)
+                        continue
+                    except (_NetworkError, _FormatError) as e2:
+                        return ExecutorResult(success=False, error=str(e2),
+                                              error_kind="exec", elapsed=time.time() - start,
+                                              tool_events=list(self._tool_events))
+                else:
+                    return ExecutorResult(success=False, error=str(e),
+                                          error_kind="exec", elapsed=time.time() - start,
+                                          tool_events=list(self._tool_events))
+            except _NetworkError as e:
                 return ExecutorResult(success=False, error=str(e),
                                       error_kind="exec", elapsed=time.time() - start,
                                       tool_events=list(self._tool_events))
