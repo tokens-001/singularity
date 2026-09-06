@@ -6,6 +6,7 @@ ProjectState 是整个工作流的单一真相源。存盘到 .qidian/projects/{
 
 from __future__ import annotations
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -217,9 +218,19 @@ def get_project_dir(project_id: str) -> Path:
     return d
 
 
+def _sanitize_name(name: str) -> str:
+    """项目名 → 合法目录名：保留中英文/数字/_-，其余转 -，去首尾 -。"""
+    s = re.sub(r"[^\w-]", "-", name.strip())
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s or "project"
+
+
 def repo_dir(project_id: str) -> Path:
-    """项目自己的代码 git 仓库根 (.qidian/projects/<id>/repo)。与奇点仓库隔离。"""
-    return get_project_dir(project_id) / "repo"
+    """项目代码仓库根：<项目根>/<项目名>/。与奇点仓库隔离、路径直观。"""
+    proj = load(project_id)
+    if proj and proj.name:
+        return config.PROJECTS_ROOT / _sanitize_name(proj.name)
+    return get_project_dir(project_id) / "repo"  # 兜底：找不到项目定义时回退旧路径
 
 
 def repo_root_for(task) -> Path:
@@ -326,6 +337,10 @@ def create(
     auto_mode: bool = False,
 ) -> ProjectState:
     now = time.time()
+    # 重名校验：与已注册项目同名（sanitize 后）或目录已存在 → 拒绝
+    key = _sanitize_name(name)
+    if any(_sanitize_name(p.name) == key for p in list_all()) or (config.PROJECTS_ROOT / key).exists():
+        raise ValueError(f"项目名 '{name}' 已被占用，请换一个")
     proj = ProjectState(
         id=_next_id(), name=name, template=template,
         description=description, scope=scope,

@@ -64,7 +64,11 @@ def _cmd_project_create(args: list) -> int:
             print(f"未知参数: {args[i]}", file=sys.stderr)
             return 1
 
-    proj = create(name=name, template=template, budget=budget, auto_mode=auto_mode)
+    try:
+        proj = create(name=name, template=template, budget=budget, auto_mode=auto_mode)
+    except ValueError as e:
+        print(f"创建失败: {e}", file=sys.stderr)
+        return 1
     tmpl = TEMPLATES.get(template, {})
     print(f"[project] 创建: {proj.id[:8]}  {proj.name}")
     print(f"  template: {template} ({tmpl.get('name','')})")

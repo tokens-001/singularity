@@ -45,8 +45,11 @@ def project_create(name: str, template: str = "product_dev",
                    constraints: list = None, budget: float = 5.0) -> tuple[dict, int]:
     """POST /api/projects"""
     from . import project as proj_mod
-    p = proj_mod.create(name=name, template=template, description=description,
-                        scope=scope, constraints=constraints or [], budget=budget)
+    try:
+        p = proj_mod.create(name=name, template=template, description=description,
+                            scope=scope, constraints=constraints or [], budget=budget)
+    except ValueError as e:
+        return {"error": str(e)}, 400
     return {"ok": True, "project": {"id": p.id, "name": p.name}}, 200
 
 
@@ -56,7 +59,9 @@ def project_detail(project_id: str) -> tuple[dict, int]:
     proj = proj_mod.load(project_id)
     if proj is None:
         return {"error": "项目不存在"}, 404
-    return proj.to_dict() if hasattr(proj, 'to_dict') else {"ok": True}, 200
+    d = proj.to_dict() if hasattr(proj, 'to_dict') else {"ok": True}
+    d["repo_dir"] = str(proj_mod.repo_dir(project_id))  # 成品保存路径
+    return d, 200
 
 
 def project_gate_confirm(project_id: str, gate: str = "", decision: str = "",

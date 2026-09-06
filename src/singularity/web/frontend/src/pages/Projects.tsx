@@ -137,6 +137,7 @@ export default function Projects() {
                     ))}
                   </div>
                   <div className="text-secondary" style={{ marginBottom: 4 }}>{detail.description}</div>
+                  {detail.repo_dir && <div className="fs-10 text-muted" style={{ marginBottom: 4 }}>📁 成品：{detail.repo_dir}</div>}
                   {detail.research_report && <ReportBlock data={detail.research_report} />}
                   {detail.architecture && <ArchBlock data={detail.architecture} />}
                   {detail.phase && detail.phase.startsWith('gate') && (

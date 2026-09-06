@@ -6,6 +6,7 @@
   - 强 D 阈值可调 (审计 6.2)
 """
 
+import os
 from pathlib import Path
 
 # ── 路径 ──────────────────────────────────────────────────────────────
@@ -20,6 +21,8 @@ EVAL_SCRIPT = ENGINE_DIR / "scripts" / "eval.py"
 
 # 快照与产物
 QIDIAN_DIR = PROJECT_ROOT / ".qidian"
+# 项目成品根目录（默认 home 下，可用 QIDIAN_PROJECTS_ROOT 覆盖）
+PROJECTS_ROOT = Path(os.environ.get("QIDIAN_PROJECTS_ROOT", "") or (Path.home() / "qidian-projects"))
 SNAPSHOT_DIR = QIDIAN_DIR / "snapshots"
 PATCH_DIR = QIDIAN_DIR / "patches"  # E+ 智谱产出暂存, apply 前不落盘 (审计 6.5)
 TRACE_DIR = QIDIAN_DIR / "traces"
