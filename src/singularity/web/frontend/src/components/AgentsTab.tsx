@@ -61,12 +61,12 @@ export default function AgentsTab() {
               <div className="agent-card-header" onClick={() => setExpanded(isExpanded ? '' : a.model)}>
                 <span style={{ color: 'var(--accent-green)', fontSize: 8 }}>●</span>
                 <span className="fw-600">{mcn(m||{id:a.model})}</span>
-                <span className="fs-9 text-muted" style={{ marginLeft: 'auto' }}>{roles.length} 个角色</span>
+                <span className="fs-10 text-muted" style={{ marginLeft: 'auto' }}>{roles.length} 个角色</span>
               </div>
-              <div className="fs-9 text-muted" style={{ marginTop: 2 }}>{m?.provider||'?'} · {m?.cost||'?'} · max_turns={a.max_turns||5}</div>
+              <div className="fs-10 text-muted" style={{ marginTop: 2 }}>{m?.provider||'?'} · {m?.cost||'?'} · max_turns={a.max_turns||5}</div>
               {isExpanded && (
                 <div style={{ marginTop: 6, borderTop: '1px solid var(--border)', paddingTop: 4 }} onClick={e => e.stopPropagation()}>
-                  <div className="fs-9 text-muted" style={{ marginBottom: 4 }}>角色分配:</div>
+                  <div className="fs-10 text-muted" style={{ marginBottom: 4 }}>角色分配:</div>
                   <div className="flex-center gap-4 flex-wrap" style={{ marginBottom: 4 }}>
                     {ALL_ROLES.map(r => {
                       const has = roles.includes(r)
@@ -78,7 +78,7 @@ export default function AgentsTab() {
                       )
                     })}
                   </div>
-                  <button onClick={() => disable(a.model)} className="btn-ghost-danger fs-9" style={{ padding: 0 }}>移除</button>
+                  <button onClick={() => disable(a.model)} className="btn-ghost-danger fs-10" style={{ padding: 0 }}>移除</button>
                 </div>
               )}
             </div>

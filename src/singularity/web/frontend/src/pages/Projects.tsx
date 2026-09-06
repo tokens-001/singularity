@@ -129,7 +129,7 @@ export default function Projects() {
                   <div className="flex-center gap-4 flex-wrap" style={{ marginBottom: 8 }}>
                     {phases.map(ph => (
                       <span key={ph} style={{
-                        padding: '2px 6px', borderRadius: 3, fontSize: 9, fontWeight: ph===detail.phase?700:400,
+                        padding: '2px 6px', borderRadius: 3, fontSize: 10, fontWeight: ph===detail.phase?700:400,
                         color: ph===detail.phase?'#fff':(PC[ph]||'var(--text-muted)'),
                         background: ph===detail.phase?PC[ph]:'transparent',
                         border: '1px solid '+(PC[ph]||'var(--border)')

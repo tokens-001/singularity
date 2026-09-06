@@ -5,6 +5,9 @@ import { Plus, Trash2, Search, Download, X } from 'lucide-react'
 import { mcn } from '../pages/Config'
 import type { ModelInfo, ApiStoreItem } from '../lib/types'
 
+const COST_CN: Record<string,string> = { budget:'省', standard:'标准', premium:'贵' }
+const SPEED_CN: Record<string,string> = { fast:'快', medium:'中', slow:'慢' }
+
 const PROVIDERS = [
   { id: 'deepseek', provider: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', api_key_env: 'DEEPSEEK_API_KEY' },
   { id: 'zhipu', provider: '智谱 GLM', base_url: 'https://open.bigmodel.cn/api/paas/v4', api_key_env: 'ZHIPU_API_KEY' },
@@ -115,7 +118,7 @@ export default function ModelsTab() {
               {scanResults.models.map(m => (
                 <label key={m.id} className="flex-center gap-4 fs-11" style={{ padding: '3px 8px', background: selected.has(m.id)?'var(--bg-tertiary)':'transparent', borderRadius: 4, cursor: 'pointer' }}>
                   <input type="checkbox" checked={selected.has(m.id)} onChange={()=>{const n=new Set(selected);n.has(m.id)?n.delete(m.id):n.add(m.id);setSelected(n)}}/>
-                  {m.display||m.id} <span className="fs-9 text-muted">{m.rating}</span>
+                  {m.display||m.id} <span className="fs-10 text-muted">{m.rating}</span>
                 </label>
               ))}
             </div>
@@ -124,19 +127,27 @@ export default function ModelsTab() {
       )}
 
       <div>
-        <div className="fw-600 fs-12 text-secondary" style={{ marginBottom: 6 }}>模型目录 ({models.length})</div>
+        <div className="fw-600 fs-12 text-secondary" style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>模型目录 ({models.length})</span>
+          <span className="flex-1"/>
+          <span className="fs-11 fw-400 text-muted">观察者</span>
+          <select value={observerModelId} onChange={e => { api.setObserverModel(e.target.value); setObserverModelId(e.target.value) }} className="inp-sm" style={{ width: 'auto' }}>
+            <option value="">未设置</option>
+            {models.map(m => <option key={m.id} value={m.id}>{mcn(m)}</option>)}
+          </select>
+        </div>
         {models.map(m => {
           const rf = m.recommended_for||[]
           const disabled = disabledSet.has(m.id)
           const dotColor = disabled ? 'var(--text-muted)' : (m.api_available?'var(--accent-green)':'var(--text-muted)')
-          const isObserver = m.id === observerModelId
           return (
             <div key={m.id} className="card-row" style={{ opacity: disabled?0.5:1 }}>
               <span style={{ color: dotColor, fontSize: 8 }}>{disabled?'○':'●'}</span>
               <span className="fw-500 flex-1">{mcn(m)}</span>
-              <span className="fs-10 text-muted">{m.cost} · {m.speed}</span>
-              <span className="flex-center gap-4">{rf.slice(0,3).map(p=><span key={p} className="card-tag">{p}</span>)}</span>
-              <button onClick={async ()=>{ await api.setObserverModel(isObserver?'':m.id); fetch() }} className="btn-sm" style={isObserver?{background:'var(--accent-green)',color:'#fff'}:{}}>{isObserver?'观察者✓':'设为观察者'}</button>
+              <span className="fs-10 text-muted">{COST_CN[m.cost||'']||m.cost} · {SPEED_CN[m.speed||'']||m.speed}</span>
+              {rf.length > 0 && !(rf.length === 1 && rf[0] === 'any') && (
+                <span className="flex-center gap-4">{rf.slice(0,3).map(p=><span key={p} className="card-tag">{p}</span>)}</span>
+              )}
               <button onClick={()=>api.deleteModel(m.id).then(fetch)} className="btn-ghost-danger"><Trash2 size={10}/></button>
             </div>
           )

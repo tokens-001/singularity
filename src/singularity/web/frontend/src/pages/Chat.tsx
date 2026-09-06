@@ -37,6 +37,12 @@ export default function Chat() {
   const fetchStatus = async () => {
     try { setStatus(await api.status()) } catch {}
   }
+  const pickRoot = async () => {
+    try {
+      const d: any = await api.fsPick()
+      if (d?.path) { await api.setProjectsRoot(d.path); fetchStatus(); toast('项目根目录已设置', 'success') }
+    } catch {}
+  }
   const fetchProjects = async () => {
     try { const d: any = await api.projects(); const list = Array.isArray(d)?d:(d?.projects||[]); setProjects(list); projectsRef.current = list } catch { toast('加载项目失败', 'error') }
   }
@@ -146,9 +152,9 @@ export default function Chat() {
             </button>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
+          <div style={{ width: '100%', maxWidth: 680, display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, flexWrap: 'wrap', justifyContent: 'space-between' }}>
             {status?.workdir && (
-              <div title={status.workdir} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#fff', border: '1px solid #e5e2d8', borderRadius: 999, padding: '5px 14px', fontSize: 12, color: '#6b6b68', maxWidth: 340 }}>
+              <div onClick={pickRoot} title="项目保存位置（点击更改）" style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#fff', border: '1px solid #e5e2d8', borderRadius: 999, padding: '5px 14px', fontSize: 12, color: '#6b6b68', maxWidth: 340, cursor: 'pointer' }}>
                 <FolderOpen size={13} color="#9a9993" style={{ flexShrink: 0 }}/>
                 <span className="truncate">{status.workdir}</span>
               </div>
@@ -426,16 +432,23 @@ export default function Chat() {
                 <ArrowUp size={14}/>
               </button>
             </div>
-            <div style={{ maxWidth: 860, margin: '6px auto 0' }}>
-              <select value={execMode} onChange={e => setExecMode(e.target.value as any)}
-                style={{
-                  background: '#f3f2ec', color: execMode==='confirm_changes'?'#16a34a':'#6b6b68',
-                  border: `1px solid ${execMode==='confirm_changes'?'#16a34a':'#d8d5cb'}`, borderRadius: 6,
-                  padding: '2px 8px', fontSize: 11, cursor: 'pointer', outline: 'none',
-                }}>
-                <option value="auto_edit">⚡ 自动编辑 — GATE卡点暂停</option>
-                <option value="confirm_changes">🔒 逐步确认 — 每步暂停等确认</option>
-              </select>
+            <div style={{ maxWidth: 860, margin: '6px auto 0', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'space-between' }}>
+              {status?.workdir && (
+                <div onClick={pickRoot} title="项目保存位置（点击更改）" style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#fff', border: '1px solid #e5e2d8', borderRadius: 999, padding: '5px 14px', fontSize: 12, color: '#6b6b68', maxWidth: 340, cursor: 'pointer' }}>
+                  <FolderOpen size={13} color="#9a9993" style={{ flexShrink: 0 }}/>
+                  <span className="truncate">{status.workdir}</span>
+                </div>
+              )}
+              <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+                <select value={execMode} onChange={e => setExecMode(e.target.value as any)}
+                  style={{ appearance: 'none', WebkitAppearance: 'none', background: '#fff',
+                    border: '1px solid #e5e2d8', borderRadius: 999, padding: '5px 30px 5px 14px',
+                    fontSize: 12, color: '#6b6b68', cursor: 'pointer', outline: 'none', lineHeight: 1.4 }}>
+                  <option value="auto_edit">⚡ 自动编辑</option>
+                  <option value="confirm_changes">🔒 逐步确认</option>
+                </select>
+                <ChevronDown size={13} color="#9a9993" style={{ position: 'absolute', right: 11, pointerEvents: 'none' }}/>
+              </div>
             </div>
           </div>
         </>

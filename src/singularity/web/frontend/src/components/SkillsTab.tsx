@@ -1,19 +1,24 @@
 import { useState, useEffect } from 'react'
 import { api } from '../lib/api'
-import { Plus, Check } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import type { ModelInfo, AgentItem, AgentsData, SkillInfo } from '../lib/types'
+import { modelDisplay } from '../pages/Config'
+
+const SKILL_SHORT: Record<string,string> = {
+  'code-review': '代码审查', 'creative-brainstorm': '头脑风暴', 'ddd': 'DDD',
+  'ponytail': 'Ponytail', 'codegraph': '代码地图',
+}
 
 export default function SkillsTab() {
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [agents, setAgents] = useState<AgentItem[]>([])
-  const [models, setModels] = useState<ModelInfo[]>([])
   const [matrix, setMatrix] = useState<Record<string,string[]>>({})
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ name: '', description: '', type: 'prompt', content: '' })
 
   const fetch = async () => {
-    const [s, a, m] = await Promise.all([api.skills() as Promise<SkillInfo[]>, api.agents() as Promise<AgentsData>, api.models() as Promise<ModelInfo[]>])
-    setSkills(s); setModels(Object.values(m||{}))
+    const [s, a] = await Promise.all([api.skills() as Promise<SkillInfo[]>, api.agents() as Promise<AgentsData>])
+    setSkills(s)
     const flat: AgentItem[] = []; const disabledSet = new Set((a?._disabled?.any||[]) as string[])
     for (const lst of Object.values(a||{})) if (Array.isArray(lst)) {
       (lst as AgentItem[]).forEach(ag => { if (!disabledSet.has(ag.model)) flat.push(ag) })
@@ -30,7 +35,7 @@ export default function SkillsTab() {
     }
   }
   useEffect(() => { fetch() }, [])
-  const modelLabel = (id: string) => (models.find(x=>x.id===id)||{}).display || id
+  const modelLabel = (id: string) => modelDisplay(id) || id
 
   const toggleSkill = async (model: string, skill: string) => {
     const cur = matrix[model]||[]
@@ -62,49 +67,33 @@ export default function SkillsTab() {
         </div>
       )}
       {skills.length > 0 && (
-        <div style={{ overflow: 'auto' }}>
-          {agents.length > 0 && (
-            <div className="flex-center gap-4 flex-wrap" style={{ marginBottom: 6 }}>
-              {agents.slice(0,8).map(a => (
-                <button key={a.model} onClick={() => assignAll(a.model)}
-                  className="btn-sm" style={{ background: 'transparent', borderColor: 'var(--accent-green)', color: 'var(--accent-green)' }}>
-                  全部分配给 {modelLabel(a.model)}
-                </button>
-              ))}
-            </div>
-          )}
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid var(--border)', textAlign: 'left', color: 'var(--text-muted)' }}>
-                <th style={{ padding: '4px 8px' }}>技能</th>
-                {agents.slice(0,8).map(a => (
-                  <th key={a.model} className="fs-9 truncate" style={{ padding: '4px 4px', textAlign: 'center', maxWidth: 80 }}>{modelLabel(a.model)}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {skills.map(s => (
-                <tr key={s.name} style={{ borderBottom: '1px solid var(--border)' }}>
-                  <td style={{ padding: '4px 8px' }}>
-                    <div className="fw-500">{s.description || s.name}</div>
-                    {s.description && <div className="fs-9 text-muted">{s.name}</div>}
-                  </td>
-                  {agents.slice(0,8).map(a => {
-                    const has = (matrix[a.model]||[]).includes(s.name)
+        <div>
+          {agents.map(a => {
+            const bound = matrix[a.model]||[]
+            return (
+              <div key={a.model} style={{ marginBottom: 10, padding: '10px 12px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius)' }}>
+                <div className="flex-center" style={{ marginBottom: 8 }}>
+                  <span className="fw-600 fs-11 flex-1">{modelLabel(a.model)}</span>
+                  <span className="fs-10 text-secondary">{bound.length}/{skills.length} 技能</span>
+                  <button onClick={() => assignAll(a.model)} className="btn-sm" style={{ marginLeft: 8 }}>全选</button>
+                </div>
+                <div className="flex-center gap-6 flex-wrap">
+                  {skills.map(s => {
+                    const has = bound.includes(s.name)
                     return (
-                      <td key={a.model} style={{ textAlign: 'center', padding: '2px' }}>
-                        <button onClick={()=>toggleSkill(a.model, s.name)}
-                          style={{ width: 20, height: 20, border: 'none', borderRadius: 3, cursor: 'pointer',
-                            background: has?'var(--accent-green)':'var(--bg-tertiary)', color: has?'#fff':'var(--text-muted)', fontSize: 10 }}>
-                          {has?<Check size={10}/>:'—'}
-                        </button>
-                      </td>
+                      <button key={s.name} onClick={() => toggleSkill(a.model, s.name)} title={s.description || s.name}
+                        style={{ padding: '3px 10px', borderRadius: 999, cursor: 'pointer', fontSize: 10,
+                          border: '1px solid ' + (has ? 'var(--accent-green)' : 'var(--border)'),
+                          background: has ? 'var(--accent-green)' : 'var(--bg-tertiary)',
+                          color: has ? '#fff' : 'var(--text-secondary)' }}>
+                        {has ? '✓ ' : ''}{SKILL_SHORT[s.name] || s.name}
+                      </button>
                     )
                   })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
     </div>

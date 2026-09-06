@@ -16,6 +16,16 @@ from singularity.scheduler import config, tracker, witness
 
 _log = logging.getLogger("observer")
 
+# 当前会话的执行模式（前端下拉硬传，绕开关键词检测的软链路）
+_pending_exec_mode = "auto_edit"
+
+
+def set_exec_mode(mode: str) -> None:
+    """设置下一次创建任务的执行模式。auto_edit | confirm_changes。"""
+    global _pending_exec_mode
+    if mode in ("auto_edit", "confirm_changes"):
+        _pending_exec_mode = mode
+
 # 待处理的用户消息队列：元素为 (client_id, question, reply_callback)
 _chat_queue: queue.Queue[tuple[str, str, Callable[[dict], None]]] = queue.Queue()
 
@@ -125,12 +135,12 @@ def _tool_create_task(description: str, level: str = "any") -> dict:
     """
     try:
         task = tracker.create(description)
-        # 检测执行模式
+        # 执行模式：优先前端硬传的 _pending_exec_mode；用户描述含关键词时覆盖
         desc_lower = description.lower()
         if any(w in desc_lower for w in ("每一步确认", "让我审", "步步确认", "每步确认", "变更确认")):
             mode = "confirm_changes"
         else:
-            mode = "auto_edit"
+            mode = _pending_exec_mode
         # LLM 分类任务类型
         route_type = "default"
         try:

@@ -107,7 +107,6 @@ body { font-family: var(--font-sans); background: var(--bg-primary); color: var(
 .flex-wrap { flex-wrap: wrap; }
 .flex-1 { flex: 1; }
 .fw-600 { font-weight: 600; }
-.fs-9 { font-size: 9px; }
 .fs-10 { font-size: 10px; }
 .fs-11 { font-size: 11px; }
 .fs-12 { font-size: 12px; }

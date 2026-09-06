@@ -351,6 +351,7 @@ def auth_remove_user(uid):
 
 def status_overview():
     from . import dispatcher as disp_mod
+    from . import project as proj_mod
     config.ensure_dirs()
     counts = witness._count_by_status(); loads = witness._heartbeat_task_levels()
     pw, dd = witness._timing_stats(); tt = witness._token_stats()
@@ -364,7 +365,7 @@ def status_overview():
         "avg_wait": f"{sum(pw)/len(pw):.1f}s" if pw else "--",
         "avg_done": f"{sum(dd)/len(dd):.1f}s" if dd else "--",
         "token_totals": tt, "stalled": stalled, "agents": agents,
-        "workdir": str(config.PROJECT_ROOT)}, 200
+        "workdir": str(proj_mod.get_projects_root())}, 200
 
 
 def cleanup():

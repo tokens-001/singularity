@@ -64,6 +64,65 @@ def project_detail(project_id: str) -> tuple[dict, int]:
     return d, 200
 
 
+def projects_root_get() -> tuple[dict, int]:
+    """GET /api/projects-root"""
+    from . import project as proj_mod
+    return {"root": str(proj_mod.get_projects_root())}, 200
+
+
+def projects_root_set(path: str) -> tuple[dict, int]:
+    """PUT /api/projects-root"""
+    from . import project as proj_mod
+    try:
+        root = proj_mod.set_projects_root(path)
+    except Exception as e:
+        return {"error": str(e)}, 400
+    return {"ok": True, "root": str(root)}, 200
+
+
+def fs_list(path: str = "") -> tuple[dict, int]:
+    """GET /api/fs/ls —— 列出目录的子目录（目录选择器用）。"""
+    from pathlib import Path
+    base = Path(path or str(Path.home())).expanduser()
+    if not base.is_dir():
+        return {"error": f"目录不存在: {base}"}, 404
+    try:
+        dirs = [e.name for e in sorted(base.iterdir()) if e.is_dir() and not e.name.startswith(".")]
+    except PermissionError:
+        return {"error": "无权限访问"}, 403
+    return {"path": str(base), "parent": str(base.parent), "dirs": dirs}, 200
+
+
+def fs_mkdir(path: str, name: str) -> tuple[dict, int]:
+    """POST /api/fs/mkdir —— 在 path 下新建目录 name。"""
+    from pathlib import Path
+    base = Path(path).expanduser()
+    name = (name or "").strip()
+    if not name or "/" in name or "\\" in name:
+        return {"error": "非法目录名"}, 400
+    target = base / name
+    if target.exists():
+        return {"error": "目录已存在"}, 400
+    target.mkdir(parents=True)
+    return {"ok": True, "path": str(target)}, 200
+
+
+def fs_pick() -> tuple[dict, int]:
+    """POST /api/fs/pick —— 用 macOS Finder 原生对话框选择文件夹。"""
+    import subprocess
+    import sys
+    if sys.platform != "darwin":
+        return {"error": "仅支持 macOS"}, 400
+    script = 'POSIX path of (choose folder with prompt "选择项目根目录")'
+    try:
+        r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return {"error": "选择超时"}, 500
+    if r.returncode != 0:
+        return {"error": "已取消"}, 400
+    return {"path": r.stdout.strip()}, 200
+
+
 def project_gate_confirm(project_id: str, gate: str = "", decision: str = "",
                           feedback: str = "") -> tuple[dict, int]:
     """POST /api/projects/<id>/gate-confirm"""

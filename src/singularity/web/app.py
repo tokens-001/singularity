@@ -669,7 +669,9 @@ from singularity.scheduler import _api as _api_handler
 def spa(path=""):
     """React SPA。API 路由优先匹配，其他全部 fallback。"""
     dist_index = Path(__file__).parent / "static" / "dist" / "index.html"
-    return dist_index.read_text(encoding="utf-8")
+    resp = app.make_response(dist_index.read_text(encoding="utf-8"))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1005,6 +1007,33 @@ def api_project_detail(project_id):
     data, code = _api_handler.project_detail(project_id)
     return jsonify(data), code
 
+@app.route("/api/projects-root")
+def api_projects_root_get():
+    data, code = _api_handler.projects_root_get()
+    return jsonify(data), code
+
+@app.route("/api/projects-root", methods=["PUT"])
+def api_projects_root_set():
+    body = request.get_json(silent=True) or {}
+    data, code = _api_handler.projects_root_set(body.get("path", ""))
+    return jsonify(data), code
+
+@app.route("/api/fs/ls")
+def api_fs_list():
+    data, code = _api_handler.fs_list(request.args.get("path", ""))
+    return jsonify(data), code
+
+@app.route("/api/fs/mkdir", methods=["POST"])
+def api_fs_mkdir():
+    body = request.get_json(silent=True) or {}
+    data, code = _api_handler.fs_mkdir(body.get("path", ""), body.get("name", ""))
+    return jsonify(data), code
+
+@app.route("/api/fs/pick", methods=["POST"])
+def api_fs_pick():
+    data, code = _api_handler.fs_pick()
+    return jsonify(data), code
+
 @app.route("/api/projects/<project_id>/gate-confirm", methods=["POST"])
 def api_project_gate_confirm(project_id):
     body = request.get_json(silent=True) or {}
@@ -1168,10 +1197,9 @@ def api_observer_chat():
         _push_event("observer_answer", json.dumps({"client_id": cid, "answer": text}))
     try:
         from singularity.scheduler.observer_agent import submit_question
-        # 注入执行模式到问题上下文
-        mode_hint = "【执行模式：每一步确认，变更前暂停】" if exec_mode == "confirm_changes" else ""
-        full_question = f"{question}\n{mode_hint}" if mode_hint else question
-        submit_question(cid, full_question, _on_reply, project_id=project_id)
+        from singularity.scheduler._observer_tools import set_exec_mode
+        set_exec_mode(exec_mode)  # 硬设执行模式，绕开关键词检测的软链路
+        submit_question(cid, question, _on_reply, project_id=project_id)
         return jsonify({"ok": True, "client_id": cid, "question": question})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500

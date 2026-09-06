@@ -36,6 +36,11 @@ export const api = {
   createProject: (data: any) => request('/api/projects',{method:'POST',body:JSON.stringify(data)}),
   runPhase: (id: string) => request(`/api/projects/${id}/run-phase`,{method:'POST'}),
   deleteProject: (id: string) => request(`/api/projects/${id}`,{method:'DELETE'}),
+  projectsRoot: async () => { const d = await request<any>('/api/projects-root'); return d?.root || '' },
+  setProjectsRoot: (path: string) => request('/api/projects-root',{method:'PUT',body:JSON.stringify({path})}),
+  fsList: (path: string) => request(`/api/fs/ls?path=${encodeURIComponent(path)}`),
+  fsMkdir: (path: string, name: string) => request('/api/fs/mkdir',{method:'POST',body:JSON.stringify({path,name})}),
+  fsPick: () => request('/api/fs/pick',{method:'POST'}),
   gateConfirm: (id: string, gate: string, decision: string) =>
     request(`/api/projects/${id}/gate-confirm`,{method:'POST',body:JSON.stringify({gate,decision})}),
 

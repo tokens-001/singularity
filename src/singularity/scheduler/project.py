@@ -229,8 +229,45 @@ def repo_dir(project_id: str) -> Path:
     """项目代码仓库根：<项目根>/<项目名>/。与奇点仓库隔离、路径直观。"""
     proj = load(project_id)
     if proj and proj.name:
-        return config.PROJECTS_ROOT / _sanitize_name(proj.name)
+        return get_projects_root() / _sanitize_name(proj.name)
     return get_project_dir(project_id) / "repo"  # 兜底：找不到项目定义时回退旧路径
+
+
+def _settings_path() -> Path:
+    return config.QIDIAN_DIR / "settings.json"
+
+
+def get_projects_root() -> Path:
+    """项目成品根目录：settings.json 用户设置 > 环境变量 > 默认 ~/qidian-projects。"""
+    p = _settings_path()
+    root = None
+    if p.exists():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            r = data.get("projects_root", "")
+            if r:
+                root = Path(r)
+        except (json.JSONDecodeError, KeyError):
+            pass
+    root = root or config.PROJECTS_ROOT
+    root.mkdir(parents=True, exist_ok=True)  # 确保根目录存在（目录选择器可浏览）
+    return root
+
+
+def set_projects_root(path: str) -> Path:
+    """设置项目成品根目录，持久化到 settings.json。返回规范化后的绝对路径。"""
+    root = Path(path).expanduser().resolve()
+    p = _settings_path()
+    data = {}
+    if p.exists():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, KeyError):
+            data = {}
+    data["projects_root"] = str(root)
+    config.QIDIAN_DIR.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return root
 
 
 def repo_root_for(task) -> Path:
@@ -339,7 +376,7 @@ def create(
     now = time.time()
     # 重名校验：与已注册项目同名（sanitize 后）或目录已存在 → 拒绝
     key = _sanitize_name(name)
-    if any(_sanitize_name(p.name) == key for p in list_all()) or (config.PROJECTS_ROOT / key).exists():
+    if any(_sanitize_name(p.name) == key for p in list_all()) or (get_projects_root() / key).exists():
         raise ValueError(f"项目名 '{name}' 已被占用，请换一个")
     proj = ProjectState(
         id=_next_id(), name=name, template=template,
