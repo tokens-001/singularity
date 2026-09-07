@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 # ── 队列调度所需 (精简后) ──────────────────────────────────
 from singularity.scheduler._types import _pending_sse_events
 from singularity.scheduler._exec import _save_trace
-from singularity.scheduler._worktree import _release_ref
+from singularity.scheduler._worktree import _release_ref, cleanup_task_artifacts
 from singularity.scheduler._planner import _maybe_complete_parents
 from singularity.scheduler._task_runner import TaskRunner
 
@@ -149,6 +149,11 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
                 pass
             results.append((t.id, f"worker_error: {e}", None))
             _save_trace(t, route, snap, None, None, False)
+            try:
+                from singularity.scheduler.project import repo_root_for
+                cleanup_task_artifacts(t.id, repo_root_for(t))
+            except Exception:
+                pass
             continue
         if batch.merge_request:
             mq.submit(batch.merge_request)
@@ -162,6 +167,12 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
         if t is not None and now - submitted_at > deadline:
             running_futures.pop(fut)
             try:
+                # 协作式中断: 写取消标记, 让执行线程在下一 turn 边界自行退出
+                config.ensure_dirs()
+                (config.CANCEL_DIR / f"{t.id}.json").write_text("{}", encoding="utf-8")
+            except Exception:
+                pass
+            try:
                 fut.cancel()
             except Exception:
                 pass
@@ -171,6 +182,11 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
                 pass
             results.append((t.id, "timeout", None))
             _save_trace(t, route, snap, None, None, False)
+            try:
+                from singularity.scheduler.project import repo_root_for
+                _release_ref(t.id, repo_root=repo_root_for(t))
+            except Exception:
+                pass
             reaped = True
 
     return reaped

@@ -25,6 +25,7 @@ from singularity.scheduler import tracker
 from singularity.scheduler.tracker import TaskStatus
 from singularity.scheduler import witness
 from singularity.scheduler import orchestrator
+from singularity.scheduler._worktree import cleanup_task_artifacts as _cleanup_task_artifacts
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -319,49 +320,6 @@ def task_set_mode(task_id: str, mode: str) -> tuple[dict, int]:
     task.execution_mode = mode
     tracker._write(task)
     return {"ok": True, "task_id": task_id, "execution_mode": mode}, 200
-
-
-def _cleanup_task_artifacts(task_id: str, repo_root) -> int:
-    """清任务衍生残留 (patch/snapshot/worktree/pending ref)，不动任务本体 json。返回删除数。"""
-    deleted = 0
-
-    def _rm(p: Path) -> None:
-        nonlocal deleted
-        try:
-            if p.exists():
-                p.unlink()
-                deleted += 1
-        except Exception as e:
-            witness.heartbeat('_api', f'warn:del:{e}')
-
-    # E+ patch 暂存 (.md)
-    _rm(config.PATCH_DIR / f"{task_id}.md")
-    _rm(config.PATCH_DIR / f"{task_id}_plan.md")
-
-    # snapshot ({ts}_{task_id}.json)
-    for p in config.SNAPSHOT_DIR.glob(f"*_{task_id}.json"):
-        _rm(p)
-
-    # worktree ({task_id}_{level} 目录) — 复用 cleanup 处理 git 元数据/孤儿/权限
-    try:
-        from singularity.scheduler._git_worktree import (
-            Worktree, cleanup as _wt_cleanup, _worktrees_dir)
-        for wt_path in _worktrees_dir().glob(f"{task_id}_*"):
-            if wt_path.is_dir():
-                _wt_cleanup(Worktree(path=wt_path, name=wt_path.name,
-                                     baseline_ref="", repo_root=repo_root))
-                if not wt_path.exists():
-                    deleted += 1
-    except Exception as e:
-        witness.heartbeat('_api', f'warn:wt_del:{e}')
-
-    # 锚定 ref (refs/qidian/pending/{task_id})
-    try:
-        from ._worktree import _release_ref
-        _release_ref(task_id, repo_root=repo_root)
-    except Exception:
-        pass
-    return deleted
 
 
 def task_delete(task_id: str) -> tuple[dict, int]:

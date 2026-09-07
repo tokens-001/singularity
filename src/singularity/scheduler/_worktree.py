@@ -61,6 +61,55 @@ def _release_ref(task_id: str, repo_root=None) -> bool:
     return True
 
 
+def cleanup_task_artifacts(task_id: str, repo_root) -> int:
+    """清任务衍生残留 (patch/snapshot/worktree/pending ref)，不动任务本体 json。返回删除数。
+
+    从 _api_tasks 下沉到此，供 orchestrator 终态清理复用（避免循环 import）。
+    """
+    from singularity.scheduler import witness
+    from singularity.scheduler._git_worktree import _worktrees_dir
+    deleted = 0
+
+    def _rm(p) -> None:
+        nonlocal deleted
+        try:
+            if p.exists():
+                p.unlink()
+                deleted += 1
+        except Exception as e:
+            witness.heartbeat('_api', f'warn:del:{e}')
+
+    # E+ patch 暂存 (.md)
+    _rm(config.PATCH_DIR / f"{task_id}.md")
+    _rm(config.PATCH_DIR / f"{task_id}_plan.md")
+
+    # 取消/暂停标记 (超时协作中断可能残留, 未消费则误判后续 retry)
+    _rm(config.CANCEL_DIR / f"{task_id}.json")
+    _rm(config.PAUSE_DIR / f"{task_id}.json")
+
+    # snapshot ({ts}_{task_id}.json)
+    for p in config.SNAPSHOT_DIR.glob(f"*_{task_id}.json"):
+        _rm(p)
+
+    # worktree ({task_id}_{level} 目录) — 复用 cleanup 处理 git 元数据/孤儿/权限
+    try:
+        for wt_path in _worktrees_dir().glob(f"{task_id}_*"):
+            if wt_path.is_dir():
+                wt_cleanup(Worktree(path=wt_path, name=wt_path.name,
+                                    baseline_ref="", repo_root=repo_root))
+                if not wt_path.exists():
+                    deleted += 1
+    except Exception as e:
+        witness.heartbeat('_api', f'warn:wt_del:{e}')
+
+    # 锚定 ref (refs/qidian/pending/{task_id})
+    try:
+        _release_ref(task_id, repo_root=repo_root)
+    except Exception:
+        pass
+    return deleted
+
+
 _MAX_WORKTREES = 50
 
 def _maybe_create_worktree(task_id: str, level: str, agent_cfg: dict, snapshot_ref: str = "", repo_root=None):
