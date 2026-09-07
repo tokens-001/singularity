@@ -268,11 +268,65 @@ def _check_artifact(changed_files: list[str], root: Path) -> CheckResult:
 # 需求符合性校验 (按 production-flow.md: 测试阶段两层之一)
 # ═══════════════════════════════════════════════════════════════
 
+def _conformance_via_llm(trace: list, agent_output: str, changed_files: list[str]):
+    """LLM 逐条验收需求符合性 (替代机械关键词)。无模型/失败返回 None (降级机械)。"""
+    if not agent_output.strip():
+        return None
+    try:
+        from singularity.scheduler import dispatcher as _disp
+        from singularity.scheduler.validator import _extract_json_obj
+        agents = _disp.load_agents()
+        pool = [a for a in (agents.get("any", []) or []) if _disp.agent_api_available(a)]
+        if not pool:
+            return None
+        cfg = pool[0]
+        items_block = "\n".join(
+            f"{i+1}. {it.get('requirement','')[:120]}"
+            + (f" — 验收: {it.get('acceptance_criteria','')[:120]}" if it.get('acceptance_criteria') else "")
+            for i, it in enumerate(trace))
+        prompt = f"""核对以下需求是否在产出中实现。逐条判定 covered=true/false。
+
+需求清单:
+{items_block}
+
+产出(截断):
+```
+{agent_output[:4000]}
+```
+
+Output ONLY JSON: {{"items":[{{"idx":1,"covered":true,"reason":"简短"}}]}}
+JSON:"""
+        result = _disp.dispatch(prompt, "any", f"conf_{len(trace)}", {"any": [cfg]})
+        raw = result.executor_result.raw_output if result and result.executor_result else ""
+        d = _extract_json_obj(raw)
+        if not d or not isinstance(d.get("items"), list) or not d["items"]:
+            return None
+        items = d["items"]
+        passed = [it for it in items if it.get("covered")]
+        failed = [it for it in items if not it.get("covered")]
+        ev = {"hard": True, "total": len(items), "passed": len(passed),
+              "failed": len(failed),
+              "failed_items": [f"{it.get('idx','?')}:{it.get('reason','')[:60]}" for it in failed],
+              "llm": True}
+        if failed:
+            return CheckResult(
+                passed=False,
+                reason=f"需求符合性(LLM): {len(passed)}/{len(items)} 通过, {len(failed)} 条未达标",
+                evidence=ev)
+        return CheckResult(
+            passed=True,
+            reason=f"需求符合性(LLM): {len(passed)}/{len(items)} 全部通过",
+            evidence=ev)
+    except Exception:
+        return None
+
+
 def check_requirement_conformance(project_id: str, agent_output: str = "",
                                    changed_files: list[str] = None) -> CheckResult:
     """加载 traceability.json，逐条核验需求符合性。
 
     对照立项需求追溯表，检查每条需求是否在产出中覆盖。
+    LLM 逐条验收优先，无模型/失败降级机械关键词。
     返回 CheckResult: passed + 逐条明细。
     """
     changed_files = changed_files or []
@@ -288,6 +342,12 @@ def check_requirement_conformance(project_id: str, agent_output: str = "",
     except Exception:
         return CheckResult(passed=True, reason="追溯表读取失败,跳过")
 
+    # LLM 逐条验收优先, 失败降级机械
+    llm_result = _conformance_via_llm(trace, agent_output, changed_files)
+    if llm_result is not None:
+        return llm_result
+
+    # 机械关键词兜底 (无模型/LLM 失败时)
     # 逐条检查
     passed_items = []
     failed_items = []
