@@ -300,16 +300,22 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             except Exception:
                 pass
             sa = val_mod.security_audit_review(diff_text, cwd)
-            if sa.get("verdict") == "needs_fix":
-                findings = sa.get("findings", [])
+            findings = sa.get("findings", []) if sa.get("verdict") == "needs_fix" else []
+            if findings:
+                # 阈值: 仅 critical/high 硬拦 (真漏洞); medium/low = 加固建议/设计不完整, 软信号不硬拦
+                hard = [f for f in findings if f.get("severity") in ("critical", "high")]
                 quality["warnings"].append(
                     f"安全审计 {len(findings)} 条问题: " +
                     "; ".join(f"{f.get('severity','?')}:{f.get('description','')[:40]}"
                               for f in findings[:3]))
-                quality["failure_kind"] = "security_findings"
-                quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.3)
-                validation.action = "retry"
-                _record_review_failure("security_findings")
+                if hard:
+                    quality["failure_kind"] = "security_findings"
+                    quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.3)
+                    validation.action = "retry"
+                    _record_review_failure("security_findings")
+                else:
+                    # 软信号: 加固建议/设计不完整 (不硬拦, 不触发 retry)
+                    quality["quality_signals"]["security_soft"] = len(findings)
             quality["quality_signals"]["security_audit"] = sa.get("verdict", "unknown")
         except Exception as e:
             quality["warnings"].append(f"安全审计 error: {e}")
