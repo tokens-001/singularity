@@ -188,27 +188,9 @@ _DEFAULT_AGENTS: dict[str, Agent] = {
 }
 
 _DEFAULT_ASSIGNMENTS: dict[str, RoleAssignment] = {
-    # ── 定义层 (Observer) ──
-    "researcher":       RoleAssignment(role_key="researcher", agents=["DeepSeek-E"], active="DeepSeek-E"),
-    # ── 架构层 (D) ──
-    "system_architect": RoleAssignment(role_key="system_architect", agents=["gpt-5.5","kimi-k2.7-code","glm-5.2"], active="gpt-5.5"),
-    "ai_architect":     RoleAssignment(role_key="ai_architect", agents=["gpt-5.5","kimi-k2.7-code","glm-5.2"], active="gpt-5.5"),
-    "frontend_architect": RoleAssignment(role_key="frontend_architect", agents=["gpt-5.5","kimi-k2.7-code","glm-5.2"], active="gpt-5.5"),
-    # ── 实现层 (E/E+) ──
     "implementer":      RoleAssignment(role_key="implementer", agents=["DeepSeek-E"], active="DeepSeek-E"),
-    "debugger":         RoleAssignment(role_key="debugger", agents=["DeepSeek-E"], active="DeepSeek-E"),
-    "builder":          RoleAssignment(role_key="builder", agents=["GLM-E+"], active="GLM-E+"),
-    "frontend_engineer": RoleAssignment(role_key="frontend_engineer", agents=["DeepSeek-E"], active="DeepSeek-E"),
-    "backend_engineer":  RoleAssignment(role_key="backend_engineer", agents=["DeepSeek-E"], active="DeepSeek-E"),
-    "data_engineer":     RoleAssignment(role_key="data_engineer", agents=["GLM-E+"], active="GLM-E+"),
-    "ai_engineer":       RoleAssignment(role_key="ai_engineer", agents=["GLM-E+"], active="GLM-E+"),
-    "devops_engineer":   RoleAssignment(role_key="devops_engineer", agents=["DeepSeek-E"], active="DeepSeek-E"),
-    # ── 验收层 (D) ──
     "qa_engineer":      RoleAssignment(role_key="qa_engineer", agents=["gpt-5.5","kimi-k2.7-code","glm-5.2"], active="gpt-5.5"),
     "security_auditor": RoleAssignment(role_key="security_auditor", agents=["gpt-5.5","kimi-k2.7-code","glm-5.2"], active="gpt-5.5"),
-    # ── 监督/审查 ──
-    "supervisor":       RoleAssignment(role_key="supervisor", agents=[], active=""),
-    "reviewer":         RoleAssignment(role_key="reviewer", agents=["gpt-5.5","kimi-k2.7-code","glm-5.2"], active="gpt-5.5"),
 }
 
 

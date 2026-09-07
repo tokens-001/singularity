@@ -200,6 +200,64 @@ def run_post_exec_checks(*, validation, quality, exec_result,
         except Exception as e:
             quality["warnings"].append(f"multi-review error: {e}")
 
+    # 3) QA 约束验收: qa_engineer 角色对照约束清单验证 (补 multi_model_review 不查的约束维度)
+    if validation.action == "pass" and changed and not _is_trivial_change(changed, cwd):
+        try:
+            proj = None
+            if project_id:
+                from . import project as proj_mod
+                proj = proj_mod.load(project_id)
+            constraints = getattr(proj, 'constraints_checklist', []) if proj else []
+            if constraints:
+                diff_text = ""
+                try:
+                    diff_text = "\n\n".join(
+                        subprocess.run(["git", "diff", f],
+                                       capture_output=True, text=True, timeout=10, cwd=cwd).stdout
+                        for f in changed[:3])
+                except Exception:
+                    pass
+                qa = val_mod.qa_acceptance_review(constraints, diff_text, cwd)
+                if qa.get("verdict") == "needs_fix":
+                    fails = [v for v in qa.get("verifications", [])
+                             if v.get("status") in ("fail", "warning")]
+                    quality["warnings"].append(
+                        f"QA 约束验收 {len(fails)} 条未满足: " +
+                        "; ".join(v.get("constraint", "")[:40] for v in fails[:3]))
+                    quality["failure_kind"] = "constraint_fail"
+                    quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.25)
+                    validation.action = "retry"
+                    _record_review_failure("constraint_fail")
+                quality["quality_signals"]["qa_acceptance"] = qa.get("verdict", "unknown")
+        except Exception as e:
+            quality["warnings"].append(f"QA 约束验收 error: {e}")
+
+    # 4) 安全审计: security_auditor 角色 LLM 五维审计 (补正则抓不到的复杂漏洞)
+    if validation.action == "pass" and changed and not _is_trivial_change(changed, cwd):
+        try:
+            diff_text = ""
+            try:
+                diff_text = "\n\n".join(
+                    subprocess.run(["git", "diff", f],
+                                   capture_output=True, text=True, timeout=10, cwd=cwd).stdout
+                    for f in changed[:3])
+            except Exception:
+                pass
+            sa = val_mod.security_audit_review(diff_text, cwd)
+            if sa.get("verdict") == "needs_fix":
+                findings = sa.get("findings", [])
+                quality["warnings"].append(
+                    f"安全审计 {len(findings)} 条问题: " +
+                    "; ".join(f"{f.get('severity','?')}:{f.get('description','')[:40]}"
+                              for f in findings[:3]))
+                quality["failure_kind"] = "security_findings"
+                quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.3)
+                validation.action = "retry"
+                _record_review_failure("security_findings")
+            quality["quality_signals"]["security_audit"] = sa.get("verdict", "unknown")
+        except Exception as e:
+            quality["warnings"].append(f"安全审计 error: {e}")
+
 
 def check_review_fail_limit(project_id: str = "", current_retries: int = 0) -> dict:
     """D1: 检查审查失败是否触顶。

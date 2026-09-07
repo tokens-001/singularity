@@ -594,3 +594,116 @@ def build_qa_report(passed: list, issues: list, verdict: str, verdict_reason: st
             "verdict_reason": verdict_reason,
         },
     }
+
+
+def qa_acceptance_review(constraints, diff_text, cwd, requirements=""):
+    """QA 验收：用 qa_engineer 角色 system_prompt 对照约束清单验证代码改动。
+
+    补 multi_model_review 的盲区：它查 bug/需求完整性，不查「约束是否满足」。
+
+    Args:
+        constraints: 约束清单 (list[str] 或 list[dict]，dict 取 rule/check)
+        diff_text: 改动 diff 文本
+        cwd: 工作目录
+
+    Returns:
+        {"verdict": "accepted|needs_fix", "verifications": [...], "summary": str}
+    """
+    from .roles import get_role
+    from . import dispatcher as _disp
+
+    qa = get_role('qa_engineer')
+    if not qa:
+        return {"verdict": "accepted", "verifications": [], "summary": "qa_engineer 角色未定义"}
+
+    lines = []
+    for c in constraints or []:
+        if isinstance(c, str):
+            lines.append(f"- {c}")
+        elif isinstance(c, dict):
+            rule = c.get('rule', c.get('text', ''))
+            check = c.get('check', '')
+            lines.append(f"- {rule}" + (f"（验证方式：{check}）" if check else ""))
+    if not lines:
+        return {"verdict": "accepted", "verifications": [], "summary": "无约束清单"}
+
+    prompt = f"""{qa.get_full_prompt()}
+
+【约束清单】逐条验证以下约束是否被满足：
+{chr(10).join(lines)}
+
+【代码改动 diff】
+{diff_text[:6000] if diff_text else '(无 diff)'}
+
+只输出 JSON：
+{{"verification":[{{"constraint":"约束","status":"pass|fail|warning|uncertain","evidence":"证据","detail":"说明"}}],"summary":{{"verdict":"accepted|needs_fix","critical":0,"major":0,"minor":0,"recommendation":"一句话"}}}}"""
+
+    # 单模型验收（QA 验收不需多模型碰撞）
+    agents = _disp.load_agents()
+    model_cfgs = [a for a in _disp._all_agents_list(agents) if _disp.agent_api_available(a)][:1]
+    if not model_cfgs:
+        return {"verdict": "accepted", "verifications": [], "summary": "无可用模型"}
+
+    try:
+        result = _disp.dispatch(prompt, "any", "qa_acceptance", {"any": model_cfgs}, cwd=cwd)
+        raw = result.executor_result.raw_output if result and result.executor_result else ""
+    except Exception as e:
+        return {"verdict": "accepted", "verifications": [], "summary": f"QA 验收调用失败: {e}"}
+
+    d = _extract_json_obj(raw)
+    if not d:
+        return {"verdict": "accepted", "verifications": [], "summary": f"QA 输出非 JSON: {raw[:200]}"}
+
+    verdict = (d.get("summary") or {}).get("verdict", "accepted")
+    if verdict == "rejected":
+        verdict = "needs_fix"  # 归一化：qa_engineer 三档 verdict 里 rejected 同样触发修复
+    return {"verdict": verdict, "verifications": d.get("verification", []), "summary": raw[:300]}
+
+
+def security_audit_review(diff_text, cwd, requirements=""):
+    """安全审计：用 security_auditor 角色 system_prompt 做 LLM 五维审计。
+
+    补 security_review（正则）抓不到的复杂漏洞：权限越权/注入变体/隐私泄露。
+
+    Args:
+        diff_text: 改动 diff 文本
+        cwd: 工作目录
+
+    Returns:
+        {"verdict": "clean|needs_fix", "findings": [...], "summary": str}
+    """
+    from .roles import get_role
+    from . import dispatcher as _disp
+
+    sa = get_role('security_auditor')
+    if not sa:
+        return {"verdict": "clean", "findings": [], "summary": "security_auditor 角色未定义"}
+
+    prompt = f"""{sa.get_full_prompt()}
+
+【代码改动 diff】
+{diff_text[:6000] if diff_text else '(无 diff)'}
+
+只输出 JSON：
+{{"findings":[{{"severity":"critical|high|medium|low","category":"auth|injection|secrets|dependency|privacy","cwe":"CWE-xxx","location":"文件:行号","description":"问题","remediation":"建议"}}],"summary":{{"verdict":"clean|needs_fix|critical","critical":0,"high":0,"medium":0,"low":0,"recommendation":"一句话"}}}}"""
+
+    # 单模型审计（安全审计不需多模型碰撞）
+    agents = _disp.load_agents()
+    model_cfgs = [a for a in _disp._all_agents_list(agents) if _disp.agent_api_available(a)][:1]
+    if not model_cfgs:
+        return {"verdict": "clean", "findings": [], "summary": "无可用模型"}
+
+    try:
+        result = _disp.dispatch(prompt, "any", "security_audit", {"any": model_cfgs}, cwd=cwd)
+        raw = result.executor_result.raw_output if result and result.executor_result else ""
+    except Exception as e:
+        return {"verdict": "clean", "findings": [], "summary": f"安全审计调用失败: {e}"}
+
+    d = _extract_json_obj(raw)
+    if not d:
+        return {"verdict": "clean", "findings": [], "summary": f"安全审计输出非 JSON: {raw[:200]}"}
+
+    verdict = (d.get("summary") or {}).get("verdict", "clean")
+    if verdict == "critical":
+        verdict = "needs_fix"  # 归一化：critical 同样触发修复
+    return {"verdict": verdict, "findings": d.get("findings", []), "summary": raw[:300]}

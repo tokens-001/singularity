@@ -225,14 +225,6 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
     if not exec_tasks:
         return "架构方案无任务清单"
 
-    #  layer → role_key 映射 (两档后不再分 level, 统一 "any")
-    LAYER_ROLE_MAP = {
-        "frontend": "frontend_engineer",
-        "backend": "backend_engineer",
-        "data": "data_engineer",
-        "devops": "devops_engineer",
-    }
-
     # 分发前先确保项目独立 git 仓库存在 (否则任务 dispatch 时 snap.take 会卡住)
     from singularity.scheduler.project import ensure_repo
     ensure_repo(project.id)
@@ -240,10 +232,8 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
     created = 0
     id_map = {}  # 本地任务 id (T1..Tn) → tracker task_id
     for idx, tdef in enumerate(exec_tasks):
-        # ── 按 layer 路由到对应角色 ──
-        # 拆解器用 suggested_level 存 layer (backend/data/frontend/devops)
-        layer = tdef.get("layer", "") or tdef.get("suggested_level", "")
-        role_key = LAYER_ROLE_MAP.get(layer, "implementer")
+        # 实现层统一 implementer（砍掉 5 个工程师角色后，无 layer 路由）
+        role_key = "implementer"
 
         # 本地任务 id = T{idx+1} (拆解器不产 id 字段，depends_on_local_id 引用此 id)
         tid = tdef.get("id", "") or f"T{idx+1}"
