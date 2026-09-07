@@ -264,11 +264,11 @@ def _is_major_model(model_id: str) -> bool:
     m = model_id.lower()
     # Well-known current-gen model patterns
     patterns = [
-        r'^gpt-5', r'^gpt-4', r'^o[34]',  # OpenAI
-        r'^claude-opus', r'^claude-sonnet', r'^claude-haiku',  # Anthropic
-        r'^deepseek-v[34]', r'^deepseek-r1$',  # DeepSeek
-        r'^glm-[45]', r'^glm-5',  # Zhipu
-        r'^kimi-k2',  # Kimi
+        r'^gpt-\d+', r'^o\d+',  # OpenAI: gpt-4/5/6..., o3/o4/o5...
+        r'^claude-opus', r'^claude-sonnet', r'^claude-haiku',  # Anthropic (名字不带代际)
+        r'^deepseek-v\d+', r'^deepseek-r1$',  # DeepSeek: v3/v4/v5...
+        r'^glm-\d+',  # Zhipu: glm-4/5/6...
+        r'^kimi-k\d+',  # Kimi: k2/k3/k4...
         r'^qwen3\.\d+-(max|plus)$', r'^qwen3-coder', r'^qwen-(max|plus|turbo|coder)',  # Qwen major
         r'^qwen3\.\d+-\d+b',  # Qwen 3.X with explicit params
     ]
