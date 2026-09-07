@@ -85,7 +85,7 @@ def _answer_question(question: str, project_id: str = "") -> str:
                         proj.confirm_gate(Phase.GATE1, "approved")
                 except Exception:
                     pass
-                return "✅ GATE1 已通过。进入架构阶段，系统架构师/AI架构师/前端架构师将并行设计方案。"
+                return "✅ GATE1 已通过。定义阶段完成，已进入架构规划阶段。请在项目页推进架构设计（多模型委员会出方案）。"
             elif any(w in q for w in ("修改", "改", "不对", "重来", "不通过")):
                 session["phase"] = "defining"
                 session["active_role"] = "product-manager"
