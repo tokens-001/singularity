@@ -118,6 +118,13 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     if fusion_meta_path.exists():
         try:
             fm = _json.loads(fusion_meta_path.read_text())
+            # 委员会中间产物结构化落 ProjectState (消除 .last_fusion.json 全局文件孤岛)
+            project.committee_fusion = {
+                "models": fm.get("models", []),
+                "count": fm.get("count", 0),
+                "fused": fm.get("fused", ""),
+                "outputs": [o[:3000] for o in fm.get("outputs", [])],
+            }
             _save_phase_output(project.id, "fusion-models.md",
                 "\n\n---\n".join(f"## 模型: {fm['models'][i]}\n\n{fm['outputs'][i][:3000]}" for i in range(len(fm['models']))))
             _save_phase_output(project.id, "fusion-meta.json",

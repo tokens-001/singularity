@@ -72,6 +72,7 @@ class ProjectState:
     # Artifact 区 (各阶段的产出)
     research_report: dict | None = None          # Researcher 产出
     architecture: dict | None = None             # Architect 产出 {plan, tasks, constraints}
+    committee_fusion: dict | None = None         # 架构委员会中间产物 {models, outputs, fused, count}
     constraints_checklist: list[str] = field(default_factory=list)  # Gate2 确认后的可检查约束
     task_ids: list[str] = field(default_factory=list)               # 关联 tracker tasks
     issues: list[dict] = field(default_factory=list)                # Reviewer 问题清单
@@ -98,6 +99,7 @@ class ProjectState:
             "owner_confirm": self.owner_confirm,
             "research_report": self.research_report,
             "architecture": self.architecture,
+            "committee_fusion": self.committee_fusion,
             "constraints_checklist": self.constraints_checklist,
             "task_ids": self.task_ids, "issues": self.issues,
             "supervision_log": self.supervision_log, "lineage": self.lineage,
@@ -123,6 +125,7 @@ class ProjectState:
         d.setdefault("owner_confirm", {})
         d.setdefault("research_report", None)
         d.setdefault("architecture", None)
+        d.setdefault("committee_fusion", None)
         d.setdefault("constraints_checklist", [])
         d.setdefault("task_ids", [])
         d.setdefault("issues", [])
