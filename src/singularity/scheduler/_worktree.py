@@ -93,7 +93,7 @@ def cleanup_task_artifacts(task_id: str, repo_root) -> int:
 
     # worktree ({task_id}_{level} 目录) — 复用 cleanup 处理 git 元数据/孤儿/权限
     try:
-        for wt_path in _worktrees_dir().glob(f"{task_id}_*"):
+        for wt_path in _worktrees_dir(repo_root).glob(f"{task_id}_*"):
             if wt_path.is_dir():
                 wt_cleanup(Worktree(path=wt_path, name=wt_path.name,
                                     baseline_ref="", repo_root=repo_root))
@@ -118,7 +118,7 @@ def _maybe_create_worktree(task_id: str, level: str, agent_cfg: dict, snapshot_r
     # worktree 数量上限检查
     try:
         from ._git_worktree import _worktrees_dir
-        wtd = _worktrees_dir()
+        wtd = _worktrees_dir(repo_root)
         count = len(list(wtd.iterdir())) if wtd.exists() else 0
         if count >= _MAX_WORKTREES:
             from . import witness

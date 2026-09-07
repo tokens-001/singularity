@@ -43,8 +43,13 @@ def _git_dir() -> Path:
     return config.PROJECT_ROOT / ".git"
 
 
-def _worktrees_dir() -> Path:
-    d = config.QIDIAN_DIR / "worktrees"
+def _worktrees_dir(repo_root: Path = None) -> Path:
+    # worktree 放 repo 同级目录 (repo.parent/.{name}-worktrees), 避开主仓库的 git 干扰
+    # (修复: worktree 若落在 singularity 的 .qidian/ 里, 任务执行时 .git 指针被删, git 解析错位)
+    if repo_root is not None:
+        d = repo_root.parent / f".{repo_root.name}-worktrees"
+    else:
+        d = config.QIDIAN_DIR / "worktrees"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -58,7 +63,7 @@ def _head_ref(repo_root: Path = None) -> str:
 def create(task_id: str, agent_level: str, base_ref: str = "", repo_root: Path = None) -> Worktree:
     root = repo_root or config.PROJECT_ROOT
     name = f"{task_id}_{agent_level}"
-    wt_path = _worktrees_dir() / name
+    wt_path = _worktrees_dir(root) / name
 
     # 幂等: 已存在同名 worktree → 返回已有的
     existing = _run(["worktree", "list", "--porcelain"], root)
@@ -249,7 +254,7 @@ def cleanup_orphans() -> int:
         _run(["worktree", "prune"], config.PROJECT_ROOT, timeout=30)
 
     # 2. 清理磁盘上的孤儿 worktree 目录
-    qidian_wt = config.QIDIAN_DIR / "worktrees"
+    qidian_wt = _worktrees_dir(config.PROJECT_ROOT)
     if qidian_wt.exists():
         for d in qidian_wt.iterdir():
             if not d.is_dir():
