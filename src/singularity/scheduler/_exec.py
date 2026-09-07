@@ -212,6 +212,14 @@ def _decide_cascade(task, level, turn, validation, disp_result, all_tool_events,
         ))
 
     if validation.action == "retry":
+        # 软质量软修复: 只首轮 retry 一次, 之后放行 (软质量非硬伤, 不值得无限修/升级)
+        if quality.get("failure_kind") == "soft_quality" and turn >= 2:
+            return ("return", BatchOutput(
+                ok=True, task_id=task.id, dispatch_result=disp_result,
+                term_reason=f"soft_quality_accept (level={level}, turn={turn})",
+                validation=validation, merge_request=pending_merge_req,
+                tool_events=all_tool_events, turn_count=turn,
+            ))
         conf = validation.confidence
         # 高置信 → 跳过升级，接受当前结果 (省钱)
         if conf >= 0.75:

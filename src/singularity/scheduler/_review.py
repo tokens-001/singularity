@@ -29,6 +29,34 @@ def _is_trivial_change(changed: list[str], cwd: str) -> bool:
         return False
 
 
+def _review_requirements(task) -> str:
+    """审查用需求: 顶层需求 + 约束 + 本任务验收 + 本任务描述 (顶层优先, 供逐条核对)."""
+    parts = []
+    pid = getattr(task, 'project_id', '')
+    proj = None
+    if pid:
+        try:
+            from .project import load as _load_proj
+            proj = _load_proj(pid)
+        except Exception:
+            proj = None
+    if proj:
+        if getattr(proj, 'description', ''):
+            parts.append(f"[顶层需求] {proj.description[:300]}")
+        if proj.constraints_checklist:
+            parts.append(f"[约束] {'; '.join(proj.constraints_checklist[:5])}")
+        if proj.architecture:
+            desc = getattr(task, 'description', '')
+            for tdef in proj.architecture.get("tasks", []):
+                if tdef.get("title", "") in desc or tdef.get("id", "") in desc:
+                    acc = tdef.get("acceptance", "")
+                    if acc:
+                        parts.append(f"[验收标准] {acc}")
+                    break
+    parts.append(f"[本任务] {task.description or ''}")
+    return "\n".join(parts)
+
+
 def run_post_exec_checks(*, validation, quality, exec_result,
                           task, agent_cfg, level, cwd, changed) -> None:
     """Run project tests + multi-model review after agent execution.
@@ -117,7 +145,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
                             fut = ex.submit(val_mod.multi_model_review,
                                 filepath=f, models=reviewer_models, cwd=cwd, diff_only=True,
-                                requirements=task.description)
+                                requirements=_review_requirements(task))
                             review = fut.result(timeout=_REVIEW_TIMEOUT_SEC)
                     except concurrent.futures.TimeoutExpired:
                         quality["warnings"].append("多模型审查超时 — 不默认通过")
@@ -150,6 +178,12 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                                 f"multi-review {f}: {len(warns)} warnings")
                             quality["confidence"] = max(
                                 0.0, quality.get("confidence", 0.5) - 0.1)
+                            # 5a: 软质量显式化 (trace/QA 可见)
+                            quality["quality_signals"]["soft_warnings"] = \
+                                quality["quality_signals"].get("soft_warnings", 0) + len(warns)
+                            # 5b: 软质量触发一次软修复 (首轮 retry, 触顶放行见 _decide_cascade)
+                            quality["failure_kind"] = "soft_quality"
+                            validation.action = "retry"
                     all_issues.extend(issues)
                     if review.get("verdicts"):
                         needs_fix = [v for v in review["verdicts"]
@@ -166,7 +200,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             else:
                 # fallback: single-model crossover review
                 review = val_mod.crossover_review(
-                    task_desc=task.description,
+                    task_desc=_review_requirements(task),
                     raw_output=exec_result.raw_output,
                     changed_files=changed, writer_level=level,
                     writer_model=writer_model, cwd=cwd)
@@ -189,6 +223,10 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                             f"review found {len(warns)} warnings")
                         quality["confidence"] = max(
                             0.0, quality.get("confidence", 0.5) - 0.1)
+                        quality["quality_signals"]["soft_warnings"] = \
+                            quality["quality_signals"].get("soft_warnings", 0) + len(warns)
+                        quality["failure_kind"] = "soft_quality"
+                        validation.action = "retry"
                 if review.get("verdict") == "abort":
                     validation.action = "abort"
                     validation.unverified.append(
@@ -231,6 +269,24 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                 quality["quality_signals"]["qa_acceptance"] = qa.get("verdict", "unknown")
         except Exception as e:
             quality["warnings"].append(f"QA 约束验收 error: {e}")
+
+    # 3.5) 需求符合性对账: 消费 traceability.json, 只写软信号 + warning (机械关键词, 先不设 hard gate)
+    if validation.action == "pass" and project_id and not _is_trivial_change(changed, cwd):
+        try:
+            from .supervisor import check_requirement_conformance
+            conf = check_requirement_conformance(
+                project_id, agent_output=getattr(exec_result, 'raw_output', '') or '',
+                changed_files=changed)
+            if not conf.passed:
+                ev = getattr(conf, 'evidence', None) or {}
+                quality["warnings"].append(
+                    f"需求符合性 {ev.get('passed', 0)}/{ev.get('total', 0)} 通过: "
+                    + "; ".join(ev.get("failed_items", [])[:3]))
+                quality["quality_signals"]["requirement_conformance"] = ev
+            else:
+                quality["quality_signals"]["requirement_conformance"] = "passed"
+        except Exception as e:
+            quality["warnings"].append(f"需求符合性对账 error: {e}")
 
     # 4) 安全审计: security_auditor 角色 LLM 五维审计 (补正则抓不到的复杂漏洞)
     if validation.action == "pass" and changed and not _is_trivial_change(changed, cwd):
