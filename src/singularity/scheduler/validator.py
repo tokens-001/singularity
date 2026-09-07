@@ -35,7 +35,7 @@ class ValidationReport:
     # D3: GATE3 分级路由 (QA 建议, Observer 裁定)
     fix_route: str = ""  # impl|design|note
 
-def validate(candidate, gate_required, task_type, changed_files, snap, turn, max_turns):
+def validate(candidate, gate_required, task_type, changed_files, snap, turn, max_turns, cwd=None):
     report = ValidationReport(turns_used=turn)
     for pat in _DANGEROUS_PATTERNS:
         if pat.search(candidate):
@@ -60,7 +60,8 @@ def validate(candidate, gate_required, task_type, changed_files, snap, turn, max
     report.validate_verdict = v.get("verdict","未知"); report.validate_reason = v.get("verdict_reason",""); report.evidence = v
     _annotate_unverified(report, task_type, changed_files)
     # ── 硬规则检查 (非 LLM) ──
-    hard = _hard_diff_rules(changed_files, cwd=str(config.PROJECT_ROOT))
+    # cwd 必须是任务执行的 worktree 路径, 不是主仓库根——否则新建的 test_*.py 会被误判"已删除"
+    hard = _hard_diff_rules(changed_files, cwd=cwd or str(config.PROJECT_ROOT))
     if hard.get("issues"):
         report.hard_rule_issues = hard["issues"]
         for iss in hard["issues"]:

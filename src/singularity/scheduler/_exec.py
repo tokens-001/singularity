@@ -406,6 +406,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     task_type=route_type,
                     changed_files=getattr(exec_result, 'changed_files', []),
                     snap=snap, turn=turn, max_turns=level_max,
+                    cwd=cwd,
                 )
                 # 补充质量信号
                 try:
