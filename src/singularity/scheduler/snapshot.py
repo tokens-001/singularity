@@ -86,6 +86,17 @@ def _take_git(snap_id: str, root: Path) -> Snapshot:
 
 def _rollback_git(snap: Snapshot, root: Path) -> bool:
     """回滚: 用快照 ref 重建工作区状态。"""
+    # 保护未提交改动: 先 stash 起来(含 untracked), 而非 checkout/clean 直接删。
+    # 独立任务跑在主仓库(v2 路径)时, 工作区可能混有开发者的手动改动, clean -fd 会误删。
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True, text=True, cwd=str(root),
+    ).stdout.strip()
+    if status:
+        subprocess.run(
+            ["git", "stash", "push", "--include-untracked", "-m", f"rollback-protect:{snap.id}"],
+            capture_output=True, text=True, cwd=str(root),
+        )
     # 丢弃当前未提交改动 ("--" 和 "." 是两个独立 arg, 不是 "-- .")
     subprocess.run(
         ["git", "checkout", "--", "."],

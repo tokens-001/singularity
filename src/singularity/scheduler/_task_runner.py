@@ -167,7 +167,7 @@ class TaskRunner:
             except Exception as e:
                 witness.heartbeat('orch', f'warn:materialize:{e}')
             reason = f"decomposed: {term_reason}"
-        elif validation.action == "pass":
+        elif batch.ok:
             tracker.transition(task.id, TaskStatus.DONE)
             _maybe_complete_parents(task.id)
             reason = f"pass: {term_reason}"
@@ -233,12 +233,12 @@ class TaskRunner:
             exec_out = disp_result.executor_result if disp_result else None
             mem_mod.archive_experience(
                 task_id=task.id, description=task.description,
-                status="done" if validation.action == "pass" else "failed",
+                status="done" if batch.ok else "failed",
                 route_level=route.level,
                 model=getattr(disp_result, 'agent_cfg', {}).get("model", "") if disp_result else "",
                 elapsed_ms=getattr(exec_out, 'elapsed', 0) if exec_out else 0,
                 tokens=getattr(exec_out, 'tokens', 0) if exec_out else 0,
-                failure_mode=validation.verdict if validation.action != "pass" else "",
+                failure_mode=validation.verdict if not batch.ok else "",
                 files_changed=getattr(exec_out, 'changed_files', []) if exec_out else [],
             )
             # 同时记录到路由学习器
@@ -248,7 +248,7 @@ class TaskRunner:
                     task_type=route.task_type,
                     model=getattr(disp_result, 'agent_cfg', {}).get("model", "") if disp_result else "",
                     level=route.level,
-                    success=validation.action == "pass",
+                    success=batch.ok,
                     elapsed_ms=getattr(exec_out, 'elapsed', 0) if exec_out else 0,
                     tokens=getattr(exec_out, 'tokens', 0) if exec_out else 0,
                 )

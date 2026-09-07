@@ -7,6 +7,7 @@ ProjectState 是整个工作流的单一真相源。存盘到 .qidian/projects/{
 from __future__ import annotations
 import json
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -73,7 +74,7 @@ class ProjectState:
     research_report: dict | None = None          # Researcher 产出
     architecture: dict | None = None             # Architect 产出 {plan, tasks, constraints}
     committee_fusion: dict | None = None         # 架构委员会中间产物 {models, outputs, fused, count}
-    constraints_checklist: list[str] = field(default_factory=list)  # Gate2 确认后的可检查约束
+    constraints_checklist: list[dict] = field(default_factory=list)  # Gate2 确认后的可检查约束 [{type,rule,check}]
     task_ids: list[str] = field(default_factory=list)               # 关联 tracker tasks
     issues: list[dict] = field(default_factory=list)                # Reviewer 问题清单
     supervision_log: list[dict] = field(default_factory=list)       # Supervisor 校验记录
@@ -228,6 +229,13 @@ def _sanitize_name(name: str) -> str:
     return s or "project"
 
 
+def constraint_text(c) -> str:
+    """从约束条目提取可读文本（约束为 dict {rule/text}，兼容历史 str 脏数据）。"""
+    if isinstance(c, dict):
+        return (c.get("rule") or c.get("text") or "").strip()
+    return str(c)
+
+
 def repo_dir(project_id: str) -> Path:
     """项目代码仓库根：<项目根>/<项目名>/。与奇点仓库隔离、路径直观。"""
     proj = load(project_id)
@@ -299,15 +307,19 @@ def _path(project_id: str) -> Path:
     return _projects_dir() / f"{project_id}.json"
 
 
+_LOCK = threading.RLock()
+
+
 def _next_id() -> str:
-    base = int(time.time() * 1000)
-    max_existing = base
-    for p in _projects_dir().glob("*.json"):
-        try:
-            max_existing = max(max_existing, int(p.stem))
-        except ValueError:
-            continue
-    return str(max(max_existing, base) + 1)
+    with _LOCK:
+        base = int(time.time() * 1000)
+        max_existing = base
+        for p in _projects_dir().glob("*.json"):
+            try:
+                max_existing = max(max_existing, int(p.stem))
+            except ValueError:
+                continue
+        return str(max(max_existing, base) + 1)
 
 
 def delete(project_id: str) -> bool:

@@ -252,8 +252,15 @@ def task_release(task_id: str) -> tuple[dict, int]:
     return {"ok": True, "held": False}, 200
 
 
+def _validate_route_level(level: str) -> bool:
+    """route_level 拼进 worktree 路径，必须只含 ASCII 字母数字下划线连字符（防路径穿越）。"""
+    return bool(level) and len(level) <= 64 and all(c.isascii() and (c.isalnum() or c in "_-") for c in level)
+
+
 def task_override_route(task_id: str, level: str, locked: bool = True) -> tuple[dict, int]:
     """POST /api/tasks/<id>/override-route"""
+    if not _validate_route_level(level):
+        return {"error": "非法的 route_level 格式"}, 400
     task = tracker.read_task(task_id)
     if task is None:
         return {"error": "任务不存在"}, 404
@@ -317,8 +324,7 @@ def task_set_mode(task_id: str, mode: str) -> tuple[dict, int]:
     task = tracker.read_task(task_id)
     if task is None:
         return {"error": "任务不存在"}, 404
-    task.execution_mode = mode
-    tracker._write(task)
+    tracker.transition(task_id, task.status, execution_mode=mode)  # 锁内更新, 防 read-modify-write 竞态
     return {"ok": True, "task_id": task_id, "execution_mode": mode}, 200
 
 
@@ -347,6 +353,28 @@ def task_delete(task_id: str) -> tuple[dict, int]:
               config.PARKED_DIR, config.HOLD_DIR):
         _rm(d / f"{task_id}.json")
     _rm(config.TRACE_DIR / f"{task_id}.json")
+
+    # 反引用清理: 父任务 children + project.task_ids
+    # (否则父任务 maybe_complete_parent 读不到已删子任务 → 永久卡在 BLOCKED/DECOMPOSED)
+    if task is not None:
+        for p in tracker.tasks_dir().glob("*.json"):
+            if p.stem == task_id:
+                continue
+            try:
+                parent = tracker.read_task(p.stem)
+                if parent is not None and task_id in parent.children:
+                    tracker.set_children(p.stem, [c for c in parent.children if c != task_id])
+            except Exception:
+                pass
+        if getattr(task, 'project_id', ''):
+            try:
+                from . import project as proj_mod
+                proj = proj_mod.load(task.project_id)
+                if proj is not None and task_id in proj.task_ids:
+                    proj.task_ids = [t for t in proj.task_ids if t != task_id]
+                    proj_mod.save(proj)
+            except Exception:
+                pass
 
     if deleted:
         return {"ok": True, "message": f"已删除 {deleted} 个文件"}, 200
@@ -429,6 +457,8 @@ def task_submit(desc: str, priority: int = 0, depends_on: list = None,
                 route_type: str = "",
                 push_event=None) -> tuple[dict, int]:
     """POST /api/tasks — 创建新任务。"""
+    if route_level and not _validate_route_level(route_level):
+        return {"error": "非法的 route_level 格式"}, 400
     config.ensure_dirs()
     task = tracker.create(desc, priority=priority, depends_on=depends_on or [])
     if route_level or route_type:

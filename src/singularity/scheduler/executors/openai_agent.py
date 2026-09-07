@@ -635,12 +635,48 @@ def _get_http_client() -> httpx.Client:
 
 # ── 模块级工具函数 (给 AnthropicApiExecutor 复用, 避免代码重复) ──
 
+def _safe_path_at(cwd: Path, path: str) -> Path:
+    """模块级路径安全：解析路径，禁止逃出 cwd（与类方法 _safe_path 等价）。"""
+    p = (cwd / path).resolve()
+    root = cwd.resolve()
+    if not (str(p) + os.sep).startswith(str(root) + os.sep) and str(p) != str(root):
+        raise ValueError(f"路径逃逸被拒绝: {path}")
+    return p
+
+def _is_blocked_path_at(path: str) -> tuple[bool, str]:
+    """模块级 blocklist 检查（与类方法 _is_blocked_path 等价）。返回 (blocked, reason)。"""
+    import fnmatch
+    normalized = path.replace("\\", "/")
+    for pattern in _BLOCKED_PATTERNS:
+        if fnmatch.fnmatch(normalized, pattern):
+            return True, f"敏感文件/目录: {pattern}"
+        if fnmatch.fnmatch(normalized, f"*/{pattern}"):
+            return True, f"敏感文件/目录: {pattern}"
+        parts = normalized.split("/")
+        for part in parts:
+            if fnmatch.fnmatch(part, pattern.rstrip("/*")):
+                return True, f"敏感文件/目录: {pattern}"
+    return False, ""
+
+def _is_dangerous_command_at(command: str) -> tuple[bool, str]:
+    """模块级危险命令检查（与类方法 _is_dangerous_command 等价）。返回 (dangerous, reason)。"""
+    cmd = command.strip()
+    cmd_lower = cmd.lower()
+    for blocked in _BLOCKED_COMMANDS:
+        bl = blocked.lower()
+        if cmd_lower.startswith(bl) or bl in cmd_lower:
+            return True, f"危险命令被拦截: {blocked}"
+    return False, ""
+
 def _read_file(args: dict, cwd) -> str:
     """模块级单文件读取。Anthropic executor 用。"""
     path = args.get("path", "")
     if not path:
         return "请指定 path"
-    p = (cwd / path).resolve()
+    blocked, reason = _is_blocked_path_at(path)
+    if blocked:
+        return f"访问被拒绝: {reason}"
+    p = _safe_path_at(cwd, path)
     if not p.exists():
         return f"文件不存在: {path}"
     content = p.read_text(encoding="utf-8")
@@ -657,7 +693,15 @@ def _read_files(args: dict, cwd) -> str:
         return "请指定 path 或 paths"
     results = []
     for path in paths:
-        p = (cwd / path).resolve()
+        blocked, reason = _is_blocked_path_at(path)
+        if blocked:
+            results.append(f"### {path}\n访问被拒绝: {reason}\n")
+            continue
+        try:
+            p = _safe_path_at(cwd, path)
+        except ValueError as e:
+            results.append(f"### {path}\n{e}\n")
+            continue
         if not p.exists():
             results.append(f"### {path}\n(不存在)\n")
             continue
@@ -676,7 +720,10 @@ def _write_file(args: dict, cwd, blocked_patterns) -> str:
     content = args.get("content", "")
     if not path:
         return "请指定 path"
-    p = (cwd / path).resolve()
+    blocked, reason = _is_blocked_path_at(path)
+    if blocked:
+        return f"写入被拒绝: {reason}"
+    p = _safe_path_at(cwd, path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
     return f"已写入 {path} ({len(content)} 字符)"
@@ -687,6 +734,9 @@ def _run_command(args: dict, cwd) -> str:
     cmd = args.get("command", "")
     if not cmd:
         return "请指定 command"
+    dangerous, reason = _is_dangerous_command_at(cmd)
+    if dangerous:
+        return f"命令被拦截: {reason}"
     try:
         argv = shlex.split(cmd)
         r = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=30, cwd=str(cwd))
@@ -703,7 +753,10 @@ def _search_code(args: dict, cwd) -> str:
     path = args.get("path", "")
     if not pattern:
         return "请指定 pattern"
-    search_dir = (cwd / path).resolve() if path else cwd
+    try:
+        search_dir = _safe_path_at(cwd, path) if path else cwd
+    except ValueError as e:
+        return f"搜索错误: {e}"
     try:
         results = []
         for f in search_dir.rglob("*.py"):

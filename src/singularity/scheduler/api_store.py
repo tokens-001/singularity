@@ -170,7 +170,10 @@ def _save(entries: dict[str, APIEntry]) -> None:
     for k, v in _load_raw().items():
         if k.startswith("_") and k not in data:
             data[k] = v
-    _store_path().write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    p = _store_path()
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, p)  # 原子写: crash 不损坏正式文件 (对齐 tracker._write)
 
 
 # ── CRUD ──

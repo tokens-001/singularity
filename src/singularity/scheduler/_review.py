@@ -36,7 +36,7 @@ def _review_requirements(task) -> str:
     proj = None
     if pid:
         try:
-            from .project import load as _load_proj
+            from .project import load as _load_proj, constraint_text
             proj = _load_proj(pid)
         except Exception:
             proj = None
@@ -44,7 +44,7 @@ def _review_requirements(task) -> str:
         if getattr(proj, 'description', ''):
             parts.append(f"[顶层需求] {proj.description[:300]}")
         if proj.constraints_checklist:
-            parts.append(f"[约束] {'; '.join(proj.constraints_checklist[:5])}")
+            parts.append(f"[约束] {'; '.join(constraint_text(c) for c in proj.constraints_checklist[:5])}")
         if proj.architecture:
             desc = getattr(task, 'description', '')
             for tdef in proj.architecture.get("tasks", []):

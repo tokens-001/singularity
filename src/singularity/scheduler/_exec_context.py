@@ -113,7 +113,7 @@ def _build_project_context(task) -> str:
     if not pid:
         return ""
     try:
-        from .project import load as _load_proj
+        from .project import load as _load_proj, constraint_text
         proj = _load_proj(pid)
         if not proj:
             return ""
@@ -128,7 +128,7 @@ def _build_project_context(task) -> str:
                 parts.append(f"注意事项: {'; '.join(pitfalls[:3])}")
         # 约束清单
         if proj.constraints_checklist:
-            parts.append(f"约束清单: {'; '.join(proj.constraints_checklist[:5])}")
+            parts.append(f"约束清单: {'; '.join(constraint_text(c) for c in proj.constraints_checklist[:5])}")
         # 架构验收标准 (匹配子任务)
         if proj.architecture:
             tasks = proj.architecture.get("tasks", [])

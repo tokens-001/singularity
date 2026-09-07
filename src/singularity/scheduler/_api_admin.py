@@ -293,9 +293,38 @@ def mcp_server_list():
     return {"servers": servers}, 200
 
 
+_MCP_FORBIDDEN_EXE = {"sh", "bash", "zsh", "dash", "ksh", "csh", "fish", "tcsh"}
+
+def _validate_mcp_command(command: str) -> str | None:
+    """校验 MCP stdio command，拒绝 shell 解释器与内联执行（防 RCE）。返回错误信息或 None。"""
+    import shlex
+    if not command or not command.strip():
+        return None  # 空 command 仅对 http transport 合法
+    try:
+        argv = shlex.split(command)
+    except ValueError as e:
+        return f"command 解析失败: {e}"
+    if not argv:
+        return "command 不能为空"
+    exe = os.path.basename(argv[0])
+    if exe in _MCP_FORBIDDEN_EXE:
+        return f"禁止 shell 解释器命令: {exe}"
+    if exe in ("python", "python3") and any(a in ("-c", "--command") for a in argv[1:]):
+        return "禁止 python -c 内联执行"
+    if "`" in command or "$(" in command:
+        return "command 含命令替换，已拒绝"
+    return None
+
+
 def mcp_server_add(data):
     from . import mcp as m
     if not data or not data.get("name"): return {"error": "缺少 name"}, 400
+    # 安全校验：stdio command 防命令注入（shell 解释器 / 内联执行）
+    cmd = data.get("command", "")
+    if cmd:
+        err = _validate_mcp_command(cmd)
+        if err:
+            return {"error": err}, 400
     configs = m.load_mcp_configs(); found = False
     for c in configs:
         if c.name == data["name"]:

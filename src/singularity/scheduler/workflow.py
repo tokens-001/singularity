@@ -412,10 +412,17 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
             pass
 
     if fix_route == "impl":
-        # 回实现层: 重置失败 task 状态, 保留已通过的
+        # 回实现层: 重置 DONE task 为 PENDING, 让实现层重新执行
+        # (否则打回后所有 task 仍 DONE, 队列无活任务 → 空转直达 GATE3, 缺陷从未修复)
         project.phase = Phase.EXECUTING
-        project.add_lineage({"action": "gate3_route", "route": "impl"})
-        msg = f"GATE3 打回 → 回实现层修复 (反馈: {feedback[:80]})"
+        reset_count = 0
+        for tid in list(project.task_ids):
+            t = tracker.read_task(tid)
+            if t is not None and t.status == TaskStatus.DONE:
+                tracker.transition(tid, TaskStatus.PENDING)
+                reset_count += 1
+        project.add_lineage({"action": "gate3_route", "route": "impl", "reset_tasks": reset_count})
+        msg = f"GATE3 打回 → 回实现层修复 (重置 {reset_count} 任务, 反馈: {feedback[:80]})"
     elif fix_route == "note":
         # 仅记录, 不阻断 (保持当前阶段, 等人再次确认)
         project.add_lineage({"action": "gate3_route", "route": "note"})

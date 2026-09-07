@@ -181,6 +181,11 @@ _READONLY_ENDPOINTS = {
 def _guard_csrf():
     if request.method in ("GET", "HEAD", "OPTIONS"): return None
     if not request.path.startswith("/api/"): return None
+    # CSRF 核心防线：浏览器跨站写请求必带 Origin，非本机 origin 直接拒绝。
+    # 恶意网页 <form> POST 会带 Origin: http://evil.com，即便 remote_addr 是回环也被拦。
+    origin = request.headers.get("Origin", "")
+    if origin and not _is_local_origin(origin):
+        return jsonify({"error": "CSRF origin rejected"}), 403
     # 本地请求免 CSRF (开发/调试 + 浏览器未带 JS header)
     if request.remote_addr in ("127.0.0.1", "::1"): return None
     t = request.headers.get("X-CSRF-Token", "")
@@ -1075,14 +1080,26 @@ def api_project_files(project_id):
     except Exception as e:
         return jsonify({"files": [], "error": str(e)})
 
+_SENSITIVE_FILES = {".env", ".flaskenv"}
+_SENSITIVE_SUFFIXES = (".key", ".pem", ".p12", ".pfx", ".crt")
+
 @app.route("/api/projects/<project_id>/files/<path:filepath>")
 def api_project_file_content(project_id, filepath):
     """读取文件内容。"""
-    import subprocess, os
+    import os
     try:
-        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-        fpath = os.path.join(root, filepath)
-        if not os.path.exists(fpath) or not fpath.startswith(root):
+        root = os.path.realpath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+        fpath = os.path.realpath(os.path.join(root, filepath))
+        # 真实路径边界校验（防 ../ 穿越，startswith 字符串前缀可被绕过）
+        if fpath != root and not fpath.startswith(root + os.sep):
+            return jsonify({"content": "", "error": "file not found"}), 404
+        # 敏感文件黑名单（防泄露 API key / 证书）
+        name = os.path.basename(fpath)
+        if name in _SENSITIVE_FILES or name.endswith(_SENSITIVE_SUFFIXES):
+            return jsonify({"content": "", "error": "forbidden"}), 403
+        if ".git" in os.path.relpath(fpath, root).split(os.sep):
+            return jsonify({"content": "", "error": "forbidden"}), 403
+        if not os.path.isfile(fpath):
             return jsonify({"content": "", "error": "file not found"}), 404
         with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
             content = f.read()[:50000]

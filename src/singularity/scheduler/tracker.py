@@ -130,7 +130,10 @@ def read_task(task_id: str) -> Optional[Task]:
     p = _path(task_id)
     if not p.exists():
         return None
-    return Task.from_dict(json.loads(p.read_text(encoding="utf-8")))
+    try:
+        return Task.from_dict(json.loads(p.read_text(encoding="utf-8")))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None  # 损坏/空文件 → 视为不存在 (与 _collect_ready_pending 一致)
 
 
 _NEXT_ID_CACHE = 0
@@ -305,6 +308,7 @@ def cas(
                 setattr(task, k, v)
         task.updated_at = time.time()
         _write(task)
+        _invalidate_scan_cache()  # 抢占成功也失效扫描缓存 (否则 2s TTL 窗口内重复调度)
         return True
 
 

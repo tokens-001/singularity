@@ -486,9 +486,9 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
             try: witness.heartbeat(task_id=task.id, status="error", detail=f"post_hook:{e}")
             except Exception: pass
 
-        if batch.validation.action == "pass" or batch.planner_decomposed:
+        if batch.ok or batch.planner_decomposed:
             return batch
-        if batch.term_reason.startswith("merge_conflict"):
+        if batch.term_reason.startswith(("merge_conflict", "soft_quality_gate")):
             return batch
 
         retry += 1

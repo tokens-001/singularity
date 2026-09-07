@@ -138,20 +138,22 @@ def _check_completeness(
 
 
 def _check_constraints(
-    constraints: list[str], changed_files: list[str], root: Path,
+    constraints: list[dict], changed_files: list[str], root: Path,
 ) -> CheckResult:
     """约束合规: 机械比对改动的文件是否在禁止名单中。"""
+    from .project import constraint_text
     if not constraints:
         return CheckResult(passed=True, reason="无约束清单,跳过")
 
     violations = []
     for c in constraints:
-        cl = c.lower()
+        rule = constraint_text(c)
+        cl = rule.lower()
         for f in changed_files:
             # 约束中提到的文件是否被改了
             if f.lower() in cl or Path(f).name.lower() in cl:
-                if "不改" in c or "禁止" in c or "冻结" in c or "不可改" in c:
-                    violations.append(f"约束'{c}'禁改,但修改了{f}")
+                if "不改" in rule or "禁止" in rule or "冻结" in rule or "不可改" in rule:
+                    violations.append(f"约束'{rule}'禁改,但修改了{f}")
 
     if violations:
         return CheckResult(

@@ -397,7 +397,7 @@ class TestFinalizeResult:
 
         reason, results, _ = self._call(
             monkeypatch,
-            batch=self._make_batch(validation=val, term_reason="rollback"),
+            batch=self._make_batch(ok=False, validation=val, term_reason="rollback"),
             **{"snap_mod.rollback": record_rollback},
         )
         assert reason.startswith("rolled_back:")
@@ -413,7 +413,7 @@ class TestFinalizeResult:
 
         reason, results, _ = self._call(
             monkeypatch,
-            batch=self._make_batch(validation=val, term_reason="escalation_exhausted (level=any)"),
+            batch=self._make_batch(ok=False, validation=val, term_reason="escalation_exhausted (level=any)"),
             **{
                 "_read_planner_patch": lambda tid: "规划方案内容",
                 "tracker.transition": record_transition,
@@ -434,7 +434,7 @@ class TestFinalizeResult:
         reason, results, _ = self._call(
             monkeypatch,
             task=task,
-            batch=self._make_batch(validation=val, term_reason="abort: 失败"),
+            batch=self._make_batch(ok=False, validation=val, term_reason="abort: 失败"),
             **{"tracker.transition": record_transition},
         )
         assert "auto_decomposed" in reason
@@ -452,7 +452,7 @@ class TestFinalizeResult:
         reason, results, _ = self._call(
             monkeypatch,
             task=task,
-            batch=self._make_batch(validation=val, term_reason="abort: 失败"),
+            batch=self._make_batch(ok=False, validation=val, term_reason="abort: 失败"),
             **{
                 "decompose": lambda desc: [],  # 拆不出来
                 "tracker.transition": record_transition,
@@ -473,7 +473,7 @@ class TestFinalizeResult:
         reason, results, _ = self._call(
             monkeypatch,
             task=task,
-            batch=self._make_batch(validation=val, term_reason="abort: 失败"),
+            batch=self._make_batch(ok=False, validation=val, term_reason="abort: 失败"),
             **{"tracker.transition": record_transition},
         )
         assert reason.startswith("failed:")
@@ -514,7 +514,7 @@ class TestFinalizeResult:
         task = self._make_task(retry_count=3, max_retries=3, depth=6)  # depth=MAX
         reason, results, _ = self._call(
             monkeypatch, task=task,
-            batch=self._make_batch(validation=val, term_reason="abort"),
+            batch=self._make_batch(ok=False, validation=val, term_reason="abort"),
             **{"tracker.transition": record_transition},
         )
         # depth=6 >= _MAX_DEPTH=6 → 不拆分, 直接 FAILED

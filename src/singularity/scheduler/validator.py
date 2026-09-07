@@ -699,11 +699,20 @@ def security_audit_review(diff_text, cwd, requirements=""):
         result = _disp.dispatch(prompt, "any", "security_audit", {"any": model_cfgs}, cwd=cwd)
         raw = result.executor_result.raw_output if result and result.executor_result else ""
     except Exception as e:
-        return {"verdict": "clean", "findings": [], "summary": f"安全审计调用失败: {e}"}
+        # fail-closed: 安全审计失败不能标 clean（否则"没审就当安全"）。标 needs_fix + high 触发重试。
+        return {"verdict": "needs_fix", "findings": [
+            {"severity": "high", "category": "review_error", "cwe": "CWE-0",
+             "location": "security_audit", "description": f"安全审计调用失败，未完成审计: {e}",
+             "remediation": "重试安全审计；若持续失败需人工介入"}
+        ], "summary": f"安全审计调用失败: {e}"}
 
     d = _extract_json_obj(raw)
     if not d:
-        return {"verdict": "clean", "findings": [], "summary": f"安全审计输出非 JSON: {raw[:200]}"}
+        return {"verdict": "needs_fix", "findings": [
+            {"severity": "high", "category": "review_error", "cwe": "CWE-0",
+             "location": "security_audit", "description": "安全审计输出非 JSON，未完成审计",
+             "remediation": "重试安全审计；若持续失败需人工介入"}
+        ], "summary": f"安全审计输出非 JSON: {raw[:200]}"}
 
     verdict = (d.get("summary") or {}).get("verdict", "clean")
     if verdict == "critical":

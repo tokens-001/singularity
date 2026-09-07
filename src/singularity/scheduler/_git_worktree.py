@@ -62,6 +62,8 @@ def _head_ref(repo_root: Path = None) -> str:
 
 def create(task_id: str, agent_level: str, base_ref: str = "", repo_root: Path = None) -> Worktree:
     root = repo_root or config.PROJECT_ROOT
+    # 纵深防御：agent_level 来自外部 route_level，拼进路径前强制清洗（API 层已校验，此处兜底）
+    agent_level = "".join(c if c.isalnum() or c in "_-" else "_" for c in (agent_level or "any")) or "any"
     name = f"{task_id}_{agent_level}"
     wt_path = _worktrees_dir(root) / name
 

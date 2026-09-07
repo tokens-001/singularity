@@ -245,6 +245,8 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
             _dispatch_ready(dispatched, pool, agents, runner, running_futures, mq)
 
             if not running_futures and not pending_batches:
+                # 队列无活任务也要推进阶段 (delivering/integrating/reviewing 依赖此推进, 否则永久卡死)
+                _auto_trigger_test_fix(agents, results)
                 remaining = tracker.ready_tasks(exclude=dispatched)
                 if not remaining:
                     break
