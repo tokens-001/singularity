@@ -65,6 +65,20 @@ class TestDecideCascade:
         assert action == "return"
         assert result.ok is False
 
+    def test_soft_quality_hard_gate(self):
+        """软质量触顶(turn>=2) → 硬门槛: ok=False 不静默放行。"""
+        task = self._make_task()
+        validation = val_mod.ValidationReport(
+            verdict="需改进", action="retry", confidence=0.5,
+            evidence={"issues": ["soft"]}, unverified=[])
+        action, result = _decide_cascade(
+            task, "any", 2, validation, self._make_disp(), [], None,
+            ["E_model1"], set(), {"warnings": ["软伤"], "failure_kind": "soft_quality", "confidence": 0.5}
+        )
+        assert action == "return"
+        assert result.ok is False
+        assert "soft_quality_gate" in result.term_reason
+
 
 class TestPickAgent:
     """dispatcher.pick_agent 选择模型 + fallback 链。"""

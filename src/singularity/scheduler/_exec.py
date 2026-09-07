@@ -212,11 +212,11 @@ def _decide_cascade(task, level, turn, validation, disp_result, all_tool_events,
         ))
 
     if validation.action == "retry":
-        # 软质量软修复: 只首轮 retry 一次, 之后放行 (软质量非硬伤, 不值得无限修/升级)
+        # 软质量硬门槛: 首轮软修复 (turn=1 retry), 触顶 (turn>=2) 仍软伤 → 不静默放行, 标失败升人工
         if quality.get("failure_kind") == "soft_quality" and turn >= 2:
             return ("return", BatchOutput(
-                ok=True, task_id=task.id, dispatch_result=disp_result,
-                term_reason=f"soft_quality_accept (level={level}, turn={turn})",
+                ok=False, task_id=task.id, dispatch_result=disp_result,
+                term_reason=f"soft_quality_gate (软质量软修一轮未达标, level={level}, turn={turn})",
                 validation=validation, merge_request=pending_merge_req,
                 tool_events=all_tool_events, turn_count=turn,
             ))
