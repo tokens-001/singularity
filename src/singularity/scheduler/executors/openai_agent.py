@@ -138,7 +138,7 @@ class OpenAIAgentExecutor(BaseExecutor):
         self._is_responses_api = "/v1/responses" in self._url or "/responses" in self._url
         self._model = cfg.get("request_template", {}).get("model", cfg.get("model", ""))
         self._max_turns = cfg.get("max_turns", 15)  # ponytail: coding任务需要足够轮次(读→写→测→修)
-        self._cwd = Path(cwd) if cwd else config.PROJECT_ROOT
+        self._cwd = (Path(cwd) if cwd else config.PROJECT_ROOT).resolve()  # resolve 掉 /tmp→/private/tmp 等符号链接, 否则 write_file 的 relative_to 会炸
         self._changed_files: list[str] = []
         self._tool_events: list[dict] = []
         self._agent_level = agent_level or cfg.get("_level", "")
@@ -222,6 +222,11 @@ class OpenAIAgentExecutor(BaseExecutor):
                 # thinking 模型(DeepSeek V4 等)不接受 tool_choice=required → 降级 auto 重试一次
                 if body.get("tool_choice") == "required" and "tool_choice" in str(e):
                     body["tool_choice"] = "auto"
+                    # 光说不做防护: auto 模式 thinking 模型可能只回文字不调工具 → 注入强制工具指令
+                    messages.append({
+                        "role": "system",
+                        "content": "[系统] 本任务必须调用工具完成：写代码用 write_file，跑命令用 run_command。禁止只输出文字描述或计划，必须实际调用工具产出文件。",
+                    })
                     try:
                         resp_data = self._api_call(body)
                     except _RateLimitError:
@@ -347,6 +352,14 @@ class OpenAIAgentExecutor(BaseExecutor):
                     tool_events=list(self._tool_events),
                 )
 
+        # 达到最大轮次: 模型可能已写文件但没输出终答 → 追踪 changed_files, 有文件就算产出
+        self._track_changed_files()
+        if self._changed_files:
+            return ExecutorResult(
+                success=True, raw_output="(达到最大工具轮次, 已产出文件)",
+                changed_files=list(self._changed_files),
+                elapsed=time.time() - start, token_count=total_tokens,
+                tool_events=list(self._tool_events))
         return ExecutorResult(success=False,
                               error=f"达到最大轮次 {self._max_turns}，任务未完成",
                               error_kind="exec", elapsed=time.time() - start,
@@ -487,22 +500,18 @@ class OpenAIAgentExecutor(BaseExecutor):
         dangerous, reason = self._is_dangerous_command(command)
         if dangerous:
             return f"命令被拦截: {reason}"
-        try:
-            argv = shlex.split(command)
-        except ValueError as e:
-            return f"命令解析失败: {e}"
-        if not argv:
+        if not command.strip():
             return "空命令"
         # ponytail: 合并 agent env 到局部环境, 不污染 os.environ
         merged = {**os.environ, **getattr(self, '_agent_env', {})}
         safe_env = {k:v for k,v in merged.items() if not any(p in k.upper() for p in ("API_KEY","TOKEN","SECRET","PASSWORD","AUTH","CREDENTIAL","CERT"))}
         try:
-            r = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=30, cwd=str(self._cwd), env=safe_env)
+            # shell=True: 支持 && | source 等 shell 语法 (shell=False 会把 &&/source 当参数生成垃圾目录)。
+            # 安全性靠 _is_dangerous_command 黑名单前置拦截 (rm -rf/curl/python -c/bash -c 等)
+            r = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30, cwd=str(self._cwd), env=safe_env)
             out = r.stdout[-4000:] if r.stdout else ""
             err = r.stderr[-2000:] if r.stderr else ""
             return f"exit={r.returncode}\nstdout:\n{out}\nstderr:\n{err}"
-        except FileNotFoundError:
-            return f"命令不存在: {argv[0]}"
         except subprocess.TimeoutExpired:
             return "命令超时 (30s)"
 
@@ -526,16 +535,26 @@ class OpenAIAgentExecutor(BaseExecutor):
             return f"搜索错误: {e}"
 
     def _track_changed_files(self):
-        """通过 git diff 追踪改动的文件 (cwd = executor 工作目录, 修复 #1)。"""
+        """通过 git status 追踪改动的文件 (含 untracked 新文件, 修复 #1)。
+
+        git diff --name-only 漏掉 untracked 新文件 (模型用 run_command heredoc 写的新文件),
+        改用 git status --porcelain 全覆盖。
+        """
         try:
             r = subprocess.run(
-                ["git", "diff", "--name-only"],
+                ["git", "status", "--porcelain"],
                 capture_output=True, text=True, cwd=str(self._cwd),
             )
             if r.returncode == 0:
-                for f in r.stdout.strip().splitlines():
-                    if f and f not in self._changed_files:
-                        self._changed_files.append(f)
+                for line in r.stdout.splitlines():
+                    # 格式: "XY path" (X=index, Y=worktree), 重命名 "R  old -> new"
+                    f = line[3:].split(" -> ")[-1].strip()
+                    # 过滤构建产物 (__pycache__/.pyc), 不算交付文件
+                    if not f or f in self._changed_files:
+                        continue
+                    if "__pycache__" in f or f.endswith((".pyc", ".pyo")):
+                        continue
+                    self._changed_files.append(f)
         except Exception:
             try: witness.heartbeat('oa_exec', 'warn')
             except Exception: pass

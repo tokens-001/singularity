@@ -11,8 +11,9 @@ _KNOWN_VERDICTS = {"人工复核", "注意", "信息不足", "阻断"}
 _DANGEROUS_PATTERNS = [
     re.compile(r"rm\s+-rf\s+/"), re.compile(r"curl.*\|.*sh"), re.compile(r"sudo\s+rm"),
     re.compile(r"chmod\s+777"), re.compile(r">\s*/dev/sda"), re.compile(r"mkfs\."),
-    re.compile(r"dd\s+if="), re.compile(r"DROP\s+TABLE", re.IGNORECASE),
-    re.compile(r"DELETE\s+FROM", re.IGNORECASE),
+    re.compile(r"dd\s+if="),
+    # SQL 注入才拦: '; 逃逸出字符串后跟 DROP/DELETE。合法 CRUD 的 DELETE FROM ... WHERE ?=、幂等 DROP TABLE IF EXISTS 不拦
+    re.compile(r"';\s*(?:DROP\s+TABLE|DELETE\s+FROM)", re.IGNORECASE),
 ]
 
 _HUMAN_REVIEW_PATTERNS = [

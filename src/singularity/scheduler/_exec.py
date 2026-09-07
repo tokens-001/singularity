@@ -479,8 +479,8 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
             if exec_result:
                 snap = snap_mod.Snapshot(id=task.id, method="git", ref=ctx.snapshot_ref, created_at=0.0)
                 post_warnings = val_mod.post_execution_hook(exec_result, snap)
-                if post_warnings:
-                    batch.term_reason += f"; post_hook: {', '.join(post_warnings)}"
+                if post_warnings and post_warnings.get("warnings"):
+                    batch.term_reason += f"; post_hook: {', '.join(post_warnings['warnings'])}"
         except Exception as e:
             try: witness.heartbeat(task_id=task.id, status="error", detail=f"post_hook:{e}")
             except Exception: pass
