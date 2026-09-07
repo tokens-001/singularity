@@ -123,7 +123,8 @@ def _ensure_agent_type(agent_cfg: dict) -> dict:
         except Exception as _e:
             logging.getLogger(__name__).warning("agent config scan failed: %s", _e)
 
-    # ponytail: coding任务需≥15轮，不论是否已有配置都强制下限
+    # ponytail: 尊重 models.toml 每模型 max_turns(thinking 模型如 deepseek-v4-pro=3 轮),
+    # 不再硬抬 ≥15——慢模型 15 轮×~150s 直接撞 orchestrator 900s deadline
     if model:
         try:
             from . import model_registry as mr
@@ -132,8 +133,8 @@ def _ensure_agent_type(agent_cfg: dict) -> dict:
         except Exception:
             registry_max = 10
         current_max = agent_cfg.get("max_turns", 0)
-        agent_cfg["max_turns"] = max(current_max, registry_max, 15)
-    agent_cfg.setdefault("max_tool_turns", 5)
+        agent_cfg["max_turns"] = current_max or registry_max or 8
+    agent_cfg.setdefault("max_tool_turns", 3)
     agent_cfg.setdefault("request_template", {"model": model, "max_tokens": 20000})
     return agent_cfg
 

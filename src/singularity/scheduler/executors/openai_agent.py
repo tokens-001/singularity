@@ -274,6 +274,7 @@ class OpenAIAgentExecutor(BaseExecutor):
             # 有 tool_calls → 执行工具
             tool_calls = msg.get("tool_calls", [])
             if tool_calls:
+                tests_passed = False
                 for tc in tool_calls:
                     func = tc.get("function", {})
                     name = func.get("name", "")
@@ -298,6 +299,8 @@ class OpenAIAgentExecutor(BaseExecutor):
                     })
                     # ── 执行工具 ──
                     result = self._execute_tool(name, args)
+                    if name == "run_command" and self._tests_green(args.get("command", ""), result):
+                        tests_passed = True
                     # ── 工具事件: 记录完成 ──
                     t_done = time.time()
                     result_preview = result[:120] if len(result) > 120 else result
@@ -316,6 +319,15 @@ class OpenAIAgentExecutor(BaseExecutor):
                         "tool_call_id": tc.get("id", ""),
                         "content": result,
                     })
+                # 测试通过即停: 跑测试全绿 → 强制输出, 治 thinking 模型反复测不收敛(超900s)
+                if tests_passed:
+                    tools = []
+                    messages.append({
+                        "role": "system",
+                        "content": "[系统] 测试已全部通过，代码已完成。停止调用工具，直接输出最终答案。",
+                    })
+                    continue
+
                 # 死循环检测
                 tool_turns += 1
                 call_fingerprint = str([(tc.get("function", {}).get("name", ""),
@@ -514,6 +526,13 @@ class OpenAIAgentExecutor(BaseExecutor):
             return f"exit={r.returncode}\nstdout:\n{out}\nstderr:\n{err}"
         except subprocess.TimeoutExpired:
             return "命令超时 (30s)"
+
+    def _tests_green(self, command: str, result: str) -> bool:
+        """run_command 跑了测试且 exit=0 → 测试通过。治 thinking 模型反复测不收敛撞 900s。"""
+        cmd = command.lower()
+        if not any(k in cmd for k in ("pytest", "unittest", " test", "test_")):
+            return False
+        return "exit=0" in result
 
     def _tool_search(self, pattern: str, path: str = "") -> str:
         search_dir = self._safe_path(path) if path else self._cwd
