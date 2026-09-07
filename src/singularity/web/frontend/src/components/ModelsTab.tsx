@@ -26,6 +26,7 @@ export default function ModelsTab() {
   const [apiForm, setApiForm] = useState({ mode: '', id: '', provider: '', base_url: '', api_key_env: '', api_key: '' })
   const [disabledSet, setDisabledSet] = useState<Set<string>>(new Set())
   const [observerModelId, setObserverModelId] = useState('')
+  const [benchmarking, setBenchmarking] = useState('')
   const addToast = useToast(s => s.add)
 
   const fetch = async () => {
@@ -47,6 +48,13 @@ export default function ModelsTab() {
     const toImport = (scanResults?.models||[]).filter(m=>selected.has(m.id))
     if (!toImport.length) return
     await api.importModels(toImport); setScanResults(null); fetch()
+  }
+
+  const runBenchmark = async (id: string) => {
+    setBenchmarking(id)
+    try { const r: any = await api.benchmarkModel(id); addToast(`基准完成: ${r.rating} · ${r.passed}/${r.total} 通过`, 'success'); await fetch() }
+    catch (e) { addToast(String(e), 'error') }
+    finally { setBenchmarking('') }
   }
 
   const pickProvider = (e: any) => {
@@ -143,13 +151,18 @@ export default function ModelsTab() {
           return (
             <div key={m.id} className="card-row" style={{ opacity: disabled?0.5:1 }}>
               <span style={{ color: dotColor, fontSize: 8 }}>{disabled?'○':'●'}</span>
-              <span className="fw-500 flex-1">{mcn(m)}{m.rating && m.rating !== '?' && <span className="fs-10 text-muted" style={{marginLeft:6}}>{m.rating}</span>}</span>
+              <span className="fw-500 flex-1">{mcn(m)}{m.rating && m.rating !== '?' ? <span className="fs-10 text-muted" style={{marginLeft:6}}>{m.rating}</span> : <span className="card-tag" style={{marginLeft:6,opacity:.55}}>未评测</span>}</span>
               <span className="fs-10 text-muted">{COST_CN[m.cost||'']||m.cost} · {SPEED_CN[m.speed||'']||m.speed}</span>
               {rf.length > 0 && !(rf.length === 1 && rf[0] === 'any') && (
                 <span className="flex-center gap-4">{rf.slice(0,3).map(p=><span key={p} className="card-tag">{p}</span>)}</span>
               )}
               {(m.strengths||[]).length > 0 && (
                 <span className="flex-center gap-4">{(m.strengths||[]).slice(0,2).map(s=><span key={s} className="card-tag">{s}</span>)}</span>
+              )}
+              {m.api_available && (
+                <button onClick={()=>runBenchmark(m.id)} disabled={benchmarking===m.id} className="btn-sm">
+                  {benchmarking===m.id?'评测中…':'跑基准'}
+                </button>
               )}
               <button onClick={()=>api.deleteModel(m.id).then(fetch)} className="btn-ghost-danger"><Trash2 size={10}/></button>
             </div>

@@ -168,11 +168,12 @@ def model_list_for_tier(tier):
         "cost": m.cost, "speed": m.speed, "api_available": api_store.is_available(m.provider)} for m in models], 200
 
 
-def model_add(model_id, provider="", display="", recommended_for=None, speed="medium", cost="standard", reasoning=False, max_turns=5, strengths="", notes=""):
+def model_add(model_id, provider="", display="", recommended_for=None, speed="medium", cost="standard", reasoning=False, max_turns=5, strengths=None, notes=""):
     from . import model_registry
     # backward compat: accept old "tiers" param too
     rf = recommended_for or []
-    model_registry.add_model(model_id, provider, display, rf, speed, cost, "", reasoning, max_turns, notes)
+    strengths = strengths if isinstance(strengths, list) else ([strengths] if strengths else [])
+    model_registry.add_model(model_id, provider, display, rf, speed, cost, "", reasoning, max_turns, notes, strengths)
     return {"ok": True, "model_id": model_id}, 200
 
 
@@ -204,9 +205,20 @@ def model_update(model_id, data):
         data.get("reasoning", m.reasoning),
         data.get("max_turns", m.max_turns),
         data.get("notes", getattr(m, "notes", "")),
+        data.get("strengths", getattr(m, "strengths", [])),
     )
     return {"ok": True, "model_id": model_id,
             "updated": {"recommended_for": sorted(new_rf)}}, 200
+
+
+def model_benchmark(model_id):
+    from . import _benchmark
+    try:
+        result = _benchmark.run_benchmark(model_id)
+        code = 200 if result.get("ok") else (404 if result.get("error") == "模型不存在" else 400)
+        return result, code
+    except Exception as e:
+        return {"ok": False, "error": f"基准失败: {e}"}, 500
 
 
 # ═══════════════════════════════════════════════════════════════

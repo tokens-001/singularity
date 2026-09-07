@@ -1474,6 +1474,11 @@ def api_models_update(model_id):
     result, code = _api_handler.model_update(model_id, data)
     return jsonify(result), code
 
+@app.route("/api/models/<model_id>/benchmark", methods=["POST"])
+def api_models_benchmark(model_id):
+    result, code = _api_handler.model_benchmark(model_id)
+    return jsonify(result), code
+
 # ═══════════════════════════════════════════════════════════
 # Skill 管理
 # ═══════════════════════════════════════════════════════════
@@ -1804,4 +1809,4 @@ if __name__ == "__main__":
         _startup_log.info("观察者智能体已自动启动")
     except Exception as e:
         _startup_log.warning("观察者启动失败: %s", e)
-    app.run(debug=False, host="127.0.0.1", port=5050)
+    app.run(debug=False, host="127.0.0.1", port=5050, threaded=True)

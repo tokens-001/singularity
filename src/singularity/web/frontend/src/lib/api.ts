@@ -56,6 +56,7 @@ export const api = {
   updateModel: (id: string, data: any) => request(`/api/models/${id}`,{method:'PUT',body:JSON.stringify(data)}),
   deleteModel: (id: string) => request(`/api/models/${id}`,{method:'DELETE'}),
   importModels: (data: any) => request('/api/models/import',{method:'POST',body:JSON.stringify(data)}),
+  benchmarkModel: (id: string) => request(`/api/models/${id}/benchmark`,{method:'POST'}),
 
   apiStore: async () => { const d = await request<any>('/api/api-store'); return Object.values(d||{}) as any[] },
   addApiStore: (data: any) => request('/api/api-store',{method:'POST',body:JSON.stringify(data)}),

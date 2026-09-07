@@ -151,7 +151,7 @@ def add_model(model_id: str, provider: str, display: str = "",
               recommended_for: list[str] = None, speed: str = "medium",
               cost: str = "standard", rating: str = "",
               reasoning: bool = False, max_turns: int = 5,
-              notes: str = "") -> ModelEntry:
+              notes: str = "", strengths: list[str] = None) -> ModelEntry:
     """添加或更新自定义模型。推荐阶段为空=不限制。"""
     custom = _load_custom()
     entry = ModelEntry(
@@ -160,6 +160,7 @@ def add_model(model_id: str, provider: str, display: str = "",
         recommended_for=recommended_for or [],
         speed=speed, cost=cost, rating=rating,
         reasoning=reasoning, max_turns=max_turns, notes=notes,
+        strengths=strengths or [],
     )
     custom[model_id] = entry
     _save_custom(custom)
