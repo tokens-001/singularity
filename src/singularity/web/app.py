@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import threading
+import queue
 from collections import deque
 from pathlib import Path
 
@@ -540,7 +541,10 @@ def _sse_broadcast(kind: str, msg: str, ts: float = None):
     dead = []
     for q in _sse_clients:
         try:
-            q.put(payload)
+            q.put_nowait(payload)
+        except queue.Full:
+            # 有界队列满 = 消费者(前端)已断开没读，判死连接清理
+            dead.append(q)
         except Exception:
             dead.append(q)
     for q in dead:
@@ -1615,10 +1619,9 @@ def api_perm_unbind(level, model):
 @app.route("/api/events")
 def api_sse_events():
     """SSE 端点: 服务器主动推送调度事件，支持 Last-Event-ID 断线重连回放。"""
-    import queue
     if len(_sse_clients) >= _MAX_SSE_CLIENTS:
         return jsonify({"error": "SSE 连接数已满"}), 503
-    q = queue.Queue()
+    q = queue.Queue(maxsize=10)  # 有界: 队列满=消费者(前端)断开没读 → 广播时判死连接清理
     _sse_clients.append(q)
 
     # 解析 Last-Event-ID（浏览器 EventSource 重连时自动携带）
@@ -1632,41 +1635,49 @@ def api_sse_events():
         pass
 
     def generate():
-        # 1) 回放断线期间遗漏的事件
-        if last_eid > 0:
-            replayed = 0
-            # 缓冲区按时间排序，找到所有 >last_eid 的事件
-            for eid, data in _sse_event_buffer:
-                if eid > last_eid:
-                    yield f"id: {eid}\ndata: {data}\n\n"
-                    replayed += 1
-            if replayed:
-                _log_info("sse", f"回放 {replayed} 个遗漏事件 (Last-Event-ID={last_eid})")
-
-        # 2) 初始状态快照（作为当前连接的首个事件）
         try:
-            init_eid = _next_event_id()
-            counts = witness._count_by_status()
-            events_data = list(_loop_events)[:20]
-            initial = json.dumps({"kind": "init", "counts": counts,
-                "running_total": sum(witness._heartbeat_task_levels().values()),
-                "running": _loop_running, "events": events_data})
-            yield f"id: {init_eid}\ndata: {initial}\n\n"
-        except Exception as _e:
-            yield f"data: {json.dumps({'kind': 'error', 'msg': f'init failed: {_e}'})}\n\n"
+            # 1) 回放断线期间遗漏的事件
+            if last_eid > 0:
+                replayed = 0
+                # 缓冲区按时间排序，找到所有 >last_eid 的事件
+                for eid, data in _sse_event_buffer:
+                    if eid > last_eid:
+                        yield f"id: {eid}\ndata: {data}\n\n"
+                        replayed += 1
+                if replayed:
+                    _log_info("sse", f"回放 {replayed} 个遗漏事件 (Last-Event-ID={last_eid})")
 
-        # 3) 持续推送
-        while True:
+            # 2) 初始状态快照（作为当前连接的首个事件）
             try:
-                eid, data = q.get(timeout=_sse_heartbeat_interval)
-                yield f"id: {eid}\ndata: {data}\n\n"
-            except queue.Empty:
-                # 心跳保活
-                ping_eid = _next_event_id()
-                ping = json.dumps({"kind": "ping", "ts": time.time()})
-                yield f"id: {ping_eid}\ndata: {ping}\n\n"
-            except GeneratorExit:
-                break
+                init_eid = _next_event_id()
+                counts = witness._count_by_status()
+                events_data = list(_loop_events)[:20]
+                initial = json.dumps({"kind": "init", "counts": counts,
+                    "running_total": sum(witness._heartbeat_task_levels().values()),
+                    "running": _loop_running, "events": events_data})
+                yield f"id: {init_eid}\ndata: {initial}\n\n"
+            except Exception as _e:
+                yield f"data: {json.dumps({'kind': 'error', 'msg': f'init failed: {_e}'})}\n\n"
+
+            # 3) 持续推送
+            while True:
+                try:
+                    eid, data = q.get(timeout=_sse_heartbeat_interval)
+                    yield f"id: {eid}\ndata: {data}\n\n"
+                except queue.Empty:
+                    # 心跳保活
+                    ping_eid = _next_event_id()
+                    ping = json.dumps({"kind": "ping", "ts": time.time()})
+                    yield f"id: {ping_eid}\ndata: {ping}\n\n"
+                except GeneratorExit:
+                    break
+        finally:
+            # 连接断开(GeneratorExit)时清理队列，防泄漏——否则 _sse_clients 塞满 20 后新连接被拒，观察者转圈
+            try:
+                _sse_clients.remove(q)
+                _log_info("sse", f"清理 SSE 客户端，剩余 {len(_sse_clients)}")
+            except ValueError:
+                pass
 
     return Response(generate(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
