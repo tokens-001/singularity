@@ -123,6 +123,11 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                 quality["confidence"] = min(1.0, quality.get("confidence", 0.5) + 0.1)
         except Exception as e:
             quality["warnings"].append(f"test execution error: {e}")
+            quality["failure_kind"] = "test_error"
+            quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.3)
+            validation.action = "retry"
+            validation.unverified.append("测试执行异常: 不默认通过")
+            _record_review_failure("test_error")
 
     # 2) multi-model review: 2+ models independently review changed files
     # ponytail: 小改动跳过审查 — 单文件 + <50行diff 不值得额外90s开销
@@ -237,6 +242,11 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                     "summary", "")[:200]
         except Exception as e:
             quality["warnings"].append(f"multi-review error: {e}")
+            quality["failure_kind"] = "review_error"
+            quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.25)
+            validation.action = "retry"
+            validation.unverified.append(f"multi-review 异常: {e}")
+            _record_review_failure("review_error")
 
     # 3) QA 约束验收: qa_engineer 角色对照约束清单验证 (补 multi_model_review 不查的约束维度)
     if validation.action == "pass" and changed and not _is_trivial_change(changed, cwd):
@@ -269,6 +279,11 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                 quality["quality_signals"]["qa_acceptance"] = qa.get("verdict", "unknown")
         except Exception as e:
             quality["warnings"].append(f"QA 约束验收 error: {e}")
+            quality["failure_kind"] = "constraint_error"
+            quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.25)
+            validation.action = "retry"
+            validation.unverified.append(f"QA 约束验收异常: {e}")
+            _record_review_failure("constraint_error")
 
     # 3.5) 需求符合性对账: 消费 traceability.json, 只写软信号 + warning (机械关键词, 先不设 hard gate)
     if validation.action == "pass" and project_id and not _is_trivial_change(changed, cwd):
@@ -319,6 +334,11 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             quality["quality_signals"]["security_audit"] = sa.get("verdict", "unknown")
         except Exception as e:
             quality["warnings"].append(f"安全审计 error: {e}")
+            quality["failure_kind"] = "security_error"
+            quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.3)
+            validation.action = "retry"
+            validation.unverified.append(f"安全审计异常: {e}")
+            _record_review_failure("security_error")
 
 
 def check_review_fail_limit(project_id: str = "", current_retries: int = 0) -> dict:

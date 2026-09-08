@@ -400,8 +400,8 @@ def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
                         key=lambda a: model_weights.get(a.get("model", ""), 1.0),
                         reverse=True,
                     )
-        except Exception:
-            pass  # learner 挂了不阻塞选择
+        except Exception as _e:
+            logging.getLogger(__name__).warning("route learner sort failed: %s", _e)  # learner 挂了不阻塞选择
 
     return deduped
 

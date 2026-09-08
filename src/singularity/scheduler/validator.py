@@ -298,18 +298,24 @@ JSON:"""
             agents, review_level,
             exclude={writer_model} if writer_model else None)
         if not chain:
-            return {"issues":[],"verdict":"pass","summary":f"no reviewer at {review_level}"}
+            return {"issues":[{"severity":"critical","line":0,
+                     "detail":f"no reviewer at {review_level}"}],
+                    "verdict":"retry","summary":f"no reviewer at {review_level}"}
         result = _disp.dispatch(prompt, review_level, f"review_{writer_model or '?'}",
                                {review_level:[chain[0]]}, cwd=cwd or "")
         raw = result.executor_result.raw_output if result and result.executor_result else ""
     except Exception as e:
-        return {"issues":[],"verdict":"pass","summary":f"review call failed: {e}"}
+        return {"issues":[{"severity":"critical","line":0,
+                 "detail":f"review call failed: {e}"}],
+                "verdict":"retry","summary":f"review call failed: {e}"}
 
     d = _extract_json_obj(raw)
     if d:
         return {"issues":d.get("issues",[]),"verdict":d.get("verdict","pass"),
                 "summary":d.get("summary",raw[:200])}
-    return {"issues":[],"verdict":"pass","summary":raw[:200] if raw else "no result"}
+    return {"issues":[{"severity":"critical","line":0,
+             "detail":f"review output not JSON: {raw[:100]}"}],
+            "verdict":"retry","summary":raw[:200] if raw else "no result"}
 
 
 def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
@@ -412,10 +418,14 @@ JSON:"""
                        "verdict": d.get("verdict", "pass"),
                        "summary": d.get("summary", raw[:200])}
             return {"model": model_name,
-                   "issues": [], "verdict": "pass", "summary": raw[:200]}
+                   "issues": [{"severity": "critical", "line": 0,
+                               "detail": f"chunk review output not JSON: {raw[:100]}"}],
+                   "verdict": "retry", "summary": raw[:200]}
         except Exception as e:
             return {"model": cfg.get("model", "unknown"),
-                   "issues": [], "verdict": "pass", "summary": f"chunk review failed: {e}"}
+                   "issues": [{"severity": "critical", "line": 0,
+                               "detail": f"chunk review failed: {e}"}],
+                   "verdict": "retry", "summary": f"chunk review failed: {e}"}
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(model_cfgs)) as executor:
         future_to_model = {
@@ -424,8 +434,13 @@ JSON:"""
             for cfg in model_cfgs
         }
         
-        for future in concurrent.futures.as_completed(future_to_model):
+        done, not_done = concurrent.futures.wait(
+            future_to_model, timeout=config.CLAUDE_CLI_TIMEOUT)
+        for future in done:
             reviews.append(future.result())
+        for future in not_done:
+            reviews.append({"model": future_to_model[future], "issues": [],
+                            "verdict": "abort", "summary": "chunk review timeout"})
 
     elapsed = _time.time() - start_time
     
@@ -644,17 +659,17 @@ def qa_acceptance_review(constraints, diff_text, cwd, requirements=""):
     agents = _disp.load_agents()
     model_cfgs = [a for a in _disp._all_agents_list(agents) if _disp.agent_api_available(a)][:1]
     if not model_cfgs:
-        return {"verdict": "accepted", "verifications": [], "summary": "无可用模型"}
+        return {"verdict": "needs_fix", "verifications": [], "summary": "无可用 QA 模型 (未验收)"}
 
     try:
         result = _disp.dispatch(prompt, "any", "qa_acceptance", {"any": model_cfgs}, cwd=cwd)
         raw = result.executor_result.raw_output if result and result.executor_result else ""
     except Exception as e:
-        return {"verdict": "accepted", "verifications": [], "summary": f"QA 验收调用失败: {e}"}
+        return {"verdict": "needs_fix", "verifications": [], "summary": f"QA 验收调用失败: {e}"}
 
     d = _extract_json_obj(raw)
     if not d:
-        return {"verdict": "accepted", "verifications": [], "summary": f"QA 输出非 JSON: {raw[:200]}"}
+        return {"verdict": "needs_fix", "verifications": [], "summary": f"QA 输出非 JSON: {raw[:200]}"}
 
     verdict = (d.get("summary") or {}).get("verdict", "accepted")
     if verdict == "rejected":
@@ -693,7 +708,11 @@ def security_audit_review(diff_text, cwd, requirements=""):
     agents = _disp.load_agents()
     model_cfgs = [a for a in _disp._all_agents_list(agents) if _disp.agent_api_available(a)][:1]
     if not model_cfgs:
-        return {"verdict": "clean", "findings": [], "summary": "无可用模型"}
+        return {"verdict": "needs_fix", "findings": [
+            {"severity": "high", "category": "review_error", "cwe": "CWE-0",
+             "location": "security_audit", "description": "无可用安全审计模型，未完成审计",
+             "remediation": "配置安全审计模型；若持续失败需人工介入"}
+        ], "summary": "无可用模型"}
 
     try:
         result = _disp.dispatch(prompt, "any", "security_audit", {"any": model_cfgs}, cwd=cwd)

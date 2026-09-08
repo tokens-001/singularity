@@ -12,7 +12,7 @@ import re as _re
 import time
 import urllib.request
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Optional
 
 from singularity.scheduler._types import RunContext, BatchOutput, _MAX_DEPTH, _pending_sse_events
@@ -90,7 +90,8 @@ def _run_committee(task, ctx: RunContext, agents: dict, d_agents: list) -> Batch
             fut = pool.submit(_run_committee_member, task, ctx, single, agent_cfg)
             futures[fut] = agent_cfg
 
-        for fut in as_completed(futures):
+        done, not_done = wait(futures, timeout=300)
+        for fut in done:
             agent_cfg = futures[fut]
             try:
                 batch = fut.result(timeout=300)
@@ -117,6 +118,13 @@ def _run_committee(task, ctx: RunContext, agents: dict, d_agents: list) -> Batch
                     "kind": "subagent", "msg": f"委员会成员异常: {agent_cfg.get('model','?')}",
                     "ts": time.time(), "task_id": task.id,
                 })
+        for fut in not_done:
+            agent_cfg = futures[fut]
+            plans.append({"model": agent_cfg.get("model", "?"), "error": "timeout"})
+            _pending_sse_events.append({
+                "kind": "subagent", "msg": f"委员会成员超时: {agent_cfg.get('model','?')}",
+                "ts": time.time(), "task_id": task.id,
+            })
 
     if not plans:
         # 全失败 → 尝试降级拆分
@@ -175,13 +183,11 @@ def _run_committee_member(task, ctx, agents, agent_cfg):
             break
 
     if extra:
-        # 临时加视角到 task description
-        orig = task.description
-        task.description = f"{orig}{extra}"
-        try:
-            return _run_with_retry(task, ctx, agents)
-        finally:
-            task.description = orig  # 恢复
+        # 并发安全: 委员会多线程共用同一 task, 原地改 description 会串视角。
+        # 用 replace 生成副本注入视角, 原 task 不变, 无需 finally 恢复。
+        from dataclasses import replace
+        member_task = replace(task, description=f"{task.description}{extra}")
+        return _run_with_retry(member_task, ctx, agents)
     return _run_with_retry(task, ctx, agents)
 
 

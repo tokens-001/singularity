@@ -189,7 +189,8 @@ def _do_merge(src_ref: str, onto: str, merge_msg: str, repo_root: Path = None) -
 
     commit_r = _run(["commit", "-m", merge_msg], root)
     if commit_r.returncode != 0:
-        # ponytail: git commit 非零可能因为 nothing-to-commit，HEAD 未变
+        # commit 失败可能留下 MERGE_HEAD (仓库卡 merging), 先 abort 清理再返回
+        _run(["merge", "--abort"], root)
         return MergeResult(ok=False, reason=f"commit 失败: {commit_r.stderr.strip()[:120]}")
     return MergeResult(ok=True, merged_ref=_head_ref(root))
 
