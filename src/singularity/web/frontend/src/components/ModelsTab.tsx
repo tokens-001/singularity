@@ -25,6 +25,7 @@ export default function ModelsTab() {
   const [showAddApi, setShowAddApi] = useState(false)
   const [apiForm, setApiForm] = useState({ mode: '', id: '', provider: '', base_url: '', api_key_env: '', api_key: '' })
   const [disabledSet, setDisabledSet] = useState<Set<string>>(new Set())
+  const [activeModels, setActiveModels] = useState<Set<string>>(new Set())
   const [observerModelId, setObserverModelId] = useState('')
   const [benchmarking, setBenchmarking] = useState('')
   const addToast = useToast(s => s.add)
@@ -34,7 +35,11 @@ export default function ModelsTab() {
     setModels(m); setApis(a); setObserverModelId(obs as string)
     const ds = new Set<string>()
     for (const d of (ag?._disabled?.any||[])) ds.add(d)
-    setDisabledSet(ds)
+    const act = new Set<string>()
+    for (const lst of Object.values(ag||{})) {
+      if (Array.isArray(lst)) for (const a of lst) if (a?.model && !ds.has(a.model)) act.add(a.model)
+    }
+    setDisabledSet(ds); setActiveModels(act)
   }
   useEffect(() => { fetch() }, [])
 
@@ -147,12 +152,14 @@ export default function ModelsTab() {
         {models.map(m => {
           const rf = m.recommended_for||[]
           const disabled = disabledSet.has(m.id)
-          const dotColor = disabled ? 'var(--text-muted)' : (m.api_available?'var(--accent-green)':'var(--text-muted)')
+          const active = activeModels.has(m.id)
+          const dotColor = active ? 'var(--accent-green)' : 'var(--text-muted)'
           return (
             <div key={m.id} className="card-row" style={{ opacity: disabled?0.5:1 }}>
               <span style={{ color: dotColor, fontSize: 8 }}>{disabled?'○':'●'}</span>
               <span className="fw-500 flex-1">{mcn(m)}{m.rating && m.rating !== '?' ? <span className="fs-10 text-muted" style={{marginLeft:6}}>{m.rating}</span> : <span className="card-tag" style={{marginLeft:6,opacity:.55}}>未评测</span>}</span>
               <span className="fs-10 text-muted">{COST_CN[m.cost||'']||m.cost} · {SPEED_CN[m.speed||'']||m.speed}</span>
+              {!m.api_available && <span className="fs-10" style={{color:'#d97706'}}>未配key</span>}
               {rf.length > 0 && !(rf.length === 1 && rf[0] === 'any') && (
                 <span className="flex-center gap-4">{rf.slice(0,3).map(p=><span key={p} className="card-tag">{p}</span>)}</span>
               )}
