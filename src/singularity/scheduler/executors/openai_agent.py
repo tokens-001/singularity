@@ -109,6 +109,7 @@ SYSTEM_PROMPT = """你是Singularity Dispatch的 AI Agent。你的唯一任务�
 - 参数 path 是相对于项目根目录的路径，不要用绝对路径
 - 写文件时给完整可运行的代码，不只给 diff
 - 对照需求完整实现：功能要全覆盖，需求里的软性要求（风格/响应式/空态/异常态/移动端适配）也要做到，别只写最小可运行版
+- 跑命令一律用 `python3` 开头（本机没有 `python` 命令，敲 `python` 会 command not found）；跑测试固定 `python3 -m pytest -q`
 - 分析/调研/总结类任务：第一轮直接输出答案，不调用工具
 - 任务完成时，必须在输出末尾附加 [HANDOFF] 块，格式如下:
   [HANDOFF]
@@ -218,7 +219,7 @@ class OpenAIAgentExecutor(BaseExecutor):
             try:
                 resp_data = self._api_call(body)
             except _RateLimitError:
-                time.sleep(2 ** turn)
+                time.sleep(min(2 ** turn, 60))
                 continue
             except _FormatError as e:
                 # thinking 模型(DeepSeek V4 等)不接受 tool_choice=required → 降级 auto 重试一次
@@ -232,7 +233,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                     try:
                         resp_data = self._api_call(body)
                     except _RateLimitError:
-                        time.sleep(2 ** turn)
+                        time.sleep(min(2 ** turn, 60))
                         continue
                     except (_NetworkError, _FormatError) as e2:
                         return ExecutorResult(success=False, error=str(e2),

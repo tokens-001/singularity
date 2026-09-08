@@ -237,10 +237,21 @@ class TaskRunner:
                 route_level=route.level,
                 model=getattr(disp_result, 'agent_cfg', {}).get("model", "") if disp_result else "",
                 elapsed_ms=getattr(exec_out, 'elapsed', 0) if exec_out else 0,
-                tokens=getattr(exec_out, 'tokens', 0) if exec_out else 0,
+                tokens=getattr(exec_out, 'token_count', 0) if exec_out else 0,
                 failure_mode=validation.verdict if not batch.ok else "",
                 files_changed=getattr(exec_out, 'changed_files', []) if exec_out else [],
             )
+            # 用量统计: 记录真实 token 消耗 (只统计, 不做预算拦截)
+            try:
+                record_tokens(
+                    project_id=getattr(task, 'project_id', ''),
+                    task_id=task.id,
+                    model=getattr(disp_result, 'agent_cfg', {}).get("model", "") if disp_result else "",
+                    level=route.level,
+                    tokens=getattr(exec_out, 'token_count', 0) if exec_out else 0,
+                )
+            except Exception:
+                pass
             # 同时记录到路由学习器
             try:
                 learner = rl_mod.load_learner()
@@ -250,7 +261,7 @@ class TaskRunner:
                     level=route.level,
                     success=batch.ok,
                     elapsed_ms=getattr(exec_out, 'elapsed', 0) if exec_out else 0,
-                    tokens=getattr(exec_out, 'tokens', 0) if exec_out else 0,
+                    tokens=getattr(exec_out, 'token_count', 0) if exec_out else 0,
                 )
                 rl_mod.save_learner(learner)
             except Exception as e:
