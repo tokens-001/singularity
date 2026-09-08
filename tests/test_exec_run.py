@@ -93,9 +93,9 @@ def install_stubs():
     _exec._cleanup_wt = fake_cleanup
 
     _exec.commit_wt = lambda wt: "fakebranchref"
-    _exec._anchor_ref = lambda tid, ref: None
-    _exec._build_merge_request = lambda task, br, base: "FAKE_MR"
-    _exec.wt_merge_back = lambda wt: type("MR", (), {"ok": False, "reason": "冲突", "conflicts": ["f"]})()
+    _exec._anchor_ref = lambda tid, ref, repo_root=None: None
+    _exec._build_merge_request = lambda task, br, base, repo_root=None: "FAKE_MR"
+    _exec.wt_merge_back = lambda wt, repo_root=None: type("MR", (), {"ok": False, "reason": "冲突", "conflicts": ["f"]})()
 
     # dispatcher
     class FakeDispMod:
