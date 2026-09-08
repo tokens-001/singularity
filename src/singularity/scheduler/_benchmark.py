@@ -7,6 +7,7 @@ pytest 自动判定通过，按结果定 rating/speed/strengths/max_turns 写回
 """
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -119,6 +120,8 @@ def _summarize(results: list[dict], m) -> dict:
 
 def _append_note(notes: str, s: dict) -> str:
     tag = f"轻量基准 {s['n_pass']}/{len(GOLDEN_TASKS)} 通过(非权威)"
+    # 去掉旧的轻量基准标签，避免同模型反复跑基准时 notes 越堆越长
+    notes = re.sub(r"\s*\|\s*轻量基准 [\d/]+ 通过\(非权威\)", "", notes or "")
     return f"{notes} | {tag}" if notes else tag
 
 

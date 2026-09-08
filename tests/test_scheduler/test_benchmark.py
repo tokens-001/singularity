@@ -58,3 +58,13 @@ class TestAddModelStrengths:
         monkeypatch.setattr(model_registry, "_save_custom", lambda c: store.update(c))
         model_registry.add_model("bench-y", "deepseek")
         assert store["bench-y"].strengths == []
+
+
+class TestAppendNote:
+    def test_first_run(self):
+        assert _benchmark._append_note("", {"n_pass": 3}) == "轻量基准 3/3 通过(非权威)"
+
+    def test_no_duplicate_tag(self):
+        # 已有旧标签 → 替换而非追加
+        out = _benchmark._append_note("foo | 轻量基准 2/3 通过(非权威)", {"n_pass": 3})
+        assert out == "foo | 轻量基准 3/3 通过(非权威)"
