@@ -159,9 +159,13 @@ class OpenAIAgentExecutor(BaseExecutor):
 
         start = time.time()
         # ── 合并 skill tools 和 prompt ──
-        tools = list(TOOLS)
-        tools.extend(self._skill_tools)
-        tools.extend(self._mcp_tools)
+        # 架构/规划类任务(no_tools)禁工具: 模型直接输出文本, 不被 write_file/run_command 带偏
+        if self.cfg.get("no_tools"):
+            tools = []
+        else:
+            tools = list(TOOLS)
+            tools.extend(self._skill_tools)
+            tools.extend(self._mcp_tools)
         system_prompt = SYSTEM_PROMPT
         if self._skill_prompt:
             system_prompt += "\n" + self._skill_prompt

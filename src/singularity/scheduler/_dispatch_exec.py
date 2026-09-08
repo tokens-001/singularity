@@ -12,7 +12,7 @@ from singularity.scheduler import tracker, config
 from singularity.scheduler.tracker import TaskStatus
 from singularity.scheduler import witness
 from singularity.scheduler.log import timed
-import json, time, logging, threading
+import json, os, time, logging, threading
 
 @timed(name="dispatcher")
 def dispatch(
@@ -98,15 +98,21 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
 
     # 席位视角: 按成员顺序轮转分配, 不依赖模型名(任何模型组合都能碰撞出差异)。
     # ponytail: 顺序轮转够用; 若要"按模型特性自适应分席"再优化。
-    _PERSPECTIVES = [
-        "你关注: 风险点、边界条件、回滚策略。方案必须稳健,不能炸。",
-        "你关注: 有没有完全不同的思路?业界最新实践是什么?大胆提替代方案。",
-        "你关注: 这方案能落地吗?需要多少个文件?现有代码风格兼容吗?复杂度实际是多少?",
-        "你关注: 和现有架构的一致性。不要引入不兼容的变更。",
-    ]
+    # QIDIAN_COMMITTEE_NO_PERSPECTIVE=1 时关闭视角注入(无视角基线, 用于 A/B 评测多视角价值)
+    if os.environ.get("QIDIAN_COMMITTEE_NO_PERSPECTIVE") == "1":
+        _PERSPECTIVES = [None, None, None, None]
+    else:
+        _PERSPECTIVES = [
+            "你关注: 风险点、边界条件、回滚策略。方案必须稳健,不能炸。",
+            "你关注: 有没有完全不同的思路?业界最新实践是什么?大胆提替代方案。",
+            "你关注: 这方案能落地吗?需要多少个文件?现有代码风格兼容吗?复杂度实际是多少?",
+            "你关注: 和现有架构的一致性。不要引入不兼容的变更。",
+        ]
 
     def _run_one(agent_cfg, perspective):
         agent_cfg = _ensure_agent_type(agent_cfg)
+        # 架构任务: 禁工具, 模型直接输出 JSON 方案(不写代码/跑测试, 避免 thinking 模型被工具带偏)
+        agent_cfg = {**agent_cfg, "no_tools": True}
         etype = agent_cfg.get("type", "claude-cli")
         executor_cls = _EXECUTOR_BY_TYPE.get(etype)
         if not executor_cls:
