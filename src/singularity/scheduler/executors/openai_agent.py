@@ -201,7 +201,8 @@ class OpenAIAgentExecutor(BaseExecutor):
                     "model": self._model,
                     "messages": messages,
                     "tools": tools,
-                    "tool_choice": "required",
+                    # tools 清空(测试通过即停/死循环强制输出)后别再 required, 否则 API 拒收空 tools + required
+                    "tool_choice": "required" if tools else "auto",
                 }
                 # GPT-5.5+ 用 max_completion_tokens, 旧模型用 max_tokens
                 if "max_completion_tokens" in tmpl:
