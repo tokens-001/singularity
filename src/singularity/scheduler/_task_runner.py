@@ -263,11 +263,7 @@ class TaskRunner:
                 witness.heartbeat('orch', f'warn:archive_experience:{e}')
             except Exception:
                 pass
-        # 工具事件
-        tool_events = getattr(batch, 'tool_events', []) or []
-        for te in tool_events:
-            te['task_id'] = task.id
-            _pending_sse_events.append(te)
+        # 工具事件已由 openai_agent 实时上流(append 到 _pending_sse_events), 此处不再批量推, 避免重复
         turn = getattr(batch, 'turn_count', 0) or 0
         if turn > 0:
             _pending_sse_events.append({

@@ -366,10 +366,34 @@ _loop_events: deque = deque(maxlen=50)  # 最近 50 个事件
 _loop_running: bool = False
 _loop_lock = threading.Lock()
 _sse_clients: list = []  # SSE 连接的客户端队列
+_sse_pump_thread: threading.Thread | None = None  # 事件泵线程(实时广播工具事件)
 _sse_event_id = 0             # 全局递增事件 ID
 _sse_event_lock = threading.Lock()
 _sse_event_buffer: deque = deque(maxlen=200)  # 事件回放缓冲区 (event_id, data_json)
 _sse_heartbeat_interval = 15  # SSE 心跳间隔(秒)
+
+
+def _sse_pump_worker():
+    """事件泵：实时广播 _pending_sse_events，绕开 run_queue 的阻塞。
+
+    执行线程(ThreadPoolExecutor) append 工具/轮次事件到全局 list，
+    本线程独立轮询 flush，让前端在任务执行期间就能看到反馈，
+    而不是等 run_queue 返回后一次性冒出来。
+
+    # ponytail: list.append 原子(GIL)，本线程是唯一 clear 者，
+    # list() 与 clear() 之间最多丢一条工具日志，可接受。要零丢失换 queue.Queue。
+    """
+    while not _loop_stop.is_set():
+        try:
+            events = list(orchestrator._pending_sse_events)
+            if events:
+                orchestrator._pending_sse_events.clear()
+                for evt in events:
+                    extra = {k: v for k, v in evt.items() if k not in ("kind", "msg", "ts")}
+                    _push_event(evt.get("kind", "tool"), evt.get("msg", ""), evt.get("ts"), extra)
+        except Exception:
+            pass
+        time.sleep(0.2)
 
 
 def _loop_worker():
@@ -415,14 +439,7 @@ def _loop_worker():
                 time.sleep(3)
             else:
                 idle_ticks = 0
-                # ── 刷新工具/轮次事件（_exec 推到全局队列）──
-                try:
-                    events_to_flush = list(orchestrator._pending_sse_events)
-                    orchestrator._pending_sse_events.clear()
-                    for evt in events_to_flush:
-                        _push_event(evt.get("kind", "tool"), evt.get("msg", ""), evt.get("ts"))
-                except Exception:
-                    pass
+                # 工具/轮次事件已由 _sse_pump_worker 实时广播, 主循环不再 flush
                 for tid, reason, validation in results:
                     t = tracker.read_task(tid)
                     level = t.route_level if t else "?"
@@ -508,11 +525,11 @@ _WS_CHANNEL_MAP: dict[str, set[str]] = {
 }
 
 
-def _push_event(kind: str, msg: str, ts: float = None):
+def _push_event(kind: str, msg: str, ts: float = None, extra: dict = None):
     if ts is None:
         ts = time.time()
-    _loop_events.appendleft({"kind": kind, "msg": msg, "ts": ts})
-    _sse_broadcast(kind, msg, ts)
+    _loop_events.appendleft({"kind": kind, "msg": msg, "ts": ts, **(extra or {})})
+    _sse_broadcast(kind, msg, ts, extra)
     # T5: 同步推送到 Observer WS（前端 subscribe 后接收）
     if kind in _WS_CHANNEL_MAP:
         try:
@@ -528,12 +545,12 @@ def _next_event_id():
         return _sse_event_id
 
 
-def _sse_broadcast(kind: str, msg: str, ts: float = None):
+def _sse_broadcast(kind: str, msg: str, ts: float = None, extra: dict = None):
     """向所有 SSE 客户端推送事件，附加递增 event_id 并存入回放缓冲区。"""
     if ts is None:
         ts = time.time()
     eid = _next_event_id()
-    data = json.dumps({"kind": kind, "msg": msg, "ts": ts})
+    data = json.dumps({"kind": kind, "msg": msg, "ts": ts, **(extra or {})})
     # 回放缓冲区（心跳不入缓冲区，免浪费空间）
     if kind != "ping":
         _sse_event_buffer.append((eid, data))
@@ -564,7 +581,7 @@ def _sse_broadcast(kind: str, msg: str, ts: float = None):
 
 
 def start_loop(concurrent: int = 1):
-    global _loop_thread, _loop_stop, _loop_concurrent, _loop_running
+    global _loop_thread, _loop_stop, _loop_concurrent, _loop_running, _sse_pump_thread
     with _loop_lock:
         if _loop_running:
             return False
@@ -573,6 +590,8 @@ def start_loop(concurrent: int = 1):
         _loop_running = True
         _loop_thread = threading.Thread(target=_loop_worker, daemon=True)
         _loop_thread.start()
+        _sse_pump_thread = threading.Thread(target=_sse_pump_worker, daemon=True)
+        _sse_pump_thread.start()
         return True
 
 

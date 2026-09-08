@@ -24,6 +24,7 @@ from singularity.scheduler.executors.base import (BaseExecutor, ExecutorResult,
     is_blocked_path, is_dangerous_command)
 from singularity.scheduler import witness
 from singularity.scheduler import config
+from singularity.scheduler._types import _pending_sse_events
 
 # ── blocklist 已统一到 base.py ──
 
@@ -291,13 +292,15 @@ class OpenAIAgentExecutor(BaseExecutor):
                             args = {}
                     # ── 工具事件: 记录开始执行 ──
                     t_start = time.time()
-                    self._tool_events.append({
+                    evt_start = {
                         "kind": "tool:start",
                         "tool": name,
                         "task_id": self.task_id,
                         "ts": t_start,
                         "msg": f"🔧 {name}",
-                    })
+                    }
+                    self._tool_events.append(evt_start)
+                    _pending_sse_events.append(evt_start)  # 实时上流: 前端任务卡滚动日志
                     # ── 执行工具 ──
                     result = self._execute_tool(name, args)
                     if name == "run_command" and self._tests_green(args.get("command", ""), result):
@@ -305,7 +308,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                     # ── 工具事件: 记录完成 ──
                     t_done = time.time()
                     result_preview = result[:120] if len(result) > 120 else result
-                    self._tool_events.append({
+                    evt_done = {
                         "kind": "tool:done",
                         "tool": name,
                         "task_id": self.task_id,
@@ -314,7 +317,9 @@ class OpenAIAgentExecutor(BaseExecutor):
                         "result_preview": result_preview,
                         "result_len": len(result),
                         "msg": f"✅ {name} ({len(result)}字符, {round(t_done-t_start,2)}s)",
-                    })
+                    }
+                    self._tool_events.append(evt_done)
+                    _pending_sse_events.append(evt_done)  # 实时上流
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.get("id", ""),

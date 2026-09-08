@@ -6,7 +6,8 @@ import { useToast } from '../components/Toast'
 import { Send, Loader2, CheckCircle2, XCircle, RotateCcw, FolderOpen, ArrowUp, ChevronDown, FileText } from 'lucide-react'
 import FilePanel from '../components/FilePanel'
 
-interface ProgressItem { id: string; desc: string; status: string; ts: number; route_type?: string; duration?: number; error?: string; files?: string[]; verdict?: string }
+interface ToolLog { tool: string; kind: string; msg: string; ts: number }
+interface ProgressItem { id: string; desc: string; status: string; ts: number; route_type?: string; duration?: number; error?: string; files?: string[]; verdict?: string; logs?: ToolLog[] }
 
 export default function Chat() {
   const conversations = useAppStore(s => s.conversations)
@@ -85,6 +86,12 @@ export default function Chat() {
         else if (desc) next.push({ id: tid, desc, status, ts: Date.now() })
         return next.slice(-20)
       })
+    } else if (e.kind === 'tool:start' || e.kind === 'tool:done') {
+      const tid = e.task_id || ''
+      if (tid) {
+        const log: ToolLog = { tool: e.tool || '', kind: e.kind, msg: e.msg || '', ts: e.ts || Date.now() }
+        setTasks(prev => prev.map(t => t.id === tid ? { ...t, logs: [...(t.logs || []), log].slice(-30) } : t))
+      }
     } else if (e.kind === 'system') {
       if (e.project_id && activePid === '_default') setActiveProject(e.project_id)
       const last = msgs[msgs.length - 1]
@@ -194,6 +201,10 @@ export default function Chat() {
                     {active > 0 ? `${active} 个执行中` : completed === tasks.length ? '全部完成' : `进度 ${completed}/${tasks.length}`}
                     {failed > 0 && <span style={{ color: '#dc2626', marginLeft: 4 }}>{failed} 失败</span>}
                   </span>
+                  {info && <span className="fs-11" style={{ marginLeft: 'auto', color: '#2563eb', fontWeight: 600 }}>{phaseNames[gatePhase] || gatePhase}</span>}
+                </div>
+                <div style={{ height: 6, background: '#e5e2d8', borderRadius: 999, overflow: 'hidden', marginBottom: 8 }}>
+                  <div style={{ height: '100%', width: `${tasks.length ? Math.round((completed / tasks.length) * 100) : 0}%`, background: '#16a34a', borderRadius: 999, transition: 'width 0.3s' }} />
                 </div>
                 {tasks.map((t) => {
                   const done = t.status === 'done'; const fail = t.status === 'failed' || t.status === 'cancelled'
@@ -221,6 +232,13 @@ export default function Chat() {
                               style={{ background: 'none', border: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 11, padding: 0 }}><RotateCcw size={11}/> 重试</button>
                           )}
                         </div>
+                        {!done && (t.logs || []).length > 0 && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 6, maxHeight: 120, overflowY: 'auto', background: '#faf9f5', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 8px' }}>
+                            {(t.logs || []).map((l, i) => (
+                              <div key={i} style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: l.kind === 'tool:done' ? '#16a34a' : '#2563eb', lineHeight: 1.4 }}>{l.msg}</div>
+                            ))}
+                          </div>
+                        )}
                         {done && (t.files || []).length > 0 && (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 6 }}>
                             {(t.files || []).map(f => (
