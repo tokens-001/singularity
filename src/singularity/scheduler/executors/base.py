@@ -57,6 +57,36 @@ _BLOCKED_COMMANDS = [
 ]
 
 
+def is_blocked_path(path: str) -> tuple[bool, str]:
+    """敏感文件 blocklist 检查。返回 (blocked, reason)。
+
+    统一入口: openai/zhipu/anthropic 三个 executor 共用 (原各自复制一份)。
+    """
+    import fnmatch
+    normalized = path.replace("\\", "/")
+    for pattern in _BLOCKED_PATTERNS:
+        if fnmatch.fnmatch(normalized, pattern):
+            return True, f"敏感文件/目录: {pattern}"
+        if fnmatch.fnmatch(normalized, f"*/{pattern}"):
+            return True, f"敏感文件/目录: {pattern}"
+        parts = normalized.split("/")
+        for part in parts:
+            if fnmatch.fnmatch(part, pattern.rstrip("/*")):
+                return True, f"敏感文件/目录: {pattern}"
+    return False, ""
+
+
+def is_dangerous_command(command: str) -> tuple[bool, str]:
+    """危险命令检查。返回 (dangerous, reason)。"""
+    cmd = command.strip()
+    cmd_lower = cmd.lower()
+    for blocked in _BLOCKED_COMMANDS:
+        bl = blocked.lower()
+        if cmd_lower.startswith(bl) or bl in cmd_lower:
+            return True, f"危险命令被拦截: {blocked}"
+    return False, ""
+
+
 class ExecutorError(Exception):
     """Base executor error."""
     def __init__(self, msg: str, kind: str = "exec"):

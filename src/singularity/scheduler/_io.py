@@ -7,9 +7,21 @@
 from __future__ import annotations
 
 import json
+import os
 import re as _re
 import tomllib
 from pathlib import Path
+
+
+def atomic_write_json(path: Path, data) -> None:
+    """原子写 JSON: 先写同目录 .tmp 再 os.replace, crash 不损坏正式文件。
+
+    统一入口: api_store/tracker/_memory_core 共用 (原各自复制一份)。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 # ═══════════════════════════════════════════════════════════════

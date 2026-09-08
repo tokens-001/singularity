@@ -21,7 +21,7 @@ from typing import Optional
 import httpx
 
 from singularity.scheduler.executors.base import (BaseExecutor, ExecutorResult,
-    _BLOCKED_PATTERNS, _BLOCKED_COMMANDS)
+    is_blocked_path, is_dangerous_command)
 from singularity.scheduler import witness
 from singularity.scheduler import config
 
@@ -433,31 +433,11 @@ class OpenAIAgentExecutor(BaseExecutor):
 
     def _is_blocked_path(self, path: str) -> tuple[bool, str]:
         """检查路径是否命中敏感文件 blocklist。返回 (blocked, reason)。"""
-        import fnmatch
-        normalized = path.replace("\\", "/")
-        for pattern in _BLOCKED_PATTERNS:
-            # 路径任意段匹配 or 文件名匹配
-            if fnmatch.fnmatch(normalized, pattern):
-                return True, f"敏感文件/目录: {pattern}"
-            if fnmatch.fnmatch(normalized, f"*/{pattern}"):
-                return True, f"敏感文件/目录: {pattern}"
-            # 检查路径中是否包含被屏蔽的目录段
-            parts = normalized.split("/")
-            for part in parts:
-                if fnmatch.fnmatch(part, pattern.rstrip("/*")):
-                    return True, f"敏感文件/目录: {pattern}"
-        return False, ""
+        return is_blocked_path(path)
 
     def _is_dangerous_command(self, command: str) -> tuple[bool, str]:
         """检查 shell 命令是否危险。返回 (dangerous, reason)。"""
-        # ponytail: strip 防空格绕过, 白名单前缀 + 子串双保险
-        cmd = command.strip()
-        cmd_lower = cmd.lower()
-        for blocked in _BLOCKED_COMMANDS:
-            bl = blocked.lower()
-            if cmd_lower.startswith(bl) or bl in cmd_lower:
-                return True, f"危险命令被拦截: {blocked}"
-        return False, ""
+        return is_dangerous_command(command)
 
     def _tool_read(self, path: str) -> str:
         blocked, reason = self._is_blocked_path(path)
@@ -645,28 +625,11 @@ def _safe_path_at(cwd: Path, path: str) -> Path:
 
 def _is_blocked_path_at(path: str) -> tuple[bool, str]:
     """模块级 blocklist 检查（与类方法 _is_blocked_path 等价）。返回 (blocked, reason)。"""
-    import fnmatch
-    normalized = path.replace("\\", "/")
-    for pattern in _BLOCKED_PATTERNS:
-        if fnmatch.fnmatch(normalized, pattern):
-            return True, f"敏感文件/目录: {pattern}"
-        if fnmatch.fnmatch(normalized, f"*/{pattern}"):
-            return True, f"敏感文件/目录: {pattern}"
-        parts = normalized.split("/")
-        for part in parts:
-            if fnmatch.fnmatch(part, pattern.rstrip("/*")):
-                return True, f"敏感文件/目录: {pattern}"
-    return False, ""
+    return is_blocked_path(path)
 
 def _is_dangerous_command_at(command: str) -> tuple[bool, str]:
     """模块级危险命令检查（与类方法 _is_dangerous_command 等价）。返回 (dangerous, reason)。"""
-    cmd = command.strip()
-    cmd_lower = cmd.lower()
-    for blocked in _BLOCKED_COMMANDS:
-        bl = blocked.lower()
-        if cmd_lower.startswith(bl) or bl in cmd_lower:
-            return True, f"危险命令被拦截: {blocked}"
-    return False, ""
+    return is_dangerous_command(command)
 
 def _read_file(args: dict, cwd) -> str:
     """模块级单文件读取。Anthropic executor 用。"""

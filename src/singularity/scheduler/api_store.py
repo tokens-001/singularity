@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from singularity.scheduler import config, witness
+from singularity.scheduler._io import atomic_write_json
 
 
 @dataclass
@@ -171,9 +172,7 @@ def _save(entries: dict[str, APIEntry]) -> None:
         if k.startswith("_") and k not in data:
             data[k] = v
     p = _store_path()
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, p)  # 原子写: crash 不损坏正式文件 (对齐 tracker._write)
+    atomic_write_json(p, data)
 
 
 # ── CRUD ──

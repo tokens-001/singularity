@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from singularity.scheduler import config
+from singularity.scheduler._io import atomic_write_json
 
 # 修复 P1-4: tracker 实际被两类线程并发写——后台 loop 线程 (orchestrator) 与
 # Flask 请求线程 (_api 的 hold/retry/override/cancel)。transition/cas/ready_tasks
@@ -119,11 +120,7 @@ def _path(task_id: str) -> Path:
 
 def _write(task: Task) -> None:
     p = _path(task.id)
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(
-        json.dumps(task.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    os.replace(tmp, p)  # 同目录 rename 原子, crash 不损坏正式文件
+    atomic_write_json(p, task.to_dict())
 
 
 def read_task(task_id: str) -> Optional[Task]:

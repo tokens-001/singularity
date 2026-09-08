@@ -14,7 +14,6 @@ v1 边界:
 """
 
 from __future__ import annotations
-import fnmatch
 import json
 import os
 import re
@@ -25,7 +24,7 @@ import urllib.error
 
 import builtins
 from singularity.scheduler.executors.base import (BaseExecutor, ExecutorResult,
-    _BLOCKED_PATTERNS, RateLimitError, FormatError, TimeoutError, ExecError)
+    is_blocked_path, RateLimitError, FormatError, TimeoutError, ExecError)
 from singularity.scheduler import config
 
 
@@ -150,17 +149,7 @@ class ZhipuApiExecutor(BaseExecutor):
     @staticmethod
     def _is_blocked_path(path: str) -> tuple[bool, str]:
         """检查路径是否命中敏感文件 blocklist。返回 (blocked, reason)。"""
-        normalized = path.replace("\\", "/")
-        for pattern in _BLOCKED_PATTERNS:
-            if fnmatch.fnmatch(normalized, pattern):
-                return True, f"敏感文件/目录: {pattern}"
-            if fnmatch.fnmatch(normalized, f"*/{pattern}"):
-                return True, f"敏感文件/目录: {pattern}"
-            parts = normalized.split("/")
-            for part in parts:
-                if fnmatch.fnmatch(part, pattern.rstrip("/*")):
-                    return True, f"敏感文件/目录: {pattern}"
-        return False, ""
+        return is_blocked_path(path)
 
     @staticmethod
     def apply_patch(task_id: str) -> dict:

@@ -29,6 +29,7 @@ from collections import defaultdict
 from singularity.scheduler import config as sched_config
 from singularity.scheduler import witness
 from singularity.scheduler._types import _pending_sse_events
+from singularity.scheduler._io import atomic_write_json
 
 __all__ = ['EdgeType', 'EventNode', '_EDGES_PATH', '_EMBED_MODEL', '_ENTITY_IDX_PATH', '_EVENTS_PATH', '_INTENT_EDGE_WEIGHTS', '_INTENT_PATTERNS', '_MAX_EVENTS', '_MEMORY_DIR', '_calculate_importance', '_cosine_sim', '_embed', '_ensure_dir', '_evict_if_needed', '_get_embed_model', '_hf_log', '_infer_mem_type', '_load_edges', '_load_events', '_read_json', '_save_edges', '_save_events', '_write_json', 'detect_intent', 'index_task', 'update_attrs']
 # ═══════════════════════════════════════════════════════════
@@ -55,10 +56,7 @@ def _read_json(path: Path) -> dict | list:
 
 
 def _write_json(path: Path, data: dict | list) -> None:
-    _ensure_dir()
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(str(tmp), str(path))
+    atomic_write_json(path, data)
 
 
 # ═══════════════════════════════════════════════════════════
