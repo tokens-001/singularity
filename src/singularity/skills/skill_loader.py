@@ -22,7 +22,7 @@ from typing import Optional
 import yaml
 
 # ── 路径（独立计算，不依赖 scheduler.config） ────────────────────
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]   # Singularity/
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]   # Singularity/（src/singularity/skills/skill_loader.py → parents[3]=项目根）
 SYSTEM_SKILLS_DIR = Path(__file__).resolve().parent   # src/singularity/skills/
 _QIDIAN_DIR = _PROJECT_ROOT / ".qidian"
 USER_SKILLS_DIR = _QIDIAN_DIR / "skills"             # .qidian/skills/
@@ -206,7 +206,9 @@ def get_prompt_additions(skills: dict[str, SkillDef]) -> str:
         return ""
     lines = ["\n## 可用 Skill (prompt 型)"]
     for s in prompt_skills:
-        lines.append(f"\n### {s.name}\n{s.description}\n{s.body}")
+        # $SKILL_DIR → SKILL.md 所在目录，让 skill 能引用自己目录下的 vendor 文件
+        body = s.body.replace("$SKILL_DIR", s.dir_path)
+        lines.append(f"\n### {s.name}\n{s.description}\n{body}")
     return "\n".join(lines)
 
 
