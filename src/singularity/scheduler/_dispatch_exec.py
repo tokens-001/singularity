@@ -90,6 +90,93 @@ def _run_executor(executor_cls, agent_cfg: dict, full_task: str, task_id: str,
     return executor.run()
 
 
+def _run_no_tools(agent_cfg: dict, prompt: str, tag: str, level: str,
+                  baseline_ref: str = "", cwd: str = "") -> str | None:
+    """跑一个禁工具的单模型调用, 返回 raw_output 或 None(失败静默)。"""
+    agent_cfg = _ensure_agent_type(agent_cfg)
+    agent_cfg = {**agent_cfg, "no_tools": True}
+    etype = agent_cfg.get("type", "claude-cli")
+    executor_cls = _EXECUTOR_BY_TYPE.get(etype)
+    if not executor_cls:
+        return None
+    try:
+        result = _run_executor(executor_cls, agent_cfg, prompt, tag, level,
+                               baseline_ref=baseline_ref, cwd=cwd)
+        return result.raw_output if result and result.raw_output else None
+    except Exception:
+        return None
+
+
+def _debate(task: str, members: list[tuple], chain: list[dict], task_id: str,
+            level: str, baseline_ref: str = "", cwd: str = "",
+            max_rounds: int = 3) -> list[tuple]:
+    """多轮辩论: 交叉评审→修订→收敛。members: [(model, raw_output)]。
+
+    每轮: 每个模型评审其他方案(挑缺陷) → 每个模型吸收对自己的点评修订方案。
+    收敛: 本轮评审 vs 上轮评审相似度 > 0.85 视为无新缺陷, 或达 max_rounds 硬上限。
+    """
+    import concurrent.futures
+    import difflib
+
+    plans = {m: o for m, o in members}
+    models = [m for m, _ in members]
+    agent_by_model = {a.get("model"): a for a in chain}
+    prev_review = ""
+
+    for rnd in range(1, max_rounds + 1):
+        # ── 阶段A: 交叉评审(并行) ──
+        def _review(reviewer):
+            others = [(m, plans[m]) for m in models if m != reviewer]
+            parts = "\n\n".join(f"【{m}】\n{p[:2500]}" for m, p in others)
+            prompt = (f"你是架构委员会成员，正在评审其他成员的方案。\n"
+                      f"任务背景:\n{task[:1200]}\n\n{parts}\n\n"
+                      f"请逐一点评每位成员的方案，指出缺陷、遗漏、风险、可补充点。"
+                      f"用「【成员名】点评：...」格式，每位 2-4 条，简洁。")
+            return reviewer, _run_no_tools(agent_by_model.get(reviewer), prompt,
+                                           f"{task_id}_rev_{reviewer[:6]}_{rnd}",
+                                           level, baseline_ref, cwd)
+
+        review_map = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(models), 4)) as ex:
+            futs = {ex.submit(_review, m): m for m in models}
+            done, _ = concurrent.futures.wait(futs, timeout=300)
+            for fut in done:
+                reviewer, r = fut.result()
+                if r:
+                    review_map[reviewer] = r
+        review_text = "\n".join(f"评审({m}):\n{r}" for m, r in review_map.items())
+
+        # ── 阶段B: 修订(并行) ──
+        def _revise(model):
+            my_plan = plans[model]
+            others_review = "\n".join(
+                f"来自 {rv} 的点评:\n{r}" for rv, r in review_map.items() if rv != model)
+            prompt = (f"这是你的架构方案:\n{my_plan[:6000]}\n\n"
+                      f"其他成员对你方案的点评:\n{others_review[:6000]}\n\n"
+                      f"请吸收合理意见，修订你的方案，输出完整修订版 JSON（保持原 Schema，直接输出 JSON）。")
+            return model, _run_no_tools(agent_by_model.get(model), prompt,
+                                        f"{task_id}_rvs_{model[:6]}_{rnd}",
+                                        level, baseline_ref, cwd)
+
+        new_plans = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(models), 4)) as ex:
+            futs = {ex.submit(_revise, m): m for m in models}
+            done, _ = concurrent.futures.wait(futs, timeout=300)
+            for fut in done:
+                model, r = fut.result()
+                if r:
+                    new_plans[model] = r
+        if new_plans:
+            plans = new_plans
+
+        # ── 收敛判定 ──
+        if prev_review and review_text and difflib.SequenceMatcher(None, prev_review, review_text).ratio() > 0.85:
+            break
+        prev_review = review_text
+
+    return [(m, plans[m]) for m in models if m in plans]
+
+
 def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
                         chain: list[dict], feedback: str = "",
                         baseline_ref: str = "", cwd: str = "") -> DispatchResult:
@@ -109,44 +196,28 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
             "你关注: 和现有架构的一致性。不要引入不兼容的变更。",
         ]
 
-    def _run_one(agent_cfg, perspective):
-        agent_cfg = _ensure_agent_type(agent_cfg)
-        # 架构任务: 禁工具, 模型直接输出 JSON 方案(不写代码/跑测试, 避免 thinking 模型被工具带偏)
-        agent_cfg = {**agent_cfg, "no_tools": True}
-        etype = agent_cfg.get("type", "claude-cli")
-        executor_cls = _EXECUTOR_BY_TYPE.get(etype)
-        if not executor_cls:
-            return None, agent_cfg
-        full_task = task
-        if feedback:
-            full_task = f"{task}\n\n---\n[上一轮校验反馈]\n{feedback}"
-        if perspective:
-            full_task = f"{full_task}\n\n[你的视角] {perspective}"
-        try:
-            result = _run_executor(
-                executor_cls, agent_cfg, full_task,
-                f"{task_id}_{agent_cfg.get('model','?')[:8]}", level,
-                baseline_ref=baseline_ref, cwd=cwd,
-            )
-            return result, agent_cfg
-        except Exception:
-            try: witness.heartbeat('dispatch', 'warn:run_one')
-            except Exception as _e:
-                logging.getLogger(__name__).warning("heartbeat failed: %s", _e)
-            return None, agent_cfg
-
-    # 并行派发
+    # 并行派发初稿 (禁工具, 直接输出 JSON 方案)
     outputs = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(chain), 4)) as ex:
-        futures = {ex.submit(_run_one, a, _PERSPECTIVES[i % len(_PERSPECTIVES)]): a
-                   for i, a in enumerate(chain)}
+        futures = {}
+        for i, a in enumerate(chain):
+            full_task = task
+            if feedback:
+                full_task = f"{task}\n\n---\n[上一轮校验反馈]\n{feedback}"
+            perspective = _PERSPECTIVES[i % len(_PERSPECTIVES)]
+            if perspective:
+                full_task = f"{full_task}\n\n[你的视角] {perspective}"
+            futures[ex.submit(_run_no_tools, a, full_task,
+                              f"{task_id}_{a.get('model','?')[:8]}",
+                              level, baseline_ref, cwd)] = a
         # 等待最多 300s 收集任意数量的完成结果
         done, _ = concurrent.futures.wait(futures, timeout=300, return_when='ALL_COMPLETED')
         for fut in done:
+            agent_cfg = futures[fut]
             try:
-                result, agent_cfg = fut.result()
-                if result and result.raw_output:
-                    outputs.append((agent_cfg.get("model", "?"), result))
+                raw = fut.result()
+                if raw:
+                    outputs.append((agent_cfg.get("model", "?"), raw))
             except Exception:
                 pass  # 单个模型失败不阻断委员会
 
@@ -154,20 +225,29 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
         raise RuntimeError("委员会所有模型均无产出")
 
     if len(outputs) == 1:
-        model, result = outputs[0]
+        model, raw = outputs[0]
+        from singularity.scheduler.executors.base import ExecutorResult
         return DispatchResult(
             level=level,
             agent_cfg=chain[0],
-            executor_result=result,
+            executor_result=ExecutorResult(success=True, raw_output=raw),
             attempts=1,
         )
 
     # 合成: 架构任务用专用 fusion，其他用通用委员会合成
     from .execution_judge import _is_architecture_task, fuse_architecture
 
+    # 多轮辩论: 架构任务且 ≥2 产出 → 交叉评审收敛(互相补充缺陷)
+    if _is_architecture_task(task):
+        try:
+            outputs = _debate(task, outputs, chain, task_id, level,
+                              baseline_ref=baseline_ref, cwd=cwd)
+        except Exception:
+            pass  # 辩论失败 → 用初稿继续融合
+
     if _is_architecture_task(task):
         # 架构方案: 两阶段 fusion (Step 2)
-        raw_outputs = [r.raw_output for _, r in outputs]
+        raw_outputs = [o for _, o in outputs]
         try:
             fused = fuse_architecture(task, raw_outputs, judge_model="deepseek-chat")
             if fused:
@@ -221,20 +301,24 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
                 )
 
         # 合成失败: 返回第一个产出
-        model, result = outputs[0]
+        model, raw = outputs[0]
+        from singularity.scheduler.executors.base import ExecutorResult
         return DispatchResult(level=level, agent_cfg=chain[0],
-                              executor_result=result, attempts=len(outputs))
+                              executor_result=ExecutorResult(success=True, raw_output=raw),
+                              attempts=len(outputs))
     except Exception:
-        model, result = outputs[0]
+        model, raw = outputs[0]
+        from singularity.scheduler.executors.base import ExecutorResult
         return DispatchResult(level=level, agent_cfg=chain[0],
-                              executor_result=result, attempts=len(outputs))
+                              executor_result=ExecutorResult(success=True, raw_output=raw),
+                              attempts=len(outputs))
 
 
 def _build_synthesis_prompt(task: str, outputs: list[tuple]) -> str:
     """构建委员会合成 prompt。"""
     parts = [f"【原始需求】\n{task}\n\n【委员会各模型产出】"]
     for i, (model, result) in enumerate(outputs, 1):
-        parts.append(f"\n── 模型{i}: {model} ──\n{result.raw_output[:3000]}")
+        parts.append(f"\n── 模型{i}: {model} ──\n{result[:3000]}")
     parts.append("""
 
 【你的任务】

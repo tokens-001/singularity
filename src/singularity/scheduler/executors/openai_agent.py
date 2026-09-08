@@ -616,7 +616,7 @@ def _get_http_client() -> httpx.Client:
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         _HTTPX_CLIENT = httpx.Client(
-            timeout=httpx.Timeout(120.0, connect=15.0),
+            timeout=httpx.Timeout(240.0, connect=15.0),
             limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
             follow_redirects=True,
             verify=False,  # ponytail: 国内API(DashScope/Moonshot) SSL兼容性
