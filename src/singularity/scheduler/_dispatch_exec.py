@@ -96,7 +96,16 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
     """多模型委员会: 所有可用D模型并行产出→合成。"""
     import concurrent.futures
 
-    def _run_one(agent_cfg):
+    # 席位视角: 按成员顺序轮转分配, 不依赖模型名(任何模型组合都能碰撞出差异)。
+    # ponytail: 顺序轮转够用; 若要"按模型特性自适应分席"再优化。
+    _PERSPECTIVES = [
+        "你关注: 风险点、边界条件、回滚策略。方案必须稳健,不能炸。",
+        "你关注: 有没有完全不同的思路?业界最新实践是什么?大胆提替代方案。",
+        "你关注: 这方案能落地吗?需要多少个文件?现有代码风格兼容吗?复杂度实际是多少?",
+        "你关注: 和现有架构的一致性。不要引入不兼容的变更。",
+    ]
+
+    def _run_one(agent_cfg, perspective):
         agent_cfg = _ensure_agent_type(agent_cfg)
         etype = agent_cfg.get("type", "claude-cli")
         executor_cls = _EXECUTOR_BY_TYPE.get(etype)
@@ -105,6 +114,8 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
         full_task = task
         if feedback:
             full_task = f"{task}\n\n---\n[上一轮校验反馈]\n{feedback}"
+        if perspective:
+            full_task = f"{full_task}\n\n[你的视角] {perspective}"
         try:
             result = _run_executor(
                 executor_cls, agent_cfg, full_task,
@@ -121,7 +132,8 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
     # 并行派发
     outputs = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(chain), 4)) as ex:
-        futures = {ex.submit(_run_one, a): a for a in chain}
+        futures = {ex.submit(_run_one, a, _PERSPECTIVES[i % len(_PERSPECTIVES)]): a
+                   for i, a in enumerate(chain)}
         # 等待最多 300s 收集任意数量的完成结果
         done, _ = concurrent.futures.wait(futures, timeout=300, return_when='ALL_COMPLETED')
         for fut in done:
