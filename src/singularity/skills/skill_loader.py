@@ -212,23 +212,6 @@ def get_prompt_additions(skills: dict[str, SkillDef]) -> str:
     return "\n".join(lines)
 
 
-def list_skills(skills: dict[str, SkillDef] = None) -> list[dict]:
-    """列出所有 skill 摘要（供 API 使用）。"""
-    if skills is None:
-        skills = load_skills()
-    result = []
-    for name, s in sorted(skills.items()):
-        result.append({
-            "name": s.name,
-            "description": s.description,
-            "type": s.type,
-            "arguments": s.arguments,
-            "source": s.source,
-            "errors": s.errors,
-        })
-    return result
-
-
 def create_user_skill(name: str, description: str, skill_type: str,
                       arguments: str, body: str) -> SkillDef:
     """创建用户 skill，写入 .qidian/skills/<name>/SKILL.md。"""

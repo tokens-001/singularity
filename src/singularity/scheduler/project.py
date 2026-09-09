@@ -146,12 +146,6 @@ class ProjectState:
 
     # ── Phase 流转 ──
 
-    def advance_to(self, next_phase: Phase) -> bool:
-        """推进到下一个 phase (Gate 确认后)。"""
-        self.phase = next_phase
-        self.updated_at = time.time()
-        return True
-
     def confirm_gate(self, gate: Phase, decision: str) -> Optional[Phase]:
         """Owner 批 Gate。自动推进 phase。返回下一个 phase 或 None。"""
         self.owner_confirm[gate.value] = decision
@@ -178,9 +172,6 @@ class ProjectState:
             return True
         return False
 
-    def is_at_gate(self) -> bool:
-        return self.phase.value.startswith("gate")
-
     def add_lineage(self, entry: dict):
         """追加血缘条目。"""
         entry["ts"] = time.time()
@@ -188,22 +179,6 @@ class ProjectState:
         # 硬上限 1000 条
         if len(self.lineage) > 1000:
             self.lineage = self.lineage[-1000:]
-
-    def spend_tokens(self, model: str, raw_tokens: int) -> float:
-        """累计成本 (按 $ 算)。粗略: Opus=$15/M, DeepSeek=$0.5/M, GLM=$1/M."""
-        rates = {"claude-opus": 15.0, "deepseek": 0.5, "glm": 1.0}
-        rate = 1.0
-        for k, v in rates.items():
-            if k in model.lower():
-                rate = v
-                break
-        cost = (raw_tokens / 1_000_000) * rate
-        self.token_spent += cost
-        return cost
-
-    def over_budget(self) -> bool:
-        return self.token_spent >= self.token_budget_total
-
 
 # ═══════════════════════════════════════════════════════════
 # 持久化

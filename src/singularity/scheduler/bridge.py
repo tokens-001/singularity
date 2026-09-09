@@ -98,14 +98,6 @@ def _get_loop() -> asyncio.AbstractEventLoop:
     return _WS_LOOP
 
 
-def get_executor() -> ThreadPoolExecutor:
-    """获取或创建共享线程池。"""
-    global _executor
-    if _executor is None:
-        _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ws-exec")
-    return _executor
-
-
 async def _ws_handler(ws):
     """WebSocket 连接处理器。"""
     from singularity.scheduler._auth import get_auth
@@ -293,11 +285,6 @@ def stop_observer_server() -> None:
     _log.info("Observer Server 已停止")
 
 
-def get_observer_server():
-    """获取 Observer Server 实例（供外部广播调用）。"""
-    return _observer_server
-
-
 def broadcast_observer(event: str, data: dict, channels: set[str] | None = None) -> int:
     """通过 Observer Server 广播事件（线程安全）。
 
@@ -361,75 +348,7 @@ def start_all(
     )
 
 
-def stop_all() -> None:
-    """统一停止所有 WebSocket 服务。shutdown_all 的别名。"""
-    shutdown_all()
-
-
-def shutdown_all() -> None:
-    """关闭所有 WebSocket 服务（bridge + observer）。"""
-    global _all_started
-    stop_ws_server()
-    stop_observer_server()
-
-    global _executor
-    if _executor is not None:
-        _executor.shutdown(wait=False)
-        _executor = None
-
-    _all_started = False
-    _log.info("所有 WebSocket 服务已关闭")
-
-
 # ── 调度事件钩子 ──────────────────────────────────────────────────────────
-
-def emit_task_event(event: str, task_id: str, data: dict | None = None) -> int:
-    """发送任务生命周期事件到 Observer。
-
-    支持的 event: task_queued, task_started, task_done, task_failed, task_blocked
-
-    Args:
-        event: 事件名称
-        task_id: 任务 ID
-        data: 附加数据（可选）
-
-    Returns:
-        成功推送的客户端数
-    """
-    payload = {"task_id": task_id, "ts": time.time()}
-    if data:
-        payload.update(data)
-    return broadcast_observer(event, payload, channels={"tasks"})
-
-
-def emit_system_event(event: str, data: dict | None = None) -> int:
-    """发送系统级事件到 Observer。
-
-    Args:
-        event: 事件名称（如 loop_idle, loop_drain, scheduler_start）
-        data: 附加数据
-
-    Returns:
-        成功推送的客户端数
-    """
-    payload = {"ts": time.time()}
-    if data:
-        payload.update(data)
-    return broadcast_observer(event, payload, channels={"system"})
-
-
-def emit_metrics_event(data: dict) -> int:
-    """发送指标采样事件到 Observer。
-
-    Args:
-        data: 指标数据字典
-
-    Returns:
-        成功推送的客户端数
-    """
-    data["ts"] = time.time()
-    return broadcast_observer("metrics", data, channels={"metrics"})
-
 
 def is_observer_running() -> bool:
     """Observer Server 是否正在运行。"""

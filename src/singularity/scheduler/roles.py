@@ -149,12 +149,6 @@ class RoleAssignment:
     agents: list[str]
     active: str = ""
 
-    def switch(self, agent_name: str) -> bool:
-        if agent_name in self.agents:
-            self.active = agent_name
-            return True
-        return False
-
     def add_agent(self, agent_name: str):
         if agent_name not in self.agents:
             self.agents.append(agent_name)
@@ -204,14 +198,6 @@ class AgentRegistry:
             for k, v in _DEFAULT_ASSIGNMENTS.items()
         }
 
-    def list_agents(self, level: str = "") -> list[Agent]:
-        if level:
-            return [a for a in self._agents.values() if a.level == level]
-        return list(self._agents.values())
-
-    def get_agent(self, name: str) -> Optional[Agent]:
-        return self._agents.get(name)
-
     def add_agent(self, agent: Agent) -> Agent:
         self._agents[agent.name] = agent
         return agent
@@ -226,33 +212,6 @@ class AgentRegistry:
             del self._agents[name]
             return True
         return False
-
-    def get_assignment(self, role_key: str) -> Optional[RoleAssignment]:
-        return self._assignments.get(role_key)
-
-    def list_assignments(self) -> list[RoleAssignment]:
-        return list(self._assignments.values())
-
-    def assign_agent(self, role_key: str, agent_name: str) -> bool:
-        if role_key not in self._assignments or agent_name not in self._agents:
-            return False
-        self._assignments[role_key].add_agent(agent_name)
-        return True
-
-    def switch_agent(self, role_key: str, agent_name: str) -> bool:
-        if role_key not in self._assignments:
-            return False
-        return self._assignments[role_key].switch(agent_name)
-
-    def get_active_agent(self, role_key: str) -> Optional[Agent]:
-        ra = self._assignments.get(role_key)
-        if not ra or not ra.active:
-            return None
-        return self._agents.get(ra.active)
-
-    def get_agent_for_task(self, role_key: str) -> Optional[Agent]:
-        return self.get_active_agent(role_key)
-
 
 registry = AgentRegistry()
 

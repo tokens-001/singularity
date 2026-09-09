@@ -269,18 +269,6 @@ class ObserverServer:
 _server: ObserverServer | None = None
 
 
-def get_server() -> ObserverServer | None:
-    """获取全局 ObserverServer 实例。"""
-    return _server
-
-
-def init_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> ObserverServer:
-    """初始化全局 ObserverServer 单例。"""
-    global _server
-    _server = ObserverServer(host=host, port=port)
-    return _server
-
-
 # ── 独立运行入口 ──────────────────────────────────────────
 async def _standalone() -> None:
     """独立模式：直接运行 WebSocket 服务。"""

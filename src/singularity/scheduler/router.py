@@ -124,23 +124,3 @@ def route(task: str) -> RouteResult:
     return _llm_classify(task)
 
 
-def select_topology() -> dict:
-    """基于 DAG 结构指标选择执行拓扑。"""
-    try:
-        from . import tracker
-        m = tracker.dag_metrics()
-    except Exception:
-        return {"topology": "τS", "omega": 1, "delta": 1, "gamma": 0.0,
-                "node_count": 1, "reason": "metrics_unavailable"}
-
-    omega = m["omega"]; delta = m["delta"]; gamma = m["gamma"]; n = m["node_count"]
-
-    if n <= 1:
-        return {**m, "topology": "τS", "reason": "single_node"}
-    if omega >= 3 and gamma < 0.3:
-        return {**m, "topology": "τP", "reason": f"ω={omega}≥3 且 γ={gamma:.2f}<0.3 → 并行"}
-    if delta >= 5 and gamma > 0.5:
-        return {**m, "topology": "τH", "reason": f"δ={delta}≥5 且 γ={gamma:.2f}>0.5 → 层级"}
-    if gamma > 0.5:
-        return {**m, "topology": "τX", "reason": f"γ={gamma:.2f}>0.5 → 混合"}
-    return {**m, "topology": "τS", "reason": f"ω={omega} δ={delta} γ={gamma:.2f} → 默认顺序"}

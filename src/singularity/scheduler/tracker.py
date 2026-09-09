@@ -36,16 +36,6 @@ class TaskStatus(Enum):
     PAUSED = "paused"                # GATE 人审暂停, 可恢复
 
 
-class ExecutionMode(str, Enum):
-    """任务执行模式 — 控制人工介入粒度。
-    auto_edit:       GATE 卡点暂停 (默认)
-    confirm_changes: GATE 卡点 + 文件写入前暂停
-    orchestrator 拿不准时可建议用户切换。
-    """
-    AUTO_EDIT = "auto_edit"
-    CONFIRM_CHANGES = "confirm_changes"
-
-
 # PAUSED: 不进 _INFLIGHT (不是崩了要重跑), 不进 _TERMINAL (能流转回 RUNNING)
 # 进 _SCHEDULABLE: resume 后调度循环能重新捡起
 _INFLIGHT = {TaskStatus.ROUTED, TaskStatus.DISPATCHED, TaskStatus.RUNNING, TaskStatus.VALIDATING}
@@ -288,21 +278,6 @@ def _collect_ready_pending() -> list[Task]:
 def _sort_key(t: Task) -> tuple:
     """priority desc 优先; 同 priority 下 starvation_score desc (等最久的优先)。"""
     return (-t.priority, -t.starvation_score)
-
-
-def list_pending() -> list[Task]:
-    """所有就绪 pending 任务, 按 priority desc + starvation desc 排。"""
-    candidates = _collect_ready_pending()
-    candidates.sort(key=_sort_key)
-    return candidates
-
-
-def next_ready() -> Optional[Task]:
-    candidates = _collect_ready_pending()
-    if not candidates:
-        return None
-    candidates.sort(key=_sort_key)
-    return candidates[0]
 
 
 def cas(

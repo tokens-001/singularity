@@ -204,53 +204,6 @@ class ProfileStore:
         candidates.sort(key=lambda s: (s.success_rate, s.elo), reverse=True)
         return candidates
 
-    def rank_by_pattern(self, task_type: str, template_id: str,
-                        exclude_models: list[str] = None) -> list[dict]:
-        """返回按 (task_type, template_id) 模式画像排序的模型列表。
-
-        优先按 pattern-specific 成功率排序，
-        如果某个模型在该 pattern 下样本数不足 3，回退到 task_type 整体成功率。
-
-        Returns list of {model, success_rate, attempts, avg_tokens}.
-        """
-        MIN_PATTERN_SAMPLES = 3
-        exclude = set(exclude_models or [])
-        prior = 2  # 贝叶斯平滑伪计数
-
-        results = []
-        for (model, tt), s in self._stats.items():
-            if tt != task_type:
-                continue
-            if model in exclude:
-                continue
-            breaker = self._breakers.get(model)
-            if breaker and breaker.is_open and not breaker.check_cooldown():
-                continue
-
-            # 尝试从 pattern 统计计算成功率
-            pat = s.template_stats.get(template_id)
-            if pat and pat["attempts"] >= MIN_PATTERN_SAMPLES:
-                rate = (pat["successes"] + prior) / (pat["attempts"] + 2 * prior)
-                attempts = pat["attempts"]
-                avg_tokens = pat["total_tokens"] / max(pat["attempts"], 1)
-            else:
-                # 回退到 task_type 整体成功率
-                rate = s.success_rate
-                attempts = s.total_attempts
-                avg_tokens = s.total_tokens / max(s.total_attempts, 1)
-
-            results.append({
-                "model": model,
-                "success_rate": round(rate, 3),
-                "attempts": attempts,
-                "avg_tokens": round(avg_tokens, 1),
-                "elo": round(s.elo, 1),
-                "from_pattern": bool(pat and pat["attempts"] >= MIN_PATTERN_SAMPLES),
-            })
-
-        results.sort(key=lambda r: (r["success_rate"], r["elo"]), reverse=True)
-        return results
-
     def get(self, model: str, task_type: str) -> ModelStats:
         key = (model, task_type)
         if key not in self._stats:

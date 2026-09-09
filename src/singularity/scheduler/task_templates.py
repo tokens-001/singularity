@@ -184,12 +184,3 @@ def guess_template(description: str) -> str:
     return max(scores, key=scores.get)
 
 
-def build_routing_hint(template_id: str) -> dict:
-    """根据模板生成路由提示：建议层级、建议模型。"""
-    tmpl = get(template_id)
-    return {
-        "template_id": template_id,
-        "suggested_max_turns": tmpl.suggested_max_turns,
-        "recommended_models": tmpl.recommended_models,
-        "system_prompt": tmpl.system_prompt,
-    }

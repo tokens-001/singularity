@@ -71,8 +71,8 @@ def _cmd_loop(max_concurrent: int = 1) -> int:
     print(f"[loop] 常驻循环启动 (concurrent={max_concurrent}), Ctrl+C 退出", file=sys.stderr)
     idle_ticks = 0
     while running:
-        # 不只用 list_pending() (只扫 PENDING) 做 gate —— v3 路径下 BLOCKED
-        # 任务等依赖满足后会由 ready_tasks() → ROUTED, 但 list_pending() 看不见。
+        # 不用"只扫 PENDING"的方式做 gate —— v3 路径下 BLOCKED 任务等依赖满足后
+        # 会由 ready_tasks() → ROUTED, 只扫 PENDING 会漏掉。
         # 改为无条件调 _drain_queue, 让其内部 run_queue 的 while 循环自行判空。
         # 返回的 count==0 才表示本轮无活可干。
         exit_code, count = _drain_queue(agents, max_concurrent=max_concurrent)

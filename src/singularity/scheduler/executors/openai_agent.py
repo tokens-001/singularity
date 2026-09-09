@@ -450,18 +450,6 @@ class OpenAIAgentExecutor(BaseExecutor):
         """检查 shell 命令是否危险。返回 (dangerous, reason)。"""
         return is_dangerous_command(command)
 
-    def _tool_read(self, path: str) -> str:
-        blocked, reason = self._is_blocked_path(path)
-        if blocked:
-            return f"访问被拒绝: {reason}"
-        p = self._safe_path(path)
-        if not p.exists():
-            return f"文件不存在: {path}"
-        content = p.read_text(encoding="utf-8")
-        if len(content) > 8000:
-            return content[:8000] + f"\n... (截断，共 {len(content)} 字符)"
-        return content
-
     def _tool_read_multi(self, paths: list[str]) -> str:
         """批量读文件，一次返回所有内容。减少 API 往返次数。"""
         if not paths:

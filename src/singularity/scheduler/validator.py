@@ -467,47 +467,6 @@ JSON:"""
     }
 
 
-def incremental_review(file_path: str, old_content: str, new_content: str, 
-                      models: list[str] = None, cwd: str = None) -> dict:
-    """增量审查：对比新旧内容差异，重点审查变更部分。
-    
-    Args:
-        file_path: 文件路径
-        old_content: 旧内容
-        new_content: 新内容  
-        models: 模型列表
-        cwd: 工作目录
-        
-    Returns:
-        审查结果字典
-    """
-    import difflib
-    
-    # 计算差异
-    diff = list(difflib.unified_diff(
-        old_content.splitlines(keepends=True),
-        new_content.splitlines(keepends=True),
-        fromfile=f"a/{file_path}",
-        tofile=f"b/{file_path}",
-        n=3  # 上下文行数
-    ))
-    
-    if not diff:
-        return {"issues": [], "verdict": "pass", "summary": "no changes detected"}
-    
-    diff_text = ''.join(diff)
-    
-    # 使用crossover_review逻辑进行审查
-    return crossover_review(
-        f"Incremental review of {file_path}",
-        f"Diff:\n{diff_text}",
-        [file_path],
-        "any",  # 两档后统一 any
-        "",
-        cwd
-    )
-
-
 def security_review(code: str, file_path: str = "", severity_filter: str = "all") -> dict:
     """专门的安全审查函数。
     

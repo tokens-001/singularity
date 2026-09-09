@@ -240,11 +240,6 @@ def is_available(api_id: str) -> bool:
     return bool(os.environ.get(entry.api_key_env, ""))
 
 
-def available_apis() -> list[APIEntry]:
-    """返回所有当前可用的 API。"""
-    return [e for e in _load().values() if is_available(e.id)]
-
-
 def get_observer_model() -> str:
     """观察者用的模型 id（api_store.json 的 _observer 键，值为模型 id）。"""
     return _load_raw().get("_observer", "")

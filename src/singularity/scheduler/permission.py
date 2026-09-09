@@ -117,9 +117,6 @@ class PermissionStore:
         }
         self._path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
 
-    def get_profile(self, name: str) -> PermissionProfile | None:
-        return self._profiles.get(name)
-
     def list_profiles(self) -> list[dict]:
         return [{"name": p.name, "description": p.description,
                  "builtin": p.name in BUILTIN_PROFILES,

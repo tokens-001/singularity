@@ -101,9 +101,5 @@ def record_perf(task_id: str, level: str, route_ms: float,
     _profiler.record(task_id, level, route_ms, execute_ms, validate_ms, merge_ms, tokens)
 
 
-def get_profiler() -> Profiler:
-    return _profiler
-
-
 def get_perf_stats() -> dict:
     return _profiler.stats()

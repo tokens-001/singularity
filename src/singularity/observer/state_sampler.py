@@ -315,44 +315,12 @@ class StateSampler:
         
         return json.dumps(result, ensure_ascii=False, default=str)
 
-    def get_metrics_for_monitoring(self) -> Dict[str, Any]:
-        """为监控系统返回简化的指标数据。"""
-        state = self.sample_state()
-        
-        return {
-            "timestamp": state.timestamp,
-            "cpu_percent": state.resources.cpu_percent,
-            "memory_percent": state.resources.memory_percent,
-            "disk_percent": state.resources.disk_percent,
-            "pending_tasks": state.queues.pending_tasks,
-            "running_tasks": state.queues.running_tasks,
-            "queue_depth": state.queues.queue_depth,
-            "active_executors": len([ex for ex in state.executors if ex.is_active]),
-            "total_executors": len(state.executors),
-            "thread_count": state.resources.thread_count,
-            "process_count": state.resources.process_count
-        }
-
-
 # 全局状态采样器实例
 _global_sampler: Optional[StateSampler] = None
 
 
 def get_global_sampler() -> Optional[StateSampler]:
     """获取全局状态采样器实例。"""
-    return _global_sampler
-
-
-def init_global_sampler(dispatcher: Optional[Dispatcher] = None,
-                       task_tracker: Optional[TaskTracker] = None,
-                       executors: Optional[List[BaseExecutor]] = None) -> StateSampler:
-    """初始化全局状态采样器。"""
-    global _global_sampler
-    _global_sampler = StateSampler(
-        dispatcher=dispatcher,
-        task_tracker=task_tracker,
-        executors=executors
-    )
     return _global_sampler
 
 

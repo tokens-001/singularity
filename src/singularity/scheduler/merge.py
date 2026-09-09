@@ -101,12 +101,6 @@ class MergeQueue:
     def conflicts(self) -> list[MergeRequest]:
         return list(self._parked.values())
 
-    def parked_ids(self) -> list[str]:
-        return list(self._parked.keys())
-
-    def get_parked(self, task_id: str) -> "MergeRequest | None":
-        return self._parked.get(task_id)
-
     def drain(self) -> list[MergeResult]:
         """串行合并队列, 返回每个 req 的最终结果。
 
