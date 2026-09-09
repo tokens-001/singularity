@@ -168,8 +168,7 @@ class TaskRunner:
                 witness.heartbeat('orch', f'warn:materialize:{e}')
             reason = f"decomposed: {term_reason}"
         elif batch.ok:
-            tracker.transition(task.id, TaskStatus.DONE)
-            _maybe_complete_parents(task.id)
+            # DONE 延后到 QA gate 之后 (见下): QA 判 fail/retry 时任务必须还能转 FAILED/PENDING
             reason = f"pass: {term_reason}"
         elif validation.action == "rollback":
             from . import project as proj_mod
@@ -223,6 +222,59 @@ class TaskRunner:
                     tracker.transition(task.id, TaskStatus.FAILED,
                         error=f"{validation.verdict}: {term_reason}")
                     reason = f"failed: {term_reason}"
+        # ── QA gate: 必须在标 DONE 之前 ──
+        # 原顺序 (先标 DONE → 再 QA) 让 QA 形同虚设: 任务已 DONE 改判不动, 但 return
+        # 又报 QA:fail, 状态与返回值矛盾。改为 QA 通过才标 DONE。
+        qa_blocked = False   # QA 判 fail/retry/escalate → 不许标 DONE
+        qa_fail = False
+        try:
+            from .supervisor import supervise
+            changed = disp_result.executor_result.changed_files if disp_result else []
+            constraints, checklist = [], []
+            pid = getattr(task, 'project_id', '')
+            if pid:
+                try:
+                    from .project import load as _load_proj
+                    proj = _load_proj(pid)
+                    if proj:
+                        constraints = proj.constraints_checklist
+                        if proj.architecture:
+                            for tdef in proj.architecture.get("tasks", []):
+                                if tdef.get("title", "") in task.description or tdef.get("id", "") in task.description:
+                                    acc = tdef.get("acceptance", "")
+                                    if acc:
+                                        checklist.append(acc)
+                except Exception as e:
+                    witness.heartbeat('orch', f'warn:{e}')
+            sv = supervise(task.description, changed, constraints, checklist,
+                          getattr(disp_result.executor_result, 'raw_output', '') if disp_result else '',
+                          task.id)
+            if sv.verdict == "fail":
+                qa_blocked = qa_fail = True
+                tracker.transition(task.id, TaskStatus.FAILED,
+                                 error=f"QA:fail: " + "; ".join(sv.issues[:2]))
+            elif sv.verdict != "pass":
+                qa_blocked = True
+                # 修复 reap bug 根因#2: QA 中间态(retry/escalate/block)转 PENDING 重新入队,
+                # 回写 RUNNING 会永久卡死。
+                tracker.transition(task.id, TaskStatus.PENDING,
+                                 error=f"QA:{sv.verdict}: " + "; ".join(sv.issues[:2]))
+                reason += f"; QA:{sv.verdict}→PENDING"
+        except Exception as e:
+            witness.heartbeat('orch', f'warn:{e}')
+
+        # QA 通过才标 DONE + 推进父任务。QA 拒绝的任务实际失败了, 不能推进父任务。
+        # planner_decomposed 的父任务走 DECOMPOSED (等子任务聚合), 也不能标 DONE。
+        if batch.ok and not batch.planner_decomposed and not qa_blocked:
+            tracker.transition(task.id, TaskStatus.DONE)
+            _maybe_complete_parents(task.id)
+
+        # 同步内存态: transition() 只改盘上对象, 传进来的 task.status 还停在调度时的 routed,
+        # 不同步则 _save_trace / archive_experience 记的是旧状态。
+        fresh = tracker.read_task(task.id)
+        if fresh is not None:
+            task.status = fresh.status
+
         _save_trace(task, route, snap, disp_result, validation, validation.action == "rollback",
                     pre_search_skipped=batch.pre_search_skipped,
                     pre_search_reason=batch.pre_search_reason,
@@ -233,7 +285,7 @@ class TaskRunner:
             exec_out = disp_result.executor_result if disp_result else None
             mem_mod.archive_experience(
                 task_id=task.id, description=task.description,
-                status="done" if batch.ok else "failed",
+                status="done" if task.status == TaskStatus.DONE else "failed",
                 route_level=route.level,
                 model=getattr(disp_result, 'agent_cfg', {}).get("model", "") if disp_result else "",
                 elapsed_ms=getattr(exec_out, 'elapsed', 0) if exec_out else 0,
@@ -281,43 +333,11 @@ class TaskRunner:
                 "kind": "turn", "msg": f"[{task.id[:8]}] 推理完成，共 {turn} 轮",
                 "ts": time.time(), "task_id": task.id,
             })
-        # QA gate
-        try:
-            from .supervisor import supervise
-            changed = disp_result.executor_result.changed_files if disp_result else []
-            constraints, checklist = [], []
-            pid = getattr(task, 'project_id', '')
-            if pid:
-                try:
-                    from .project import load as _load_proj
-                    proj = _load_proj(pid)
-                    if proj:
-                        constraints = proj.constraints_checklist
-                        if proj.architecture:
-                            for tdef in proj.architecture.get("tasks", []):
-                                if tdef.get("title", "") in task.description or tdef.get("id", "") in task.description:
-                                    acc = tdef.get("acceptance", "")
-                                    if acc:
-                                        checklist.append(acc)
-                except Exception as e:
-                    witness.heartbeat('orch', f'warn:{e}')
-            sv = supervise(task.description, changed, constraints, checklist,
-                          getattr(disp_result.executor_result, 'raw_output', '') if disp_result else '',
-                          task.id)
-            if sv.verdict == "fail":
-                tracker.transition(task.id, TaskStatus.FAILED,
-                                 error=f"QA:fail: " + "; ".join(sv.issues[:2]))
-                results.append((task.id, reason + " (QA拒绝)", validation))
-                return reason + "; QA:fail"
-            elif sv.verdict != "pass":
-                # 修复 reap bug 根因#2: QA 中间态(retry/escalate/block)之前用
-                # task.status(RUNNING)回写 → 任务转回 RUNNING 永久卡死。
-                # 改为转 PENDING 重新入队, 让调度循环重试。
-                tracker.transition(task.id, TaskStatus.PENDING,
-                                 error=f"QA:{sv.verdict}: " + "; ".join(sv.issues[:2]))
-                reason += f"; QA:{sv.verdict}→PENDING"
-        except Exception as e:
-            witness.heartbeat('orch', f'warn:{e}')
+        # QA gate 已上移到标 DONE 之前 (见上方), 此处只剩 QA 拒绝的提前出口:
+        # 保持改动前语义 — 跳过 Chancellor, 但 trace/经验归档已在上方落盘。
+        if qa_fail:
+            results.append((task.id, reason + " (QA拒绝)", validation))
+            return reason + "; QA:fail"
         # Chancellor
         try:
             changed = disp_result.executor_result.changed_files if disp_result else []
