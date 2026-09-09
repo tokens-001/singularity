@@ -77,7 +77,7 @@ class ZhipuApiExecutor(BaseExecutor):
                     success=False,
                     error=f"超时 {config.ZHIPU_API_TIMEOUT}s",
                     error_kind="timeout",
-                    elapsed=config.ZHIPU_API_TIMEOUT,
+                    elapsed=time.time() - start,
                 )
 
     # ── 内部 ──────────────────────────────────────────────────────────

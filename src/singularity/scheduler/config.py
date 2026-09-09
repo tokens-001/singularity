@@ -37,7 +37,7 @@ PRE_SEARCH_TIMEOUT = 15.0     # 秒; 首次调用需加载句向量模型(24MB)+
 VALIDATE_TIMEOUT = 30.0
 GATE_TIMEOUT = 120.0          # eval.py 要跑 30 条 golden, 不快
 CLAUDE_CLI_TIMEOUT = 300.0
-ZHIPU_API_TIMEOUT = 120.0     # 代码生成任务长 (审计 5.3)
+ZHIPU_API_TIMEOUT = 240.0     # 代码生成任务长 (审计 5.3); 与 openai_agent 的 httpx 240s 对齐 — 慢模型出长 JSON 120s 不够
 
 # ── 阈值 ──────────────────────────────────────────────────────────────
 # 强 D 命中: pre_search 返回 decision 域前 3 条里 >=2 条 score 超此值 → 升 D (审计 6.2)

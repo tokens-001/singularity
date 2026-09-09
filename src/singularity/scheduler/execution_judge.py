@@ -89,7 +89,7 @@ def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:
         return ""
     try:
         import httpx
-        with httpx.Client(timeout=httpx.Timeout(120)) as client:
+        with httpx.Client(timeout=httpx.Timeout(240.0)) as client:
             r = client.post(
                 f"{base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
