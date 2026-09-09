@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api, Task } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
-import { useToast } from '../components/Toast'
+import { useToast } from '../lib/toast'
 import { Plus, RefreshCw, RotateCcw, XCircle, Trash2, Search } from 'lucide-react'
 
 const STATUS_CN: Record<string,string> = { pending:'待处理', running:'进行中', done:'已完成', failed:'失败', blocked:'已暂停', paused:'已暂停' }
@@ -14,7 +14,7 @@ export default function Tasks() {
   const [desc, setDesc] = useState('')
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
-  const toast = useToast(s => s.add)
+  const toast = useToast()
 
   const fetch = useCallback(() => {
     setLoading(true)

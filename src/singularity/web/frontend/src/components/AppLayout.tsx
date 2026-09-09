@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAppStore } from '../stores/app'
-import { ToastContainer, useToast } from './Toast'
+import { useToast } from '../lib/toast'
 import { api } from '../lib/api'
 import { MessageSquare, List, Settings, User, Boxes } from 'lucide-react'
 
@@ -41,7 +41,7 @@ export default function AppLayout() {
   const [projects, setProjects] = useState<any[]>([])
   const [hovered, setHovered] = useState<string>('')
   const [pinned, setPinned] = useState<string[]>(getPinned)
-  const addToast = useToast(s => s.add)
+  const addToast = useToast()
   const sidebarWidth = sidebarCollapsed ? 0 : 260
   const [usage, setUsage] = useState<any>({})
 
@@ -140,7 +140,6 @@ export default function AppLayout() {
       <main className="main-area">
         <div className="main-scroll"><Outlet /></div>
       </main>
-      <ToastContainer />
     </div>
   )
 }

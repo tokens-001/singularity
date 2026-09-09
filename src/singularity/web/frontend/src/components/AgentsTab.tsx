@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Tag } from 'antd'
 import { api } from '../lib/api'
 import { Plus } from 'lucide-react'
 import { ALL_ROLES, ROLE_LABELS, mcn } from '../pages/Config'
@@ -71,10 +72,10 @@ export default function AgentsTab() {
                     {ALL_ROLES.map(r => {
                       const has = roles.includes(r)
                       return (
-                        <button key={r} onClick={() => toggleRole(a.model, r, roles)} className="agent-role-btn"
-                          style={{ background: has ? 'var(--accent)' : 'var(--bg-secondary)', color: has ? '#fff' : 'var(--text-muted)' }}>
+                        <Tag.CheckableTag key={r} checked={has} onChange={() => toggleRole(a.model, r, roles)}
+                          style={{ fontSize: 10, padding: '0 6px', margin: 0 }}>
                           {ROLE_LABELS[r]||r}
-                        </button>
+                        </Tag.CheckableTag>
                       )
                     })}
                   </div>

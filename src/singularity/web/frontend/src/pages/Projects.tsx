@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
-import { useToast } from '../components/Toast'
+import { useToast } from '../lib/toast'
 import { Plus, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react'
 
 const PHASE_CN: Record<string,string> = {
@@ -64,7 +64,7 @@ export default function Projects() {
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState({ name: '', description: '', template: 'feature' })
   const [loading, setLoading] = useState(true)
-  const toast = useToast(s => s.add)
+  const toast = useToast()
 
   const fetch = async () => {
     setLoading(true)

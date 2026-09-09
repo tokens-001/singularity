@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
+import { Button, Input, Select } from 'antd'
 import { api } from '../lib/api'
-import { useToast } from './Toast'
+import { useToast } from '../lib/toast'
 import { Plus, Trash2, Search, Download, X } from 'lucide-react'
 import { mcn } from '../pages/Config'
 import type { ModelInfo, ApiStoreItem } from '../lib/types'
@@ -28,7 +29,7 @@ export default function ModelsTab() {
   const [activeModels, setActiveModels] = useState<Set<string>>(new Set())
   const [observerModelId, setObserverModelId] = useState('')
   const [benchmarking, setBenchmarking] = useState('')
-  const addToast = useToast(s => s.add)
+  const addToast = useToast()
 
   const fetch = async () => {
     const [m, a, ag, obs] = await Promise.all([api.models(), api.apiStore() as Promise<ApiStoreItem[]>, api.agents(), api.observerModel()])
@@ -62,8 +63,7 @@ export default function ModelsTab() {
     finally { setBenchmarking('') }
   }
 
-  const pickProvider = (e: any) => {
-    const v = e.target.value
+  const pickProvider = (v: string) => {
     if (v === '__custom__') return setApiForm({ ...apiForm, mode: v, id: '', provider: '', base_url: '', api_key_env: '' })
     const p = PROVIDERS.find(x => x.id === v)
     if (!p) return setApiForm({ ...apiForm, mode: '' })
@@ -87,21 +87,18 @@ export default function ModelsTab() {
         </div>
         {showAddApi && (
           <div className="flex-center gap-6 flex-wrap" style={{ marginBottom: 8 }}>
-            <select value={apiForm.mode} onChange={pickProvider} className="inp-sm">
-              <option value="">选择厂家…</option>
-              {PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.provider}</option>)}
-              <option value="__custom__">自定义…</option>
-            </select>
+            <Select size="small" style={{ width: 150 }} value={apiForm.mode} onChange={pickProvider}
+              options={[{ value: '', label: '选择厂家…' }, ...PROVIDERS.map(p => ({ value: p.id, label: p.provider })), { value: '__custom__', label: '自定义…' }]}/>
             {apiForm.mode === '__custom__' && (
               <>
-                <input placeholder="标识" value={apiForm.id} onChange={e=>setApiForm({...apiForm,id:e.target.value})} className="inp-sm"/>
-                <input placeholder="提供商" value={apiForm.provider} onChange={e=>setApiForm({...apiForm,provider:e.target.value})} className="inp-sm"/>
-                <input placeholder="基础URL" value={apiForm.base_url} onChange={e=>setApiForm({...apiForm,base_url:e.target.value})} className="inp-sm" style={{width:200}}/>
-                <input placeholder="API密钥环境变量" value={apiForm.api_key_env} onChange={e=>setApiForm({...apiForm,api_key_env:e.target.value})} className="inp-sm"/>
+                <Input size="small" style={{ width: 110 }} placeholder="标识" value={apiForm.id} onChange={e=>setApiForm({...apiForm,id:e.target.value})}/>
+                <Input size="small" style={{ width: 110 }} placeholder="提供商" value={apiForm.provider} onChange={e=>setApiForm({...apiForm,provider:e.target.value})}/>
+                <Input size="small" style={{ width: 200 }} placeholder="基础URL" value={apiForm.base_url} onChange={e=>setApiForm({...apiForm,base_url:e.target.value})}/>
+                <Input size="small" style={{ width: 150 }} placeholder="API密钥环境变量" value={apiForm.api_key_env} onChange={e=>setApiForm({...apiForm,api_key_env:e.target.value})}/>
               </>
             )}
-            <input placeholder="API Key（明文，写入 .env）" type="password" value={apiForm.api_key} onChange={e=>setApiForm({...apiForm,api_key:e.target.value})} className="inp-sm" style={{width:220}}/>
-            <button onClick={addApi} className="btn-green">添加</button>
+            <Input.Password size="small" style={{ width: 220 }} placeholder="API Key（明文，写入 .env）" value={apiForm.api_key} onChange={e=>setApiForm({...apiForm,api_key:e.target.value})}/>
+            <Button size="small" type="primary" onClick={addApi}>添加</Button>
           </div>
         )}
         <div className="flex-center gap-6 flex-wrap">
@@ -144,10 +141,9 @@ export default function ModelsTab() {
           <span>模型目录 ({models.length})</span>
           <span className="flex-1"/>
           <span className="fs-11 fw-400 text-muted">观察者</span>
-          <select value={observerModelId} onChange={e => { api.setObserverModel(e.target.value); setObserverModelId(e.target.value) }} className="inp-sm" style={{ width: 'auto' }}>
-            <option value="">未设置</option>
-            {models.map(m => <option key={m.id} value={m.id}>{mcn(m)}</option>)}
-          </select>
+          <Select size="small" style={{ width: 170 }} value={observerModelId}
+            onChange={(v) => { api.setObserverModel(v); setObserverModelId(v) }}
+            options={[{ value: '', label: '未设置' }, ...models.map(m => ({ value: m.id, label: mcn(m) }))]}/>
         </div>
         {models.map(m => {
           const rf = m.recommended_for||[]

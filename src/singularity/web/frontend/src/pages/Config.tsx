@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Tabs } from 'antd'
 import { Cpu, Bot, Wrench } from 'lucide-react'
 import ModelsTab from '../components/ModelsTab'
 import AgentsTab from '../components/AgentsTab'
@@ -39,17 +40,8 @@ export default function Config() {
   const [tab, setTab] = useState('models')
   return (
     <div style={{ maxWidth: 1000, margin: '0 auto' }}>
-      <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
-        {TABS.map(t => (
-          <button key={t.key} onClick={() => setTab(t.key)}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 'var(--radius)',
-              border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: tab===t.key?600:400,
-              background: tab===t.key?'var(--accent)':'var(--bg-secondary)',
-              color: tab===t.key?'#fff':'var(--text-secondary)' }}>
-            <t.icon size={14}/> {t.label}
-          </button>
-        ))}
-      </div>
+      <Tabs activeKey={tab} onChange={setTab} style={{ marginBottom: 12 }}
+        items={TABS.map(t => ({ key: t.key, label: <span className="flex-center gap-6"><t.icon size={14}/> {t.label}</span> }))} />
       {tab === 'models' && <ModelsTab />}
       {tab === 'agents' && <AgentsTab />}
       {tab === 'skills' && <SkillsTab />}

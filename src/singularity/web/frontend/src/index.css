@@ -54,16 +54,6 @@ body { font-family: var(--font-sans); background: var(--bg-primary); color: var(
 .card-row { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
 .card-tag { padding: 1px 4px; border-radius: 2px; background: var(--bg-tertiary); font-size: 9px; color: var(--accent); }
 
-/* ── Tabs ── */
-.tabs { display: flex; gap: 4px; margin-bottom: 12px; }
-.tab-btn { display: flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: var(--radius); border: none; cursor: pointer; font-size: 13px; }
-.tab-active { background: var(--accent); color: #fff; font-weight: 600; }
-.tab-inactive { background: var(--bg-tertiary); color: var(--text-secondary); font-weight: 400; }
-
-/* ── Toast ── */
-.toast-container { position: fixed; top: 12px; right: 12px; z-index: 9999; display: flex; flex-direction: column; gap: 6px; }
-.toast-item { padding: 8px 14px; border-radius: var(--radius); font-size: 13px; background: #fff; color: var(--text-primary); cursor: pointer; max-width: 360px; box-shadow: var(--shadow-md); }
-
 /* ── Skeleton ── */
 @keyframes shimmer { 0% { opacity: 0.3; } 50% { opacity: 0.6; } 100% { opacity: 0.3; } }
 .skeleton { background: var(--bg-tertiary); border-radius: 6px; animation: shimmer 1.5s infinite; }
@@ -79,18 +69,11 @@ body { font-family: var(--font-sans); background: var(--bg-primary); color: var(
 
 /* ── Chat ── */
 .chat-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding-bottom: 10%; }
-.chat-input-wrap { background: #fff; border-radius: 24px; border: 1px solid var(--border); box-shadow: 0 6px 24px rgba(20,20,19,0.08); padding: 12px 18px; display: flex; align-items: center; gap: 8px; }
-.chat-input-wrap-bottom { background: #fff; border-radius: 12px; border: 1px solid var(--border); box-shadow: var(--shadow-sm); padding: 6px 12px; display: flex; align-items: center; gap: 8px; }
-.chat-textarea { flex: 1; background: transparent; border: none; outline: none; color: var(--text-primary); font-size: 15px; font-family: inherit; resize: none; padding: 12px 0; line-height: 24px; }
-.chat-msg-user { display: inline-block; text-align: left; font-size: 13px; color: #fff; background: #2563eb; border-radius: 12px; padding: 6px 12px; max-width: 80%; white-space: pre-wrap; }
 .chat-msg-row { max-width: 860px; margin: 0 auto; width: 100%; }
-.chat-msg-assistant { font-size: 13px; color: var(--text-primary); line-height: 1.7; white-space: pre-wrap; padding: 4px 0 12px; }
-.chat-send-btn { border: none; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 
 /* ── Agent card ── */
 .agent-card { padding: 8px 12px; border: 1px solid var(--accent); background: var(--bg-tertiary); border-radius: var(--radius); font-size: 11px; min-width: 180px; }
 .agent-card-header { display: flex; align-items: center; gap: 6px; cursor: pointer; }
-.agent-role-btn { padding: 1px 6px; border-radius: 3px; border: none; cursor: pointer; font-size: 9px; }
 
 /* ── Search ── */
 .search-box { display: flex; align-items: center; gap: 4px; background: var(--bg-tertiary); border-radius: 6px; padding: 2px 8px; }
@@ -121,7 +104,6 @@ body { font-family: var(--font-sans); background: var(--bg-primary); color: var(
   .main-scroll { padding: 8px 10px; }
   .kanban { flex-direction: column; }
   .kanban-col { min-width: 100%; }
-  .chat-input-wrap, .chat-input-wrap-bottom { border-radius: 8px; }
   .chat-msg-row { max-width: 100%; }
   .page-wrap, .page-wrap-wide { max-width: 100%; }
   .agent-card { min-width: 140px; }

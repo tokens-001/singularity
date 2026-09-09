@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
+import { Bubble, Sender } from '@ant-design/x'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
 import { useAppStore, type ChatMsg } from '../stores/app'
-import { useToast } from '../components/Toast'
-import { Send, Loader2, CheckCircle2, XCircle, RotateCcw, FolderOpen, ArrowUp, ChevronDown, FileText } from 'lucide-react'
+import { useToast } from '../lib/toast'
+import { Loader2, CheckCircle2, XCircle, RotateCcw, FolderOpen, ChevronDown, FileText } from 'lucide-react'
 import FilePanel from '../components/FilePanel'
 
 interface ToolLog { tool: string; kind: string; msg: string; ts: number }
@@ -27,7 +28,7 @@ export default function Chat() {
   const pendingCid = useRef<string>('')
   const projectsRef = useRef<any[]>([])
   const traceCache = useRef<Map<string, { files: string[]; verdict: string }>>(new Map())
-  const toast = useToast(s => s.add)
+  const toast = useToast()
 
   useEffect(() => {
     useAppStore.getState().clearConversation('_default')
@@ -113,8 +114,8 @@ export default function Chat() {
     }
   })
 
-  const send = async () => {
-    const q = input.trim(); if (!q || loading) return
+  const send = async (text?: string) => {
+    const q = (text ?? input).trim(); if (!q || loading) return
     addChatMsg({role:'user',content:q,ts:Date.now()}); setInput(''); setLoading(true)
 
     if (activePid === '_default') {
@@ -149,14 +150,10 @@ export default function Chat() {
 
       {isEmpty ? (
         <div className="chat-empty">
-          <div style={{ width: '100%', maxWidth: 680 }} className="chat-input-wrap">
-            <textarea value={input} onChange={e => setInput(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-              placeholder="描述你的项目或任务，回车开始…" rows={1} className="chat-textarea"/>
-            <button onClick={send} disabled={!input.trim()} className="chat-send-btn"
-              style={{ background: input.trim() ? '#141413' : '#e5e2d8', color: input.trim() ? '#fff' : '#9a9993', cursor: input.trim() ? 'pointer' : 'default', boxShadow: input.trim() ? '0 2px 8px rgba(20,20,19,0.25)' : 'none', transition: 'background 0.15s' }}>
-              <ArrowUp size={16}/>
-            </button>
+          <div style={{ width: '100%', maxWidth: 680 }}>
+            <Sender value={input} onChange={(v) => setInput(v)} onSubmit={(v) => send(v)}
+              loading={loading} placeholder="描述你的项目或任务，回车开始…"
+              autoSize={{ minRows: 1, maxRows: 6 }}/>
           </div>
 
           <div style={{ width: '100%', maxWidth: 680, display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, flexWrap: 'wrap', justifyContent: 'space-between' }}>
@@ -182,16 +179,16 @@ export default function Chat() {
       ) : (
         <>
           <div style={{ flex: 1, overflow: 'auto', padding: '8px 0' }}>
-            {msgs.map((m: ChatMsg, i: number) => {
-              if (m.role === 'user') {
-                return (
-                  <div key={i} className="chat-msg-row" style={{ textAlign: 'right', padding: '4px 0' }}>
-                    <span className="chat-msg-user">{m.content}</span>
-                  </div>
-                )
-              }
-              return <div key={i} className="chat-msg-row chat-msg-assistant">{m.content}</div>
-            })}
+            {msgs.map((m: ChatMsg, i: number) => (
+              <div key={i} className="chat-msg-row" style={{ padding: '4px 0' }}>
+                <Bubble placement={m.role === 'user' ? 'end' : 'start'}
+                  variant={m.role === 'user' ? 'filled' : 'borderless'}
+                  content={m.content}
+                  styles={m.role === 'user'
+                    ? { content: { background: '#2563eb', color: '#fff', borderRadius: 12, fontSize: 13, whiteSpace: 'pre-wrap' } }
+                    : { content: { padding: 0, fontSize: 13, lineHeight: 1.7, whiteSpace: 'pre-wrap' } }}/>
+              </div>
+            ))}
 
             {tasks.length > 0 && (
               <div className="chat-msg-row" style={{ marginBottom: 16 }}>
@@ -427,28 +424,26 @@ export default function Chat() {
               </div>
             )}
             {loading && (
-              <div className="chat-msg-row flex-center gap-6 text-muted fs-12">
-                <Loader2 size={11} style={{animation:'spin 1s linear infinite'}}/>思考中...
+              <div className="chat-msg-row" style={{ padding: '4px 0' }}>
+                <Bubble placement="start" variant="borderless" content="" loading
+                  loadingRender={() => (
+                    <span className="flex-center gap-6 text-muted fs-12">
+                      <Loader2 size={11} style={{animation:'spin 1s linear infinite'}}/>思考中...
+                    </span>
+                  )}/>
               </div>
             )}
             <div ref={bottomRef} />
           </div>
 
           <div style={{ padding: '0 0 12px' }}>
-            <div className="chat-input-wrap-bottom" style={{ maxWidth: 860, margin: '0 auto' }}>
-              {info && <span className="fs-11 text-muted" style={{ whiteSpace: 'nowrap' }}>
+            <div style={{ maxWidth: 860, margin: '0 auto' }}>
+              {info && <div className="fs-11 text-muted" style={{ marginBottom: 4 }}>
                 {info.name} <span style={{color: isGate?'#16a34a':gatePhase==='done'?'#16a34a':'#9a9993'}}>· {phaseNames[gatePhase] || gatePhase}</span>
-              </span>}
-              <textarea value={input} onChange={e => setInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-                placeholder="发送消息..." rows={1} className="chat-textarea"/>
-              <button onClick={() => setShowFiles(!showFiles)} className="btn-icon" style={{ color: showFiles?'#2563eb':'#9a9993' }}>
-                <FolderOpen size={15}/>
-              </button>
-              <button onClick={send} disabled={!input.trim()} className="chat-send-btn"
-                style={{ background: input.trim() ? '#141413' : '#e5e2d8', color: input.trim() ? '#fff' : '#9a9993', cursor: input.trim() ? 'pointer' : 'default' }}>
-                <ArrowUp size={14}/>
-              </button>
+              </div>}
+              <Sender value={input} onChange={(v) => setInput(v)} onSubmit={(v) => send(v)}
+                loading={loading} placeholder="发送消息..." autoSize={{ minRows: 1, maxRows: 6 }}
+                prefix={<button onClick={() => setShowFiles(!showFiles)} className="btn-icon" style={{ color: showFiles?'#2563eb':'#9a9993' }}><FolderOpen size={15}/></button>}/>
             </div>
             <div style={{ maxWidth: 860, margin: '6px auto 0', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'space-between' }}>
               {status?.workdir && (

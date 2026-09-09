@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Button, Input, Select, Tag } from 'antd'
 import { api } from '../lib/api'
 import { Plus } from 'lucide-react'
 import type { ModelInfo, AgentItem, AgentsData, SkillInfo } from '../lib/types'
@@ -58,12 +59,11 @@ export default function SkillsTab() {
       </div>
       {showForm && (
         <div className="flex-center gap-6 flex-wrap" style={{ marginBottom: 8, padding: 8, background: 'var(--bg-secondary)', borderRadius: 'var(--radius)' }}>
-          <input placeholder="名称" value={form.name} onChange={e=>setForm({...form,name:e.target.value})} className="inp-sm"/>
-          <input placeholder="描述" value={form.description} onChange={e=>setForm({...form,description:e.target.value})} className="inp-sm"/>
-          <select value={form.type} onChange={e=>setForm({...form,type:e.target.value})} className="inp-sm" style={{width:'auto'}}>
-            <option value="prompt">prompt</option><option value="tool">tool</option>
-          </select>
-          <button onClick={create} className="btn-green">创建</button>
+          <Input size="small" style={{ width: 140 }} placeholder="名称" value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/>
+          <Input size="small" style={{ width: 200 }} placeholder="描述" value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/>
+          <Select size="small" style={{ width: 100 }} value={form.type} onChange={(v)=>setForm({...form,type:v})}
+            options={[{ value: 'prompt', label: 'prompt' }, { value: 'tool', label: 'tool' }]}/>
+          <Button size="small" type="primary" onClick={create}>创建</Button>
         </div>
       )}
       {skills.length > 0 && (
@@ -81,13 +81,10 @@ export default function SkillsTab() {
                   {skills.map(s => {
                     const has = bound.includes(s.name)
                     return (
-                      <button key={s.name} onClick={() => toggleSkill(a.model, s.name)} title={s.description || s.name}
-                        style={{ padding: '3px 10px', borderRadius: 999, cursor: 'pointer', fontSize: 10,
-                          border: '1px solid ' + (has ? 'var(--accent-green)' : 'var(--border)'),
-                          background: has ? 'var(--accent-green)' : 'var(--bg-tertiary)',
-                          color: has ? '#fff' : 'var(--text-secondary)' }}>
-                        {has ? '✓ ' : ''}{SKILL_SHORT[s.name] || s.name}
-                      </button>
+                      <Tag.CheckableTag key={s.name} checked={has} onChange={() => toggleSkill(a.model, s.name)}
+                        style={{ fontSize: 10, padding: '1px 8px', margin: 0 }}>
+                        {SKILL_SHORT[s.name] || s.name}
+                      </Tag.CheckableTag>
                     )
                   })}
                 </div>
