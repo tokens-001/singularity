@@ -40,12 +40,17 @@ def cleanup():
             _path(p.id).unlink()
 
 def cli(args):
-    return subprocess.run(["python3", "-m", "singularity.scheduler"] + args,
+    # 用当前解释器（venv）—— 系统 python3 不一定装了 singularity
+    return subprocess.run([sys.executable, "-m", "singularity.scheduler"] + args,
                           capture_output=True, text=True)
 
 def main():
     global PASS, FAIL
     PASS = FAIL = 0
+
+    # 残留检查以「跑测试前的任务文件」为基线 —— 系统里本来就有真实任务，不能假设目录是空的
+    tasks_dir = Path(".qidian/tasks")
+    baseline_tasks = {p.name for p in tasks_dir.glob("*.json")}
 
     print("Singularity全量烟雾测试\n")
 
@@ -180,8 +185,8 @@ def main():
 
     # ═══ 清理 ═══
     cleanup()
-    remaining = len(list(Path(".qidian/tasks").glob("*.json")))
-    check("无残留", remaining == 0, f"{remaining} left")
+    left = {p.name for p in tasks_dir.glob("*.json")} - baseline_tasks
+    check("无残留", not left, f"{len(left)} left")
 
     # ═══ 结果 ═══
     total = PASS + FAIL

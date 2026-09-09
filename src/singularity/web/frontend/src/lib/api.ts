@@ -4,7 +4,12 @@ async function request<T>(url: string, opts?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json', ...opts?.headers },
     ...opts,
   })
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  if (!res.ok) {
+    // 后端错误体统一是 {"error": "..."}，优先把中文原因透出来（否则调用方只能看到 500 Internal Server Error）
+    let detail = ''
+    try { const body = await res.json(); detail = body?.error || body?.message || '' } catch { /* 非 JSON 响应 */ }
+    throw new Error(detail || `${res.status} ${res.statusText}`)
+  }
   return res.json()
 }
 

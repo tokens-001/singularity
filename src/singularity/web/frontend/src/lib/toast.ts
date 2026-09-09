@@ -11,3 +11,8 @@ export function useToast() {
   const { message } = AntApp.useApp()
   return (msg: string, kind: Kind = 'info') => message[kind](msg)
 }
+
+/** antd 的 Modal 实例（同样必须来自 App.useApp() 才吃 theme）。 */
+export function useModal() {
+  return AntApp.useApp().modal
+}

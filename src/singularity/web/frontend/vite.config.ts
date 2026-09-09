@@ -8,12 +8,12 @@ export default defineConfig({
   build: {
     outDir: '../static/dist',
     emptyOutDir: true,
-    // 拆分 vendor：antd/antd-x 体积大且很少变，单独成 chunk 便于浏览器缓存
+    // 只固定 react：antd 不写进 manualChunks，交给 Rollup 按动态 import 自动切，
+    // 否则 antd 全量被打进一个 chunk，路由级 lazy 就白做了。
     rollupOptions: {
       output: {
         manualChunks: {
           react: ['react', 'react-dom', 'react-router-dom'],
-          antd: ['antd', '@ant-design/x'],
         },
       },
     },

@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAppStore } from '../stores/app'
-import { useToast } from '../lib/toast'
+import { useSSE, useSSEConnected } from '../lib/useSSE'
+import { useToast, useModal } from '../lib/toast'
 import { api } from '../lib/api'
 import { MessageSquare, List, Settings, User, Boxes } from 'lucide-react'
 
@@ -42,28 +43,40 @@ export default function AppLayout() {
   const [hovered, setHovered] = useState<string>('')
   const [pinned, setPinned] = useState<string[]>(getPinned)
   const addToast = useToast()
+  const modal = useModal()
   const sidebarWidth = sidebarCollapsed ? 0 : 260
   const [usage, setUsage] = useState<any>({})
 
-  useEffect(() => {
-    const f = async () => {
-      try { const d: any = await api.projects(); setProjects(Array.isArray(d)?d:(d?.projects||[])) } catch { addToast('加载项目失败', 'error') }
-    }
-    f(); const t = setInterval(f, 10000); return () => clearInterval(t)
-  }, [])
+  const sseAlive = useSSEConnected()
 
+  const loadProjects = async () => {
+    try { const d: any = await api.projects(); setProjects(Array.isArray(d)?d:(d?.projects||[])) } catch { addToast('加载项目失败', 'error') }
+  }
+  useEffect(() => {
+    loadProjects()
+    if (sseAlive) return   // SSE 活着 → 靠事件驱动；断了才退回轮询
+    const t = setInterval(loadProjects, 10000); return () => clearInterval(t)
+  }, [sseAlive])
+  useSSE(loadProjects, { kinds: ['project', 'workflow', 'system', 'task'], debounceMs: 400 })
+
+  // token 用量后端没有 SSE 事件，只能轮询；拉长到 30s
   useEffect(() => {
     const f = async () => { try { setUsage(await api.tokenUsage()) } catch {} }
-    f(); const t = setInterval(f, 10000); return () => clearInterval(t)
+    f(); const t = setInterval(f, 30000); return () => clearInterval(t)
   }, [])
 
   const selectProject = (pid: string) => { setActiveProject(pid); navigate('/') }
-  const deleteProject = async (p: any) => {
-    if (confirm(`删除 "${p.name}"?`)) {
-      await api.deleteProject(p.id)
-      setProjects(prev => prev.filter(x => x.id !== p.id))
-      if (activePid === p.id) { setActiveProject('_default'); navigate('/') }
-    }
+  const deleteProject = (p: any) => {
+    modal.confirm({
+      title: `删除项目「${p.name}」？`,
+      content: '该操作不可撤销。',
+      okText: '删除', okButtonProps: { danger: true }, cancelText: '取消',
+      onOk: async () => {
+        await api.deleteProject(p.id)
+        setProjects(prev => prev.filter(x => x.id !== p.id))
+        if (activePid === p.id) { setActiveProject('_default'); navigate('/') }
+      },
+    })
   }
 
   return (
@@ -94,7 +107,8 @@ export default function AppLayout() {
               const isPinned = pinned.includes(p.id)
               const isActive = activePid === p.id
               return (
-                <div key={p.id} onClick={() => selectProject(p.id)}
+                <div key={p.id} onClick={() => selectProject(p.id)} role="button" tabIndex={0}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectProject(p.id) } }}
                   onMouseEnter={() => setHovered(p.id)} onMouseLeave={() => setHovered('')}
                   style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', margin: '1px 0',
                     borderRadius: 6, cursor: 'pointer', fontSize: 12, color: isActive ? '#141413' : '#6b6b68',
@@ -105,8 +119,10 @@ export default function AppLayout() {
                   {hovered === p.id && (
                     <span className="flex-center gap-4">
                       <button onClick={e => { e.stopPropagation(); togglePin(p.id); setPinned(getPinned()) }}
+                        aria-label={isPinned ? '取消置顶' : '置顶'}
                         style={{ background:'none',border:'none',cursor:'pointer',padding:1,fontSize:10,color: isPinned?'#d97706':'#9a9993' }}>📌</button>
                       <button onClick={e => { e.stopPropagation(); deleteProject(p) }}
+                        aria-label="删除项目"
                         style={{ background:'none',border:'none',cursor:'pointer',padding:1,fontSize:10,color:'#9a9993' }}>×</button>
                     </span>
                   )}
@@ -127,12 +143,12 @@ export default function AppLayout() {
             <User size={12} style={{color:'#9a9993'}}/>
           </div>
           <span style={{ fontSize: 11, color: '#9a9993', flex: 1 }}>local</span>
-          <button onClick={() => navigate('/config')} className="btn-icon" title="配置"><Settings size={14}/></button>
+          <button onClick={() => navigate('/config')} className="btn-icon" title="配置" aria-label="配置"><Settings size={14}/></button>
         </div>
       </div>
 
       {sidebarCollapsed && (
-        <button onClick={toggleSidebar} style={{ position:'fixed',left:8,top:10,zIndex:10,background:'#f3f2ec',border:'none',borderRadius:6,color:'#9a9993',cursor:'pointer',padding:6 }}>
+        <button onClick={toggleSidebar} aria-label="展开侧边栏" style={{ position:'fixed',left:8,top:10,zIndex:10,background:'#f3f2ec',border:'none',borderRadius:6,color:'#9a9993',cursor:'pointer',padding:6 }}>
           <MessageSquare size={14}/>
         </button>
       )}

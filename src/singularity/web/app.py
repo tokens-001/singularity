@@ -3,6 +3,7 @@ from __future__ import annotations
 # Flask 后端：查看调度状态、提交任务、处理合并冲突
 # v2: 调度循环后台线程，面板即控制中心
 
+import gzip
 import json
 import os
 import sys
@@ -632,6 +633,43 @@ def _api_timing_log(response):
         elapsed = (time.perf_counter() - t0) * 1000
         status = response.status_code
         _api_log.info("%s %s → %s | %.0fms", request.method, request.path, status, elapsed)
+    return response
+
+
+_GZIP_TYPES = frozenset((
+    "text/html", "text/css", "text/plain", "text/javascript",
+    "application/javascript", "application/json", "image/svg+xml",
+))
+
+
+@app.after_request
+def gzip_response(response):
+    """压缩文本响应：首屏 bundle 748kB → 约 240kB。
+
+    先按 mimetype 白名单筛 —— SSE 是 text/event-stream，不在白名单里，
+    绝不能对它调 get_data()（会消费掉流，实时推送就断了）。
+    静态文件走 send_file，是 direct_passthrough 响应，需先关掉该标记才能读出字节。
+    """
+    if (
+        "gzip" not in request.headers.get("Accept-Encoding", "")
+        or not (200 <= response.status_code < 300)
+        or "Content-Encoding" in response.headers
+        or response.mimetype not in _GZIP_TYPES
+    ):
+        return response
+    if response.direct_passthrough:
+        response.direct_passthrough = False
+    try:
+        data = response.get_data()
+    except Exception:  # noqa: BLE001 — 读不出来就原样返回，不因为压缩失败弄坏响应
+        return response
+    if len(data) < 1024:
+        return response
+    out = gzip.compress(data, 6)
+    response.set_data(out)
+    response.headers["Content-Encoding"] = "gzip"
+    response.headers["Content-Length"] = str(len(out))
+    response.headers["Vary"] = "Accept-Encoding"
     return response
 
 

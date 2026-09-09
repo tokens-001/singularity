@@ -139,7 +139,7 @@ export default function FilePanel({ onClose }: { onClose: () => void }) {
           color: activeTab === 'diff' ? 'var(--text-primary)' : 'var(--text-muted)',
         }}><GitBranch size={12} style={{display:'inline',marginRight:4}}/>Diff</button>
         <span style={{ flex: 1 }} />
-        <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 2 }}>
+        <button onClick={onClose} aria-label="关闭文件面板" style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 2 }}>
           <PanelRightClose size={14}/>
         </button>
       </div>
@@ -156,7 +156,7 @@ export default function FilePanel({ onClose }: { onClose: () => void }) {
             <div style={{ borderTop: '1px solid var(--border)', maxHeight: '40%', display: 'flex', flexDirection: 'column' }}>
               <div style={{ padding: '4px 10px', fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span style={{ flex: 1 }}>{selectedFile}</span>
-                <button onClick={downloadFile} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: 2 }} title="下载">
+                <button onClick={downloadFile} aria-label="下载文件" style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: 2 }} title="下载">
                   <Download size={12}/>
                 </button>
               </div>

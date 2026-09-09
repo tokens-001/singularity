@@ -107,7 +107,7 @@ export default function ModelsTab() {
               <span className="fw-600">{a.provider||a.id}</span>
               <span className="fs-10" style={{ color: a.status==='active'?'var(--accent-green)':'var(--text-muted)' }}>{a.status==='active'?'●':'○'}</span>
               <button onClick={()=>scan(a.id)} disabled={scanning===a.id} className="btn-sm"><Search size={10}/> {scanning===a.id?'扫描中':'扫描'}</button>
-              <button onClick={()=>api.deleteApiStore(a.id).then(fetch)} className="btn-ghost-danger"><Trash2 size={10}/></button>
+              <button onClick={()=>api.deleteApiStore(a.id).then(fetch)} className="btn-ghost-danger" aria-label={`删除 ${a.provider||a.id}`}><Trash2 size={10}/></button>
             </div>
           ))}
         </div>
@@ -121,7 +121,7 @@ export default function ModelsTab() {
               <button onClick={()=>setSelected(new Set(scanResults.models!.map(m=>m.id)))} className="btn-sm">全选</button>
               <button onClick={importSelected} disabled={selected.size===0} className="btn-green"><Download size={12}/> 导入 ({selected.size})</button>
             </>}
-            <button onClick={()=>setScanResults(null)} className="btn-icon"><X size={14}/></button>
+            <button onClick={()=>setScanResults(null)} className="btn-icon" aria-label="关闭扫描结果"><X size={14}/></button>
           </div>
           {scanResults.models && (
             <div className="flex-center gap-4 flex-wrap">
@@ -167,7 +167,7 @@ export default function ModelsTab() {
                   {benchmarking===m.id?'评测中…':'跑基准'}
                 </button>
               )}
-              <button onClick={()=>api.deleteModel(m.id).then(fetch)} className="btn-ghost-danger"><Trash2 size={10}/></button>
+              <button onClick={()=>api.deleteModel(m.id).then(fetch)} className="btn-ghost-danger" aria-label={`删除模型 ${m.id}`}><Trash2 size={10}/></button>
             </div>
           )
         })}

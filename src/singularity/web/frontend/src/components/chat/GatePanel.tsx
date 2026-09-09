@@ -1,0 +1,197 @@
+import { memo } from 'react'
+
+const GATE_LABELS: Record<string, string> = { '1': '定义完成·请审核PRD', '2': '架构完成·请审核方案', '3': '验收完成·请审核交付物' }
+
+const Details = memo(function Details({ title, color, children }: { title: string; color: string; children: React.ReactNode }) {
+  return (
+    <details style={{ background: '#ffffff', border: '1px solid #e5e2d8', borderRadius: 10, marginBottom: 10, overflow: 'hidden' }}>
+      <summary style={{ cursor: 'pointer', padding: '12px 14px', fontSize: 13, fontWeight: 700, color, listStyle: 'none', display: 'flex', alignItems: 'center', gap: 8, userSelect: 'none' }}>
+        <span>{title}</span>
+        <span style={{ marginLeft: 'auto', color: '#6b6b68', fontSize: 11, fontWeight: 400 }}>点击展开 ▾</span>
+      </summary>
+      <div style={{ padding: '0 14px 14px' }}>{children}</div>
+    </details>
+  )
+})
+
+const ResearchReport = memo(function ResearchReport({ report }: { report: any }) {
+  const products = report.competitive_analysis?.products || []
+  const pitfalls: string[] = report.pitfalls || []
+  return (
+    <Details title="📋 调研报告" color="#2563eb">
+      {report.recommendation && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: '#6b6b68', fontWeight: 600, marginBottom: 4 }}>推荐方案</div>
+          <div style={{ fontSize: 12, color: '#141413', lineHeight: 1.6 }}>{report.recommendation}</div>
+        </div>
+      )}
+      {products.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: '#6b6b68', fontWeight: 600, marginBottom: 4 }}>竞品分析</div>
+          {products.map((p: any, i: number) => (
+            <div key={i} style={{ fontSize: 12, color: '#141413', padding: '6px 8px', background: '#faf9f5', borderRadius: 6, marginBottom: 4, lineHeight: 1.5 }}>
+              <b style={{ color: '#141413' }}>{p.name}</b> <span style={{ color: '#6b6b68' }}>· {p.type}</span><br/>
+              <span style={{ color: '#16a34a' }}>优：</span>{p.strengths}
+            </div>
+          ))}
+        </div>
+      )}
+      {pitfalls.length > 0 && (
+        <div>
+          <div style={{ fontSize: 11, color: '#6b6b68', fontWeight: 600, marginBottom: 4 }}>关键坑</div>
+          {pitfalls.map((p, i) => (
+            <div key={i} style={{ fontSize: 12, color: '#dc2626', lineHeight: 1.5, marginBottom: 2 }}>⚠ {p}</div>
+          ))}
+        </div>
+      )}
+    </Details>
+  )
+})
+
+const ArchitectureDetails = memo(function ArchitectureDetails({ arch }: { arch: any }) {
+  const modules = arch.modules || []
+  const tasks = arch.tasks || []
+  const entities = arch.data_model?.entities || []
+  const relationships = arch.data_model?.relationships || []
+  const contracts = arch.api_contracts || []
+  const constraints = arch.constraints || []
+  const risks = arch.risks || []
+  const sectionTitle = { fontSize: 11, color: '#6b6b68', fontWeight: 600, marginBottom: 4 } as const
+  const row = { fontSize: 11, color: '#141413', padding: '3px 0', borderBottom: '1px solid #f3f2ec' } as const
+  return (
+    <Details title="🏗 架构方案" color="#7c3aed">
+      {arch.architecture && (
+        <div style={{ fontSize: 12, color: '#141413', lineHeight: 1.6, marginBottom: 10, padding: '8px 10px', background: '#faf9f5', borderRadius: 6 }}>
+          {arch.architecture}
+        </div>
+      )}
+      {modules.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ ...sectionTitle, marginBottom: 6 }}>模块（{modules.length}）</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {modules.map((m: any, i: number) => (
+              <span key={i} style={{ fontSize: 11, color: '#141413', background: '#faf9f5', border: '1px solid #e5e2d8', borderRadius: 6, padding: '3px 9px' }}>{m.name}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      {tasks.length > 0 && (
+        <div>
+          <div style={sectionTitle}>任务（{tasks.length}）</div>
+          {tasks.map((t: any, i: number) => (
+            <div key={i} style={{ fontSize: 11, color: '#141413', padding: '4px 0', borderBottom: '1px solid #f3f2ec' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <span style={{ color: '#6b6b68', fontFamily: 'monospace' }}>{t.id}</span>
+                <span style={{ flex: 1 }}>{t.title}</span>
+                <span style={{ fontSize: 10, color: t.complexity === 'high' ? '#dc2626' : t.complexity === 'medium' ? '#b45309' : '#16a34a' }}>{t.complexity}</span>
+              </div>
+              {(t.depends_on?.length > 0 || t.acceptance) && (
+                <div style={{ fontSize: 10, color: '#6b6b68', marginTop: 2 }}>
+                  {t.depends_on?.length > 0 && <span>依赖：{t.depends_on.join(', ')}</span>}
+                  {t.depends_on?.length > 0 && t.acceptance && <span> · </span>}
+                  {t.acceptance && <span>验收：{t.acceptance}</span>}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {entities.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={sectionTitle}>数据模型（{entities.length}）</div>
+          {entities.map((e: any, i: number) => (
+            <div key={i} style={{ fontSize: 11, color: '#141413', padding: '4px 8px', background: '#faf9f5', borderRadius: 6, marginBottom: 4 }}>
+              <b style={{ color: '#141413' }}>{e.name}</b> <span style={{ color: '#6b6b68' }}>（{e.fields?.length || 0} 字段）</span> {(e.fields || []).map((f: any) => f.name).join(', ')}
+            </div>
+          ))}
+          {relationships.length > 0 && (
+            <div style={{ fontSize: 11, color: '#6b6b68', lineHeight: 1.6 }}>
+              <b>关系：</b>{relationships.map((r: any, i: number) => (
+                <span key={i}>{r.from}→{r.to}({r.type}) </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {contracts.length > 0 && (
+        <div>
+          <div style={sectionTitle}>API 契约（{contracts.length}）</div>
+          {contracts.map((a: any, i: number) => (
+            <div key={i} style={row}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <span style={{ color: '#16a34a', fontFamily: 'monospace', fontWeight: 600, minWidth: 36 }}>{a.method}</span>
+                <span style={{ color: '#2563eb', fontFamily: 'monospace' }}>{a.path}</span>
+                <span style={{ color: '#6b6b68', flex: 1 }}>{a.description}</span>
+              </div>
+              {(a.input || a.output) && (
+                <div style={{ fontSize: 10, color: '#6b6b68', paddingLeft: 44, marginTop: 2 }}>
+                  {a.input && <div>入参：{JSON.stringify(a.input)}</div>}
+                  {a.output && <div>返回：{JSON.stringify(a.output)}</div>}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {arch.tech_stack && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={sectionTitle}>技术栈</div>
+          {Object.entries(arch.tech_stack).map(([k, v]: [string, any], i: number) => (
+            <div key={i} style={{ fontSize: 11, color: '#141413', padding: '3px 0' }}>
+              <b style={{ color: '#6b6b68' }}>{k}：</b>{v}
+            </div>
+          ))}
+        </div>
+      )}
+      {constraints.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={sectionTitle}>约束（{constraints.length}）</div>
+          {constraints.map((c: any, i: number) => (
+            <div key={i} style={row}>
+              <span style={{ color: '#b45309', fontWeight: 600 }}>[{c.type}]</span> {c.rule}
+              {c.check && <span style={{ color: '#6b6b68' }}> → 验证：{c.check}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+      {risks.length > 0 && (
+        <div>
+          <div style={sectionTitle}>风险（{risks.length}）</div>
+          {risks.map((r: any, i: number) => (
+            <div key={i} style={row}>
+              <span style={{ color: r.impact === 'high' ? '#dc2626' : r.impact === 'medium' ? '#b45309' : '#16a34a', fontWeight: 600 }}>[{r.impact}]</span> {r.risk}
+              {r.mitigation && <span style={{ color: '#6b6b68' }}> → {r.mitigation}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </Details>
+  )
+})
+
+interface Props {
+  info: any
+  gateNum: string
+  gatePhase: string
+  onGate: (decision: 'approved' | 'rejected') => void
+}
+
+/** GATE 审核面板（含调研报告 / 架构方案）。memo：任务日志高频更新时不该重渲染这棵大树。 */
+export const GatePanel = memo(function GatePanel({ info, gateNum, gatePhase, onGate }: Props) {
+  return (
+    <div style={{ padding: '8px 0', textAlign: 'center' }}>
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: '#eaf6ec', border: '1px solid #16a34a', borderRadius: 8, padding: '8px 16px' }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: '#16a34a' }}>🛑 GATE{gateNum}</span>
+        <span style={{ fontSize: 12, color: '#6b6b68' }}>{GATE_LABELS[gateNum] || '等待审核'}</span>
+        <button onClick={() => onGate('approved')}
+          style={{ background: '#16a34a', color: '#141413', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>✅ 通过</button>
+        <button onClick={() => onGate('rejected')}
+          style={{ background: '#b5b2a8', color: '#dc2626', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: 11, cursor: 'pointer' }}>↩ 打回</button>
+      </div>
+      <div style={{ maxWidth: 760, margin: '12px auto 0', textAlign: 'left' }}>
+        {info.research_report && <ResearchReport report={info.research_report} />}
+        {info.architecture && <ArchitectureDetails arch={info.architecture} />}
+      </div>
+    </div>
+  )
+})

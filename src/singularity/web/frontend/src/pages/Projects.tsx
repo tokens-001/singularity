@@ -72,7 +72,8 @@ export default function Projects() {
     setLoading(false)
   }
   useEffect(() => { fetch() }, [])
-  useSSE(() => { fetch() })
+  // project=新建项目；workflow=阶段流转（phase 变化）；task/system 兜底
+  useSSE(() => { fetch() }, { kinds: ['project', 'workflow', 'task', 'system'], debounceMs: 400 })
 
   const toggle = async (id: string) => {
     if (expanded === id) { setExpanded(null); setDetail(null); return }
@@ -94,7 +95,7 @@ export default function Projects() {
         <h2 style={{ fontSize: 16, fontWeight: 600 }}>项目</h2>
         <span className="fs-11 text-muted">{projects.length} 个</span>
         <span className="flex-1"/>
-        <button onClick={fetch} className="btn-icon"><RefreshCw size={14}/></button>
+        <button onClick={fetch} className="btn-icon" aria-label="刷新"><RefreshCw size={14}/></button>
         <button onClick={()=>setShowCreate(!showCreate)} className="btn-green" style={{ padding: '6px 12px', fontSize: 12, gap: 4 }}><Plus size={14}/> 新建</button>
       </div>
 

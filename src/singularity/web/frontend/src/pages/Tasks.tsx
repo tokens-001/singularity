@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api, Task } from '../lib/api'
-import { useSSE } from '../lib/useSSE'
+import { useSSE, useSSEConnected } from '../lib/useSSE'
+import { useVirtualRows } from '../lib/useVirtualRows'
 import { useToast } from '../lib/toast'
 import { Plus, RefreshCw, RotateCcw, XCircle, Trash2, Search } from 'lucide-react'
 
@@ -26,13 +27,19 @@ export default function Tasks() {
     }).catch(() => {})
   }, [])
   useEffect(() => { fetch() }, [fetch])
-  useSSE(() => { fetch() })
-  useEffect(() => { const t = setInterval(fetch, 10000); return () => clearInterval(t) }, [fetch])
+  const sseAlive = useSSEConnected()
+  useSSE(() => { fetch() }, { kinds: ['task', 'tool:start', 'tool:done', 'system'], debounceMs: 400 })
+  useEffect(() => {
+    if (sseAlive) return   // SSE 活着 → 事件驱动；断了才退回轮询
+    const t = setInterval(fetch, 10000); return () => clearInterval(t)
+  }, [fetch, sseAlive])
 
   const create = () => { if (desc.trim()) { api.createTask(desc).then(() => { setShowCreate(false); setDesc(''); fetch() }) } }
   const act = (fn: (id: string) => Promise<any>, id: string) => { fn(id).then(fetch).catch(() => toast('操作失败', 'error')) }
 
   const list = tasks.filter(t => !search || t.description.toLowerCase().includes(search.toLowerCase()))
+  // 行高固定 36px + 间距 4px（单行截断，不换行）；列表短时 start/end 覆盖全部，占位为 0
+  const V = useVirtualRows(list.length, 36, 4)
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -44,7 +51,7 @@ export default function Tasks() {
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索..." aria-label="搜索任务" className="search-input"/>
         </div>
         <span className="flex-1"/>
-        <button onClick={fetch} className="btn-icon"><RefreshCw size={14}/></button>
+        <button onClick={fetch} className="btn-icon" aria-label="刷新"><RefreshCw size={14}/></button>
         <button onClick={() => setShowCreate(!showCreate)} className="btn-white"><Plus size={12}/> 新建</button>
       </div>
 
@@ -61,8 +68,9 @@ export default function Tasks() {
       ) : list.length === 0 ? (
         <div className="fs-11 text-muted" style={{ padding: 30, textAlign: 'center' }}>暂无任务，点「新建」创建一个</div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {list.map(t => (
+        <div ref={V.ref} onScroll={V.onScroll} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: V.padTop, paddingBottom: V.padBottom }}>
+          {list.slice(V.start, V.end).map(t => (
             <div key={t.id} className="flex-center gap-8" title={t.description}
               style={{ padding: '8px 10px', background: '#fff', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}>
               <span className="status-dot" style={{ background: STATUS_COLOR[t.status] || '#9a9993', flexShrink: 0 }}/>
@@ -75,12 +83,13 @@ export default function Tasks() {
               <span className="fs-10" style={{ color: STATUS_COLOR[t.status] || '#9a9993', flexShrink: 0 }}>{STATUS_CN[t.status] || t.status}</span>
               <span className="fs-10 text-muted mono" style={{ flexShrink: 0 }}>{t.id.slice(0, 8)}</span>
               <span className="flex-center gap-4">
-                {t.status === 'failed' && <button onClick={() => act(api.retryTask, t.id)} className="btn-icon" title="重试"><RotateCcw size={12}/></button>}
-                {['pending','running','paused'].includes(t.status) && <button onClick={() => act(api.cancelTask, t.id)} className="btn-icon" title="取消"><XCircle size={12}/></button>}
-                <button onClick={() => act(api.deleteTask, t.id)} className="btn-icon" title="删除" style={{ color: '#dc2626' }}><Trash2 size={12}/></button>
+                {t.status === 'failed' && <button onClick={() => act(api.retryTask, t.id)} className="btn-icon" title="重试" aria-label="重试"><RotateCcw size={12}/></button>}
+                {['pending','running','paused'].includes(t.status) && <button onClick={() => act(api.cancelTask, t.id)} className="btn-icon" title="取消" aria-label="取消"><XCircle size={12}/></button>}
+                <button onClick={() => act(api.deleteTask, t.id)} className="btn-icon" title="删除" aria-label="删除" style={{ color: '#dc2626' }}><Trash2 size={12}/></button>
               </span>
             </div>
           ))}
+          </div>
         </div>
       )}
     </div>

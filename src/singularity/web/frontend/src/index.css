@@ -24,7 +24,8 @@ body { font-family: var(--font-sans); background: var(--bg-primary); color: var(
 ::-webkit-scrollbar-thumb { background: #d8d5cb; border-radius: 3px; }
 
 /* ── Layout ── */
-.app-shell { display: flex; height: 100vh; background: var(--bg-primary); }
+/* 100dvh：移动端 Safari 的地址栏会把 100vh 撑出屏幕，底部输入框被顶掉；100vh 作老浏览器 fallback */
+.app-shell { display: flex; height: 100vh; height: 100dvh; background: var(--bg-primary); }
 .sidebar { background: #ffffff; border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; transition: width 0.15s; overflow: hidden; }
 .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-primary); }
 .main-scroll { flex: 1; overflow: auto; padding: 10px 20px; }
@@ -101,7 +102,8 @@ body { font-family: var(--font-sans); background: var(--bg-primary); color: var(
 /* ── Responsive ── */
 @media (max-width: 768px) {
   .sidebar { width: 0 !important; }
-  .main-scroll { padding: 8px 10px; }
+  /* 顶部留白：侧边栏折叠后那个 fixed 按钮会压住第一行内容 */
+  .main-scroll { padding: 8px 10px; padding-top: 44px; }
   .kanban { flex-direction: column; }
   .kanban-col { min-width: 100%; }
   .chat-msg-row { max-width: 100%; }
