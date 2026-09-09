@@ -131,9 +131,16 @@ def _run_no_tools(agent_cfg: dict, prompt: str, tag: str, level: str,
     try:
         result = _run_executor(executor_cls, agent_cfg, prompt, tag, level,
                                baseline_ref=baseline_ref, cwd=cwd)
-        return result.raw_output if result and result.raw_output else None
-    except Exception:
+    except Exception as e:
+        # 以前这里静默 return None —— 委员会里模型失败完全看不见。
+        # 实测 3 家阵容有 2 家无声无息没产出，只能靠猜（超时？空输出？）。
+        witness.heartbeat("dispatcher", f"warn:no_tools_fail:{tag}:{type(e).__name__}"[:80])
         return None
+    if result and result.raw_output:
+        return result.raw_output
+    err = getattr(result, "error", "") if result else "no result"
+    witness.heartbeat("dispatcher", f"warn:no_tools_empty:{tag}:{err}"[:80])
+    return None
 
 
 def _is_slow_model(model_id: str) -> bool:
@@ -298,6 +305,13 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
                     outputs.append((agent_cfg.get("model", "?"), raw))
             except Exception:
                 pass  # 单个模型失败不阻断委员会
+
+    # 部分模型没产出 → 告警。否则委员会"3 家碰撞"实际只有 1 家，外面完全看不出来
+    if len(outputs) < len(chain):
+        got = {m for m, _ in outputs}
+        miss = [a.get("model", "?") for a in chain if a.get("model") not in got]
+        witness.heartbeat("dispatcher",
+                          f"warn:committee_partial:{len(outputs)}/{len(chain)} 缺:{','.join(miss)}"[:80])
 
     if not outputs:
         raise RuntimeError("委员会所有模型均无产出")

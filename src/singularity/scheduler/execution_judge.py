@@ -69,7 +69,17 @@ def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:
                       "max_tokens": max_tokens, "temperature": 0.3},
             )
             if r.status_code == 200:
-                return r.json()["choices"][0]["message"]["content"]
+                choice = r.json()["choices"][0]
+                content = choice.get("message", {}).get("content") or ""
+                if not content:
+                    # 思考模型把 max_tokens 全烧在 reasoning 上 → content 为空。
+                    # 静默返回 "" 会让上层（融合分析/盲评）无声降级，这里显式告警。
+                    witness.heartbeat('execution_judge',
+                        f'warn:empty_content:{model}:{choice.get("finish_reason", "")}'[:80])
+                    return ""
+                if choice.get("finish_reason") == "length":
+                    witness.heartbeat('execution_judge', f'warn:truncated:{model}'[:80])
+                return content
     except Exception as e:
         witness.heartbeat('execution_judge', f'warn:{e}')
     return ""
