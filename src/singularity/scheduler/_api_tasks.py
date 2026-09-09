@@ -422,15 +422,31 @@ def task_apply(task_id: str, push_event=None) -> tuple[dict, int]:
 
 
 def task_rollback(task_id: str, push_event=None) -> tuple[dict, int]:
-    """POST /api/tasks/<id>/rollback"""
+    """POST /api/tasks/<id>/rollback — 回滚到该任务的执行前快照。"""
+    task = tracker.read_task(task_id)
+    if task is None:
+        return {"error": "任务不存在"}, 404
+    snapshot_id = getattr(task, "snapshot_id", "") or ""
+    if not snapshot_id:
+        return {"error": "该任务没有执行前快照, 无法回滚"}, 400
+    meta_path = config.SNAPSHOT_DIR / f"{snapshot_id}.json"
+    if not meta_path.exists():
+        return {"error": f"快照元数据不存在: {snapshot_id}"}, 400
+    from . import snapshot as snap_mod
     try:
-        from . import rollback as rb_mod
-        ok, msg = rb_mod.rollback(task_id)
-        if push_event:
-            push_event("system", f"[{task_id[:8]}] rollback: {msg}")
-        return {"ok": ok, "message": msg}, (200 if ok else 400)
-    except ImportError:
-        return {"error": "rollback 模块不可用"}, 500
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        snap = snap_mod.Snapshot(
+            id=meta["id"], method=meta["method"], ref=meta["ref"],
+            created_at=meta.get("created_at", 0.0), repo_root=meta.get("repo_root", ""),
+        )
+    except (json.JSONDecodeError, KeyError, OSError) as e:
+        return {"error": f"快照元数据损坏: {e}"}, 500
+    from .project import repo_root_for
+    ok = snap_mod.rollback(snap, repo_root=Path(snap.repo_root or str(repo_root_for(task))))
+    msg = f"已回滚到快照 {snapshot_id}" if ok else f"回滚失败 (快照 {snapshot_id}), 需人工处理"
+    if push_event:
+        push_event("system", f"[{task_id[:8]}] rollback: {msg}")
+    return {"ok": ok, "message": msg}, (200 if ok else 400)
 
 
 def task_supervise(task_id: str, data: dict, push_event=None) -> tuple[dict, int]:
