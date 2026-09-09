@@ -266,3 +266,37 @@ def test_stage2_prompt_formats():
     p = ej._ARCH_FUSION_STAGE2.format(
         task="t", analysis="a", outputs="o", schema=ej._ARCH_SCHEMA)
     assert '"test_cases"' in p and "{schema}" not in p
+
+
+# ── 空口 accept 不算让步（Not Just RLHF, arXiv 2605.12991）────
+
+def test_demote_bare_accept():
+    items = [{"id": 1, "verdict": "accept", "reason": "被精度论证说服"},
+             {"id": 2, "verdict": "accept", "reason": "   "},
+             {"id": 3, "verdict": "accept"},
+             {"id": 4, "verdict": "insist", "reason": "你误判"}]
+    out = ej._demote_bare_accept(items)
+    assert [x["verdict"] for x in out] == ["accept", "question", "question", "insist"]
+    assert out[0]["reason"] == "被精度论证说服"       # 带理由的不动
+
+
+def test_bare_accept_does_not_converge(monkeypatch):
+    """全 accept 但都没理由 → 不收敛，继续辩（旧逻辑会直接终局）。"""
+    calls = []
+    _stub(monkeypatch, calls=calls,
+          r2={"responses": [{"id": 1, "verdict": "accept", "reason": ""},
+                            {"id": 2, "verdict": "accept", "reason": ""}],
+              "unique_gains": [{"id": 1, "stance": "adopt", "reason": "好"}]})
+    ej.fuse_architecture_v2("需求", PLANS)
+    assert any("对你的论证给出了回应" in p for _, p in calls)
+
+
+# ── 提取模型不能是委员本人 ────────────────────────────────
+
+def test_extractor_swapped_when_it_is_a_member(monkeypatch):
+    calls = []
+    _stub(monkeypatch, calls=calls)
+    monkeypatch.setattr(ej, "_v2_extractor_model", lambda: "A")   # A 是委员
+    ej.fuse_architecture_v2("需求", PLANS)
+    used = next(m for m, p in calls if "架构委员会秘书" in p)
+    assert used in ej._V2_EXTRACT_FALLBACKS and used not in ("A", "B")

@@ -156,8 +156,9 @@ def _resolve_fusion_models(judge_model: str = "", synthesizer_model: str = "") -
 
 # 融合阶段每份方案的字符上限。曾写死 2000 —— 而方案实际 8k~20k 字，裁判和定稿人
 # 只看得到前 ~15%，等于蒙眼合成（实测 brief2 单稿 13114/14433/11873 字）。
-# 0 = 不限。20k 覆盖目前所有观测到的方案长度。
-_FUSION_PLAN_CHARS = int(os.environ.get("QIDIAN_FUSION_PLAN_CHARS", "20000"))
+# 0 = 不限。40k 覆盖目前所有观测到的方案长度（初稿额度放开后单稿到 31k 字，
+# 20k 会砍掉 36%，融合看到的和评委看到的不是同一份东西）。
+_FUSION_PLAN_CHARS = int(os.environ.get("QIDIAN_FUSION_PLAN_CHARS", "40000"))
 
 # 融合提示词里「需求」部分的字符上限。曾写死 1500 —— 但生产的架构任务 =
 # 角色提示词 + 需求 + 完整 schema（约 3.5k 字），截到 1500 会把 schema 和需求
@@ -165,11 +166,15 @@ _FUSION_PLAN_CHARS = int(os.environ.get("QIDIAN_FUSION_PLAN_CHARS", "20000"))
 _FUSION_TASK_CHARS = int(os.environ.get("QIDIAN_FUSION_TASK_CHARS", "4000"))
 
 # 各方案全文的合计上限（新旧路径共用；按 N 均分）。0 = 不限。
-_FUSION_PLANS_TOTAL = int(os.environ.get("QIDIAN_FUSION_PLANS_TOTAL", "60000"))
+# N=2 时 120k//2 = 60k/份，够放下 31k 的单稿；N=4 时降到 30k/份（会截断并告警）。
+_FUSION_PLANS_TOTAL = int(os.environ.get("QIDIAN_FUSION_PLANS_TOTAL", "120000"))
 
-# 定稿输出上限。实测融合稿要 24k~27k 字（含 schema 必填的 tasks/risks），
+# 融合各步的输出上限。实测融合稿要 24k~27k 字（含 schema 必填的 tasks/risks），
 # 16000 token 撞顶被腰斩 —— 三题全部截断，且分数和"截断到哪"完美单调。
-_FUSION_MAX_TOKENS = int(os.environ.get("QIDIAN_FUSION_MAX_TOKENS", "16000"))
+# v2 的对话/确认步同样吃这个值：它们按需用（实测确认步只出 32 字），
+# 但给 2000 会撞顶返回空（warn:empty_content:*:length）。
+_FUSION_MAX_TOKENS = int(os.environ.get("QIDIAN_FUSION_MAX_TOKENS", "")
+                         or config.MODEL_MAX_TOKENS)
 
 _ARCH_FUSION_STAGE1 = """你是架构合成裁判。以下 {n} 个模型对同一需求独立产出了架构方案。
 
@@ -305,7 +310,7 @@ def fuse_architecture(task_desc: str, outputs: list[str],
     stage1_prompt = _ARCH_FUSION_STAGE1.format(
         n=len(outputs), task=task_desc[:_FUSION_TASK_CHARS], outputs=outputs_text
     )
-    analysis_raw = _call_model(stage1_prompt, judge_model, max_tokens=4000)
+    analysis_raw = _call_model(stage1_prompt, judge_model, max_tokens=_FUSION_MAX_TOKENS)
     analysis = try_parse_json(analysis_raw) if analysis_raw else {}
 
     # 阶段二: 基于分析定稿
@@ -474,8 +479,9 @@ _V2_CONFIRM = """你是架构委员会成员「{checker}」。下面是「{write
 
 
 # ② 提取的输出上限。思考模型（实测 glm-5.3）会先把预算烧在 reasoning 上，
-# 8000 时直接返回空 content —— 提取步骤一空，整条 v2 就废了。
-_V2_EXTRACT_MAX_TOKENS = int(os.environ.get("QIDIAN_FUSION_EXTRACT_TOKENS", "16000"))
+# 8000/16000 都撞过（空 content 或截断）—— 提取步骤一空，整条 v2 就废了。
+_V2_EXTRACT_MAX_TOKENS = int(os.environ.get("QIDIAN_FUSION_EXTRACT_TOKENS", "")
+                             or config.MODEL_MAX_TOKENS)
 
 
 def _fusion_v2_enabled() -> bool:
@@ -488,6 +494,10 @@ def _fusion_v2_enabled() -> bool:
 # 都撞过，而注册表的 reasoning 标注不可靠（v4-flash 标 false，实际会输出思考链）。
 # 别改回观察者模型：观察者就是 v4-flash，实测在提取 prompt 上返回空。
 _V2_EXTRACT_DEFAULT = os.environ.get("QIDIAN_FUSION_EXTRACT_MODEL", "glm-5.3-flash")
+
+# 提取模型必须**不在委员会里** —— 否则等于选手给自己出题（warn:fusion_self_judge）。
+# 阵容是动态的，所以只列备选，运行时挑第一个不在阵容里的。
+_V2_EXTRACT_FALLBACKS = ("glm-5.2", "deepseek-v4-pro")
 
 
 def _v2_extractor_model() -> str:
@@ -533,6 +543,22 @@ def _j(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2)
 
 
+def _demote_bare_accept(items: list) -> list:
+    """空口 accept 不算让步 → 降级成 question（对话继续）。
+
+    依据：Not Just RLHF（arXiv 2605.12991）—— 一句"大家都同意了"就能把模型从
+    对翻到错 44~98%。让步必须说出被哪条论据说服，否则可能只是被共识信号带跑。
+    """
+    out = []
+    for it in items or []:
+        if (isinstance(it, dict) and it.get("verdict") == "accept"
+                and not str(it.get("reason") or "").strip()):
+            witness.heartbeat("execution_judge", "warn:bare_accept"[:80])
+            it = {**it, "verdict": "question"}
+        out.append(it)
+    return out
+
+
 def _votes_into(store: dict, who: str, items: list, field: str) -> dict:
     """把 [{id, <field>}] 收进 store[(who, id)]（只留最新一票），返回本轮结果。"""
     cur = {}
@@ -550,6 +576,12 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
         return plans[0][1] if plans else ""
     members = [m for m, _ in plans]
     judge = judge_model or _v2_extractor_model()
+    if judge in members:
+        alt = next((m for m in _V2_EXTRACT_FALLBACKS if m not in members), "")
+        if alt:
+            witness.heartbeat("execution_judge",
+                              f"warn:extractor_swapped:{judge}->{alt}"[:80])
+            judge = alt
     _warn_same_model(judge, "", members)
 
     task = task_desc[:_FUSION_TASK_CHARS]
@@ -579,6 +611,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
     # 轮 1 发言方陈述 → 其余成员逐条回应 → 有 insist 才让发言方确认，交替往复。
     # 终止三选一：全 accept / 发言方全 agree（有人让步才算结论）/ 复读 / 撞轮数上限。
     # 只认「有人让步」是刻意的 —— 否则发言方一句 question 就终局，多给的轮次是死代码。
+    # 空口 accept（没写理由）先降级成 question，见 _demote_bare_accept。
     max_rounds = max(2, int(os.environ.get("QIDIAN_FUSION_V2_ROUNDS", "5")))
     transcript = []
     resp_votes, conf_votes, gain_votes = {}, {}, {}   # (谁, 条目id) → 最新一票
@@ -587,7 +620,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
         a1 = try_parse_json(_call_model(
             _V2_ROUND1.format(speaker=writer, task=task, outputs=plans_text,
                               disagreements=d_json, unique_gains=g_json),
-            writer, max_tokens=6000) or "") or {}
+            writer, max_tokens=_FUSION_MAX_TOKENS) or "") or {}
         transcript.append(f"[{writer} 陈述]\n{_j(a1)}")
         _votes_into(gain_votes, writer, a1.get("unique_gains"), "stance")
         rounds, prev = 1, {}
@@ -597,7 +630,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
                 r = _call_model(_V2_ROUND2.format(
                     speaker=m, task=task, outputs=plans_text, disagreements=d_json,
                     transcript="\n\n".join(transcript), unique_gains=g_json),
-                    m, max_tokens=6000)
+                    m, max_tokens=_FUSION_MAX_TOKENS)
                 return m, (try_parse_json(r) if r else {})
 
             cur = {}
@@ -607,21 +640,22 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
                     # 解析失败 = 这家的票全丢 → 该分歧点默认判给发言方。不吭声就查不出来。
                     witness.heartbeat("execution_judge", f"warn:fusion_round2_json:{m}"[:80])
                 transcript.append(f"[{m} 回应]\n{_j(a)}")
-                cur.update(_votes_into(resp_votes, m, a.get("responses"), "verdict"))
+                cur.update(_votes_into(resp_votes, m,
+                                       _demote_bare_accept(a.get("responses")), "verdict"))
                 _votes_into(gain_votes, m, a.get("unique_gains"), "stance")
             rounds += 1
             if cur == prev:
                 break                       # 复读机 → 再辩也没新信息，别烧 token
             prev = dict(cur)
-            if not any(v == "insist" for v in cur.values()):
-                break                       # 全 accept → 收敛
+            if all(v == "accept" for v in cur.values()):
+                break                       # 全 accept（且都带理由）→ 收敛
             if rounds >= max_rounds:
                 break
 
             c = try_parse_json(_call_model(
                 _V2_ROUND3.format(speaker=writer, task=task, disagreements=d_json,
                                   transcript="\n\n".join(transcript)),
-                writer, max_tokens=4000) or "") or {}
+                writer, max_tokens=_FUSION_MAX_TOKENS) or "") or {}
             transcript.append(f"[{writer} 确认]\n{_j(c)}")
             cur_c = _votes_into(conf_votes, writer, c.get("confirms"), "verdict")
             rounds += 1
@@ -665,7 +699,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
     for attempt in range(2):
         def _check(m):
             c = _call_model(_V2_CONFIRM.format(checker=m, writer=writer, task=task, draft=draft),
-                            m, max_tokens=2000)
+                            m, max_tokens=_FUSION_MAX_TOKENS)
             if not c:
                 witness.heartbeat("execution_judge", f"warn:fusion_confirm_empty:{m}"[:80])
                 return None

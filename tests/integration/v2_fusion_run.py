@@ -31,8 +31,22 @@ BRIEF_NO = int(sys.argv[1]) if len(sys.argv) > 1 else 3
 PLANS_CACHE = HERE / ".v2_plans.json"
 
 _bl.MAX_CHARS = 0
-_bl.JUDGE_MODEL = os.environ.get("AB_JUDGE", "kimi-k3")
+_bl.JUDGE_MODEL = os.environ.get("AB_JUDGE", "glm-5.2")   # kimi 已停用（余额不足）
 _bl.JUDGE_MAX_TOKENS = int(os.environ.get("AB_JUDGE_MAX_TOKENS", "16000"))
+
+# 告警实时打出来 —— 以前只打"回复 N 字"，分不清是限流还是额度烧光。
+from singularity.scheduler import witness as _w
+_real_heartbeat = _w.heartbeat
+
+
+def _heartbeat(*a, **kw):
+    detail = a[1] if len(a) > 1 else kw.get("status", "")
+    if str(detail).startswith("warn:"):
+        print(f"   ⚠ {detail}", flush=True)
+    return _real_heartbeat(*a, **kw)
+
+
+_w.heartbeat = _heartbeat
 
 STEPS = [("② 提取三类", "架构委员会秘书"), ("③ 轮1 陈述", "陈述己方理由"),
          ("③ 回应", "逐条回应"), ("③ 确认", "对你的论证给出了回应"),
@@ -82,8 +96,11 @@ def main():
     log = []
     real = ej._call_model
 
+    min_tok = int(os.environ.get("V2_MIN_TOKENS", "0"))
+
     def spy(prompt, model, max_tokens=2000):
-        out = real(prompt, model, max_tokens)
+        mt = max(max_tokens, min_tok) if min_tok else max_tokens
+        out = real(prompt, model, mt)
         log.append((_step_of(prompt), model, prompt, out))
         return out
 
