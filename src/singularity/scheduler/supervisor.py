@@ -148,7 +148,13 @@ def qa_context(task) -> tuple[list, list]:
 def _check_completeness(
     checklist: list[str], agent_output: str, changed_files: list[str],
 ) -> CheckResult:
-    """完整性: checklist 逐项检查。"""
+    """完整性: checklist 逐项检查 (仅记录, 不判失败)。
+
+    验收标准是散文、agent 产出是代码摘要, 逐字子串匹配实测几乎必然 0 命中,
+    据此判 fail 只会误伤正常改动 (软失败还会触发重排队)。真正的语义核对在
+    run_post_exec_checks → check_requirement_conformance (LLM) 里做。
+    这里只把未逐字命中的项记进 evidence 供排查, 不参与 pass/fail。
+    """
     if not checklist:
         return CheckResult(passed=True, reason="无 checklist,跳过")
     if not changed_files:
@@ -156,18 +162,13 @@ def _check_completeness(
             passed=False, reason="无文件改动",
             evidence={"hard": True},
         )
-    # 机械检查: checklist 每项在 agent_output 中是否有提及
-    missing = []
-    for item in checklist:
-        if item.lower() not in agent_output.lower():
-            missing.append(item)
-    if missing:
-        return CheckResult(
-            passed=False,
-            reason=f"checklist {len(missing)}/{len(checklist)} 未覆盖: {missing[:3]}",
-            evidence={"missing_items": missing, "hard": False},
-        )
-    return CheckResult(passed=True, reason=f"checklist {len(checklist)} 项全部覆盖")
+    missing = [item for item in checklist if item.lower() not in agent_output.lower()]
+    return CheckResult(
+        passed=True,
+        reason=(f"checklist {len(checklist)} 项全部逐字命中" if not missing
+                else f"checklist {len(missing)}/{len(checklist)} 项未逐字命中 (仅记录, 不判失败)"),
+        evidence={"unverified_items": missing[:5], "hard": False},
+    )
 
 
 def _check_constraints(
@@ -225,13 +226,15 @@ def _check_laziness(
             hard_signals.append(f"模糊措辞: '{phrase}'")
             break
 
-    # 4. 没有测试或验证 (软)
+    # 4. 没有测试或验证 (软; 仅当 checklist 确实要求验证时才提, 否则纯误报)
     has_test = any(
         "test" in f.lower() or "spec" in f.lower() or "_test" in f.lower()
         for f in changed_files
     )
-    if not has_test and checklist:
-        soft_signals.append("无测试文件改动,checklist要求验证")
+    # 注意别用"验证"——"验证码"这类词会误命中
+    wants_test = any(("测试" in c or "test" in c.lower()) for c in checklist)
+    if not has_test and wants_test:
+        soft_signals.append("checklist 要求验证但无测试文件改动")
 
     signals = hard_signals + soft_signals
     if signals:

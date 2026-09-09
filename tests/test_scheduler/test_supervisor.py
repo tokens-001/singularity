@@ -36,23 +36,24 @@ class TestCheckCompleteness:
         )
         assert r.passed
 
-    def test_partial_coverage_fails(self):
-        """部分 checklist 未覆盖 → 软证据失败。"""
+    def test_partial_coverage_recorded_not_failed(self):
+        """部分 checklist 未逐字命中 → 只记录, 不判失败 (机械匹配不可靠)。"""
         from singularity.scheduler.supervisor import _check_completeness
         r = _check_completeness(
             ["登录功能", "注册功能", "忘记密码"],
             "实现了登录功能",  # 只覆盖了登录
             ["app.py"],
         )
-        assert not r.passed
-        assert not r.evidence.get("hard")  # 软证据
-        assert "注册功能" in r.reason or "1/3" in r.reason or "2/3" in r.reason
+        assert r.passed                       # 不判失败
+        assert not r.evidence.get("hard")
+        assert "注册功能" in r.evidence["unverified_items"]
 
-    def test_empty_output_covers_nothing(self):
-        """输出为空 → checklist 全部未覆盖。"""
+    def test_empty_output_recorded_not_failed(self):
+        """输出为空 → 全部未命中, 但仍只记录不判失败。"""
         from singularity.scheduler.supervisor import _check_completeness
         r = _check_completeness(["实现登录"], "", ["app.py"])
-        assert not r.passed
+        assert r.passed
+        assert r.evidence["unverified_items"] == ["实现登录"]
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -195,6 +196,12 @@ class TestCheckLaziness:
         r = _check_laziness("代码实现完成", ["app.py"], ["实现功能", "添加测试"])
         assert not r.passed
         assert not r.evidence.get("hard")
+
+    def test_no_test_signal_needs_test_in_checklist(self):
+        """checklist 没提测试 → 无测试文件改动不算偷懒信号。"""
+        from singularity.scheduler.supervisor import _check_laziness
+        r = _check_laziness("代码实现完成", ["app.py"], ["实现功能"])
+        assert r.passed
 
     def test_mixed_signals_stay_hard(self):
         """硬信号 + 软信号同时命中 → 仍判硬。"""
