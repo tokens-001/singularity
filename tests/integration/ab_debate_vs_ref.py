@@ -42,7 +42,7 @@ REF = os.environ.get("AB_REF", "glm-5.3-flash")
 JUDGES = [j.strip() for j in os.environ.get("AB_JUDGES", "glm-5.3,kimi-k3").split(",")]
 REPEATS = int(os.environ.get("AB_REPEATS", "2"))
 THRESH = 3.0
-PLANS = HERE / ".ab_debate_plans.json"
+PLANS = HERE / os.environ.get("AB_CACHE", ".ab_debate_plans.json")
 
 _bl.MAX_CHARS = 0
 _bl.JUDGE_MAX_TOKENS = 16000
@@ -79,9 +79,20 @@ def main():
     results = []
     for i, brief in enumerate(BRIEFS[:n], 1):
         key = str(i)
-        if key in store:
-            v = store[key]
+        v = store.get(key)
+        if v and v.get("ref_model") == REF:
             print(f"[{i}] 用缓存（{v['dt']:.0f}s）", flush=True)
+        elif v:
+            # 委员会产物可复用，但参照换了就得重出 —— 否则拿旧参照的稿子去评，结论作废
+            print(f"[{i}] 复用委员会缓存（{v['dt']:.0f}s），重出参照 {REF}", flush=True)
+            ref = de._run_no_tools({"model": REF}, brief, f"abref{i}_ref", "any")
+            if not ref:
+                print(f"  ✗ 参照 {REF} 无产出", flush=True)
+                continue
+            v["ref"], v["ref_model"] = ref, REF
+            store[key] = v
+            PLANS.write_text(json.dumps(store, ensure_ascii=False))
+            print(f"  参照 {REF}={len(ref)} 字", flush=True)
         else:
             print(f"[{i}] 跑委员会… {brief[:34]}…", flush=True)
             plans, fused, dt = run_committee(brief, i)

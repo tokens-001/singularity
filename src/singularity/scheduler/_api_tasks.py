@@ -366,8 +366,9 @@ def task_delete(task_id: str) -> tuple[dict, int]:
                 parent = tracker.read_task(p.stem)
                 if parent is not None and task_id in parent.children:
                     tracker.set_children(p.stem, [c for c in parent.children if c != task_id])
-            except Exception:
-                pass
+            except Exception as e:
+                # 静默 = 父任务里残留已删子任务的 id，之后查依赖关系会撞鬼
+                witness.heartbeat('_api', f'warn:orphan_child:{p.stem}:{e}'[:80])
         if getattr(task, 'project_id', ''):
             try:
                 from . import project as proj_mod
@@ -375,8 +376,8 @@ def task_delete(task_id: str) -> tuple[dict, int]:
                 if proj is not None and task_id in proj.task_ids:
                     proj.task_ids = [t for t in proj.task_ids if t != task_id]
                     proj_mod.save(proj)
-            except Exception:
-                pass
+            except Exception as e:
+                witness.heartbeat('_api', f'warn:orphan_project_task:{task.project_id}:{e}'[:80])
 
     if deleted:
         return {"ok": True, "message": f"已删除 {deleted} 个文件"}, 200

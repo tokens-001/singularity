@@ -296,8 +296,9 @@ class TaskRunner:
                     level=route.level,
                     tokens=getattr(exec_out, 'token_count', 0) if exec_out else 0,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                # 静默吞掉 = token 账目悄悄丢失，成本统计对不上也查不出原因
+                witness.heartbeat('orch', f'warn:record_tokens:{e}'[:80])
             # 同时记录到路由学习器
             try:
                 learner = rl_mod.load_learner()

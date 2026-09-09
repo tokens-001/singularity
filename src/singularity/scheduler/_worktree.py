@@ -105,8 +105,10 @@ def cleanup_task_artifacts(task_id: str, repo_root) -> int:
     # 锚定 ref (refs/qidian/pending/{task_id})
     try:
         _release_ref(task_id, repo_root=repo_root)
-    except Exception:
-        pass
+    except Exception as e:
+        # 静默 = 锚定 ref 残留，下次清理对不上号
+        from singularity.scheduler import witness
+        witness.heartbeat('_api', f'warn:release_ref:{task_id}:{e}'[:80])
     return deleted
 
 

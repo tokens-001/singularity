@@ -91,8 +91,9 @@ def _inject_role_context(route_role: str) -> str:
         role = get_role(route_role)
         if role:
             return role.get_full_prompt()
-    except Exception:
-        pass
+    except Exception as e:
+        # 静默返回 "" = agent 悄悄丢掉角色提示词，行为差异在外面完全看不见
+        witness.heartbeat('orch', f'warn:role_context:{route_role}:{e}'[:80])
     return ""
 
 
