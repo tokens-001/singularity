@@ -38,6 +38,8 @@ _RETRY_TOTAL_BUDGET = float(os.environ.get("QIDIAN_RETRY_TOTAL_BUDGET", "600"))
 # 非流式只能干等整体 240s 超时，且线程 join 不掉 —— 见 _dispatch_exec 顶部注释。
 _STREAM = os.environ.get("QIDIAN_STREAM", "1") != "0"
 _STALL_TIMEOUT = float(os.environ.get("QIDIAN_STALL_TIMEOUT", "90"))
+# 进度上流节流：多久推一条 "生成中 N 字" 到前端（0 = 关）
+_PROGRESS_INTERVAL = float(os.environ.get("QIDIAN_PROGRESS_INTERVAL", "1.0"))
 
 # ── blocklist 已统一到 base.py ──
 
@@ -681,19 +683,29 @@ class OpenAIAgentExecutor(BaseExecutor):
                 if resp.status_code >= 400:
                     resp.read()                      # 先取回 body 才能读 .text
                     self._raise_for_status(resp)
+                emitted, last_emit = 0, time.time()
                 for line in resp.iter_lines():
                     if not line.startswith("data:"):
                         continue
-                    body = line[5:].strip()          # 容忍 "data:{...}" 无空格
-                    if body == "[DONE]":
+                    chunk_str = line[5:].strip()     # 容忍 "data:{...}" 无空格
+                    if chunk_str == "[DONE]":
                         break
-                    chunk = json.loads(body)
+                    chunk = json.loads(chunk_str)
                     if chunk.get("usage"):
                         usage = chunk["usage"]
                     for ch in chunk.get("choices", []) or []:
                         delta = ch.get("delta") or {}
                         if delta.get("content"):
                             content.append(delta["content"])
+                            emitted += len(delta["content"])
+                            now = time.time()
+                            if now - last_emit >= _PROGRESS_INTERVAL:
+                                # 进度上流：节流后再推，否则每个 token 一条会淹掉 SSE
+                                last_emit = now
+                                _pending_sse_events.append({
+                                    "kind": "gen", "task_id": self.task_id,
+                                    "msg": f"✍️ 生成中 {emitted} 字…", "ts": now,
+                                })
                         if delta.get("reasoning_content"):
                             reasoning.append(delta["reasoning_content"])
                         for tc in delta.get("tool_calls") or []:

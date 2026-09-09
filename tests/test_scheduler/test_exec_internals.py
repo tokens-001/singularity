@@ -1149,6 +1149,35 @@ class TestStreamCall:
         assert tc["function"]["name"] == "write_file"
         assert tc["function"]["arguments"] == '{"path":"a"}'
 
+    def test_emits_throttled_progress_event(self, monkeypatch):
+        """进度必须上流到 SSE（前端任务卡滚动日志），且是节流后的。"""
+        oa, ex = self._ex(monkeypatch)
+        monkeypatch.setattr(oa, "_PROGRESS_INTERVAL", 0)      # 关掉节流
+        oa._pending_sse_events.clear()
+        lines = [
+            'data: {"choices":[{"delta":{"content":"消息"}}]}',
+            'data: {"choices":[{"delta":{"content":"队列"}}]}',
+            'data: [DONE]',
+        ]
+        monkeypatch.setattr(oa, "_get_http_client", lambda: self._client(oa, lines))
+        ex._stream_call({})
+        gen = [e for e in oa._pending_sse_events if e.get("kind") == "gen"]
+        assert gen, oa._pending_sse_events
+        assert gen[-1]["task_id"] == "tid"
+        assert "2 字" in gen[0]["msg"], gen[0]      # 首条是累计 2 字
+        assert "4 字" in gen[-1]["msg"], gen[-1]    # 末条是累计 4 字
+
+    def test_progress_is_throttled(self, monkeypatch):
+        """节流开着时，一瞬间的多个 chunk 只推一条 —— 否则 SSE 会被淹掉。"""
+        oa, ex = self._ex(monkeypatch)
+        monkeypatch.setattr(oa, "_PROGRESS_INTERVAL", 60)     # 60s 内只推一条
+        oa._pending_sse_events.clear()
+        lines = ['data: {"choices":[{"delta":{"content":"x"}}]}'] * 5 + ['data: [DONE]']
+        monkeypatch.setattr(oa, "_get_http_client", lambda: self._client(oa, lines))
+        ex._stream_call({})
+        gen = [e for e in oa._pending_sse_events if e.get("kind") == "gen"]
+        assert len(gen) <= 1, gen
+
     def test_stall_raises_network_error(self, monkeypatch):
         """read timeout = 停滞 → 抛 _NetworkError（可重试），且连接随之关闭。"""
         oa, ex = self._ex(monkeypatch)

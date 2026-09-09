@@ -40,7 +40,7 @@ export const TaskCard = memo(function TaskCard({ t, onRetry, onReveal }: Props) 
         {!done && (t.logs || []).length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 6, maxHeight: 120, overflowY: 'auto', background: '#faf9f5', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 8px' }}>
             {(t.logs || []).map((l, i) => (
-              <div key={i} style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: l.kind === 'tool:done' ? '#16a34a' : '#2563eb', lineHeight: 1.4 }}>{l.msg}</div>
+              <div key={i} style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: l.kind === 'tool:done' ? '#16a34a' : (l.kind === 'gen' ? '#9a9993' : '#2563eb'), lineHeight: 1.4 }}>{l.msg}</div>
             ))}
           </div>
         )}

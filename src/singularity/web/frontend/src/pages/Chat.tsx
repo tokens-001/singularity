@@ -106,7 +106,7 @@ export default function Chat() {
         else if (desc) next.push({ id: tid, desc, status, ts: Date.now() })
         return next.slice(-20)
       })
-    } else if (e.kind === 'tool:start' || e.kind === 'tool:done') {
+    } else if (e.kind === 'tool:start' || e.kind === 'tool:done' || e.kind === 'gen') {
       const tid = e.task_id || ''
       if (tid) {
         const log: ToolLog = { tool: e.tool || '', kind: e.kind, msg: e.msg || '', ts: e.ts || Date.now() }
