@@ -211,31 +211,34 @@ _ARCH_FUSION_STAGE2 = """你是架构合成定稿人。基于五维分析，产�
 
 输出必须严格遵循以下 JSON schema:
 
-{{
+{schema}
+
+只输出 JSON，用 ```json ... ``` 包裹。"""
+
+# 定稿输出 schema。旧两阶段和新 v2 共用 —— 单花括号（这里不经过 .format）。
+_ARCH_SCHEMA = """{
   "architecture": "综述 (<500字)",
-  "modules": [{{"name":"","responsibility":"","depends_on":[],"interfaces":[]}}],
-  "data_model": {{"database":"","entities":[],"relationships":[]}},
-  "api_contracts": [{{"method":"","path":"","description":"","input":{{}},"output":{{}},"errors":[]}}],
-  "tech_stack": {{"language":"","framework":"","database":"","cache":"","mq":""}},
-  "constraints": [{{"type":"","rule":"","check":""}}],
-  "tasks": [{{"id":"","title":"","description":"","complexity":"","layer":"","depends_on":[],"acceptance":""}}],
-  "risks": [{{"risk":"","impact":"","mitigation":""}}],
-  "test_cases": {{
-    "unit": [{{"name":"","target_module":"","input":"","expected":""}}],
-    "integration": [{{"name":"","interfaces_tested":[],"setup":"","expected":""}}],
-    "e2e": [{{"name":"","user_flow":"","success_criteria":""}}],
-    "security": [{{"name":"","rule":"","source":"constraints|通用规则库","expected":""}}]
-  }},
-  "fusion_notes": {{
+  "modules": [{"name":"","responsibility":"","depends_on":[],"interfaces":[]}],
+  "data_model": {"database":"","entities":[],"relationships":[]},
+  "api_contracts": [{"method":"","path":"","description":"","input":{},"output":{},"errors":[]}],
+  "tech_stack": {"language":"","framework":"","database":"","cache":"","mq":""},
+  "constraints": [{"type":"","rule":"","check":""}],
+  "tasks": [{"id":"","title":"","description":"","complexity":"","layer":"","depends_on":[],"acceptance":""}],
+  "risks": [{"risk":"","impact":"","mitigation":""}],
+  "test_cases": {
+    "unit": [{"name":"","target_module":"","input":"","expected":""}],
+    "integration": [{"name":"","interfaces_tested":[],"setup":"","expected":""}],
+    "e2e": [{"name":"","user_flow":"","success_criteria":""}],
+    "security": [{"name":"","rule":"","source":"constraints|通用规则库","expected":""}]
+  },
+  "fusion_notes": {
     "resolved_contradictions": 0,
     "adopted_insights": 0,
     "filled_blind_spots": 0,
     "dedup_stats": "模块/实体/API/任务/约束 各项去重数量",
     "confidence": "high/medium/low — 合成结果的可信度"
-  }}
-}}
-
-只输出 JSON，用 ```json ... ``` 包裹。"""
+  }
+}"""
 
 
 def _warn_same_model(judge: str, synth: str, members: list[str] | None) -> None:
@@ -283,10 +286,310 @@ def fuse_architecture(task_desc: str, outputs: list[str],
     # 阶段二: 基于分析定稿
     analysis_text = json.dumps(analysis, ensure_ascii=False, indent=2) if analysis else "分析不可用"
     stage2_prompt = _ARCH_FUSION_STAGE2.format(
-        task=task_desc[:1500], analysis=analysis_text, outputs=outputs_text
+        task=task_desc[:1500], analysis=analysis_text, outputs=outputs_text,
+        schema=_ARCH_SCHEMA,
     )
     fused = _call_model(stage2_prompt, synthesizer_model, max_tokens=_FUSION_MAX_TOKENS)
     return fused if fused else outputs[0]
+
+
+# ═══════════════════════════════════════════════════
+# 新融合机制 v2（QIDIAN_FUSION_V2=1）—— 见 docs/融合机制重设计.md
+#
+#   ② 提取三类（共识/分歧/独有优点）1 次
+#   ③ 共享对话：发言方陈述 → 其余逐条 accept/insist → 有 insist 才确认
+#   ④ 最后发言方定稿 → 其余确认（不认可带 issues 重写 1 次）
+#
+# 相比旧两阶段：补上了「反驳通道」（insist + 解释），且定稿输入是对话结论
+# 而不是 N 份方案全文 —— 从根上压住"取并集"造成的膨胀。
+# 任一步拿不到输出 → 返回 ""，由调用方回退旧流程（默认路径不变）。
+# ═══════════════════════════════════════════════════
+
+_V2_EXTRACT = """你是架构委员会秘书。以下 {n} 个模型对同一需求独立产出了架构方案。
+
+【原始需求】
+{task}
+
+【各模型方案】
+{outputs}
+
+请提取三类信息，只输出 JSON：
+
+{{
+  "consensus": ["所有模型一致的点，只列点不展开"],
+  "disagreements": [
+    {{"id": 1, "dimension": "modules|data_model|api_contracts|tech_stack|tasks|risks",
+      "point": "分歧点一句话",
+      "positions": {{"模型名": "该模型的立场"}},
+      "raised_by": "提出方模型名（立场与对方相反的一方）"}}
+  ],
+  "unique_gains": [
+    {{"id": 1, "content": "某家独有、别人没有的好做法", "from": "模型名", "impact": "影响面"}}
+  ]
+}}
+
+规则:
+- consensus 只列已一致的点，不要展开描述
+- disagreements 只列真正互斥的（同一处两种不能并存的解法），措辞差异不算
+- unique_gains 只列确实只有一家提出的，不要凑数
+- 没有就留空数组
+只输出 JSON，用 ```json ... ``` 包裹。"""
+
+_V2_ROUND1 = """你是架构委员会成员「{speaker}」。委员会已把你的观点与其他成员的分歧列成了清单。
+
+【原始需求】
+{task}
+
+【各模型方案】
+{outputs}
+
+【分歧清单】
+{disagreements}
+
+【各家独有做法】
+{unique_gains}
+
+请对**全部分歧点**逐条陈述己方理由，并对其余成员的独有做法表态。只输出 JSON：
+
+{{
+  "arguments": [{{"id": 1, "reason": "你为什么主张这个做法（技术理由）"}}],
+  "unique_gains": [{{"id": 1, "stance": "adopt|reject", "reason": "..."}}]
+}}
+
+约束: 只谈清单上的条目，不许重述方案全文。只输出 JSON。"""
+
+_V2_ROUND2 = """你是架构委员会成员「{speaker}」。成员「{other}」对分歧清单逐条陈述了理由。
+
+【原始需求】
+{task}
+
+【各模型方案】
+{outputs}
+
+【分歧清单与已有论证】
+{transcript}
+
+【各家独有做法】
+{unique_gains}
+
+请逐条回应，并对其余成员的独有做法表态。只输出 JSON：
+
+{{
+  "responses": [{{"id": 1, "verdict": "accept|insist",
+                  "reason": "accept=被说服，采用对方观点；insist=坚持，并解释对方哪里误判"}}],
+  "unique_gains": [{{"id": 1, "stance": "adopt|reject", "reason": "..."}}]
+}}
+
+约束: 只谈清单上的条目，不许重述方案全文。只输出 JSON。"""
+
+_V2_ROUND3 = """你是架构委员会成员「{speaker}」。其他成员对你的论证给出了回应，其中有 insist。
+
+【原始需求】
+{task}
+
+【分歧清单与双方论证】
+{transcript}
+
+请对标注 insist 的条目表态。只输出 JSON：
+
+{{"confirms": [{{"id": 1, "verdict": "agree|question",
+                 "reason": "agree=接受对方反驳；question=仍然质疑"}}]}}
+
+只输出 JSON。"""
+
+_V2_FINALIZE = """你是架构定稿人「{writer}」。下面是委员会的最终结论，请据此产出统一架构方案。
+
+【原始需求】
+{task}
+
+【已达成共识】
+{consensus}
+
+【分歧结论（逐条已定，按此采用）】
+{resolved}
+
+【采纳的独有做法】
+{adopted}
+
+【已驳回的独有做法（不要写进方案）】
+{rejected}
+
+要求:
+1. 分歧按结论采用对应立场 —— 不折中、不两个都写
+2. 只写采纳的独有做法；驳回的一条都不要出现
+3. 长度控制在单份方案的 1.1~1.3 倍以内 —— 不取并集、不重复、不堆砌
+4. 顺便生成 test_cases（基于 PRD 成功标准 + API契约 + state_machine）
+
+输出必须严格遵循以下 JSON schema:
+
+{schema}
+
+只输出 JSON，用 ```json ... ``` 包裹。"""
+
+_V2_CONFIRM = """你是架构委员会成员「{checker}」。下面是「{writer}」根据委员会结论写出的定稿。
+
+【原始需求】
+{task}
+
+【定稿】
+{draft}
+
+请检查三件事：分歧结论有没有被正确落实？有没有把驳回的做法写了进去？有没有明显缺失？
+只输出 JSON：
+
+{{"approved": true, "issues": ["不认可时逐条列出"]}}
+
+只输出 JSON。"""
+
+
+def _fusion_v2_enabled() -> bool:
+    """读 env（不缓存）—— 测试和 A/B 都要能中途切换。"""
+    return os.environ.get("QIDIAN_FUSION_V2") == "1"
+
+
+def _parallel(thunks: list) -> list:
+    """跑一批无参函数，保序返回结果。"""
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(thunks), 4)) as ex:
+        return [f.result() for f in [ex.submit(t) for t in thunks]]
+
+
+def _plans_block(plans: list[tuple[str, str]]) -> str:
+    """各方案全文（受 QIDIAN_FUSION_PLAN_CHARS 限制）。"""
+    lim = _FUSION_PLAN_CHARS
+    return "\n\n---\n".join(
+        f"[{m}]\n{o if lim <= 0 else o[:lim]}" for m, o in plans)
+
+
+def _first_speaker(disagreements: list, members: list[str]) -> str:
+    """轮 1 发言方 = 提出分歧最多的一方；平手取 members 顺序靠前者。"""
+    cnt = {m: 0 for m in members}
+    for d in disagreements:
+        who = d.get("raised_by", "")
+        if who in cnt:
+            cnt[who] += 1
+    return max(members, key=lambda m: cnt[m])
+
+
+def _j(obj) -> str:
+    return json.dumps(obj, ensure_ascii=False, indent=2)
+
+
+def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
+                         judge_model: str = "") -> str:
+    """新融合机制。plans: [(模型名, 方案全文)]。任一步失败返回 ""。"""
+    if len(plans) < 2:
+        return plans[0][1] if plans else ""
+    members = [m for m, _ in plans]
+    judge, _ = _resolve_fusion_models(judge_model, "")
+    _warn_same_model(judge, "", members)
+
+    task = task_desc[:1500]
+    plans_text = _plans_block(plans)
+
+    # ── ② 提取三类 ──
+    raw = _call_model(_V2_EXTRACT.format(n=len(plans), task=task, outputs=plans_text),
+                      judge, max_tokens=8000)
+    deltas = try_parse_json(raw) if raw else {}
+    # try_parse_json 失败返回 {"parse_error": True}（仍是 dict）—— 不判它就会
+    # 静默退化成"没有分歧"，然后拿垃圾定稿。
+    if not isinstance(deltas, dict) or deltas.get("parse_error"):
+        return ""
+    disagreements = [d for d in (deltas.get("disagreements") or []) if isinstance(d, dict)]
+    gains = [g for g in (deltas.get("unique_gains") or []) if isinstance(g, dict)]
+    consensus = deltas.get("consensus") or []
+
+    writer = _first_speaker(disagreements, members)
+    others = [m for m in members if m != writer]
+
+    # ── ③ 共享对话 ──
+    transcript, said = [], {}
+    if disagreements or gains:
+        d_json, g_json = _j(disagreements), _j(gains)
+        said[writer] = try_parse_json(_call_model(
+            _V2_ROUND1.format(speaker=writer, task=task, outputs=plans_text,
+                              disagreements=d_json, unique_gains=g_json),
+            writer, max_tokens=6000) or "") or {}
+        transcript.append(f"[{writer} 陈述]\n{_j(said[writer])}")
+
+        def _respond(m):
+            r = _call_model(_V2_ROUND2.format(
+                speaker=m, other=writer, task=task, outputs=plans_text,
+                transcript="\n\n".join(transcript), unique_gains=g_json),
+                m, max_tokens=6000)
+            return m, (try_parse_json(r) if r else {})
+
+        for m, a in _parallel([lambda m=m: _respond(m) for m in others]):
+            said[m] = a if isinstance(a, dict) else {}
+            transcript.append(f"[{m} 回应]\n{_j(said[m])}")
+
+        # 有人 insist 才让发言方确认（spec：上限 3 轮）
+        insists = {r.get("id") for m in others
+                   for r in (said[m].get("responses") or [])
+                   if isinstance(r, dict) and r.get("verdict") == "insist"}
+        confirms = {}
+        if insists:
+            confirms = try_parse_json(_call_model(
+                _V2_ROUND3.format(speaker=writer, task=task,
+                                  transcript="\n\n".join(transcript)),
+                writer, max_tokens=4000) or "") or {}
+            transcript.append(f"[{writer} 确认]\n{_j(confirms)}")
+    else:
+        confirms = {}
+
+    # 分歧结论：默认发言方胜；其余成员 insist 且发言方 agree（认输）→ 对方胜。
+    # ponytail: 多个 insist 方各自立场不同时只记第一个 —— N>2 才有的歧义，
+    # 实际分歧点几乎都是两家对立（spec 按两方设计）。
+    resolved = []
+    for d in disagreements:
+        did = d.get("id")
+        verdicts = {m: r.get("verdict") for m in others
+                    for r in (said.get(m, {}).get("responses") or [])
+                    if isinstance(r, dict) and r.get("id") == did}
+        winner = writer
+        if verdicts and all(v == "accept" for v in verdicts.values()):
+            winner = writer
+        elif "insist" in verdicts.values():
+            c = next((x.get("verdict") for x in (confirms.get("confirms") or [])
+                      if isinstance(x, dict) and x.get("id") == did), "")
+            if c == "agree":
+                winner = next((m for m, v in verdicts.items() if v == "insist"), writer)
+        resolved.append({**d, "winner": winner})
+
+    # 独有做法：全体 adopt 才采纳（保守 —— 长度就是膨胀的主因）
+    adopted = []
+    for g in gains:
+        stances = [x.get("stance") for a in said.values()
+                   for x in (a.get("unique_gains") or [])
+                   if isinstance(x, dict) and x.get("id") == g.get("id")]
+        if stances and all(s == "adopt" for s in stances):
+            adopted.append(g)
+    rejected = [g for g in gains if g not in adopted]
+
+    # ── ④ 定稿 + 确认 ──
+    final_prompt = _V2_FINALIZE.format(
+        writer=writer, task=task, consensus=_j(consensus), resolved=_j(resolved),
+        adopted=_j(adopted), rejected=_j(rejected), schema=_ARCH_SCHEMA)
+    draft = _call_model(final_prompt, writer, max_tokens=_FUSION_MAX_TOKENS)
+    if not draft:
+        return ""
+
+    for attempt in range(2):
+        def _check(m):
+            c = _call_model(_V2_CONFIRM.format(checker=m, writer=writer, task=task, draft=draft),
+                            m, max_tokens=2000)
+            return try_parse_json(c) if c else {}
+        issues = []
+        for p in _parallel([lambda m=m: _check(m) for m in others]):
+            if not isinstance(p, dict) or p.get("approved", True):
+                continue
+            issues += [str(i) for i in (p.get("issues") or [])] or ["(未给出具体问题)"]
+        if not issues or attempt:
+            break
+        draft = _call_model(
+            final_prompt + "\n\n【上一稿被指出的问题，请修正】\n" + "\n".join(issues),
+            writer, max_tokens=_FUSION_MAX_TOKENS) or draft
+    return draft
 
 
 def decompose_architecture(arch_json: dict) -> list[dict]:

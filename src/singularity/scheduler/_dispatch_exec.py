@@ -346,57 +346,61 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
         )
 
     # 合成: 架构任务用专用 fusion，其他用通用委员会合成
-    from .execution_judge import _is_architecture_task, fuse_architecture
-
-    # 多轮辩论: 架构任务且 ≥2 产出 → 交叉评审收敛(互相补充缺陷)
-    if _is_architecture_task(task):
-        try:
-            outputs = _debate(task, outputs, chain, task_id, level,
-                              baseline_ref=baseline_ref, cwd=cwd)
-        except Exception:
-            pass  # 辩论失败 → 用初稿继续融合
+    from .execution_judge import (
+        _is_architecture_task, _fusion_v2_enabled, fuse_architecture, fuse_architecture_v2,
+    )
 
     if _is_architecture_task(task):
-        # 架构方案: 两阶段 fusion (Step 2)
-        raw_outputs = [o for _, o in outputs]
-        try:
-            fused = fuse_architecture(task, raw_outputs,  # 裁判/定稿模型取自 fusion.toml [custom]
-                                      member_models=[m for m, _ in outputs])
-            if fused:
-                # Save individual model outputs for display
-                from singularity.scheduler.config import QIDIAN_DIR
-                import json as _json
-                proj_dir = QIDIAN_DIR / "projects"
-                # Store in fusion metadata that the workflow can pick up
-                fusion_meta = {
-                    "models": [m for m, _ in outputs],
-                    "outputs": raw_outputs,
-                    "fused": fused,
-                    "count": len(outputs),
-                }
-                # Write to a temp file that workflow can read
-                meta_path = QIDIAN_DIR / ".last_fusion.json"
-                meta_path.write_text(_json.dumps(fusion_meta, ensure_ascii=False, indent=2))
-                # 包装成 ExecutorResult 兼容格式
-                class _FusionResult:
-                    # 字段要和 neijinglu.build_report / _save_trace 读的契约对齐,
-                    # 缺一个就 AttributeError → trace 静默不落盘
-                    raw_output = fused
-                    success = True
-                    error = ""
-                    changed_files: list = []
-                    patch_path = ""
-                    token_count = 0
-                    elapsed = 0.0
-                    tool_events: list = []
-                return DispatchResult(
-                    level=level,
-                    agent_cfg={"model": f"fusion({','.join(m for m,_ in outputs)})"},
-                    executor_result=_FusionResult(),
-                    attempts=len(outputs) + 2,
-                )
-        except Exception:
-            pass  # fusion 失败 → fallback 到通用合成
+        # QIDIAN_FUSION_V2=1 → 新机制（提取三类→共享对话→定稿），失败回退旧流程
+        fused = fuse_architecture_v2(task, list(outputs)) if _fusion_v2_enabled() else ""
+        if not fused:
+            # 多轮辩论: 交叉评审收敛(互相补充缺陷)。辩论失败 → 用初稿继续融合
+            try:
+                outputs = _debate(task, outputs, chain, task_id, level,
+                                  baseline_ref=baseline_ref, cwd=cwd)
+            except Exception:
+                pass
+            # 架构方案: 两阶段 fusion (Step 2)
+            raw_outputs = [o for _, o in outputs]
+            try:
+                fused = fuse_architecture(task, raw_outputs,  # 裁判/定稿模型取自 fusion.toml [custom]
+                                          member_models=[m for m, _ in outputs])
+            except Exception:
+                fused = ""
+        if fused:
+            raw_outputs = [o for _, o in outputs]
+            # Save individual model outputs for display
+            from singularity.scheduler.config import QIDIAN_DIR
+            import json as _json
+            # Store in fusion metadata that the workflow can pick up
+            fusion_meta = {
+                "models": [m for m, _ in outputs],
+                "outputs": raw_outputs,
+                "fused": fused,
+                "count": len(outputs),
+            }
+            # Write to a temp file that workflow can read
+            meta_path = QIDIAN_DIR / ".last_fusion.json"
+            meta_path.write_text(_json.dumps(fusion_meta, ensure_ascii=False, indent=2))
+            # 包装成 ExecutorResult 兼容格式
+            class _FusionResult:
+                # 字段要和 neijinglu.build_report / _save_trace 读的契约对齐,
+                # 缺一个就 AttributeError → trace 静默不落盘
+                raw_output = fused
+                success = True
+                error = ""
+                changed_files: list = []
+                patch_path = ""
+                token_count = 0
+                elapsed = 0.0
+                tool_events: list = []
+            return DispatchResult(
+                level=level,
+                agent_cfg={"model": f"fusion({','.join(m for m,_ in outputs)})"},
+                executor_result=_FusionResult(),
+                attempts=len(outputs) + 2,
+            )
+        # fusion 失败 → fallback 到通用合成
 
     # 通用委员会合成
     synthesizer = chain[0]
