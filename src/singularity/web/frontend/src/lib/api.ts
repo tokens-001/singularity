@@ -97,4 +97,6 @@ export const api = {
 
   roles: () => request<any>('/api/roles'),
   updateRole: (key: string, data: any) => request(`/api/roles/${key}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  createRole: (data: any) => request<any>('/api/roles', { method: 'POST', body: JSON.stringify(data) }),
+  deleteRole: (key: string) => request<any>(`/api/roles/${key}`, { method: 'DELETE' }),
 }

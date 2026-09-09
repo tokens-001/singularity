@@ -1580,7 +1580,9 @@ def api_roles():
             "key": r.key, "name": r.name, "level": r.level,
             "description": r.description, "persona": r.persona,
             "capabilities": r.capabilities,
-            "system_prompt": r.system_prompt[:500],  # 截断，完整版单独取
+            # 不能截断：前端拿它填编辑框，截断后一保存就把完整提示词覆盖成残篇
+            # （而且并没有"完整版单独取"的接口）
+            "system_prompt": r.system_prompt,
         }
     personas = {}
     for k, p in PERSONAS.items():
@@ -1592,21 +1594,58 @@ def api_roles():
     return jsonify({"roles": roles, "personas": personas}), 200
 
 
-@app.route("/api/roles/<key>", methods=["PATCH"])
-def api_roles_update(key):
-    """更新角色配置（人格、层级等）。写入 roles_custom.json 覆盖。"""
-    data = request.get_json(silent=True) or {}
-    overrides_path = sched_config.QIDIAN_DIR / "roles_custom.json"
+def _write_role_override(key: str, vals: dict, replace: bool = False) -> None:
+    """写 roles_custom.json 并重新加载角色。roles.toml 是出厂默认，不动。"""
+    from singularity.scheduler._io import atomic_write_json
+    path = sched_config.QIDIAN_DIR / "roles_custom.json"
     overrides = {}
-    if overrides_path.exists():
-        try: overrides = json.loads(overrides_path.read_text())
-        except Exception: pass
-    overrides[key] = {k: v for k, v in data.items() if v}
-    overrides_path.write_text(json.dumps(overrides, ensure_ascii=False, indent=2))
-    # Reload roles
+    if path.exists():
+        try:
+            overrides = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            overrides = {}
+    clean = {k: v for k, v in vals.items() if v is not None}
+    overrides[key] = clean if replace else {**overrides.get(key, {}), **clean}
+    atomic_write_json(path, overrides)
     from singularity.scheduler.roles import _init
     _init()
+
+
+@app.route("/api/roles/<key>", methods=["PATCH"])
+def api_roles_update(key):
+    """更新角色（含 system_prompt —— 以前只认 persona/level，改提示词是白改）。"""
+    data = request.get_json(silent=True) or {}
+    from singularity.scheduler.roles import ROLES
+    if key not in ROLES:
+        return jsonify({"error": f"角色 {key} 不存在"}), 404
+    _write_role_override(key, data)
     return jsonify({"ok": True, "key": key, "updated": list(data.keys())}), 200
+
+
+@app.route("/api/roles", methods=["POST"])
+def api_roles_create():
+    """新增角色。"""
+    data = request.get_json(silent=True) or {}
+    key = (data.get("key") or "").strip()
+    if not key:
+        return jsonify({"error": "缺少 key"}), 400
+    if not key.replace("-", "").replace("_", "").isalnum():
+        return jsonify({"error": "key 只能包含字母/数字/下划线/连字符"}), 400
+    from singularity.scheduler.roles import ROLES
+    if key in ROLES:
+        return jsonify({"error": f"角色 {key} 已存在"}), 409
+    _write_role_override(key, data, replace=True)
+    return jsonify({"ok": True, "key": key}), 200
+
+
+@app.route("/api/roles/<key>", methods=["DELETE"])
+def api_roles_delete(key):
+    """删除角色。出厂角色写 deleted 标记（roles.toml 不动），自定义角色同路。"""
+    from singularity.scheduler.roles import ROLES
+    if key not in ROLES:
+        return jsonify({"error": f"角色 {key} 不存在"}), 404
+    _write_role_override(key, {"deleted": True}, replace=True)
+    return jsonify({"ok": True, "key": key}), 200
 
 
 @app.route("/api/skills")

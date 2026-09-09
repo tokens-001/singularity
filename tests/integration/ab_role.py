@@ -26,10 +26,11 @@ HERE = Path(__file__).resolve().parent
 MODEL = os.environ.get("AB_ROLE_MODEL", "deepseek-v4-flash")
 ROLE = os.environ.get("AB_ROLE", "implementer")
 REPEATS = int(sys.argv[1]) if len(sys.argv) > 1 else 2
-CACHE = HERE / ".ab_role_cache.json"
+TASK_SET = os.environ.get("AB_ROLE_SET", "easy")
+CACHE = HERE / (".ab_role_cache.json" if TASK_SET == "easy" else ".ab_role_cache_hard.json")
 
 # 每题：要实现的文件、规格、预先写好的测试
-TASKS = [
+EASY_TASKS = [
     {
         "name": "slugify",
         "file": "slugify.py",
@@ -100,6 +101,101 @@ def test_bad_size():
 ''',
     },
 ]
+
+
+HARD_TASKS = [
+    {
+        "name": "median",
+        "file": "median.py",
+        "spec": '实现 median(nums) -> float：返回列表的中位数。空列表抛 ValueError。**不要修改传入的列表**。',
+        "test": '''import pytest
+from median import median
+
+def test_odd():
+    assert median([3, 1, 2]) == 2
+
+def test_even():
+    assert median([4, 1, 3, 2]) == 2.5
+
+def test_single():
+    assert median([7]) == 7
+
+def test_empty():
+    with pytest.raises(ValueError):
+        median([])
+
+def test_does_not_mutate():
+    data = [3, 1, 2]
+    median(data)
+    assert data == [3, 1, 2]
+''',
+    },
+    {
+        "name": "merge_intervals",
+        "file": "merge_intervals.py",
+        "spec": ('实现 merge_intervals(intervals) -> list：输入是 [(start, end), ...]（start <= end），'
+                 '合并所有重叠**或相邻**的区间，按起点升序返回。空列表返回 []。**不要修改输入**。'),
+        "test": '''from merge_intervals import merge_intervals
+
+def test_overlap():
+    assert merge_intervals([(1, 4), (2, 6)]) == [(1, 6)]
+
+def test_adjacent_merged():
+    assert merge_intervals([(1, 3), (3, 5)]) == [(1, 5)]
+
+def test_disjoint_kept():
+    assert merge_intervals([(1, 2), (4, 5)]) == [(1, 2), (4, 5)]
+
+def test_unsorted_input():
+    assert merge_intervals([(5, 6), (1, 3)]) == [(1, 3), (5, 6)]
+
+def test_contained():
+    assert merge_intervals([(1, 10), (2, 3)]) == [(1, 10)]
+
+def test_empty():
+    assert merge_intervals([]) == []
+
+def test_does_not_mutate():
+    data = [(5, 6), (1, 3)]
+    merge_intervals(data)
+    assert data == [(5, 6), (1, 3)]
+''',
+    },
+    {
+        "name": "format_bytes",
+        "file": "format_bytes.py",
+        "spec": ('实现 format_bytes(n) -> str，按 1024 进制格式化：\n'
+                 '  - n < 1024 → "{n}B"（0 -> "0B"，1023 -> "1023B"）\n'
+                 '  - 否则选不超过 n 的最大单位（KB/MB/GB/TB），保留一位小数，格式 "{v:.1f}{unit}"'
+                 '（1024 -> "1.0KB"，1536 -> "1.5KB"）\n'
+                 '  - 负数抛 ValueError'),
+        "test": '''import pytest
+from format_bytes import format_bytes
+
+def test_zero():
+    assert format_bytes(0) == "0B"
+
+def test_below_kb():
+    assert format_bytes(1023) == "1023B"
+
+def test_exactly_kb():
+    assert format_bytes(1024) == "1.0KB"
+
+def test_fraction():
+    assert format_bytes(1536) == "1.5KB"
+
+def test_mb():
+    assert format_bytes(1024 * 1024) == "1.0MB"
+
+def test_negative():
+    with pytest.raises(ValueError):
+        format_bytes(-1)
+''',
+    },
+]
+
+
+TASKS = HARD_TASKS if TASK_SET == "hard" else EASY_TASKS
 
 
 def build_prompt(task, with_role: bool) -> str:

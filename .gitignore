@@ -28,4 +28,4 @@ tests/integration/.ab_cache*.json
 tests/integration/.ab_solo_cache.json
 tests/integration/.bench_plans.json
 tests/integration/.ab_debate_plans*.json
-tests/integration/.ab_role_cache.json
+tests/integration/.ab_role_cache*.json

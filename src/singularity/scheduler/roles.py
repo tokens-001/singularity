@@ -225,24 +225,53 @@ def get_role(key: str) -> Optional[Role]:
 
 
 # ── 模块加载: 填充 PERSONAS 和 ROLES ──
+def _apply_overrides() -> None:
+    """把 .qidian/roles_custom.json 应用到 ROLES。
+
+    支持三种操作：
+    - 改：含 system_prompt —— 以前只认 persona/level，改提示词是**白改**（写进文件但读的时候不看）
+    - 新增：key 不在 roles.toml 里也能建
+    - 删除：{"deleted": true}
+    """
+    from .config import QIDIAN_DIR
+    path = QIDIAN_DIR / "roles_custom.json"
+    if not path.exists():
+        return
+    try:
+        overrides = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logging.getLogger(__name__).warning("role override load failed: %s", e)
+        return
+    for key, vals in overrides.items():
+        if not isinstance(vals, dict):
+            continue
+        if vals.get("deleted"):
+            ROLES.pop(key, None)
+            continue
+        r = ROLES.get(key)
+        if r is None:                       # 新增
+            ROLES[key] = Role(
+                key=key, name=vals.get("name") or key, level=vals.get("level", ""),
+                description=vals.get("description", ""),
+                capabilities=list(vals.get("capabilities") or []),
+                persona=vals.get("persona", ""),
+                system_prompt=vals.get("system_prompt", ""),
+                output_schema=vals.get("output_schema") or {},
+            )
+            continue
+        if vals.get("persona") and vals["persona"] in PERSONAS:
+            r.persona = vals["persona"]
+        for f in ("name", "level", "description", "system_prompt"):
+            if vals.get(f):
+                setattr(r, f, vals[f])
+        if vals.get("capabilities"):
+            r.capabilities = list(vals["capabilities"])
+
+
 def _init():
     global PERSONAS, ROLES
     PERSONAS = _load_personas()
     ROLES = _load_roles()
-    # Apply Web UI overrides (persona, level changes)
-    try:
-        from .config import QIDIAN_DIR
-        overrides_path = QIDIAN_DIR / "roles_custom.json"
-        if overrides_path.exists():
-            overrides = json.loads(overrides_path.read_text())
-            for key, vals in overrides.items():
-                if key in ROLES:
-                    r = ROLES[key]
-                    if "persona" in vals and vals["persona"] in PERSONAS:
-                        r.persona = vals["persona"]
-                    if "level" in vals:
-                        r.level = vals["level"]
-    except Exception as _e:
-        logging.getLogger(__name__).warning("role override load failed: %s", _e)
+    _apply_overrides()
 
 _init()

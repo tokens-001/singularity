@@ -3,7 +3,7 @@ import { Tag } from 'antd'
 import { api } from '../lib/api'
 import { useRun } from '../lib/toast'
 import { Plus } from 'lucide-react'
-import { ALL_ROLES, ROLE_LABELS, mcn } from '../pages/Config'
+import { mcn } from '../pages/Config'
 import type { ModelInfo, AgentItem, AgentsData } from '../lib/types'
 
 export default function AgentsTab() {
@@ -25,10 +25,6 @@ export default function AgentsTab() {
   const activeModels = new Set(allAgents.filter(a => !disabledSet.has(a.model)).map(a => a.model))
   const addableModels = models.filter(m => m.api_available && !activeModels.has(m.id) && !disabledSet.has(m.id))
 
-  const toggleRole = async (model: string, role: string, currentRoles: string[]) => {
-    const next = currentRoles.includes(role) ? currentRoles.filter(r => r !== role) : [...currentRoles, role]
-    if (await run(() => api.updateAgent(model, { roles: next }))) fetch()
-  }
   const disable = async (model: string) => { if (await run(() => api.deleteAgent(model))) fetch() }
   const enable = async (model: string) => { if (await run(() => api.addAgent({model, roles:['generic']}))) fetch() }
 
@@ -57,30 +53,17 @@ export default function AgentsTab() {
       <div className="flex-center gap-6 flex-wrap">
         {allAgents.filter(a => !disabledSet.has(a.model)).map(a => {
           const m = models.find(x => x.id === a.model)
-          const roles: string[] = a.roles || []
           const isExpanded = expanded === a.model
           return (
             <div key={a.model} className="agent-card">
               <div className="agent-card-header" onClick={() => setExpanded(isExpanded ? '' : a.model)}>
                 <span style={{ color: 'var(--accent-green)', fontSize: 8 }}>●</span>
                 <span className="fw-600">{mcn(m||{id:a.model})}</span>
-                <span className="fs-10 text-muted" style={{ marginLeft: 'auto' }}>{roles.length} 个角色</span>
+                <span className="fs-10 text-muted" style={{ marginLeft: 'auto' }}>{m?.cost||'?'}</span>
               </div>
-              <div className="fs-10 text-muted" style={{ marginTop: 2 }}>{m?.provider||'?'} · {m?.cost||'?'} · max_turns={a.max_turns||5}</div>
+              <div className="fs-10 text-muted" style={{ marginTop: 2 }}>{m?.provider||'?'} · max_turns={a.max_turns||5}</div>
               {isExpanded && (
                 <div style={{ marginTop: 6, borderTop: '1px solid var(--border)', paddingTop: 4 }} onClick={e => e.stopPropagation()}>
-                  <div className="fs-10 text-muted" style={{ marginBottom: 4 }}>角色分配:</div>
-                  <div className="flex-center gap-4 flex-wrap" style={{ marginBottom: 4 }}>
-                    {ALL_ROLES.map(r => {
-                      const has = roles.includes(r)
-                      return (
-                        <Tag.CheckableTag key={r} checked={has} onChange={() => toggleRole(a.model, r, roles)}
-                          style={{ fontSize: 10, padding: '0 6px', margin: 0 }}>
-                          {ROLE_LABELS[r]||r}
-                        </Tag.CheckableTag>
-                      )
-                    })}
-                  </div>
                   <button onClick={() => disable(a.model)} className="btn-ghost-danger fs-10" style={{ padding: 0 }}>移除</button>
                 </div>
               )}

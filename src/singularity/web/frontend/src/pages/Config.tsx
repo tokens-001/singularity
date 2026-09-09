@@ -1,22 +1,21 @@
 import { useState } from 'react'
 import { Tabs } from 'antd'
-import { Cpu, Bot, Wrench, Plug, GitMerge } from 'lucide-react'
+import { Cpu, Bot, Wrench, Plug, GitMerge, UserCog } from 'lucide-react'
 import ModelsTab from '../components/ModelsTab'
 import AgentsTab from '../components/AgentsTab'
 import SkillsTab from '../components/SkillsTab'
 import McpTab from '../components/McpTab'
 import FusionTab from '../components/FusionTab'
+import RolesTab from '../components/RolesTab'
 
 const TABS = [
   { key: 'models', icon: Cpu, label: '模型目录' },
   { key: 'agents', icon: Bot, label: '智能体' },
+  { key: 'roles', icon: UserCog, label: '角色' },
   { key: 'skills', icon: Wrench, label: '技能' },
   { key: 'mcp', icon: Plug, label: 'MCP' },
   { key: 'fusion', icon: GitMerge, label: '融合' },
 ]
-
-export const ALL_ROLES = ['builder','ai_architect','ai_engineer','qa_engineer','security_auditor','reviewer','generic']
-export const ROLE_LABELS: Record<string,string> = { builder:'构建者', ai_architect:'AI架构师', ai_engineer:'AI工程师', qa_engineer:'QA工程师', security_auditor:'安全审计师', reviewer:'审查者', generic:'通用' }
 const VENDOR_DISPLAY: Record<string,string> = {
   deepseek: 'DeepSeek', kimi: 'Kimi', claude: 'Claude', moonshot: 'Moonshot',
   glm: 'GLM', gpt: 'GPT', qwen: 'Qwen', openai: 'OpenAI', anthropic: 'Anthropic',
@@ -48,6 +47,7 @@ export default function Config() {
         items={TABS.map(t => ({ key: t.key, label: <span className="flex-center gap-6"><t.icon size={14}/> {t.label}</span> }))} />
       {tab === 'models' && <ModelsTab />}
       {tab === 'agents' && <AgentsTab />}
+      {tab === 'roles' && <RolesTab />}
       {tab === 'skills' && <SkillsTab />}
       {tab === 'mcp' && <McpTab />}
       {tab === 'fusion' && <FusionTab />}
