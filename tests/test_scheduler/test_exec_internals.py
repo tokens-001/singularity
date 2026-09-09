@@ -520,3 +520,208 @@ class TestFinalizeResult:
         # depth=6 >= _MAX_DEPTH=6 → 不拆分, 直接 FAILED
         assert "failed" in reason or "exhausted" in reason
         assert any("FAILED" in str(s) for _, s, _ in transitions)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 委员会辩论的波数（性能相关：轮数直接决定架构阶段耗时）
+# ═══════════════════════════════════════════════════════════════
+
+class TestDebateWaves:
+    """_debate 每轮 2 波（评审 + 修订）串行 —— max_rounds 就是波数的一半。"""
+
+    def _run(self, monkeypatch, max_rounds):
+        from singularity.scheduler import _dispatch_exec as de
+        calls = []
+        monkeypatch.setattr(de, "_run_no_tools",
+                            lambda cfg, prompt, tag, level, baseline_ref="", cwd="":
+                            (calls.append(tag), '{"ok": true}')[1])
+        monkeypatch.setattr(de, "_is_slow_model", lambda m: False)
+        members = [("m1", '{"a": 1}'), ("m2", '{"b": 2}')]
+        chain = [{"model": "m1"}, {"model": "m2"}]
+        de._debate("任务", members, chain, "tid", "any", max_rounds=max_rounds)
+        return calls
+
+    def test_one_round_is_two_waves(self, monkeypatch):
+        calls = self._run(monkeypatch, 1)
+        # 2 个成员 × (评审波 + 修订波) = 4 次调用 = 2 波
+        assert len(calls) == 4, calls
+        assert sum("_rev_" in c for c in calls) == 2
+        assert sum("_rvs_" in c for c in calls) == 2
+
+    def test_two_rounds_is_four_waves(self, monkeypatch):
+        calls = self._run(monkeypatch, 2)
+        assert len(calls) == 8, calls           # 2 轮 × 2 波 × 2 成员
+
+    def test_default_rounds_from_env_knob(self):
+        """默认轮数由 QIDIAN_DEBATE_ROUNDS 决定，缺省 2（第 1 轮 + 二次碰撞）。"""
+        from singularity.scheduler import _dispatch_exec as de
+        import inspect
+        assert de._DEBATE_ROUNDS >= 1
+        assert inspect.signature(de._debate).parameters["max_rounds"].default == de._DEBATE_ROUNDS
+
+
+# ═══════════════════════════════════════════════════════════════
+# Fusion 裁判/定稿模型解析（曾写死 deepseek-chat，fusion.toml 整份不生效）
+# ═══════════════════════════════════════════════════════════════
+
+class TestFusionModelResolution:
+
+    def test_reads_custom_section(self, monkeypatch):
+        from singularity.scheduler import execution_judge as ej
+        monkeypatch.setattr(ej, "_load_fusion_config",
+                            lambda: {"custom": {"judge_model": "J", "call_model": "S"}})
+        assert ej._resolve_fusion_models() == ("J", "S")
+
+    def test_explicit_arg_wins(self, monkeypatch):
+        from singularity.scheduler import execution_judge as ej
+        monkeypatch.setattr(ej, "_load_fusion_config",
+                            lambda: {"custom": {"judge_model": "J", "call_model": "S"}})
+        assert ej._resolve_fusion_models("X", "Y") == ("X", "Y")
+        assert ej._resolve_fusion_models("X") == ("X", "S")
+
+    def test_falls_back_when_config_missing(self, monkeypatch):
+        from singularity.scheduler import execution_judge as ej
+        monkeypatch.setattr(ej, "_load_fusion_config", lambda: {})
+        assert ej._resolve_fusion_models() == ("deepseek-chat", "deepseek-chat")
+
+    def test_fuse_architecture_uses_resolved_models(self, monkeypatch):
+        """两阶段实际拿到的模型名必须来自配置，而不是硬编码。"""
+        from singularity.scheduler import execution_judge as ej
+        monkeypatch.setattr(ej, "_load_fusion_config",
+                            lambda: {"custom": {"judge_model": "J", "call_model": "S"}})
+        used = []
+        monkeypatch.setattr(ej, "_call_model",
+                            lambda prompt, model, max_tokens=2000:
+                            (used.append((model, max_tokens)), "{}")[1])
+        ej.fuse_architecture("任务", ["方案A", "方案B"])
+        assert [m for m, _ in used] == ["J", "S"], used
+
+    def test_api_resolved_from_registry_not_whitelist(self, monkeypatch):
+        """激活模型（如 deepseek-v4-flash）必须能解析出 key/base_url。
+
+        曾硬编码 8 个 id 的白名单，其余模型静默返回空串 —— 下拉里能选、调了没结果。
+        """
+        from singularity.scheduler import execution_judge as ej
+        from singularity.scheduler import model_registry, api_store
+
+        class _Entry:
+            api_key_env = "DEEPSEEK_API_KEY"
+            base_url = "https://api.deepseek.com/v1"
+
+        monkeypatch.setattr(model_registry, "provider_for_model",
+                            lambda m: "deepseek" if m == "deepseek-v4-flash" else "")
+        monkeypatch.setattr(api_store, "get", lambda pid: _Entry() if pid == "deepseek" else None)
+
+        assert ej._resolve_api("deepseek-v4-flash") == ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1")
+        # 注册表查不到 → 兜底表
+        assert ej._resolve_api("gpt-5.5") == ("OPENAI_API_KEY", "https://api.openai.com/v1")
+        # 两边都没有 → 空（调用方会告警并返回 ""）
+        assert ej._resolve_api("查无此模型") == ("", "")
+
+
+# ═══════════════════════════════════════════════════════════════
+# no_tools 必须真的禁掉工具（否则委员会"禁工具"只是空话）
+# ═══════════════════════════════════════════════════════════════
+
+class TestNoToolsEnforced:
+
+    def test_capability_flags(self):
+        """执行器要声明自己能不能禁工具；声明不了 → 调用方告警，不假装禁住了。"""
+        from singularity.scheduler.executors.anthropic_api import AnthropicApiExecutor
+        from singularity.scheduler.executors.openai_agent import OpenAIAgentExecutor
+        from singularity.scheduler.executors.claude_cli import ClaudeCliExecutor
+        from singularity.scheduler.executors.zhipu_api import ZhipuApiExecutor
+        assert AnthropicApiExecutor.honors_no_tools is True
+        assert OpenAIAgentExecutor.honors_no_tools is True
+        assert ZhipuApiExecutor.honors_no_tools is True    # 纯补全，不支持工具
+        assert ClaudeCliExecutor.honors_no_tools is False  # claude CLI 自带工具，禁不掉
+
+    def _captured_body(self, monkeypatch, no_tools: bool) -> dict:
+        import httpx
+        from singularity.scheduler.executors import anthropic_api as aa
+        captured = {}
+
+        class _Resp:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"content": [{"type": "text", "text": "ok"}], "usage": {}}
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            captured.update(json or {})
+            return _Resp()
+
+        monkeypatch.setattr(httpx, "post", fake_post)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        cfg = {"model": "claude-sonnet-4-6"}
+        if no_tools:
+            cfg["no_tools"] = True
+        ex = aa.AnthropicApiExecutor(
+            cfg, "任务", "tid",
+            skill_tools=[{"type": "function",
+                          "function": {"name": "read_file", "parameters": {"type": "object", "properties": {}}}}],
+            skill_prompt="", mcp_tools=[],
+        )
+        ex.run()
+        return captured
+
+    def test_no_tools_drops_tools(self, monkeypatch):
+        body = self._captured_body(monkeypatch, no_tools=True)
+        assert "tools" not in body, f"禁工具调用仍注入了工具: {body.get('tools')}"
+
+    def test_normal_call_keeps_tools(self, monkeypatch):
+        body = self._captured_body(monkeypatch, no_tools=False)
+        assert len(body.get("tools", [])) == 1
+
+
+# ═══════════════════════════════════════════════════════════════
+# 架构任务触发判据 + 委员会席位视角
+# ═══════════════════════════════════════════════════════════════
+
+class TestArchitectureTrigger:
+    """只认强短语。松词（"模块"/"entity"）会把实现任务误送进委员会 ——
+    禁工具跑 7 波、拿回架构 JSON 而不是代码。"""
+
+    def test_architect_prompt_triggers(self):
+        from singularity.scheduler.workflow import _ARCHITECT_PREAMBLE
+        from singularity.scheduler.execution_judge import _is_architecture_task
+        prompt = _ARCHITECT_PREAMBLE.format(description="x", scope="y",
+                                            constraints="z", research="w")
+        assert _is_architecture_task(prompt) is True
+
+    def test_implementation_tasks_dont_trigger(self):
+        from singularity.scheduler.execution_judge import _is_architecture_task
+        for t in ["修复登录模块的 token 过期判断",
+                  "在 User entity 上增加 email 唯一索引",
+                  "把 config 模块拆成两个文件",
+                  "实现 /api/tasks 的分页查询"]:
+            assert _is_architecture_task(t) is False, f"实现任务误触发委员会: {t}"
+
+
+class TestCommitteePerspective:
+    """席位视角默认关（A/B 盲评：有视角 31 vs 无视角 32，略输）。"""
+
+    def _draft_prompts(self, monkeypatch, tmp_path):
+        from singularity.scheduler import _dispatch_exec as de
+        from singularity.scheduler import execution_judge as ej
+        from singularity.scheduler import config as cfg
+        seen = []
+        monkeypatch.setattr(de, "_run_no_tools",
+                            lambda c, prompt, tag, level, baseline_ref="", cwd="":
+                            (seen.append(prompt), '{"architecture":"x"}')[1])
+        monkeypatch.setattr(de, "_is_slow_model", lambda m: False)
+        monkeypatch.setattr(ej, "fuse_architecture", lambda *a, **k: '{"architecture":"fused"}')
+        monkeypatch.setattr(cfg, "QIDIAN_DIR", tmp_path)
+        de._dispatch_committee("模块划分 数据模型", "any", "tid", {},
+                               [{"model": "m1"}, {"model": "m2"}])
+        return seen
+
+    def test_perspective_off_by_default(self, monkeypatch, tmp_path):
+        prompts = self._draft_prompts(monkeypatch, tmp_path)
+        assert prompts, "委员会没产出初稿"
+        assert not any("[你的视角]" in p for p in prompts), "席位视角默认应为关闭"
+
+    def test_perspective_can_be_reenabled(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QIDIAN_COMMITTEE_PERSPECTIVE", "1")
+        prompts = self._draft_prompts(monkeypatch, tmp_path)
+        assert sum("[你的视角]" in p for p in prompts) == 2

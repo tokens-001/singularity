@@ -17,6 +17,23 @@ from singularity.scheduler import model_registry
 from singularity.scheduler import _model_breaker
 import json, os, time, logging, threading
 
+# ── 委员会辩论的时间预算 ──
+# 单次模型调用本身有上限（claude-cli 300s / openai-agent 240s），所以一波的耗时
+# 取决于最慢的那个模型。把波超时调小只会让慢模型白跑——输出被丢弃、token 照花。
+# 真正省时间的是少一波，见 _DEBATE_ROUNDS。
+# 这个 timeout 也不决定"何时返回"：调用点用 with ThreadPoolExecutor(...)，退出时
+# shutdown(wait=True) 会 join 所有线程（实测 timeout=0.3s 仍等了 3s），它只决定
+# "何时去读已完成的结果"。调小它救不了总耗时。
+_WAVE_TIMEOUT = float(os.environ.get("QIDIAN_DEBATE_TIMEOUT", "300"))
+# 辩论轮数。默认 2 = 「第 1 轮 + 二次碰撞」：
+#   第 1 轮没有 prev_review 可比, 收敛判断必然短路(设计如此), 但第 1 轮的修订补丁
+#   可能引入新缺陷 —— 第 2 轮评审专门抓这个。砍到 1 就退化成固定单轮。
+# 注意收敛判断只在 max_rounds>=3 时才真省下工作: 在末轮末尾 break 与循环自然
+# 结束等价, 所以 2 轮的价值是二次碰撞, 不是"提前收敛"。
+# 赶时间: QIDIAN_DEBATE_ROUNDS=1 (跳过二次碰撞, 质量损失未 A/B 过)。
+_DEBATE_ROUNDS = max(1, int(os.environ.get("QIDIAN_DEBATE_ROUNDS", "2")))
+
+
 @timed(name="dispatcher")
 def dispatch(
     task: str,
@@ -107,6 +124,10 @@ def _run_no_tools(agent_cfg: dict, prompt: str, tag: str, level: str,
     executor_cls = _EXECUTOR_BY_TYPE.get(etype)
     if not executor_cls:
         return None
+    # 禁工具是委员会的前提（纯文本出方案，别改磁盘）。claude-cli 这类自带工具的执行器
+    # 禁不掉 —— 告警让它在 trace 里可见，而不是假装禁住了。
+    if not getattr(executor_cls, "honors_no_tools", False):
+        witness.heartbeat("dispatcher", f"warn:no_tools_not_enforced:{etype}"[:80])
     try:
         result = _run_executor(executor_cls, agent_cfg, prompt, tag, level,
                                baseline_ref=baseline_ref, cwd=cwd)
@@ -155,11 +176,13 @@ def _prefer_by_strengths(task: str, chain: list[dict]) -> list[dict]:
 
 def _debate(task: str, members: list[tuple], chain: list[dict], task_id: str,
             level: str, baseline_ref: str = "", cwd: str = "",
-            max_rounds: int = 2) -> list[tuple]:
+            max_rounds: int = _DEBATE_ROUNDS) -> list[tuple]:
     """多轮辩论: 交叉评审→修订→收敛。members: [(model, raw_output)]。
 
     每轮: 每个模型评审其他方案(挑缺陷) → 每个模型吸收对自己的点评修订方案。
     收敛: 本轮评审 vs 上轮评审相似度 > 0.85 视为无新缺陷, 或达 max_rounds 硬上限。
+    每轮 2 波串行(评审、修订), 所以 max_rounds 直接决定辩论阶段的波数。
+    收敛只在 max_rounds>=3 时省波: 末轮末尾 break 与循环自然结束等价。
     """
     import concurrent.futures
     import difflib
@@ -189,7 +212,7 @@ def _debate(task: str, members: list[tuple], chain: list[dict], task_id: str,
         review_map = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(reviewers), 4)) as ex:
             futs = {ex.submit(_review, m): m for m in reviewers}
-            done, _ = concurrent.futures.wait(futs, timeout=300)
+            done, _ = concurrent.futures.wait(futs, timeout=_WAVE_TIMEOUT)
             for fut in done:
                 reviewer, r = fut.result()
                 if r:
@@ -215,7 +238,7 @@ def _debate(task: str, members: list[tuple], chain: list[dict], task_id: str,
         new_plans = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(reviewers), 4)) as ex:
             futs = {ex.submit(_revise, m): m for m in reviewers}
-            done, _ = concurrent.futures.wait(futs, timeout=300)
+            done, _ = concurrent.futures.wait(futs, timeout=_WAVE_TIMEOUT)
             for fut in done:
                 model, r = fut.result()
                 if r:
@@ -223,6 +246,7 @@ def _debate(task: str, members: list[tuple], chain: list[dict], task_id: str,
         plans.update(new_plans)  # 只更新快模型; 慢模型保留初稿
 
         # ── 收敛判定 ──
+        # 末轮的 break 与循环自然结束等价 → 这个判据只在 max_rounds>=3 时才省波
         if prev_review and review_text and difflib.SequenceMatcher(None, prev_review, review_text).ratio() > 0.85:
             break
         prev_review = review_text
@@ -236,18 +260,19 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
     """多模型委员会: 所有可用D模型并行产出→合成。"""
     import concurrent.futures
 
-    # 席位视角: 按成员顺序轮转分配, 不依赖模型名(任何模型组合都能碰撞出差异)。
-    # ponytail: 顺序轮转够用; 若要"按模型特性自适应分席"再优化。
-    # QIDIAN_COMMITTEE_NO_PERSPECTIVE=1 时关闭视角注入(无视角基线, 用于 A/B 评测多视角价值)
-    if os.environ.get("QIDIAN_COMMITTEE_NO_PERSPECTIVE") == "1":
-        _PERSPECTIVES = [None, None, None, None]
-    else:
+    # 席位视角: 默认关闭 —— A/B 盲评证伪（有视角 31 vs 无视角 32，略输）：
+    # 一句"你关注风险/创新"的提示词 = 伪碰撞，不产生真实差异。
+    # 真正有效的是辩论轮（盲评 +3~5 分），别把两者搞混。
+    # QIDIAN_COMMITTEE_PERSPECTIVE=1 可重新打开（保留做后续 A/B）。
+    if os.environ.get("QIDIAN_COMMITTEE_PERSPECTIVE") == "1":
         _PERSPECTIVES = [
             "你关注: 风险点、边界条件、回滚策略。方案必须稳健,不能炸。",
             "你关注: 有没有完全不同的思路?业界最新实践是什么?大胆提替代方案。",
             "你关注: 这方案能落地吗?需要多少个文件?现有代码风格兼容吗?复杂度实际是多少?",
             "你关注: 和现有架构的一致性。不要引入不兼容的变更。",
         ]
+    else:
+        _PERSPECTIVES = [None, None, None, None]
 
     # 并行派发初稿 (禁工具, 直接输出 JSON 方案)
     outputs = []
@@ -264,7 +289,7 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
                               f"{task_id}_{a.get('model','?')[:8]}",
                               level, baseline_ref, cwd)] = a
         # 等待最多 300s 收集任意数量的完成结果
-        done, _ = concurrent.futures.wait(futures, timeout=300, return_when='ALL_COMPLETED')
+        done, _ = concurrent.futures.wait(futures, timeout=_WAVE_TIMEOUT, return_when='ALL_COMPLETED')
         for fut in done:
             agent_cfg = futures[fut]
             try:
@@ -302,7 +327,7 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
         # 架构方案: 两阶段 fusion (Step 2)
         raw_outputs = [o for _, o in outputs]
         try:
-            fused = fuse_architecture(task, raw_outputs, judge_model="deepseek-chat")
+            fused = fuse_architecture(task, raw_outputs)  # 裁判/定稿模型取自 fusion.toml [custom]
             if fused:
                 # Save individual model outputs for display
                 from singularity.scheduler.config import QIDIAN_DIR
