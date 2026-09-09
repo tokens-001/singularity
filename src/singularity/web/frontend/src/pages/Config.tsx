@@ -1,14 +1,16 @@
 import { useState } from 'react'
 import { Tabs } from 'antd'
-import { Cpu, Bot, Wrench } from 'lucide-react'
+import { Cpu, Bot, Wrench, Plug } from 'lucide-react'
 import ModelsTab from '../components/ModelsTab'
 import AgentsTab from '../components/AgentsTab'
 import SkillsTab from '../components/SkillsTab'
+import McpTab from '../components/McpTab'
 
 const TABS = [
   { key: 'models', icon: Cpu, label: '模型目录' },
   { key: 'agents', icon: Bot, label: '智能体' },
   { key: 'skills', icon: Wrench, label: '技能' },
+  { key: 'mcp', icon: Plug, label: 'MCP' },
 ]
 
 export const ALL_ROLES = ['builder','ai_architect','ai_engineer','qa_engineer','security_auditor','reviewer','generic']
@@ -45,6 +47,7 @@ export default function Config() {
       {tab === 'models' && <ModelsTab />}
       {tab === 'agents' && <AgentsTab />}
       {tab === 'skills' && <SkillsTab />}
+      {tab === 'mcp' && <McpTab />}
     </div>
   )
 }

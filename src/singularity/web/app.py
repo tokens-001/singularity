@@ -986,9 +986,15 @@ def api_task_submit():
     _VALID_TYPES = frozenset({"default", "bugfix", "feature", "refactor", "docs", "fusion"})
     if route_type and route_type not in _VALID_TYPES:
         return jsonify({"error": f"route_type 无效，允许: {','.join(sorted(_VALID_TYPES))}"}), 400
+    project_id = data.get("project_id", "")
+    if project_id:
+        from singularity.scheduler import project as proj_mod
+        if proj_mod.load(project_id) is None:
+            return jsonify({"error": f"项目不存在: {project_id}"}), 400
     _invalidate_task_cache()
     result, code = _api_handler.task_submit(desc, priority=priority, depends_on=depends_on,
-                                             route_level=route_level, route_type=route_type, push_event=_push_event)
+                                             route_level=route_level, route_type=route_type,
+                                             project_id=project_id, push_event=_push_event)
     return jsonify(result), code
 
 # ═══════════════════════════════════════════════════════════

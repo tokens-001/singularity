@@ -475,12 +475,21 @@ def task_supervise(task_id: str, data: dict, push_event=None) -> tuple[dict, int
 def task_submit(desc: str, priority: int = 0, depends_on: list = None,
                 route_level: str = "", route_locked: bool = True,
                 route_type: str = "",
+                project_id: str = "",
                 push_event=None) -> tuple[dict, int]:
-    """POST /api/tasks — 创建新任务。"""
+    """POST /api/tasks — 创建新任务。project_id 非空则挂到该项目（同步写 project.task_ids）。"""
     if route_level and not _validate_route_level(route_level):
         return {"error": "非法的 route_level 格式"}, 400
     config.ensure_dirs()
-    task = tracker.create(desc, priority=priority, depends_on=depends_on or [])
+    task = tracker.create(desc, priority=priority, depends_on=depends_on or [], project_id=project_id)
+    if project_id:
+        # 只写 task.project_id 不够：项目页的任务数读的是 project.task_ids，
+        # orchestrator 也只认 task_ids 里的任务
+        from . import project as proj_mod
+        proj = proj_mod.load(project_id)
+        if proj is not None:
+            proj.task_ids.append(task.id)
+            proj_mod.save(proj)
     if route_level or route_type:
         kwargs = {}
         if route_level:
@@ -490,7 +499,7 @@ def task_submit(desc: str, priority: int = 0, depends_on: list = None,
             kwargs["route_type"] = route_type
         tracker.transition(task.id, TaskStatus.PENDING, **kwargs)
     if push_event:
-        push_event("task", json.dumps({"task_id": task.id, "status": "pending", "desc": desc[:120]}))
+        push_event("task", json.dumps({"task_id": task.id, "status": "pending", "desc": desc[:120], "project_id": project_id}))
     return {"ok": True, "task_id": task.id, "description": desc[:120]}, 200
 
 

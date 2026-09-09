@@ -4,6 +4,7 @@ import { api, Task } from '../lib/api'
 import { useSSE, useSSEConnected } from '../lib/useSSE'
 import { useVirtualRows } from '../lib/useVirtualRows'
 import { useToast, useModal, useRun } from '../lib/toast'
+import { useAppStore } from '../stores/app'
 import { Plus, RefreshCw, RotateCcw, XCircle, Trash2, Search, Pause, Play, X } from 'lucide-react'
 
 const STATUS_CN: Record<string,string> = { pending:'待处理', running:'进行中', done:'已完成', failed:'失败', blocked:'已暂停', paused:'已暂停' }
@@ -15,9 +16,11 @@ export default function Tasks() {
   const [showCreate, setShowCreate] = useState(false)
   const [desc, setDesc] = useState('')
   const [search, setSearch] = useState('')
+  const [dag, setDag] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [params, setParams] = useSearchParams()
   const projectFilter = params.get('project') || ''   // 从项目页「N 任务」跳进来时带的项目 id
+  const activePid = useAppStore(s => s.activeProjectId)
   const toast = useToast()
   const modal = useModal()
   const run = useRun()
@@ -30,6 +33,7 @@ export default function Tasks() {
       ps.forEach((p: any) => { if (p.id) m[p.id] = p.name || p.id })
       setProjectNames(m)
     }).catch(() => {})
+    api.dagMetrics().then(setDag).catch(() => {})   // 图结构指标，拿不到就不显示
   }, [])
   useEffect(() => { fetch() }, [fetch])
   const sseAlive = useSSEConnected()
@@ -41,7 +45,8 @@ export default function Tasks() {
 
   const create = async () => {
     if (!desc.trim()) return
-    if (!(await run(() => api.createTask(desc)))) return
+    // 挂到侧边栏当前选中的项目；没选中就是独立任务
+    if (!(await run(() => api.createTask(desc, activePid !== '_default' ? activePid : '')))) return
     setShowCreate(false); setDesc(''); fetch()
   }
   const act = async (fn: (id: string) => Promise<any>, id: string) => { if (await run(() => fn(id))) fetch() }
@@ -52,9 +57,15 @@ export default function Tasks() {
     onOk: () => act(api.deleteTask, t.id),
   })
 
-  const list = tasks.filter(t =>
-    (!projectFilter || t.project_id === projectFilter) &&
-    (!search || t.description.toLowerCase().includes(search.toLowerCase())))
+  const projKey = (t: Task) => (t.project_id ? (projectNames[t.project_id] || t.project_id) : '')
+  const list = tasks
+    .filter(t =>
+      (!projectFilter || t.project_id === projectFilter) &&
+      (!search || t.description.toLowerCase().includes(search.toLowerCase())))
+    // 同项目的聚在一起（独立任务垫底），省得"这条是谁的"要逐条看标签
+    .sort((a, b) => (a.project_id ? 0 : 1) - (b.project_id ? 0 : 1)
+      || projKey(a).localeCompare(projKey(b))
+      || (a.created_at || 0) - (b.created_at || 0))
   // 行高固定 36px + 间距 4px（单行截断，不换行）；列表短时 start/end 覆盖全部，占位为 0
   const V = useVirtualRows(list.length, 36, 4)
 
@@ -63,6 +74,12 @@ export default function Tasks() {
       <div className="flex-center gap-8" style={{ marginBottom: 12 }}>
         <h2 className="fs-13 fw-600" style={{ color: '#141413' }}>任务</h2>
         <span className="fs-11 text-muted">{tasks.length} 个</span>
+        {dag && dag.node_count > 1 && (
+          <span className="fs-10 text-muted"
+            title={`任务依赖图：并行度上限 ω=${dag.omega}，关键路径 δ=${dag.delta}，耦合密度 γ=${dag.gamma}（${dag.topology_hint}）`}>
+            图 {dag.node_count} 节点 · 并行 {dag.omega} · 链长 {dag.delta}
+          </span>
+        )}
         {projectFilter && (
           <span className="flex-center gap-4 fs-10" style={{ padding: '2px 8px', borderRadius: 4, background: '#eef2ff', color: '#4f46e5', border: '1px solid #c7d2fe' }}>
             项目：{projectNames[projectFilter] || projectFilter.slice(0, 8)}
@@ -83,6 +100,11 @@ export default function Tasks() {
         <div className="flex-center gap-8" style={{ marginBottom: 10, padding: 8, background: '#f3f2ec', borderRadius: 8 }}>
           <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="任务描述..." onKeyDown={e => e.key === 'Enter' && create()}
             className="inp-dark" style={{ flex: 1 }}/>
+          {activePid !== '_default' && (
+            <span className="fs-10 text-muted" style={{ flexShrink: 0 }}>
+              → {projectNames[activePid] || activePid.slice(0, 8)}
+            </span>
+          )}
           <button onClick={create} style={{ background: '#fff', color: '#141413', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>创建</button>
         </div>
       )}
@@ -98,10 +120,13 @@ export default function Tasks() {
             <div key={t.id} className="flex-center gap-8" title={t.description}
               style={{ padding: '8px 10px', background: '#fff', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}>
               <span className="status-dot" style={{ background: STATUS_COLOR[t.status] || '#9a9993', flexShrink: 0 }}/>
-              {t.project_id && (
-                <span className="fs-10" style={{ flexShrink: 0, padding: '1px 6px', borderRadius: 4, background: '#eef2ff', color: '#4f46e5', border: '1px solid #c7d2fe', whiteSpace: 'nowrap' }}>
+              {t.project_id ? (
+                <button onClick={() => setParams({ project: t.project_id })} title="只看该项目的任务"
+                  className="fs-10" style={{ flexShrink: 0, padding: '1px 6px', borderRadius: 4, background: '#eef2ff', color: '#4f46e5', border: '1px solid #c7d2fe', whiteSpace: 'nowrap', cursor: 'pointer' }}>
                   {projectNames[t.project_id] || t.project_id.slice(0, 8)}
-                </span>
+                </button>
+              ) : (
+                <span className="fs-10" style={{ flexShrink: 0, padding: '1px 6px', borderRadius: 4, background: '#f3f2ec', color: '#9a9993', border: '1px solid var(--border)', whiteSpace: 'nowrap' }}>独立</span>
               )}
               <span className="truncate" style={{ flex: 1, color: '#141413' }}>{t.description.split('\n')[0]}</span>
               <span className="fs-10" style={{ color: STATUS_COLOR[t.status] || '#9a9993', flexShrink: 0 }}>{STATUS_CN[t.status] || t.status}</span>

@@ -93,5 +93,6 @@ if __name__ == "__main__":
     config.ensure_dirs()
     dag = dag_metrics()
     assert isinstance(dag, dict), "dag_metrics should return dict"
-    assert "total_tasks" in dag
-    print(f"✅ dag_metrics self-check: total={dag['total_tasks']}, max_depth={dag['max_depth']}")
+    # 键名是 omega/delta/gamma（Dilworth 反链 / 关键路径 / 耦合密度），不是老的 total_tasks
+    assert "omega" in dag and "delta" in dag, f"dag_metrics 键名变了: {sorted(dag)}"
+    print(f"✅ dag_metrics self-check: nodes={dag['node_count']} omega={dag['omega']} delta={dag['delta']}")

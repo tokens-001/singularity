@@ -36,8 +36,11 @@ export default function Chat() {
 
   useEffect(() => {
     useAppStore.getState().clearConversation('_default')
-    fetchProjects(); fetchTasks(); fetchStatus()
+    fetchProjects(); fetchStatus()
   }, [])
+
+  // 切项目必须重拉任务，否则 B 项目里还挂着 A 的任务卡片
+  useEffect(() => { setTasks([]); fetchTasks() }, [activePid])
 
   useEffect(() => {
     if (!stickBottom.current) return
@@ -95,6 +98,8 @@ export default function Chat() {
       if (e.msg && typeof e.msg === 'string') { try { const p = JSON.parse(e.msg); if (p.task_id) td = p } catch {} }
       const tid = td.task_id || ''; const status = td.status || 'running'; const desc = td.desc || e.msg || ''
       if (td.project_id && activePid === '_default') setActiveProject(td.project_id)
+      // 只收当前项目的事件：否则别的项目一跑任务，当前对话里就冒出它的卡片
+      if (activePid !== '_default' && td.project_id !== activePid) return
       setTasks(prev => {
         const next = [...prev]; const idx = next.findIndex(t => t.id === tid)
         if (idx >= 0) next[idx] = { ...next[idx], status, ts: Date.now() }

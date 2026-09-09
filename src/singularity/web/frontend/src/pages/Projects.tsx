@@ -123,7 +123,7 @@ export default function Projects() {
                     title="只看该项目的任务"
                     style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px',
                       fontSize: 10, color: '#6b6b68', textDecoration: 'underline' }}>
-                    {p.task_count||0} 任务
+                    {p.task_ids?.length || 0} 任务
                   </button>
                   <button onClick={e=>{e.stopPropagation(); pin(p.id)}} className="btn-icon"
                     title={isPinned?'取消置顶':'置顶'} aria-label={isPinned?'取消置顶':'置顶'}

@@ -22,7 +22,7 @@ export const api = {
   task: (id: string) => request<any>(`/api/tasks/${id}`),
   taskTrace: (id: string, section?: string) => request<any>(`/api/tasks/${id}/trace${section ? `?section=${section}` : ''}`),
   revealFile: (path: string) => request('/api/files/reveal', { method: 'POST', body: JSON.stringify({ path }) }),
-  createTask: (desc: string) => request('/api/tasks',{method:'POST',body:JSON.stringify({description:desc})}),
+  createTask: (desc: string, project_id = '') => request('/api/tasks',{method:'POST',body:JSON.stringify({description:desc, project_id})}),
   cancelTask: (id: string) => request(`/api/tasks/${id}/cancel`,{method:'POST'}),
   pauseTask: (id: string) => request(`/api/tasks/${id}/pause`,{method:'POST'}),
   resumeTask: (id: string) => request(`/api/tasks/${id}/resume`,{method:'POST'}),
@@ -90,7 +90,10 @@ export const api = {
 
   mcpServers: async () => { const d = await request<any>('/api/mcp/servers'); return (d?.servers||d||[]) as any[] },
   mcpTools: async () => { const d = await request<any>('/api/mcp/tools'); return (d?.tools||d||[]) as any[] },
+  mcpRefresh: () => request<any>('/api/mcp/refresh',{method:'POST'}),
   addMcpServer: (data: any) => request('/api/mcp/servers',{method:'POST',body:JSON.stringify(data)}),
+
+  dagMetrics: () => request<any>('/api/dag-metrics'),
 
   roles: () => request<any>('/api/roles'),
   updateRole: (key: string, data: any) => request(`/api/roles/${key}`, { method: 'PATCH', body: JSON.stringify(data) }),
