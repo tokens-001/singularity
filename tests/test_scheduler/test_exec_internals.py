@@ -1065,8 +1065,9 @@ class TestApiCallRetry:
         assert len(calls) == 1, calls
 
     def test_5xx_transient_4xx_format(self, monkeypatch):
-        """状态码分类：5xx 可重试，4xx 不可。"""
+        """状态码分类：5xx 可重试，4xx 不可。（非流式路径）"""
         oa, ex = self._ex(monkeypatch)
+        monkeypatch.setattr(oa, "_STREAM", False)
 
         class _R:
             def __init__(self, code):
@@ -1083,3 +1084,81 @@ class TestApiCallRetry:
         monkeypatch.setattr(oa, "_get_http_client", lambda: _C(400))
         with pytest.raises(oa._FormatError):
             ex._api_call_once({})
+
+
+# ═══════════════════════════════════════════════════════════════
+# 流式调用 + 停滞检测（read timeout = 多久没新 token 就断开）
+# ═══════════════════════════════════════════════════════════════
+
+class TestStreamCall:
+
+    def _ex(self, monkeypatch):
+        from singularity.scheduler.executors import openai_agent as oa
+        monkeypatch.setenv("TEST_KEY", "k")
+        ex = oa.OpenAIAgentExecutor(
+            {"model": "m", "api_key_env": "TEST_KEY", "entry": "http://x"},
+            "任务", "tid", [], "", [])
+        return oa, ex
+
+    def _client(self, oa, lines, code=200):
+        class _Resp:
+            def __init__(self): self.status_code, self.text = code, "boom"
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): pass
+            def iter_lines(self):
+                for l in lines:
+                    yield l
+
+        class _C:
+            def stream(self, *a, **k): return _Resp()
+        return _C()
+
+    def test_assembles_content_and_usage(self, monkeypatch):
+        oa, ex = self._ex(monkeypatch)
+        lines = [
+            'data: {"choices":[{"delta":{"content":"消息"}}]}',
+            'data: {"choices":[{"delta":{"content":"队列"}}]}',
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"total_tokens":42}}',
+            'data: [DONE]',
+        ]
+        monkeypatch.setattr(oa, "_get_http_client", lambda: self._client(oa, lines))
+        d = ex._stream_call({})
+        assert d["choices"][0]["message"]["content"] == "消息队列"
+        assert d["choices"][0]["finish_reason"] == "stop"
+        assert d["usage"]["total_tokens"] == 42
+
+    def test_assembles_tool_calls(self, monkeypatch):
+        oa, ex = self._ex(monkeypatch)
+        lines = [
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"write_","arguments":"{\\"pa"}}]}}]}',
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"file","arguments":"th\\":\\"a\\"}"}}]}}]}',
+            'data: [DONE]',
+        ]
+        monkeypatch.setattr(oa, "_get_http_client", lambda: self._client(oa, lines))
+        tc = ex._stream_call({})["choices"][0]["message"]["tool_calls"][0]
+        assert tc["id"] == "c1"
+        assert tc["function"]["name"] == "write_file"
+        assert tc["function"]["arguments"] == '{"path":"a"}'
+
+    def test_stall_raises_network_error(self, monkeypatch):
+        """read timeout = 停滞 → 抛 _NetworkError（可重试），且连接随之关闭。"""
+        oa, ex = self._ex(monkeypatch)
+        import httpx
+
+        class _Resp:
+            status_code, text = 200, ""
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): pass
+            def iter_lines(self):
+                yield 'data: {"choices":[{"delta":{"content":"开头"}}]}'
+                raise httpx.ReadTimeout("stalled")
+
+        class _C:
+            def stream(self, *a, **k): return _Resp()
+
+        monkeypatch.setattr(oa, "_get_http_client", lambda: _C())
+        with pytest.raises(oa._NetworkError) as e:
+            ex._stream_call({})
+        assert "停滞" in str(e.value)

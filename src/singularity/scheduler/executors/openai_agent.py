@@ -34,6 +34,10 @@ _RETRY_MAX_INTERVAL = float(os.environ.get("QIDIAN_RETRY_MAX_INTERVAL", "60"))
 _RETRY_MAX_ATTEMPTS = int(os.environ.get("QIDIAN_RETRY_MAX_ATTEMPTS", "3"))
 # 整轮预算（schedule-to-close）：重试总耗时上限，防止 3×240s 撞穿 orchestrator 的 900s deadline
 _RETRY_TOTAL_BUDGET = float(os.environ.get("QIDIAN_RETRY_TOTAL_BUDGET", "600"))
+# 流式 + 停滞检测。read timeout = 多久没新 token 就断开（真中断，不用杀进程）。
+# 非流式只能干等整体 240s 超时，且线程 join 不掉 —— 见 _dispatch_exec 顶部注释。
+_STREAM = os.environ.get("QIDIAN_STREAM", "1") != "0"
+_STALL_TIMEOUT = float(os.environ.get("QIDIAN_STALL_TIMEOUT", "90"))
 
 # ── blocklist 已统一到 base.py ──
 
@@ -615,7 +619,14 @@ class OpenAIAgentExecutor(BaseExecutor):
         raise AssertionError("unreachable")
 
     def _api_call_once(self, body: dict) -> dict:
-        """单次 API 调用。异常分类见 _api_call 的文档。"""
+        """单次 API 调用。异常分类见 _api_call 的文档。
+
+        默认走流式（QIDIAN_STREAM=0 关）：只有流式才能做**停滞检测** ——
+        read timeout 就是"多久没有新 token"的上限，超时即断开连接，生成真的停。
+        非流式只能干等 240s 整体超时，而且线程 join 不掉（见 _dispatch_exec 顶部注释）。
+        """
+        if _STREAM:
+            return self._stream_call(body)
         client = _get_http_client()
         try:
             resp = client.post(
@@ -633,14 +644,7 @@ class OpenAIAgentExecutor(BaseExecutor):
         except Exception as e:
             raise _NetworkError(f"网络错误: {e}")
 
-        if resp.status_code == 429:
-            raise _RateLimitError()
-        if resp.status_code >= 500:
-            # 服务端瞬时故障 —— 重试有意义，别一次就判任务死
-            raise _TransientError(f"HTTP {resp.status_code}: {resp.text[:200] if resp.text else ''}")
-        if resp.status_code >= 400:
-            err_text = resp.text[:500] if resp.text else ""
-            raise _FormatError(f"HTTP {resp.status_code}: {err_text}")
+        self._raise_for_status(resp)
 
         try:
             data = resp.json()
@@ -649,6 +653,73 @@ class OpenAIAgentExecutor(BaseExecutor):
             return data
         except json.JSONDecodeError as e:
             raise _FormatError(f"JSON解析失败: {e}")
+
+    @staticmethod
+    def _raise_for_status(resp) -> None:
+        """状态码 → 异常分类（流式/非流式共用）。"""
+        if resp.status_code == 429:
+            raise _RateLimitError()
+        if resp.status_code >= 500:
+            raise _TransientError(f"HTTP {resp.status_code}: {resp.text[:200] if resp.text else ''}")
+        if resp.status_code >= 400:
+            raise _FormatError(f"HTTP {resp.status_code}: {resp.text[:500] if resp.text else ''}")
+
+    def _stream_call(self, body: dict) -> dict:
+        """流式调用，把 delta 拼回与非流式同形状的响应。
+
+        read timeout = _STALL_TIMEOUT：超过这么久没有新 token 就抛 ReadTimeout，
+        `with client.stream(...)` 退出即关闭连接 —— 这是不靠杀进程的"真中断"。
+        """
+        client = _get_http_client()
+        payload = dict(body, stream=True, stream_options={"include_usage": True})
+        headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
+        content, reasoning = [], []
+        tool_calls, finish, usage = {}, "", {}
+        try:
+            with client.stream("POST", self._url, json=payload, headers=headers,
+                               timeout=httpx.Timeout(240.0, connect=15.0, read=_STALL_TIMEOUT)) as resp:
+                if resp.status_code >= 400:
+                    resp.read()                      # 先取回 body 才能读 .text
+                    self._raise_for_status(resp)
+                for line in resp.iter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    if line == "data: [DONE]":
+                        break
+                    chunk = json.loads(line[6:])
+                    if chunk.get("usage"):
+                        usage = chunk["usage"]
+                    for ch in chunk.get("choices", []) or []:
+                        delta = ch.get("delta") or {}
+                        if delta.get("content"):
+                            content.append(delta["content"])
+                        if delta.get("reasoning_content"):
+                            reasoning.append(delta["reasoning_content"])
+                        for tc in delta.get("tool_calls") or []:
+                            slot = tool_calls.setdefault(tc.get("index", 0), {
+                                "id": "", "type": "function",
+                                "function": {"name": "", "arguments": ""}})
+                            if tc.get("id"):
+                                slot["id"] = tc["id"]
+                            fn = tc.get("function") or {}
+                            if fn.get("name"):
+                                slot["function"]["name"] += fn["name"]
+                            if fn.get("arguments"):
+                                slot["function"]["arguments"] += fn["arguments"]
+                        if ch.get("finish_reason"):
+                            finish = ch["finish_reason"]
+        except httpx.TimeoutException:
+            # read timeout = 流停滞（不是整体超时）—— 报清楚，方便区分
+            raise _NetworkError(f"流停滞 {_STALL_TIMEOUT:.0f}s 无新 token")
+        except httpx.HTTPError as e:
+            raise _NetworkError(f"网络错误: {e}")
+
+        msg = {"role": "assistant", "content": "".join(content)}
+        if reasoning:
+            msg["reasoning_content"] = "".join(reasoning)
+        if tool_calls:
+            msg["tool_calls"] = [tool_calls[k] for k in sorted(tool_calls)]
+        return {"choices": [{"message": msg, "finish_reason": finish}], "usage": usage}
 
 
 # ── 全局 httpx 客户端 (连接池复用) ──
