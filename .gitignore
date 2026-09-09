@@ -25,3 +25,5 @@ src/singularity/web/static/dist/
 
 # A/B 实验缓存（临时产物，见 tests/integration/ab_fusion.py）
 tests/integration/.ab_cache*.json
+tests/integration/.ab_solo_cache.json
+tests/integration/.bench_plans.json

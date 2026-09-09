@@ -552,6 +552,46 @@ class TestDebateWaves:
         calls = self._run(monkeypatch, 2)
         assert len(calls) == 8, calls           # 2 轮 × 2 波 × 2 成员
 
+    def test_noop_revisions_stop_early(self, monkeypatch):
+        """所有修订都返回空补丁 → 不再跑第 2 轮（省 2 波）。"""
+        from singularity.scheduler import _dispatch_exec as de
+        calls = []
+
+        def fake(cfg, prompt, tag, level, baseline_ref="", cwd=""):
+            calls.append(tag)
+            return "[]" if "_rvs_" in tag else "点评"
+        monkeypatch.setattr(de, "_run_no_tools", fake)
+        monkeypatch.setattr(de, "_is_slow_model", lambda m: False)
+        members = [("m1", '{"a": 1}'), ("m2", '{"b": 2}')]
+        chain = [{"model": "m1"}, {"model": "m2"}]
+        de._debate("任务", members, chain, "tid", "any", max_rounds=2)
+        assert len(calls) == 4, calls          # 只跑第 1 轮 = 2 波 × 2 成员
+
+    def test_real_patch_keeps_debating(self, monkeypatch):
+        """修订真的改了方案 → 正常跑满 2 轮（不能误停）。"""
+        from singularity.scheduler import _dispatch_exec as de
+        calls = []
+
+        def fake(cfg, prompt, tag, level, baseline_ref="", cwd=""):
+            calls.append(tag)
+            if "_rvs_" in tag:
+                return '[{"op":"add","path":"/x","value":1}]'
+            return "点评"
+        monkeypatch.setattr(de, "_run_no_tools", fake)
+        monkeypatch.setattr(de, "_is_slow_model", lambda m: False)
+        members = [("m1", '{"a": 1}'), ("m2", '{"b": 2}')]
+        chain = [{"model": "m1"}, {"model": "m2"}]
+        de._debate("任务", members, chain, "tid", "any", max_rounds=2)
+        assert len(calls) == 8, calls
+
+    def test_patch_is_noop_helper(self):
+        from singularity.scheduler import _dispatch_exec as de
+        assert de._patch_is_noop("[]") is True
+        assert de._patch_is_noop("") is True
+        assert de._patch_is_noop("```json\n[]\n```") is True
+        assert de._patch_is_noop('[{"op":"add","path":"/x","value":1}]') is False
+        assert de._patch_is_noop("废话，没解析出数组") is False   # 宁可多辩一轮
+
     def test_default_rounds_from_env_knob(self):
         """默认轮数由 QIDIAN_DEBATE_ROUNDS 决定，缺省 2（第 1 轮 + 二次碰撞）。"""
         from singularity.scheduler import _dispatch_exec as de
@@ -595,6 +635,60 @@ class TestFusionModelResolution:
                             (used.append((model, max_tokens)), "{}")[1])
         ej.fuse_architecture("任务", ["方案A", "方案B"])
         assert [m for m, _ in used] == ["J", "S"], used
+
+    def test_long_plans_reach_fusion_intact(self, monkeypatch):
+        """方案正文必须完整传给融合。曾写死 o[:2000]，而方案 8k~20k 字 →
+        裁判和定稿人只看得到前 ~15%，等于蒙眼合成。"""
+        from singularity.scheduler import execution_judge as ej
+        monkeypatch.setattr(ej, "_load_fusion_config",
+                            lambda: {"custom": {"judge_model": "J", "call_model": "S"}})
+        prompts = []
+        monkeypatch.setattr(ej, "_call_model",
+                            lambda prompt, model, max_tokens=2000:
+                            (prompts.append(prompt), "{}")[1])
+        long_plan = "方案正文" * 3000          # 12000 字，超过旧上限 2000
+        ej.fuse_architecture("任务", [long_plan, "短方案"])
+        assert long_plan in prompts[0], "阶段一提示词里方案被截断"
+        assert long_plan in prompts[1], "阶段二提示词里方案被截断"
+
+    def test_warns_when_judge_is_a_committee_member(self, monkeypatch):
+        """裁判/定稿人就是选手之一 → 必须告警（自己评自己，结论作废）。"""
+        from singularity.scheduler import execution_judge as ej
+        beats = []
+        monkeypatch.setattr(ej.witness, "heartbeat", lambda src, msg: beats.append(msg))
+        monkeypatch.setattr(ej, "_load_fusion_config",
+                            lambda: {"custom": {"judge_model": "deepseek-v4-flash",
+                                                "call_model": "glm-5.3-flash"}})
+        monkeypatch.setattr(ej, "_call_model", lambda prompt, model, max_tokens=2000: "{}")
+        ej.fuse_architecture("任务", ["A", "B"],
+                             member_models=["deepseek-v4-flash", "glm-5.3-flash"])
+        assert any("fusion_self_judge:judge" in b for b in beats), beats
+        assert any("fusion_self_judge:synth" in b for b in beats), beats
+
+    def test_no_warning_when_judge_is_outsider(self, monkeypatch):
+        from singularity.scheduler import execution_judge as ej
+        beats = []
+        monkeypatch.setattr(ej.witness, "heartbeat", lambda src, msg: beats.append(msg))
+        monkeypatch.setattr(ej, "_load_fusion_config",
+                            lambda: {"custom": {"judge_model": "glm-5.3",
+                                                "call_model": "kimi-k3"}})
+        monkeypatch.setattr(ej, "_call_model", lambda prompt, model, max_tokens=2000: "{}")
+        ej.fuse_architecture("任务", ["A", "B"], member_models=["deepseek-v4-flash"])
+        assert not any("fusion_self_judge" in b for b in beats), beats
+
+    def test_plan_char_limit_is_applied(self, monkeypatch):
+        """上限本身要生效（不是把截断整个删掉）。"""
+        from singularity.scheduler import execution_judge as ej
+        monkeypatch.setattr(ej, "_FUSION_PLAN_CHARS", 100)
+        monkeypatch.setattr(ej, "_load_fusion_config",
+                            lambda: {"custom": {"judge_model": "J", "call_model": "S"}})
+        prompts = []
+        monkeypatch.setattr(ej, "_call_model",
+                            lambda prompt, model, max_tokens=2000:
+                            (prompts.append(prompt), "{}")[1])
+        ej.fuse_architecture("任务", ["X" * 500, "短"])
+        assert "X" * 100 in prompts[0]
+        assert "X" * 101 not in prompts[0]
 
     def test_api_resolved_from_registry_not_whitelist(self, monkeypatch):
         """激活模型（如 deepseek-v4-flash）必须能解析出 key/base_url。

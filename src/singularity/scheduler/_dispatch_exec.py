@@ -12,7 +12,7 @@ from singularity.scheduler import tracker, config
 from singularity.scheduler.tracker import TaskStatus
 from singularity.scheduler import witness
 from singularity.scheduler.log import timed
-from singularity.scheduler._io import apply_json_patch
+from singularity.scheduler._io import apply_json_patch, _parse_patch_ops
 from singularity.scheduler import model_registry
 from singularity.scheduler import _model_breaker
 import json, os, time, logging, threading
@@ -143,6 +143,19 @@ def _run_no_tools(agent_cfg: dict, prompt: str, tag: str, level: str,
     return None
 
 
+def _patch_is_noop(raw: str) -> bool:
+    """修订输出是否表示「无需改动」—— 空补丁数组 / 空白。
+
+    只在无歧义时才算 noop：解析失败一律当「有改动」，宁可多辩一轮也不误停。
+    注意用 _parse_patch_ops 而非 try_parse_json —— 后者只返回 dict，`[]` 会被判成解析失败。
+    """
+    s = (raw or "").strip()
+    if not s:
+        return True
+    ops = _parse_patch_ops(s)
+    return ops is not None and not ops
+
+
 def _is_slow_model(model_id: str) -> bool:
     """慢模型判定: speed=slow 或 reasoning(思考链)。慢模型只出初稿, 不参与辩论后续轮。"""
     e = model_registry.get(model_id)
@@ -242,15 +255,21 @@ def _debate(task: str, members: list[tuple], chain: list[dict], task_id: str,
                                         f"{task_id}_rvs_{model[:6]}_{rnd}",
                                         level, baseline_ref, cwd)
 
-        new_plans = {}
+        new_plans, raw_revisions = {}, []
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(reviewers), 4)) as ex:
             futs = {ex.submit(_revise, m): m for m in reviewers}
             done, _ = concurrent.futures.wait(futs, timeout=_WAVE_TIMEOUT)
             for fut in done:
                 model, r = fut.result()
                 if r:
+                    raw_revisions.append(r)
                     new_plans[model] = apply_json_patch(plans[model], r)
         plans.update(new_plans)  # 只更新快模型; 慢模型保留初稿
+
+        # 自适应终止: 所有修订都说「无需改动」(或一个修订都没回来) → 再辩是重复, 提前停。
+        # max_rounds=2 时这是唯一能省波的机会（省掉第 2 轮的 2 波）。
+        if not raw_revisions or all(_patch_is_noop(r) for r in raw_revisions):
+            break
 
         # ── 收敛判定 ──
         # 末轮的 break 与循环自然结束等价 → 这个判据只在 max_rounds>=3 时才省波
@@ -341,7 +360,8 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
         # 架构方案: 两阶段 fusion (Step 2)
         raw_outputs = [o for _, o in outputs]
         try:
-            fused = fuse_architecture(task, raw_outputs)  # 裁判/定稿模型取自 fusion.toml [custom]
+            fused = fuse_architecture(task, raw_outputs,  # 裁判/定稿模型取自 fusion.toml [custom]
+                                      member_models=[m for m, _ in outputs])
             if fused:
                 # Save individual model outputs for display
                 from singularity.scheduler.config import QIDIAN_DIR

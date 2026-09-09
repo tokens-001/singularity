@@ -101,6 +101,11 @@ def _resolve_fusion_models(judge_model: str = "", synthesizer_model: str = "") -
 # 架构方案专用 Fusion (Step 2: 3模型碰撞)
 # ═══════════════════════════════════════════════════
 
+# 融合阶段每份方案的字符上限。曾写死 2000 —— 而方案实际 8k~20k 字，裁判和定稿人
+# 只看得到前 ~15%，等于蒙眼合成（实测 brief2 单稿 13114/14433/11873 字）。
+# 0 = 不限。20k 覆盖目前所有观测到的方案长度。
+_FUSION_PLAN_CHARS = int(os.environ.get("QIDIAN_FUSION_PLAN_CHARS", "20000"))
+
 _ARCH_FUSION_STAGE1 = """你是架构合成裁判。以下 {n} 个模型对同一需求独立产出了架构方案。
 
 【原始需求】
@@ -152,7 +157,7 @@ _ARCH_FUSION_STAGE2 = """你是架构合成定稿人。基于五维分析，产�
 【各模型原始方案（参考）】
 {outputs}
 
-合成规则:
+合成规则（吸收重写，不是拼接、也不是择一 —— 最终方案质量必须高于任何单一输入）:
 1. consensus → 直接锁定，写入最终方案
 2. contradictions → 按裁决采用 winner 的观点
 3. unique_insights (adopt=true) → 补充进最终方案
@@ -193,9 +198,23 @@ _ARCH_FUSION_STAGE2 = """你是架构合成定稿人。基于五维分析，产�
 只输出 JSON，用 ```json ... ``` 包裹。"""
 
 
+def _warn_same_model(judge: str, synth: str, members: list[str] | None) -> None:
+    """裁判/定稿人若就是某个选手，等于自己评自己 —— 结论直接作废。
+
+    MAD 论文（EMNLP 2024）明确指出裁判会偏向与自己 backbone 相同的一方。
+    同厂没法完全避免（3 家厂商全在委员会里时没有第三方可选），但同模型必须报警。
+    """
+    if not members:
+        return
+    for role, m in (("judge", judge), ("synth", synth)):
+        if m and m in members:
+            witness.heartbeat("execution_judge", f"warn:fusion_self_judge:{role}:{m}"[:80])
+
+
 def fuse_architecture(task_desc: str, outputs: list[str],
                       judge_model: str = "",
-                      synthesizer_model: str = "") -> str:
+                      synthesizer_model: str = "",
+                      member_models: list[str] | None = None) -> str:
     """架构方案专用两阶段融合。
 
     阶段一: 五维差异分析 (consensus/contradictions/insights/blind_spots)
@@ -208,10 +227,12 @@ def fuse_architecture(task_desc: str, outputs: list[str],
         return outputs[0] if outputs else ""
 
     judge_model, synthesizer_model = _resolve_fusion_models(judge_model, synthesizer_model)
+    _warn_same_model(judge_model, synthesizer_model, member_models)
 
     # 阶段一: 五维分析
+    lim = _FUSION_PLAN_CHARS
     outputs_text = "\n\n---\n".join(
-        f"[模型{i+1}]\n{o[:2000]}" for i, o in enumerate(outputs)
+        f"[模型{i+1}]\n{o if lim <= 0 else o[:lim]}" for i, o in enumerate(outputs)
     )
     stage1_prompt = _ARCH_FUSION_STAGE1.format(
         n=len(outputs), task=task_desc[:1500], outputs=outputs_text

@@ -6,7 +6,7 @@
 
 用法: .venv/bin/python tests/integration/ab_best_baseline.py <cache.json> [<cache2.json> ...]
 """
-import sys, json, random, importlib.util
+import os, sys, json, random, importlib.util
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
@@ -20,8 +20,11 @@ _spec.loader.exec_module(_ab)
 BRIEFS = _ab.BRIEFS
 
 JUDGE_MODEL = "glm-5.2"
+# 思考模型当评委时 reasoning 会吃掉额度 → content 空。稿子越长越容易触发，给足。
+JUDGE_MAX_TOKENS = int(os.environ.get("AB_JUDGE_MAX_TOKENS", "4000"))
 LABELS = ["甲", "乙", "丙", "丁", "戊", "己"]
-MAX_CHARS = 10000          # 每份截断，防止 prompt 过长；四份同等对待，相对比较仍成立
+MAX_CHARS = int(os.environ.get("AB_MAX_CHARS", "10000"))   # 每份截断；AB_MAX_CHARS=0 关闭
+# ponytail: 截断对长稿（融合稿）系统性不利，核对结论时用 AB_MAX_CHARS=0 复核一次
 
 RUBRIC = """你是架构评审员。下面是同一个需求的 {n} 份架构方案。
 
@@ -46,13 +49,14 @@ def score_all(brief, docs):
     n = len(docs)
     order = list(range(n))
     random.shuffle(order)                       # 打乱顺序，避免位置偏好
+    cut = (lambda s: s) if MAX_CHARS <= 0 else (lambda s: s[:MAX_CHARS])
     blocks, mapping = [], {}
     for pos, idx in enumerate(order):
         lab = LABELS[pos]
         mapping[lab] = idx
-        blocks.append(f"【方案{lab}】\n{docs[idx][:MAX_CHARS]}")
+        blocks.append(f"【方案{lab}】\n{cut(docs[idx])}")
     prompt = RUBRIC.format(n=n, brief=brief[:1500], docs="\n\n".join(blocks))
-    raw = ej._call_model(prompt, JUDGE_MODEL, max_tokens=4000)
+    raw = ej._call_model(prompt, JUDGE_MODEL, max_tokens=JUDGE_MAX_TOKENS)
     if not raw:
         return None
     d = ej.try_parse_json(raw)
