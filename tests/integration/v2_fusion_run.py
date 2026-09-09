@@ -27,6 +27,8 @@ _ab = _load("ab_fusion", HERE / "ab_fusion.py")
 BRIEFS, arch_task = _ab.BRIEFS, _ab.arch_task
 _bl = _load("ab_best_baseline", HERE / "ab_best_baseline.py")
 BRIEF_NO = int(sys.argv[1]) if len(sys.argv) > 1 else 3
+# 委员会很贵，跑过就存下来，重跑融合时不用再花钱
+PLANS_CACHE = HERE / ".v2_plans.json"
 
 _bl.MAX_CHARS = 0
 _bl.JUDGE_MODEL = os.environ.get("AB_JUDGE", "kimi-k3")
@@ -54,13 +56,22 @@ def _get_plans(brief_no: int) -> list[tuple[str, str]]:
         v = json.loads(Path(os.environ["AB_PLANS"]).read_text())[str(brief_no)]
         print("（复用缓存方案 —— 旧缓存是裸 brief 跑的，不代表生产）")
         return list(zip(v["members"], v["plans"]))
+    if PLANS_CACHE.exists():
+        d = json.loads(PLANS_CACHE.read_text())
+        if str(brief_no) in d:
+            print("（复用本脚本上次跑的委员会初稿）")
+            return [tuple(x) for x in d[str(brief_no)]]
     import singularity.scheduler.dispatcher as disp
     import singularity.scheduler._dispatch_exec as de
     de._debate = lambda task, members, chain, task_id, **kw: members   # v2 自带对话
-    agents, chain = disp.load_agents(), None
+    agents = disp.load_agents()
     chain = disp.pick_agent_fallback_chain(agents, "any")
     print(f"跑委员会初稿（生产形态任务，{len(chain)} 席）…", flush=True)
-    return _ab.run_committee(arch_task(BRIEFS[brief_no - 1]), agents, chain, f"v2_{brief_no}")
+    pairs = _ab.run_committee(arch_task(BRIEFS[brief_no - 1]), agents, chain, f"v2_{brief_no}")
+    d = json.loads(PLANS_CACHE.read_text()) if PLANS_CACHE.exists() else {}
+    d[str(brief_no)] = pairs
+    PLANS_CACHE.write_text(json.dumps(d, ensure_ascii=False))
+    return pairs
 
 
 def main():
@@ -86,8 +97,13 @@ def main():
     fused = ej.fuse_architecture_v2(task, plans, judge_model=extractor)
     ej._call_model = real
 
+    # 失败也要先打明细 —— 不然只能靠猜是哪一步空
+    print("── 调用明细 ──")
+    for step, model, prompt, out in log:
+        print(f"  {step:<12} {model:<24} prompt {len(prompt):>6} 字 → 回复 {len(out or '')} 字")
+
     if not fused:
-        print("❌ 融合返回空（会回退旧流程）")
+        print("\n❌ 融合返回空（会回退旧流程）")
         return
     out_path = Path("/tmp/v2_fused.json")
     out_path.write_text(fused)
@@ -96,10 +112,6 @@ def main():
     print(f"  存到 {out_path}（结尾 200 字：{fused[-200:]!r}）\n")
 
     # ── 对话过程（别只看分数）──
-    print("── 调用明细 ──")
-    for step, model, prompt, out in log:
-        print(f"  {step:<12} {model:<18} prompt {len(prompt):>6} 字 → 回复 {len(out or '')} 字")
-
     for step, model, prompt, out in log:
         if step.startswith("③"):
             print(f"\n── {step}（{model}）──\n{(out or '(空)')[:700]}")
