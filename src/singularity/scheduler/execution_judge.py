@@ -57,14 +57,18 @@ def _resolve_api(model: str) -> tuple[str, str]:
 _STALL_TIMEOUT = float(os.environ.get("QIDIAN_STALL_TIMEOUT", "90"))
 
 
-def _stream_once(client, base_url: str, headers: dict, payload: dict) -> tuple[int, str, str, str]:
-    """一次流式 POST。返回 (status, content, finish_reason, err_text)。"""
+def _stream_once(client, base_url: str, headers: dict, payload: dict) -> tuple[int, str, str, str, str]:
+    """一次流式 POST。返回 (status, content, finish_reason, err_text, reasoning)。
+
+    reasoning 单收一路：执行器早就在认它（openai_agent.py:406），这里一直只收 content，
+    于是思考模型（实测 glm-5.3 / deepseek-v4-flash）走融合路径全部静默返回空。
+    """
     with client.stream("POST", f"{base_url}/chat/completions",
                        headers=headers, json={**payload, "stream": True}) as r:
         if r.status_code >= 400:
             r.read()                                  # 先取回 body 才能读 .text
-            return r.status_code, "", "", (r.text or "")[:200]
-        parts, finish = [], ""
+            return r.status_code, "", "", (r.text or "")[:200], ""
+        parts, reasons, finish = [], [], ""
         for line in r.iter_lines():
             if not line.startswith("data:"):
                 continue
@@ -76,9 +80,11 @@ def _stream_once(client, base_url: str, headers: dict, payload: dict) -> tuple[i
                 delta = ch.get("delta") or {}
                 if delta.get("content"):
                     parts.append(delta["content"])
+                if delta.get("reasoning_content"):
+                    reasons.append(delta["reasoning_content"])
                 if ch.get("finish_reason"):
                     finish = ch["finish_reason"]
-        return 200, "".join(parts), finish, ""
+        return 200, "".join(parts), finish, "", "".join(reasons)
 
 
 def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:
@@ -97,12 +103,19 @@ def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:
         payload = {"model": model, "messages": [{"role": "user", "content": prompt}],
                    "max_tokens": max_tokens, "temperature": 0.3}
         with httpx.Client(timeout=httpx.Timeout(240.0, connect=15.0, read=_STALL_TIMEOUT)) as client:
-            status, content, finish, err = _stream_once(client, base_url, headers, payload)
+            status, content, finish, err, reasoning = _stream_once(client, base_url, headers, payload)
             if status == 400 and "temperature" in err:
                 # 部分模型只接受 temperature=1（实测 kimi-k3：'only 1 is allowed for this model'）
                 payload.pop("temperature", None)
-                status, content, finish, err = _stream_once(client, base_url, headers, payload)
+                status, content, finish, err, reasoning = _stream_once(client, base_url, headers, payload)
             if status == 200:
+                if not content and reasoning and finish != "length":
+                    # 模型正常收尾、但把答案落在 reasoning_content 里（执行器同样这么兜）
+                    # → 回退。**只有 finish != "length" 才能这么干**：撞上限时 reasoning
+                    # 是半截思考、不是答案，当结果返回会误导上层。
+                    witness.heartbeat('execution_judge',
+                                      f'warn:reasoning_only:{model}:{finish}'[:80])
+                    return reasoning
                 if not content:
                     # 思考模型把 max_tokens 全烧在 reasoning 上 → content 为空。
                     # 静默返回 "" 会让上层（融合分析/盲评）无声降级，这里显式告警。
@@ -367,7 +380,10 @@ _V2_ROUND2 = """你是架构委员会成员「{speaker}」。以下是分歧清�
 【各模型方案】
 {outputs}
 
-【分歧清单与已有论证】
+【分歧清单】
+{disagreements}
+
+【已有论证】
 {transcript}
 
 【各家独有做法】
@@ -388,7 +404,10 @@ _V2_ROUND3 = """你是架构委员会成员「{speaker}」。其他成员对你�
 【原始需求】
 {task}
 
-【分歧清单与双方论证】
+【分歧清单】
+{disagreements}
+
+【双方论证】
 {transcript}
 
 请对标注 insist 的条目表态。只输出 JSON：
@@ -443,9 +462,25 @@ _V2_CONFIRM = """你是架构委员会成员「{checker}」。下面是「{write
 只输出 JSON。"""
 
 
+# ② 提取的输出上限。思考模型（实测 glm-5.3）会先把预算烧在 reasoning 上，
+# 8000 时直接返回空 content —— 提取步骤一空，整条 v2 就废了。
+_V2_EXTRACT_MAX_TOKENS = int(os.environ.get("QIDIAN_FUSION_EXTRACT_TOKENS", "16000"))
+
+
 def _fusion_v2_enabled() -> bool:
     """读 env（不缓存）—— 测试和 A/B 都要能中途切换。"""
     return os.environ.get("QIDIAN_FUSION_V2") == "1"
+
+
+def _v2_extractor_model() -> str:
+    """v2 ② 提取用哪个模型：优先观察者模型，回退 fusion.toml 的裁判。
+
+    提取的活儿是「通读 N 份方案列清单」，输出小、要求**非思考**模型 ——
+    实测 glm-5.3（思考模型）会把 16000 token 全烧在 reasoning 上，content 返回空，
+    整条 v2 直接废掉（warn:empty_content:glm-5.3:length）。
+    """
+    from singularity.scheduler import api_store
+    return api_store.get_observer_model() or _resolve_fusion_models()[0]
 
 
 def _parallel(thunks: list) -> list:
@@ -501,7 +536,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
     if len(plans) < 2:
         return plans[0][1] if plans else ""
     members = [m for m, _ in plans]
-    judge, _ = _resolve_fusion_models(judge_model, "")
+    judge = judge_model or _v2_extractor_model()
     _warn_same_model(judge, "", members)
 
     task = task_desc[:1500]
@@ -509,15 +544,20 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
 
     # ── ② 提取三类 ──
     raw = _call_model(_V2_EXTRACT.format(n=len(plans), task=task, outputs=plans_text),
-                      judge, max_tokens=8000)
+                      judge, max_tokens=_V2_EXTRACT_MAX_TOKENS)
     deltas = try_parse_json(raw) if raw else {}
-    # try_parse_json 失败返回 {"parse_error": True}（仍是 dict）—— 不判它就会
-    # 静默退化成"没有分歧"，然后拿垃圾定稿。
-    if not isinstance(deltas, dict) or deltas.get("parse_error"):
+    # 提取失败必须回退旧流程，不能"空着往下走"。三种失败都实测过：
+    #   - raw 空（思考模型把 max_tokens 烧在 reasoning 上）→ 实测 glm-5.3 撞过
+    #   - try_parse_json 失败返回 {"parse_error": True}（仍是 dict）
+    #   - 三样全空 = 没提取到，不是"两家没分歧"
+    if not raw or not isinstance(deltas, dict) or deltas.get("parse_error"):
         return ""
     disagreements = [d for d in (deltas.get("disagreements") or []) if isinstance(d, dict)]
     gains = [g for g in (deltas.get("unique_gains") or []) if isinstance(g, dict)]
     consensus = deltas.get("consensus") or []
+    if not (consensus or disagreements or gains):
+        witness.heartbeat("execution_judge", "warn:fusion_v2_empty_extract"[:80])
+        return ""
 
     writer = _first_speaker(disagreements, members)
     others = [m for m in members if m != writer]
@@ -542,7 +582,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
         while rounds < max_rounds:
             def _respond(m):
                 r = _call_model(_V2_ROUND2.format(
-                    speaker=m, task=task, outputs=plans_text,
+                    speaker=m, task=task, outputs=plans_text, disagreements=d_json,
                     transcript="\n\n".join(transcript), unique_gains=g_json),
                     m, max_tokens=6000)
                 return m, (try_parse_json(r) if r else {})
@@ -550,6 +590,9 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
             cur = {}
             for m, a in _parallel([lambda m=m: _respond(m) for m in others]):
                 a = a if isinstance(a, dict) else {}
+                if a.get("parse_error"):
+                    # 解析失败 = 这家的票全丢 → 该分歧点默认判给发言方。不吭声就查不出来。
+                    witness.heartbeat("execution_judge", f"warn:fusion_round2_json:{m}"[:80])
                 transcript.append(f"[{m} 回应]\n{_j(a)}")
                 cur.update(_votes_into(resp_votes, m, a.get("responses"), "verdict"))
                 _votes_into(gain_votes, m, a.get("unique_gains"), "stance")
@@ -563,7 +606,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
                 break
 
             c = try_parse_json(_call_model(
-                _V2_ROUND3.format(speaker=writer, task=task,
+                _V2_ROUND3.format(speaker=writer, task=task, disagreements=d_json,
                                   transcript="\n\n".join(transcript)),
                 writer, max_tokens=4000) or "") or {}
             transcript.append(f"[{writer} 确认]\n{_j(c)}")
@@ -610,11 +653,18 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
         def _check(m):
             c = _call_model(_V2_CONFIRM.format(checker=m, writer=writer, task=task, draft=draft),
                             m, max_tokens=2000)
-            return try_parse_json(c) if c else {}
+            if not c:
+                witness.heartbeat("execution_judge", f"warn:fusion_confirm_empty:{m}"[:80])
+                return None
+            p = try_parse_json(c)
+            if not isinstance(p, dict) or p.get("parse_error"):
+                witness.heartbeat("execution_judge", f"warn:fusion_confirm_json:{m}"[:80])
+                return None
+            return p
         issues = []
         for p in _parallel([lambda m=m: _check(m) for m in others]):
-            if not isinstance(p, dict) or p.get("approved", True):
-                continue
+            if p is None or p.get("approved", True):
+                continue              # 拿不到结论按"没意见"处理，但上面已告警
             issues += [str(i) for i in (p.get("issues") or [])] or ["(未给出具体问题)"]
         if not issues or attempt:
             break

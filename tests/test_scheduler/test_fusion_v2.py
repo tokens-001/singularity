@@ -121,8 +121,25 @@ def test_parse_error_returns_empty(monkeypatch):
     assert ej.fuse_architecture_v2("需求", PLANS) == ""
 
 
-def test_empty_extract_call_returns_empty(monkeypatch):
-    monkeypatch.setattr(ej, "_call_model", lambda p, m, max_tokens=2000: "")
+def test_empty_extract_returns_empty(monkeypatch):
+    """提取返回空 → 必须回退，不能拿空议程去定稿。
+
+    实测踩过：glm-5.3 把 8000 token 烧在 reasoning 上返回空 content，
+    旧代码当成"两家没分歧"，跳过整段对话直接定稿，写出 25 分的稿。
+    """
+    calls = []
+
+    def fake(prompt, model, max_tokens=2000):
+        calls.append(prompt)
+        return "" if "架构委员会秘书" in prompt else "最终稿"
+
+    monkeypatch.setattr(ej, "_call_model", fake)
+    assert ej.fuse_architecture_v2("需求", PLANS) == ""
+    assert len(calls) == 1                    # 提取失败就停，没有往下走
+
+
+def test_all_empty_extract_returns_empty(monkeypatch):
+    _stub(monkeypatch, extract={"consensus": [], "disagreements": [], "unique_gains": []})
     assert ej.fuse_architecture_v2("需求", PLANS) == ""
 
 
@@ -192,6 +209,55 @@ def test_confirm_issues_triggers_one_rewrite(monkeypatch):
     assert out == "稿2"
     assert state["n"] == 2                     # 只重写一次
     assert any("tasks 段缺失" in p for _, p in calls)   # issues 带进了重写 prompt
+
+
+# ── _call_model 对思考模型的兜底 ────────────────────────
+
+def _fake_stream(monkeypatch, result):
+    monkeypatch.setattr(ej, "_resolve_api", lambda m: ("X_KEY", "https://x/v1"))
+    monkeypatch.setenv("X_KEY", "k")
+    warns = []
+    monkeypatch.setattr(ej.witness, "heartbeat", lambda *a, **k: warns.append(a))
+    monkeypatch.setattr(ej, "_stream_once", lambda *a, **k: result)
+    return warns
+
+
+def test_call_model_falls_back_to_reasoning(monkeypatch):
+    """内容全落在 reasoning_content 的模型不能静默返回空（实测 v4-flash）。"""
+    warns = _fake_stream(monkeypatch, (200, "", "stop", "", "思考内容"))
+    assert ej._call_model("p", "m") == "思考内容"
+    assert any("reasoning_only" in str(w) for w in warns)
+
+
+def test_call_model_truly_empty_still_warns(monkeypatch):
+    warns = _fake_stream(monkeypatch, (200, "", "length", "", ""))
+    assert ej._call_model("p", "m") == ""
+    assert any("empty_content" in str(w) for w in warns)
+
+
+def test_confirm_empty_is_warned(monkeypatch):
+    """确认步骤空返回不能静默通过（实测 glm-5.2 返回 0 字）。"""
+    warns = []
+    monkeypatch.setattr(ej.witness, "heartbeat", lambda *a, **k: warns.append(a))
+
+    def fake(prompt, model, max_tokens=2000):
+        if "架构委员会秘书" in prompt:
+            return _j(EXTRACT)
+        if "陈述己方理由" in prompt:
+            return _j({"arguments": [], "unique_gains": []})
+        if "逐条回应" in prompt:
+            return _j(R2_INSIST_ACCEPT)
+        if "对你的论证给出了回应" in prompt:
+            return _j({"confirms": [{"id": 1, "verdict": "agree"}]})
+        if "架构定稿人" in prompt:
+            return "最终稿"
+        if "检查三件事" in prompt:
+            return ""                       # 空返回
+        raise AssertionError(prompt[:60])
+
+    monkeypatch.setattr(ej, "_call_model", fake)
+    assert ej.fuse_architecture_v2("需求", PLANS) == "最终稿"
+    assert any("fusion_confirm_empty" in str(w) for w in warns)
 
 
 # ── 旧路径 prompt 仍然可格式化（schema 抽出去别抽坏了）────
