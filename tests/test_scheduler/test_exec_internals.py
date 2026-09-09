@@ -989,3 +989,97 @@ class TestCallModelEmptyContent:
 
         assert ej._call_model("p", "some-model") == ""
         assert any("empty_content" in str(a) for a in seen), seen
+
+
+# ═══════════════════════════════════════════════════════════════
+# _api_call 分层重试（Temporal 五字段语义）—— 以前网络错误一次就判任务失败
+# ═══════════════════════════════════════════════════════════════
+
+class TestApiCallRetry:
+
+    def _ex(self, monkeypatch):
+        from singularity.scheduler.executors import openai_agent as oa
+        monkeypatch.setenv("TEST_KEY", "k")
+        monkeypatch.setattr(oa, "_RETRY_INITIAL", 0)
+        monkeypatch.setattr(oa, "_RETRY_MAX_INTERVAL", 0)
+        ex = oa.OpenAIAgentExecutor(
+            {"model": "m", "api_key_env": "TEST_KEY", "entry": "http://x"},
+            "任务", "tid", [], "", [])
+        return oa, ex
+
+    def test_network_error_is_retried_until_success(self, monkeypatch):
+        oa, ex = self._ex(monkeypatch)
+        calls = []
+
+        def once(body):
+            calls.append(1)
+            if len(calls) < 3:
+                raise oa._NetworkError("超时")
+            return {"ok": True}
+
+        monkeypatch.setattr(ex, "_api_call_once", once)
+        assert ex._api_call({}) == {"ok": True}
+        assert len(calls) == 3, calls
+
+    def test_gives_up_after_max_attempts(self, monkeypatch):
+        oa, ex = self._ex(monkeypatch)
+        monkeypatch.setattr(oa, "_RETRY_MAX_ATTEMPTS", 3)
+        calls = []
+
+        def once(body):
+            calls.append(1)
+            raise oa._NetworkError("超时")
+
+        monkeypatch.setattr(ex, "_api_call_once", once)
+        with pytest.raises(oa._NetworkError):
+            ex._api_call({})
+        assert len(calls) == 3, calls
+
+    def test_4xx_is_not_retried(self, monkeypatch):
+        """4xx 重试也不会好（non_retryable）。"""
+        oa, ex = self._ex(monkeypatch)
+        calls = []
+
+        def once(body):
+            calls.append(1)
+            raise oa._FormatError("HTTP 400")
+
+        monkeypatch.setattr(ex, "_api_call_once", once)
+        with pytest.raises(oa._FormatError):
+            ex._api_call({})
+        assert len(calls) == 1, calls
+
+    def test_total_budget_stops_retries(self, monkeypatch):
+        """超预算就不再重试 —— 防止 3×240s 撞穿 900s deadline。"""
+        oa, ex = self._ex(monkeypatch)
+        monkeypatch.setattr(oa, "_RETRY_TOTAL_BUDGET", -1)   # 一开始就已超预算
+        calls = []
+
+        def once(body):
+            calls.append(1)
+            raise oa._NetworkError("超时")
+
+        monkeypatch.setattr(ex, "_api_call_once", once)
+        with pytest.raises(oa._NetworkError):
+            ex._api_call({})
+        assert len(calls) == 1, calls
+
+    def test_5xx_transient_4xx_format(self, monkeypatch):
+        """状态码分类：5xx 可重试，4xx 不可。"""
+        oa, ex = self._ex(monkeypatch)
+
+        class _R:
+            def __init__(self, code):
+                self.status_code, self.text = code, "boom"
+
+        class _C:
+            def __init__(self, code): self.code = code
+            def post(self, *a, **k): return _R(self.code)
+
+        monkeypatch.setattr(oa, "_get_http_client", lambda: _C(503))
+        with pytest.raises(oa._TransientError):
+            ex._api_call_once({})
+
+        monkeypatch.setattr(oa, "_get_http_client", lambda: _C(400))
+        with pytest.raises(oa._FormatError):
+            ex._api_call_once({})

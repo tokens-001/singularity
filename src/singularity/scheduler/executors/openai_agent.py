@@ -26,6 +26,15 @@ from singularity.scheduler import witness
 from singularity.scheduler import config
 from singularity.scheduler._types import _pending_sse_events
 
+# ── 重试策略（Temporal 五字段语义，见 _api_call）──
+# 以前网络错误/超时一次就判任务失败 —— 一次抖动整轮白跑。
+_RETRY_INITIAL = float(os.environ.get("QIDIAN_RETRY_INITIAL", "1"))        # 首次重试间隔
+_RETRY_COEFF = float(os.environ.get("QIDIAN_RETRY_COEFF", "2.0"))          # 退避系数
+_RETRY_MAX_INTERVAL = float(os.environ.get("QIDIAN_RETRY_MAX_INTERVAL", "60"))
+_RETRY_MAX_ATTEMPTS = int(os.environ.get("QIDIAN_RETRY_MAX_ATTEMPTS", "3"))
+# 整轮预算（schedule-to-close）：重试总耗时上限，防止 3×240s 撞穿 orchestrator 的 900s deadline
+_RETRY_TOTAL_BUDGET = float(os.environ.get("QIDIAN_RETRY_TOTAL_BUDGET", "600"))
+
 # ── blocklist 已统一到 base.py ──
 
 # ── Tool 定义 (OpenAI function calling 格式) ──
@@ -587,7 +596,26 @@ class OpenAIAgentExecutor(BaseExecutor):
     # ── API 调用 ──
 
     def _api_call(self, body: dict) -> dict:
-        """通过 httpx 连接池调用 API。复用 TCP 连接，自动重试。"""
+        """带分层重试的 API 调用（Temporal 五字段语义）。
+
+        - 单次尝试上限 240s（start-to-close，见 _get_http_client 的 httpx.Timeout）
+        - 整轮预算 600s（schedule-to-close）：超预算不再重试，避免 3×240s 撞穿 900s deadline
+        - 重试间隔 = initial × coeff^(n-1)，封顶 maximum_interval
+        - 只重试**瞬时**错误（网络中断 / 超时 / 5xx）；4xx 不重试 —— 重试也不会好
+        - 429 交给外层循环（它按对话轮次退避），这里不吞
+        """
+        deadline = time.time() + _RETRY_TOTAL_BUDGET
+        for attempt in range(1, _RETRY_MAX_ATTEMPTS + 1):
+            try:
+                return self._api_call_once(body)
+            except (_NetworkError, _TransientError):
+                if attempt >= _RETRY_MAX_ATTEMPTS or time.time() >= deadline:
+                    raise
+                time.sleep(min(_RETRY_INITIAL * _RETRY_COEFF ** (attempt - 1), _RETRY_MAX_INTERVAL))
+        raise AssertionError("unreachable")
+
+    def _api_call_once(self, body: dict) -> dict:
+        """单次 API 调用。异常分类见 _api_call 的文档。"""
         client = _get_http_client()
         try:
             resp = client.post(
@@ -607,6 +635,9 @@ class OpenAIAgentExecutor(BaseExecutor):
 
         if resp.status_code == 429:
             raise _RateLimitError()
+        if resp.status_code >= 500:
+            # 服务端瞬时故障 —— 重试有意义，别一次就判任务死
+            raise _TransientError(f"HTTP {resp.status_code}: {resp.text[:200] if resp.text else ''}")
         if resp.status_code >= 400:
             err_text = resp.text[:500] if resp.text else ""
             raise _FormatError(f"HTTP {resp.status_code}: {err_text}")
@@ -768,3 +799,4 @@ def _search_code(args: dict, cwd) -> str:
 class _RateLimitError(Exception): pass
 class _FormatError(Exception): pass
 class _NetworkError(Exception): pass
+class _TransientError(Exception): pass     # 5xx —— 可重试（429 由 _RateLimitError 单独走）
