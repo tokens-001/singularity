@@ -279,14 +279,17 @@ def crossover_review(task_desc, raw_output, changed_files, writer_level, writer_
         return {"issues":[],"verdict":"pass","summary":"empty diff"}
 
     files_list = ", ".join(changed_files[:10])
-    prompt = f"""Code review:
+    # 角色定位/审查重点在 roles.toml [reviewer]（页面上可改）；这里只填动态内容和输出契约
+    from .roles import get_role, get_phase_role
+    review_role = get_role(get_phase_role("reviewing") or "reviewer")
+    role_prompt = review_role.get_full_prompt() if review_role else "你是代码审查者。"
+    prompt = f"""{role_prompt}
 
 Task: {task_desc[:500]}
 Files: {files_list}
 Diff:
 {diff_text[:6000]}
 
-Check: logic errors, security, unnecessary changes, missed call sites.
 Output ONLY JSON: {{"issues":[{{"severity":"critical|warning|info","line":approx,"detail":"..."}}],"verdict":"pass|retry|abort","summary":"one line"}}
 No issues? {{"issues":[],"verdict":"pass","summary":"no issues"}}
 JSON:"""

@@ -227,8 +227,11 @@ def get_role(key: str) -> Optional[Role]:
 # 阶段 → 角色 key。默认 = 现状（不配置就不改变行为）。
 # 一个角色可用于多个阶段（implementer 用于执行+修复），所以映射表独立存放。
 _DEFAULT_PHASE_ROLES = {
+    "researching": "surveyor",
+    "planning": "architect",
     "executing": "implementer",
     "fixing": "implementer",
+    "reviewing": "reviewer",
 }
 
 

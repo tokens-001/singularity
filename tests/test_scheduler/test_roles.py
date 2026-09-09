@@ -94,11 +94,17 @@ class TestPhaseRoleMap:
         from singularity.scheduler.project import Phase
         assert roles.get_phase_role(Phase.EXECUTING) == "implementer"
 
-    def test_unknown_phase_is_empty(self, tmp_path, monkeypatch):
-        """没配的阶段不注入角色 —— 和改造前一致（调研/架构本来就没角色）。"""
+    def test_research_and_planning_roles(self, tmp_path, monkeypatch):
+        """调研/架构的提示词已搬进 roles.toml，映射也应指向它们。"""
         roles = self._cfg(tmp_path, monkeypatch)
-        assert roles.get_phase_role("researching") == ""
-        assert roles.get_phase_role("planning") == ""
+        assert roles.get_phase_role("researching") == "surveyor"
+        assert roles.get_phase_role("planning") == "architect"
+
+    def test_unknown_phase_is_empty(self, tmp_path, monkeypatch):
+        """没有 agent 参与的阶段不映射角色。"""
+        roles = self._cfg(tmp_path, monkeypatch)
+        assert roles.get_phase_role("delivering") == ""
+        assert roles.get_phase_role("gate1") == ""
 
     def test_broken_file_falls_back_to_default(self, tmp_path, monkeypatch):
         roles = self._cfg(tmp_path, monkeypatch)
