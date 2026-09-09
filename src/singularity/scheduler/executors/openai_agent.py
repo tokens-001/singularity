@@ -118,6 +118,17 @@ SYSTEM_PROMPT = """你是Singularity Dispatch的 AI Agent。你的唯一任务�
   next: <建议下一个 Agent，如 Coding/QA/Review/None>
   human_confirm: <true/false，是否需要人工确认>"""
 
+# no_tools 时用这份：上面那份写着"你有工具/直接写代码别输出方案"，
+# 委员会这类"禁工具、只输出方案 JSON"的调用用它会被带偏。
+SYSTEM_PROMPT_NO_TOOLS = """你是Singularity Dispatch的 AI Agent。
+
+本次调用已禁用全部工具：你不能读写文件、不能执行命令、不能搜索代码。
+
+规则:
+- 不要调用工具，不要输出 tool_calls 或 <invoke> 块
+- 直接按用户要求输出最终文本（如架构方案 JSON），不要输出"我先做X再做Y"的过程叙述
+- 不要以 [HANDOFF] 块结尾（那是执行类任务的格式）"""
+
 
 class OpenAIAgentExecutor(BaseExecutor):
     """通用 Agent Executor — 给任何 OpenAI 兼容模型装上工具。"""
@@ -162,15 +173,27 @@ class OpenAIAgentExecutor(BaseExecutor):
         start = time.time()
         # ── 合并 skill tools 和 prompt ──
         # 架构/规划类任务(no_tools)禁工具: 模型直接输出文本, 不被 write_file/run_command 带偏
-        if self.cfg.get("no_tools"):
+        no_tools = bool(self.cfg.get("no_tools"))
+        if no_tools:
             tools = []
+            # 只清空 tools 不够: 通用 SYSTEM_PROMPT 说"你有工具/直接写代码别输出方案"，
+            # 与"输出架构 JSON"直接冲突 → 模型去够工具、吐出假 tool_call 就结束
+            # （实测委员会初稿只剩 320 字）。
+            system_prompt = SYSTEM_PROMPT_NO_TOOLS
         else:
             tools = list(TOOLS)
             tools.extend(self._skill_tools)
             tools.extend(self._mcp_tools)
-        system_prompt = SYSTEM_PROMPT
+            system_prompt = SYSTEM_PROMPT
         if self._skill_prompt:
             system_prompt += "\n" + self._skill_prompt
+            if no_tools:
+                # 技能提示词可能要求跑命令（如 archify 的 node 渲染器）—— 禁工具时
+                # 这会诱导模型吐假 tool_call。把禁令放最后压住它。
+                system_prompt += (
+                    "\n\n[重要] 本次调用已禁用所有工具：不要调用工具、不要执行命令、"
+                    "不要输出 tool_calls，直接输出最终文本。"
+                )
 
         messages = [
             {"role": "system", "content": system_prompt},

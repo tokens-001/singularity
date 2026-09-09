@@ -43,7 +43,8 @@ class AnthropicApiExecutor(BaseExecutor):
         # ── Build tools (convert OpenAI format to Anthropic format) ──
         # 架构/规划类调用(no_tools)禁工具：和 openai_agent 对齐，否则委员会"禁工具"
         # 的承诺对 anthropic-api 类型的成员不成立（工具照注入，模型可能直接改磁盘）
-        if self.cfg.get("no_tools"):
+        no_tools = bool(self.cfg.get("no_tools"))
+        if no_tools:
             anthropic_tools = []
             system_prompt = _DEFAULT_SYSTEM_NO_TOOLS
         else:
@@ -51,6 +52,13 @@ class AnthropicApiExecutor(BaseExecutor):
             system_prompt = _DEFAULT_SYSTEM
         if self._skill_prompt:
             system_prompt += "\n" + self._skill_prompt
+            if no_tools:
+                # 技能提示词可能要求跑命令（如 archify 的 node 渲染器）—— 禁工具时
+                # 这会诱导模型吐假 tool_call。把禁令放最后压住它。
+                system_prompt += (
+                    "\n\n[重要] 本次调用已禁用所有工具：不要调用工具、不要执行命令、"
+                    "不要输出 tool_calls，直接输出最终文本。"
+                )
 
         messages = [{"role": "user", "content": self.task}]
         tool_events = []
