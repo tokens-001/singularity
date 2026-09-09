@@ -350,6 +350,8 @@ def query(
       2 = 摘要 + Beam Search 遍历（中等成本）
       3 = 深度搜索 + 实体图 + 全文（最全但最慢，按需触发）
     """
+    # stats() 在 _memory_lifecycle 里；它反过来又 import 本模块（延迟在函数内），所以这里也必须延迟 import
+    from singularity.scheduler._memory_lifecycle import stats
     stats_data = stats()
     results: list[dict] = []
     entity_matches: dict[str, list[str]] = {}

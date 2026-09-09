@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Singularity烟雾测试 — 25项核心 + 19项边界 = 44项全覆盖。QIDIAN_SKIP_EMBED=1 跳过模型加载。"""
+"""Singularity烟雾测试 — 25项核心 + 15项边界 = 40项全覆盖。QIDIAN_SKIP_EMBED=1 跳过模型加载。"""
 import os, sys, json, subprocess
 from pathlib import Path
 
@@ -79,12 +79,12 @@ def main():
     check("项目列表", len(api("/api/projects").get("projects", [])) >= 1)
     check("项目详情", api(f"/api/projects/{pid}").get("phase") == "template")
     check("费用估算", "cost" in api(f"/api/projects/{pid}/cost"))
-    check("Gate确认API", isinstance(
-        api(f"/api/projects/{pid}/gate-confirm", method="POST", body={"decision": "skip"}),
-        dict))
+    check("Gate确认API",
+        api(f"/api/projects/{pid}/gate-confirm", method="POST", body={"decision": "skip"}).get("ok") is True)
 
     print("── 记忆 ──")
-    check("记忆统计", "events" in api("/api/memory?action=stats") or True)
+    # 不能写成 `... or True` —— 那样 500 也是绿的（这条以前就掩盖了 /api/memory 的 NameError）
+    check("记忆统计", "stats" in api("/api/memory?action=stats"))
 
     print("── Agent ──")
     r = api("/api/agents")
@@ -115,18 +115,18 @@ def main():
 
     print("── 日志 ──")
     from singularity.scheduler.log import info; info("smoke_test", "entry")
-    check("日志文件", Path(os.getcwd()) / ".qidian/logs/scheduler.log")
+    check("日志文件", (Path(os.getcwd()) / ".qidian/logs/scheduler.log").exists())
 
     print("── API 端点全覆盖 ──")
     for path, method in [("/api/conflicts","GET"), ("/api/loop/status","GET")]:
         # conflict_list 返回数据里有 "error" 字段(存冲突详情), 不能子串匹配
         check(f"端点 {path}", api(path, method).get("error") is None)
 
-    # ═══ 边界 19 项 ═══
+    # ═══ 边界 15 项 ═══
     print("\n── 边界情况 ──")
     check("删除不存在任务", "error" in api("/api/tasks/nonexistent/delete", method="POST"))
     check("空名称拒绝", api("/api/projects", method="POST", body={"name":""}).get("error") is not None)
-    check("记忆查询", isinstance(api("/api/memory?action=query&q=test"), dict))
+    check("记忆查询", "traversal" in api("/api/memory?action=query&q=test"))
 
     # 压力: 10 tasks
     tids = []
