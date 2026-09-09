@@ -14,7 +14,7 @@ from singularity.scheduler.roles import get_phase_role
 from singularity.scheduler.workflow import (
     _safe_dispatch, _needs_research, _should_skip, _collect_changed_files,
     _phase_output_path, _save_phase_output, _read_phase_output,
-    _ARCHITECT_PREAMBLE, _RESEARCHER_PREAMBLE,
+    _ARCHITECT_CONTEXT, _RESEARCHER_CONTEXT,
 )
 
 def _run_research(project: ProjectState, agents: dict) -> str:
@@ -24,7 +24,12 @@ def _run_research(project: ProjectState, agents: dict) -> str:
         save(project)
         return "调研已跳过"
 
-    prompt = _RESEARCHER_PREAMBLE.format(
+    # 角色定位/六维度清单/边界在 roles.toml [surveyor]（页面上可改）；
+    # 这里只填动态上下文 + 输出契约
+    from singularity.scheduler.roles import get_role
+    role = get_role(get_phase_role(Phase.RESEARCHING) or "surveyor")
+    role_prompt = role.get_full_prompt() if role else "你是项目调研员。"
+    prompt = f"{role_prompt}\n\n" + _RESEARCHER_CONTEXT.format(
         description=project.description,
         scope=project.scope,
         constraints=project.raw_constraints,
@@ -84,7 +89,12 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     else:
         research_context = "无调研报告"
 
-    prompt = _ARCHITECT_PREAMBLE.format(
+    # 角色定位/设计原则/边界在 roles.toml [architect]（页面上可改）；
+    # 这里只填动态上下文 + 输出 Schema（代码要按它解析）
+    from singularity.scheduler.roles import get_role
+    arch_role = get_role(get_phase_role(Phase.PLANNING) or "architect")
+    arch_prompt = arch_role.get_full_prompt() if arch_role else "你是资深系统架构师。"
+    prompt = f"{arch_prompt}\n\n" + _ARCHITECT_CONTEXT.format(
         description=project.description,
         scope=project.scope,
         constraints=project.raw_constraints,

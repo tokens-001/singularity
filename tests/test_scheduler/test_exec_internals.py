@@ -833,10 +833,13 @@ class TestArchitectureTrigger:
     禁工具跑 7 波、拿回架构 JSON 而不是代码。"""
 
     def test_architect_prompt_triggers(self):
-        from singularity.scheduler.workflow import _ARCHITECT_PREAMBLE
+        """架构提示词搬进 roles.toml 后，触发判据必须仍然命中。"""
+        from singularity.scheduler.roles import get_role
+        from singularity.scheduler.workflow import _ARCHITECT_CONTEXT
         from singularity.scheduler.execution_judge import _is_architecture_task
-        prompt = _ARCHITECT_PREAMBLE.format(description="x", scope="y",
-                                            constraints="z", research="w")
+        role = get_role("architect")
+        prompt = f"{role.get_full_prompt()}\n\n" + _ARCHITECT_CONTEXT.format(
+            description="x", scope="y", constraints="z", research="w")
         assert _is_architecture_task(prompt) is True
 
     def test_implementation_tasks_dont_trigger(self):
