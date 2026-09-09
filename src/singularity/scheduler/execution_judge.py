@@ -1,14 +1,13 @@
 """execution_judge.py — Fusion 多模型合成模块
 
-ponytail: AI裁判已移除。仅保留 fuse_outputs() 用于规划阶段多模型并行出方案。
-架构方案阶段可以多个模型各出一份，fuse_outputs 交叉合成一份最优方案。
+架构方案阶段多个模型各出一份 → fuse_architecture 两阶段合成
+（五维差异分析 → 按 schema 去重定稿）。
+裁判/定稿模型取自 fusion.toml [custom]，见 _resolve_fusion_models。
 """
 
-import fcntl
 import json
 import logging
 import os
-from typing import Optional
 
 from singularity.scheduler import config, witness
 from singularity.scheduler._io import try_parse_json
@@ -17,7 +16,7 @@ _log = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════
-# Fusion 配置 & 角色
+# Fusion 配置
 # ═══════════════════════════════════════════════
 
 def _load_fusion_config() -> dict:
@@ -29,63 +28,36 @@ def _load_fusion_config() -> dict:
     except Exception:
         return {}
 
-# 角色定义 — 借鉴 model-fusion 角色多样性 (skeptic/builder/analyst)
-_FUSION_ROLES = {
-    "builder": "你是 Builder（建设者）。关注可实现性、具体步骤、代码结构、模块划分。给出可落地的方案。",
-    "skeptic": "你是 Skeptic（质疑者）。主动找方案的漏洞：边界条件、并发安全、异常路径、向后兼容。指出所有可能出错的地方。",
-    "analyst": "你是 Analyst（分析者）。关注架构合理性、技术选型权衡、长期维护成本。从更高维度评估方案。",
+
+# 兜底表：只给「注册表里没有、但确实要调」的模型用。正常路径走 api_store。
+_LEGACY_API = {
+    "gpt-5.5": ("OPENAI_API_KEY", "https://api.openai.com/v1"),
+    "gpt-5.5-pro": ("OPENAI_API_KEY", "https://api.openai.com/v1"),
+    "claude-opus-4-8": ("ANTHROPIC_API_KEY", "https://api.anthropic.com/v1"),
 }
 
-# ═══════════════════════════════════════════════
-# 阶段一：裁判分析 — 五维结构化 JSON
-# ═══════════════════════════════════════════════
 
-_STAGE1_PROMPT = """你是 Fusion 裁判分析器。以下 N 个模型对同一任务独立产出了方案/代码。
+def _resolve_api(model: str) -> tuple[str, str]:
+    """模型 id → (api_key_env, base_url)。
 
-【任务】
-{task}
-
-【各模型产出】
-{outputs}
-
-请输出结构化五维分析 JSON（不要输出其他内容）:
-
-{{
-  "consensus": ["所有模型一致同意的点 — 最高置信，直接锁定"],
-  "contradictions": [
-    {{"point": "矛盾点描述", "model_a": "模型A观点", "model_b": "模型B观点", "resolution": "你的裁决及理由"}}
-  ],
-  "partial_coverage": [
-    {{"point": "部分模型覆盖的点", "covered_by": ["model_x"], "confidence": "high/medium/low"}}
-  ],
-  "unique_insights": [
-    {{"point": "只有一个模型提出的独到见解", "source_model": "model_name"}}
-  ],
-  "blind_spots": ["需求要求但所有模型都遗漏的点"]
-}}
-
-分析原则:
-- consensus 只放真正一致的，不要模糊归类
-- contradictions 必须给出明确裁决，不能 "两者都对"
-- blind_spots 对照原始需求逐条检查，不要说 "无"
-- 如果某个维度确实为空，用空数组 []"""
+    先查模型注册表的 provider，再查 api_store 的 base_url/key_env —— 这样
+    「激活模型」里任何一个都能用。以前这里是硬编码 8 个 id 的白名单，
+    其余模型静默返回空串（选 deepseek-v4-flash 融合会无声失败）。
+    """
+    from singularity.scheduler import api_store, model_registry
+    provider = model_registry.provider_for_model(model)
+    entry = api_store.get(provider) if provider else None
+    if entry:
+        return entry.api_key_env, entry.base_url
+    return _LEGACY_API.get(model, ("", ""))
 
 
 def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:
-    """调用单个模型（用于合成阶段）。"""
-    api_map = {
-        "deepseek-chat": ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1"),
-        "deepseek-v4-pro": ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1"),
-        "glm-5-turbo": ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4"),
-        "glm-5.2": ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4"),
-        "kimi-k2.7-code": ("KIMI_API_KEY", "https://api.moonshot.cn/v1"),
-        "gpt-5.5": ("OPENAI_API_KEY", "https://api.openai.com/v1"),
-        "gpt-5.5-pro": ("OPENAI_API_KEY", "https://api.openai.com/v1"),
-        "claude-opus-4-8": ("ANTHROPIC_API_KEY", "https://api.anthropic.com/v1"),
-    }
-    env_var, base_url = api_map.get(model, ("", ""))
+    """调用单个模型（用于合成阶段）。未知模型 / 缺 key → 返回 ""。"""
+    env_var, base_url = _resolve_api(model)
     api_key = os.environ.get(env_var, "")
     if not api_key:
+        witness.heartbeat('execution_judge', f'warn:no_key:{model}:{env_var}'[:80])
         return ""
     try:
         import httpx
@@ -103,109 +75,16 @@ def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:
     return ""
 
 
-def _stage1_analyze(task: str, outputs: list[str], judge_model: str = "deepseek-chat") -> dict:
-    """阶段一：裁判模型输出结构化五维 JSON。"""
-    outputs_text = "\n\n---\n".join(
-        f"[模型{i+1}]\n{o[:1500]}" for i, o in enumerate(outputs)
-    )
-    prompt = _STAGE1_PROMPT.format(task=task, outputs=outputs_text)
-    raw = _call_model(prompt, judge_model)
-    return try_parse_json(raw) if raw else {}
+def _resolve_fusion_models(judge_model: str = "", synthesizer_model: str = "") -> tuple[str, str]:
+    """定稿/裁判模型：显式参数 > fusion.toml [custom] > 硬编码默认。
 
-
-# ═══════════════════════════════════════════════
-# 阶段二：基于五维分析 + 6项合成提纲定稿
-# ═══════════════════════════════════════════════
-
-_STAGE2_PROMPT = """你是 Fusion 最终定稿人。请基于以下五维分析和6项合成提纲写出最终答案。
-
-【原始任务】
-{task}
-
-【五维分析】
-{analysis}
-
-【各模型原始产出】
-{outputs}
-
-按以下6项提纲合成（借鉴 model-fusion）:
-1. Claim ledger — 列出所有模型的所有主张，不遗漏任何观点
-2. Correlated-error check — 多个模型犯同类错误 → 可能是 prompt 歧义，标注出来
-3. Evidence-based contradiction resolution — 矛盾不靠投票，靠证据。说明为什么选A不选B
-4. Coverage union — 取所有模型的覆盖面并集，确保没有遗漏
-5. Calibration — 标注每个结论的置信度 (high/medium/low)
-6. Anti-majority guard — 少数派意见如果证据充分，保留不丢弃
-
-只输出最终方案/代码，不输出分析过程。"""
-
-
-def fuse_outputs(task_desc: str, output_a: str, output_b: str,
-                 outputs: list[str] = None, tier: str = "triple") -> str:
-    """Fusion 两阶段合成:
-    阶段一: 裁判模型输出结构化五维JSON分析
-    阶段二: 调用模型基于五维分析+6项提纲写出定稿
-
-    防递归: FUSION_CHILD=1 环境变量防止融合模型再调融合
-    tier: budget|self|standard
+    [custom] 是 fusion.toml 里唯一非 tier 段（dual/triple/super 是 tier），
+    架构委员会按 agent 链选人、不分 tier，所以读它。
     """
-    all_outputs = outputs or [output_a, output_b]
-    if len(all_outputs) < 2:
-        return all_outputs[0] if all_outputs else ""
-
-    # 防递归: 如果已经是 Fusion 子进程，直接返回第一个输出
-    if os.environ.get("FUSION_CHILD") == "1":
-        return all_outputs[0]
-
-    cfg = _load_fusion_config()
-    tier_cfg = cfg.get("tiers", {}).get(tier, {})
-    judge_model = tier_cfg.get("judge_model", "deepseek-chat")
-
-    # 阶段一
-    analysis = _stage1_analyze(task_desc, all_outputs, judge_model)
-
-    # 阶段二: 基于五维分析 + 6项提纲定稿
-    outputs_text = "\n\n---\n".join(
-        f"[模型{i+1}]\n{o[:1200]}" for i, o in enumerate(all_outputs)
-    )
-    analysis_text = json.dumps(analysis, ensure_ascii=False, indent=2) if analysis else "分析不可用"
-    prompt = _STAGE2_PROMPT.format(task=task_desc, analysis=analysis_text, outputs=outputs_text)
-
-    call_model = tier_cfg.get("call_model", "deepseek-chat")
-    # 标记子进程防递归
-    os.environ["FUSION_CHILD"] = "1"
-    try:
-        fused = _call_model(prompt, call_model)
-    finally:
-        os.environ.pop("FUSION_CHILD", None)
-    return fused if fused else f"{output_a}\n\n---\n{output_b}"
-
-
-# ═══════════════════════════════════════════════
-# Fusion Tool — 模型可自主调用
-# ═══════════════════════════════════════════════
-
-FUSION_TOOL_DEF = {
-    "type": "function",
-    "function": {
-        "name": "fusion_second_opinion",
-        "description": "对当前任务请求跨模型第二意见。当你遇到架构决策、安全边界、或不确定的方案时调用。会并行调另一个模型+合成裁判给出融合结果。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "question": {
-                    "type": "string",
-                    "description": "需要第二意见的具体问题或决策点"
-                },
-                "tier": {
-                    "type": "string",
-                    "enum": ["dual", "triple", "super"],
-                    "description": "融合级别: dual(双模型), triple(三模型), super(超级协作)"
-                }
-            },
-            "required": ["question"]
-        }
-    }
-}
+    cfg = _load_fusion_config().get("custom", {}) or {}
+    judge = judge_model or cfg.get("judge_model") or "deepseek-chat"
+    synth = synthesizer_model or cfg.get("call_model") or judge
+    return judge, synth
 
 
 # ═══════════════════════════════════════════════════
@@ -305,15 +184,20 @@ _ARCH_FUSION_STAGE2 = """你是架构合成定稿人。基于五维分析，产�
 
 
 def fuse_architecture(task_desc: str, outputs: list[str],
-                      judge_model: str = "deepseek-chat",
+                      judge_model: str = "",
                       synthesizer_model: str = "") -> str:
     """架构方案专用两阶段融合。
 
     阶段一: 五维差异分析 (consensus/contradictions/insights/blind_spots)
     阶段二: 基于分析定稿，schema 去重合并
+
+    裁判/定稿模型默认取 fusion.toml [custom]（见 _resolve_fusion_models），
+    传参可覆盖。以前这里写死 deepseek-chat，导致 fusion.toml 整份不生效。
     """
     if not outputs or len(outputs) < 2:
         return outputs[0] if outputs else ""
+
+    judge_model, synthesizer_model = _resolve_fusion_models(judge_model, synthesizer_model)
 
     # 阶段一: 五维分析
     outputs_text = "\n\n---\n".join(
@@ -326,8 +210,6 @@ def fuse_architecture(task_desc: str, outputs: list[str],
     analysis = try_parse_json(analysis_raw) if analysis_raw else {}
 
     # 阶段二: 基于分析定稿
-    if not synthesizer_model:
-        synthesizer_model = judge_model  # ponytail: 复用裁判模型
     analysis_text = json.dumps(analysis, ensure_ascii=False, indent=2) if analysis else "分析不可用"
     stage2_prompt = _ARCH_FUSION_STAGE2.format(
         task=task_desc[:1500], analysis=analysis_text, outputs=outputs_text
@@ -402,7 +284,12 @@ def decompose_architecture(arch_json: dict) -> list[dict]:
 
 
 def _is_architecture_task(task: str) -> bool:
-    """检测是否为架构设计任务。"""
-    arch_keywords = ["模块划分", "数据模型", "API契约", "技术栈", "架构方案",
-                     "architecture", "system_architect", "模块", "entity"]
+    """检测是否为架构设计任务。
+
+    只认强短语。以前还含 "模块"/"entity"/"architecture" 这类单字词，
+    "修复登录模块的 token 过期判断" 也会命中 → 实现任务被送进委员会，
+    禁工具跑 7 波、拿回一份架构 JSON 而不是代码。架构 prompt 本身含
+    「模块划分/数据模型/API契约/技术栈/架构方案」，仍能命中。
+    """
+    arch_keywords = ["模块划分", "数据模型", "API契约", "技术栈", "架构方案", "系统架构"]
     return any(kw in task for kw in arch_keywords)
