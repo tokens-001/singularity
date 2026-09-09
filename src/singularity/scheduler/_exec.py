@@ -428,6 +428,13 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                         agent_cfg=agent_cfg, level=level, cwd=cwd,
                         changed=changed)
 
+                # 审查结论接回决策: run_post_exec_checks 只改 quality["confidence"],
+                # 而 _decide_cascade 读 validation.confidence (审查前就赋了值) → 惩罚传不到,
+                # review_critical 仍可能被 cascade_accept (conf>=0.75) 放行合并。
+                # 取二者较小值: 无发现时 quality 更高, min 取原值 → 行为不变。
+                validation.confidence = min(
+                    validation.confidence, quality.get("confidence", validation.confidence))
+
                 last_validation = validation
 
                 # ── QA 门禁 (supervisor): 硬证据失败 → 不合并 ──
