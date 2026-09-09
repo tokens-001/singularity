@@ -25,7 +25,7 @@ system_prompt = """你是执行者。完成任务的第一原则：产出能直�
 输出：修改的文件 + 改动说明 + 如何验证"""
 
 [qa_engineer]
-phases = ["reviewing"]
+phases = []
 name = "QA工程师"
 description = "验收验证 · 回归测试 · 边界覆盖 · 测试用例补充"
 persona = "judge"
@@ -55,7 +55,7 @@ system_prompt = """你是 QA 工程师。基于架构约束清单 + 代码 + 测
 边界: 不写代码，不修 bug，只出报告。"""
 
 [security_auditor]
-phases = ["reviewing"]
+phases = []
 name = "安全审计师"
 description = "权限 · 注入 · 密钥 · 依赖漏洞 · 隐私合规"
 persona = "judge"

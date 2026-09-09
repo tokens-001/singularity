@@ -143,7 +143,17 @@ class TestRolePhases:
         assert ROLES["architect"].phases == ["planning"]
         assert set(ROLES["implementer"].phases) == {"executing", "fixing"}
         assert ROLES["reviewer"].phases == ["reviewing"]
-        assert ROLES["qa_engineer"].phases == ["reviewing"]
+
+    def test_auxiliary_review_roles_are_not_phase_candidates(self):
+        """QA 验收 / 安全审计是审查阶段里并列的独立调用，不占阶段映射位。
+
+        标成 ["reviewing"] 会出现在审查下拉里 —— 选了它，代码审查就会用 QA 的
+        提示词，而 QA 提示词明写"不做代码审查"，自己跟自己打架。
+        """
+        from singularity.scheduler.roles import ROLES
+        assert ROLES["qa_engineer"].phases == []
+        assert ROLES["security_auditor"].phases == []
+        assert [k for k, r in ROLES.items() if "reviewing" in r.phases] == ["reviewer"]
 
     def test_definition_layer_roles_have_no_phase(self):
         """定义层角色切换靠对话，不属于研发阶段 —— 不该出现在阶段下拉里。"""
