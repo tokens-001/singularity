@@ -54,6 +54,17 @@ _TERMINAL = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.ROLLED_BACK}
 # ready_tasks 扫描的状态: 等待调度的入口态
 _SCHEDULABLE = {TaskStatus.PENDING, TaskStatus.ROUTED, TaskStatus.BLOCKED, TaskStatus.PAUSED}
 
+# 终态任务的合法出口白名单 (其余改判一律拒绝, 见 transition)
+#   DONE: 已完成并 merge → 空集。改判会造出"代码已合入却显示失败", 或转 PENDING
+#         触发二次执行+二次合并。唯一合法出口 (GATE3 打回重置) 走 force=True。
+#   FAILED / ROLLED_BACK → PENDING: 调度重排队 + 人工重试, 刻意保留。
+# 注: PAUSED 不是终态, PAUSED→RUNNING (暂停恢复) 不受影响。
+_TERMINAL_EXIT = {
+    TaskStatus.DONE: frozenset(),
+    TaskStatus.FAILED: frozenset({TaskStatus.PENDING}),
+    TaskStatus.ROLLED_BACK: frozenset({TaskStatus.PENDING}),
+}
+
 
 @dataclass
 class Task:
@@ -188,12 +199,22 @@ def create(
     return task
 
 
-def transition(task_id: str, new_status: TaskStatus, **kwargs) -> Optional[Task]:
+def transition(task_id: str, new_status: TaskStatus, force: bool = False, **kwargs) -> Optional[Task]:
+    """改状态。终态 (DONE/FAILED/ROLLED_BACK) 只允许 _TERMINAL_EXIT 白名单内的流转,
+    其余改判拒绝并返回 None (force=True 可绕过, 仅 GATE3 打回这类显式重置用)。"""
     with _LOCK:
         task = read_task(task_id)
         if task is None:
             return None
         old_status = task.status
+        if (old_status in _TERMINAL and new_status != old_status and not force
+                and new_status not in _TERMINAL_EXIT.get(old_status, frozenset())):
+            try:
+                from singularity.scheduler.log import warn as _log_warn
+                _log_warn("tracker", f"拒绝非法流转 {old_status.value}→{new_status.value} (task={task_id})")
+            except Exception:
+                pass
+            return None
         task.status = new_status
         for k, v in kwargs.items():
             if hasattr(task, k):

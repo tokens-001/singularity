@@ -419,7 +419,8 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
         for tid in list(project.task_ids):
             t = tracker.read_task(tid)
             if t is not None and t.status == TaskStatus.DONE:
-                tracker.transition(tid, TaskStatus.PENDING)
+                # force=True: DONE 是终态, GATE3 打回是唯一合法的 DONE→PENDING 重置
+                tracker.transition(tid, TaskStatus.PENDING, force=True)
                 reset_count += 1
         project.add_lineage({"action": "gate3_route", "route": "impl", "reset_tasks": reset_count})
         msg = f"GATE3 打回 → 回实现层修复 (重置 {reset_count} 任务, 反馈: {feedback[:80]})"
