@@ -142,6 +142,10 @@ def _resolve_fusion_models(judge_model: str = "", synthesizer_model: str = "") -
 # 0 = 不限。20k 覆盖目前所有观测到的方案长度。
 _FUSION_PLAN_CHARS = int(os.environ.get("QIDIAN_FUSION_PLAN_CHARS", "20000"))
 
+# 定稿输出上限。实测融合稿要 24k~27k 字（含 schema 必填的 tasks/risks），
+# 16000 token 撞顶被腰斩 —— 三题全部截断，且分数和"截断到哪"完美单调。
+_FUSION_MAX_TOKENS = int(os.environ.get("QIDIAN_FUSION_MAX_TOKENS", "16000"))
+
 _ARCH_FUSION_STAGE1 = """你是架构合成裁判。以下 {n} 个模型对同一需求独立产出了架构方案。
 
 【原始需求】
@@ -281,7 +285,7 @@ def fuse_architecture(task_desc: str, outputs: list[str],
     stage2_prompt = _ARCH_FUSION_STAGE2.format(
         task=task_desc[:1500], analysis=analysis_text, outputs=outputs_text
     )
-    fused = _call_model(stage2_prompt, synthesizer_model, max_tokens=16000)
+    fused = _call_model(stage2_prompt, synthesizer_model, max_tokens=_FUSION_MAX_TOKENS)
     return fused if fused else outputs[0]
 
 
