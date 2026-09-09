@@ -22,4 +22,3 @@ src/singularity/web/static/dist/
 
 # 个人工具配置（不绑定项目）
 .obsidian/
-CLAUDE.md
