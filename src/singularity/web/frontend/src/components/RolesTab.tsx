@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
-import { Button, Input, Modal, Popconfirm } from 'antd'
+import { Button, Input, Modal, Popconfirm, Select } from 'antd'
 import { api } from '../lib/api'
 import { useRun } from '../lib/toast'
 import { Plus, Trash2 } from 'lucide-react'
 
 type RoleInfo = { key: string; name: string; description: string; system_prompt: string; capabilities?: string[] }
+type PhaseInfo = { key: string; label: string }
 
 export default function RolesTab() {
   const [roles, setRoles] = useState<Record<string, RoleInfo>>({})
@@ -12,13 +13,23 @@ export default function RolesTab() {
   const [draft, setDraft] = useState({ name: '', description: '', system_prompt: '' })
   const [adding, setAdding] = useState(false)
   const [newKey, setNewKey] = useState('')
+  const [phases, setPhases] = useState<PhaseInfo[]>([])
+  const [phaseMap, setPhaseMap] = useState<Record<string, string>>({})
   const run = useRun()
 
   const fetch = async () => {
-    const d = await api.roles()
+    const [d, p] = await Promise.all([api.roles(), api.phaseRoles()])
     setRoles(d?.roles || {})
+    setPhases(p?.phases || [])
+    setPhaseMap({ ...(p?.defaults || {}), ...(p?.custom || {}) })
   }
   useEffect(() => { fetch() }, [])
+
+  const setPhaseRole = async (key: string, role: string) => {
+    const next = { ...phaseMap, [key]: role }
+    setPhaseMap(next)
+    await run(() => api.updatePhaseRoles(next))
+  }
 
   const open = (key: string) => {
     const r = roles[key]
@@ -52,7 +63,22 @@ export default function RolesTab() {
       </div>
 
       <div className="fs-10 text-muted" style={{ marginBottom: 10 }}>
-        角色 = 一段约束提示词。按研发阶段使用（执行阶段用 implementer，审查阶段用 qa_engineer / security_auditor）。
+        角色 = 一段约束提示词。**绑定研发阶段**（不是绑定模型 —— 模型回答"谁来做"，角色回答"做什么、不做什么"）。
+      </div>
+
+      <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', marginBottom: 14, background: '#faf9f5' }}>
+        <div className="fw-600 fs-12" style={{ marginBottom: 6 }}>阶段 → 角色</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+          {phases.map(p => (
+            <div key={p.key} className="flex-center gap-6">
+              <span className="fs-11 text-muted" style={{ width: 32 }}>{p.label}</span>
+              <Select size="small" style={{ width: 150 }} value={phaseMap[p.key] || ''}
+                onChange={v => setPhaseRole(p.key, v)}
+                options={[{ value: '', label: '(不注入角色)' },
+                  ...Object.entries(roles).map(([k, r]) => ({ value: k, label: r.name || k }))]} />
+            </div>
+          ))}
+        </div>
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

@@ -1638,6 +1638,41 @@ def api_roles_create():
     return jsonify({"ok": True, "key": key}), 200
 
 
+_PHASE_LABELS = [
+    ("researching", "调研"), ("planning", "架构"), ("executing", "实现"),
+    ("fixing", "修复"), ("reviewing", "审查"),
+]
+
+
+@app.route("/api/phase-roles", methods=["GET"])
+def api_phase_roles():
+    """阶段 → 角色映射。custom 覆盖 defaults，没配的阶段不注入角色。"""
+    from singularity.scheduler.roles import _DEFAULT_PHASE_ROLES
+    path = sched_config.QIDIAN_DIR / "phases.json"
+    custom = {}
+    if path.exists():
+        try:
+            custom = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            custom = {}
+    return jsonify({
+        "phases": [{"key": k, "label": lbl} for k, lbl in _PHASE_LABELS],
+        "defaults": _DEFAULT_PHASE_ROLES,
+        "custom": custom,
+    }), 200
+
+
+@app.route("/api/phase-roles", methods=["PUT"])
+def api_phase_roles_update():
+    data = request.get_json(silent=True) or {}
+    mapping = data.get("map")
+    if not isinstance(mapping, dict):
+        return jsonify({"error": "map 必须是对象"}), 400
+    from singularity.scheduler._io import atomic_write_json
+    atomic_write_json(sched_config.QIDIAN_DIR / "phases.json", mapping)
+    return jsonify({"ok": True}), 200
+
+
 @app.route("/api/roles/<key>", methods=["DELETE"])
 def api_roles_delete(key):
     """删除角色。出厂角色写 deleted 标记（roles.toml 不动），自定义角色同路。"""

@@ -99,4 +99,7 @@ export const api = {
   updateRole: (key: string, data: any) => request(`/api/roles/${key}`, { method: 'PATCH', body: JSON.stringify(data) }),
   createRole: (data: any) => request<any>('/api/roles', { method: 'POST', body: JSON.stringify(data) }),
   deleteRole: (key: string) => request<any>(`/api/roles/${key}`, { method: 'DELETE' }),
+  phaseRoles: () => request<any>('/api/phase-roles'),
+  updatePhaseRoles: (map: Record<string, string>) =>
+    request<any>('/api/phase-roles', { method: 'PUT', body: JSON.stringify({ map }) }),
 }
