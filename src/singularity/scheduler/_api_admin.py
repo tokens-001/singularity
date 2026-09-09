@@ -263,11 +263,18 @@ def perm_profiles():
 
 
 def perm_profiles_add(name, profile):
-    from .permission import get_store; get_store().add_profile(name, profile); return {"ok": True}, 200
+    from .permission import get_store, PermissionProfile
+    try:
+        get_store().save_profile(PermissionProfile.from_dict({**(profile or {}), "name": name}))
+    except ValueError as e:  # 内置 profile 不可覆盖
+        return {"error": str(e)}, 400
+    return {"ok": True}, 200
 
 
 def perm_profiles_delete(name):
-    from .permission import get_store; get_store().remove_profile(name); return {"ok": True}, 200
+    from .permission import get_store
+    ok = get_store().delete_profile(name)  # False = 内置 profile 或不存在
+    return {"ok": ok}, (200 if ok else 400)
 
 
 def perm_bind(level, model, profile):
