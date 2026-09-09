@@ -22,3 +22,6 @@ src/singularity/web/static/dist/
 
 # 个人工具配置（不绑定项目）
 .obsidian/
+
+# A/B 实验缓存（临时产物，见 tests/integration/ab_fusion.py）
+tests/integration/.ab_cache*.json

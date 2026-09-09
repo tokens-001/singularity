@@ -725,3 +725,120 @@ class TestCommitteePerspective:
         monkeypatch.setenv("QIDIAN_COMMITTEE_PERSPECTIVE", "1")
         prompts = self._draft_prompts(monkeypatch, tmp_path)
         assert sum("[你的视角]" in p for p in prompts) == 2
+
+    def test_partial_committee_warns(self, monkeypatch, tmp_path):
+        """有成员没产出必须告警 —— 否则"3 家碰撞"实际只有 1 家，外面看不出来。"""
+        from singularity.scheduler import _dispatch_exec as de
+        from singularity.scheduler import execution_judge as ej
+        from singularity.scheduler import config as cfg
+        seen = []
+        monkeypatch.setattr(de.witness, "heartbeat", lambda *a, **k: seen.append(a))
+        monkeypatch.setattr(de, "_run_no_tools",
+                            lambda c, prompt, tag, level, baseline_ref="", cwd="":
+                            None if c.get("model") == "m2" else '{"architecture":"x"}')
+        monkeypatch.setattr(de, "_is_slow_model", lambda m: False)
+        monkeypatch.setattr(ej, "fuse_architecture", lambda *a, **k: '{}')
+        monkeypatch.setattr(cfg, "QIDIAN_DIR", tmp_path)
+        de._dispatch_committee("模块划分 数据模型", "any", "tid", {},
+                               [{"model": "m1"}, {"model": "m2"}])
+        assert any("committee_partial" in str(x) for x in seen), seen
+
+
+class TestNoToolsFailureVisibility:
+    """_run_no_tools 曾静默吞异常 —— 委员会里模型失败完全看不见，
+    只能靠猜是超时还是空输出（实测 3 家阵容 2 家无产出）。"""
+
+    def _run(self, monkeypatch, behavior):
+        from singularity.scheduler import _dispatch_exec as de
+        seen = []
+        monkeypatch.setattr(de.witness, "heartbeat", lambda *a, **k: seen.append(a))
+        monkeypatch.setattr(de, "_run_executor", behavior)
+        r = de._run_no_tools({"model": "m", "type": "openai-agent"}, "p", "tag", "any")
+        return r, seen
+
+    def test_exception_warns(self, monkeypatch):
+        def boom(*a, **k):
+            raise TimeoutError("240s 超时")
+        r, seen = self._run(monkeypatch, boom)
+        assert r is None
+        assert any("no_tools_fail" in str(x) for x in seen), seen
+
+    def test_empty_output_warns(self, monkeypatch):
+        class _R:
+            raw_output = ""
+            error = "timeout"
+        r, seen = self._run(monkeypatch, lambda *a, **k: _R())
+        assert r is None
+        assert any("no_tools_empty" in str(x) for x in seen), seen
+
+    def test_success_no_warn(self, monkeypatch):
+        class _R:
+            raw_output = "方案"
+            error = ""
+        r, seen = self._run(monkeypatch, lambda *a, **k: _R())
+        assert r == "方案"
+        assert not seen, seen
+
+
+# ═══════════════════════════════════════════════════════════════
+# 禁工具调用的系统提示词（通用 SYSTEM_PROMPT 说"你有工具/直接写代码"，
+# 与"输出架构 JSON"冲突 → 模型吐假 tool_call 就结束，初稿作废）
+# ═══════════════════════════════════════════════════════════════
+
+class TestNoToolsSystemPrompt:
+
+    def _system_msg(self, monkeypatch, no_tools: bool) -> str:
+        from singularity.scheduler.executors import openai_agent as oa
+        monkeypatch.setenv("TEST_KEY", "k")
+        captured = {}
+        cfg = {"model": "m", "api_key_env": "TEST_KEY", "entry": "http://x"}
+        if no_tools:
+            cfg["no_tools"] = True
+        ex = oa.OpenAIAgentExecutor(
+            cfg, "任务", "tid",
+            skill_tools=[], skill_prompt="技能正文: 用 node 渲染架构图", mcp_tools=[],
+        )
+        monkeypatch.setattr(ex, "_api_call", lambda body: (
+            captured.update(body),
+            {"choices": [{"message": {"content": "ok"}}]},
+        )[1])
+        ex.run()
+        return captured["messages"][0]["content"]
+
+    def test_no_tools_uses_dedicated_prompt(self, monkeypatch):
+        sys_msg = self._system_msg(monkeypatch, no_tools=True)
+        assert "你有工具可以用" not in sys_msg, "禁工具调用仍说'你有工具'"
+        assert "直接写代码" not in sys_msg, "禁工具调用仍要求写代码"
+        assert "[重要] 本次调用已禁用所有工具" in sys_msg, "缺禁令"
+
+    def test_normal_call_keeps_general_prompt(self, monkeypatch):
+        sys_msg = self._system_msg(monkeypatch, no_tools=False)
+        assert "你有工具可以用" in sys_msg
+        assert "[重要] 本次调用已禁用所有工具" not in sys_msg
+
+
+class TestCallModelEmptyContent:
+    """思考模型把 max_tokens 烧在 reasoning 上 → content 空，必须告警不能静默。"""
+
+    def test_warns_on_empty_content(self, monkeypatch):
+        from singularity.scheduler import execution_judge as ej
+        seen = []
+        monkeypatch.setattr(ej, "_resolve_api", lambda m: ("AB_TEST_KEY", "http://x"))
+        monkeypatch.setenv("AB_TEST_KEY", "k")
+        monkeypatch.setattr(ej.witness, "heartbeat", lambda *a, **k: seen.append(a))
+
+        class _R:
+            status_code = 200
+            def json(self):
+                return {"choices": [{"message": {"content": ""}, "finish_reason": "length"}]}
+
+        class _C:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def post(self, *a, **k): return _R()
+
+        import httpx
+        monkeypatch.setattr(httpx, "Client", lambda **k: _C())
+
+        assert ej._call_model("p", "some-model") == ""
+        assert any("empty_content" in str(a) for a in seen), seen
