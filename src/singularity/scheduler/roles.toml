@@ -5,7 +5,6 @@
 phases = ["executing", "fixing"]
 name = "执行者"
 description = "领单一任务，写代码，守约束"
-capabilities = ["按任务描述修改代码", "遵循现有风格", "不越界", "写完自查"]
 persona = "engineer"
 system_prompt = """你是执行者。完成任务的第一原则：产出能直接交付的代码，不是草稿。
 
@@ -29,7 +28,6 @@ system_prompt = """你是执行者。完成任务的第一原则：产出能直�
 phases = ["reviewing"]
 name = "QA工程师"
 description = "验收验证 · 回归测试 · 边界覆盖 · 测试用例补充"
-capabilities = ["约束验证", "回归检查", "边界覆盖分析", "测试用例设计"]
 persona = "judge"
 system_prompt = """你是 QA 工程师。基于架构约束清单 + 代码 + 测试结果，做验收验证。不写代码、不做代码审查（那是审查者的活），只出验收报告。
 
@@ -60,7 +58,6 @@ system_prompt = """你是 QA 工程师。基于架构约束清单 + 代码 + 测
 phases = ["reviewing"]
 name = "安全审计师"
 description = "权限 · 注入 · 密钥 · 依赖漏洞 · 隐私合规"
-capabilities = ["权限审计", "注入检测", "密钥扫描", "依赖漏洞", "隐私合规"]
 persona = "judge"
 system_prompt = """你是安全审计师。基于架构约束 + 代码 + 依赖清单，做安全审计。不写代码，只出报告。
 
@@ -95,7 +92,6 @@ severity 语义（重要，别标错）:
 phases = ["researching"]
 name = "调研员"
 description = "六维度调研报告（竞品/前沿理论/用户研究/需求澄清/技术预研/约束识别）"
-capabilities = ["竞品分析", "前沿理论", "用户研究", "需求澄清", "技术预研", "约束识别"]
 persona = ""
 system_prompt = """你是项目调研员。基于项目需求，完成六维度调研报告。
 
@@ -114,7 +110,6 @@ system_prompt = """你是项目调研员。基于项目需求，完成六维度�
 phases = ["planning"]
 name = "架构师"
 description = "系统架构方案（模块划分/数据模型/API契约/技术栈/约束/任务拆解）"
-capabilities = ["模块划分", "数据模型", "API契约", "技术栈选型", "任务拆解"]
 persona = ""
 system_prompt = """你是资深系统架构师。基于 PRD + 交互/UI方案 + 调研报告，产出可执行的系统架构方案。
 
@@ -132,7 +127,6 @@ system_prompt = """你是资深系统架构师。基于 PRD + 交互/UI方案 + 
 phases = ["reviewing"]
 name = "代码审查者"
 description = "审查改动本身（逻辑错误/安全/多余改动/漏改调用点）"
-capabilities = ["逻辑审查", "安全审查", "影响面分析"]
 persona = ""
 system_prompt = """你是代码审查者。审查别人刚写完的改动，只挑问题，不改代码。
 
@@ -148,7 +142,6 @@ system_prompt = """你是代码审查者。审查别人刚写完的改动，只�
 phases = []
 name = "产品经理"
 description = "产品经理 — 需求分析·用户故事·竞品调研·PRD"
-capabilities = []
 persona = ""
 system_prompt = """# 产品经理
 
@@ -196,7 +189,6 @@ system_prompt = """# 产品经理
 phases = []
 name = "交互设计师"
 description = "交互设计师 — 用户流程·信息架构·页面结构·状态流转"
-capabilities = []
 persona = ""
 system_prompt = """# 交互设计师
 
@@ -252,7 +244,6 @@ system_prompt = """# 交互设计师
 phases = []
 name = "UI 设计师"
 description = "UI设计师 — 视觉偏好收集·风格参考·品牌调性"
-capabilities = []
 persona = ""
 system_prompt = """# UI 设计师
 
@@ -310,7 +301,6 @@ system_prompt = """# UI 设计师
 phases = []
 name = "研究员"
 description = "研究员(Observer) — 市场调研·技术调研·可行性分析"
-capabilities = []
 persona = ""
 system_prompt = """# 研究员
 

@@ -1577,9 +1577,8 @@ def api_roles():
     roles = {}
     for k, r in ROLES.items():
         roles[k] = {
-            "key": r.key, "name": r.name, "level": r.level,
+            "key": r.key, "name": r.name,
             "description": r.description, "persona": r.persona,
-            "capabilities": r.capabilities,
             "phases": r.phases,
             # 不能截断：前端拿它填编辑框，截断后一保存就把完整提示词覆盖成残篇
             # （而且并没有"完整版单独取"的接口）

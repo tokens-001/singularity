@@ -13,7 +13,7 @@ def role_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
     monkeypatch.setattr(roles, "PERSONAS", {})
     monkeypatch.setattr(roles, "ROLES", {
-        "base": roles.Role(key="base", name="基础", level="", description="",
+        "base": roles.Role(key="base", name="基础", description="",
                            system_prompt="原始提示词"),
     })
     return tmp_path, roles
@@ -52,12 +52,11 @@ class TestRoleOverrides:
         roles._apply_overrides()
         assert "base" not in roles.ROLES
 
-    def test_capabilities_and_name_override(self, role_env):
+    def test_name_override(self, role_env):
         tmp, roles = role_env
-        _write(tmp, {"base": {"name": "改名了", "capabilities": ["写代码", "写测试"]}})
+        _write(tmp, {"base": {"name": "改名了"}})
         roles._apply_overrides()
         assert roles.ROLES["base"].name == "改名了"
-        assert roles.ROLES["base"].capabilities == ["写代码", "写测试"]
 
     def test_missing_file_is_noop(self, role_env):
         tmp, roles = role_env
