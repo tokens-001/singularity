@@ -651,6 +651,59 @@ class TestFusionModelResolution:
         assert long_plan in prompts[0], "阶段一提示词里方案被截断"
         assert long_plan in prompts[1], "阶段二提示词里方案被截断"
 
+    def test_call_model_retries_without_temperature(self, monkeypatch):
+        """kimi-k3 只接受 temperature=1（实测 400 'only 1 is allowed'）→ 必须去掉后重试。"""
+        import httpx
+        from singularity.scheduler import execution_judge as ej
+        monkeypatch.setattr(ej, "_resolve_api", lambda m: ("BENCH_KEY", "http://x"))
+        monkeypatch.setenv("BENCH_KEY", "k")
+        seen = []
+
+        class Resp:
+            def __init__(self, code, text):
+                self.status_code, self.text = code, text
+
+            def json(self):
+                return {"choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}]}
+
+        class Client:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+            def post(self, url, headers=None, json=None):
+                seen.append(dict(json))
+                if "temperature" in json:
+                    return Resp(400, '{"error":{"message":"invalid temperature: only 1 is allowed"}}')
+                return Resp(200, "{}")
+
+        monkeypatch.setattr(httpx, "Client", lambda **kw: Client())
+        assert ej._call_model("hi", "kimi-k3") == "OK"
+        assert len(seen) == 2, seen
+        assert "temperature" not in seen[1], seen
+
+    def test_call_model_logs_non_200(self, monkeypatch):
+        """非 200 不能再静默返回空串。"""
+        import httpx
+        from singularity.scheduler import execution_judge as ej
+        monkeypatch.setattr(ej, "_resolve_api", lambda m: ("BENCH_KEY2", "http://x"))
+        monkeypatch.setenv("BENCH_KEY2", "k")
+        beats = []
+        monkeypatch.setattr(ej.witness, "heartbeat", lambda src, msg: beats.append(msg))
+
+        class Resp:
+            status_code, text = 500, "boom"
+
+            def json(self): return {}
+
+        class Client:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def post(self, *a, **kw): return Resp()
+
+        monkeypatch.setattr(httpx, "Client", lambda **kw: Client())
+        assert ej._call_model("hi", "m") == ""
+        assert any("http500" in b for b in beats), beats
+
     def test_warns_when_judge_is_a_committee_member(self, monkeypatch):
         """裁判/定稿人就是选手之一 → 必须告警（自己评自己，结论作废）。"""
         from singularity.scheduler import execution_judge as ej

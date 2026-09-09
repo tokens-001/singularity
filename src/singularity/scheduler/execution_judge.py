@@ -61,13 +61,15 @@ def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:
         return ""
     try:
         import httpx
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        payload = {"model": model, "messages": [{"role": "user", "content": prompt}],
+                   "max_tokens": max_tokens, "temperature": 0.3}
         with httpx.Client(timeout=httpx.Timeout(240.0)) as client:
-            r = client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": model, "messages": [{"role": "user", "content": prompt}],
-                      "max_tokens": max_tokens, "temperature": 0.3},
-            )
+            r = client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
+            if r.status_code == 400 and "temperature" in r.text:
+                # 部分模型只接受 temperature=1（实测 kimi-k3：'only 1 is allowed for this model'）
+                payload.pop("temperature", None)
+                r = client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
             if r.status_code == 200:
                 choice = r.json()["choices"][0]
                 content = choice.get("message", {}).get("content") or ""
@@ -80,6 +82,10 @@ def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:
                 if choice.get("finish_reason") == "length":
                     witness.heartbeat('execution_judge', f'warn:truncated:{model}'[:80])
                 return content
+            # 非 200 以前什么都不记，上层只看到空串，查不出原因（kimi-k3 就是这样
+            # 静默失败了很久：temperature 不被接受 → 400 → 空串）
+            witness.heartbeat('execution_judge',
+                              f'warn:http{r.status_code}:{model}:{r.text[:40]}'[:80])
     except Exception as e:
         witness.heartbeat('execution_judge', f'warn:{e}')
     return ""
