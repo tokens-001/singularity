@@ -337,9 +337,10 @@ def _push_project_event(proj: "ProjectState") -> None:
         # Channel 1: pending queue (loop flush)
         from singularity.scheduler._types import _pending_sse_events
         _pending_sse_events.append({"kind": "project", "msg": payload, "ts": time.time()})
-        # Channel 2: direct broadcast
-        from singularity.web.app import _sse_broadcast
-        _sse_broadcast("project", payload)
+        # Channel 2: direct broadcast —— 事件泵只在调度循环启动时跑，
+        # 循环没开时（比如刚建完项目还没跑任务）靠这条立刻送达
+        from singularity.scheduler import _hooks
+        _hooks.emit("project", payload)
     except Exception:
         pass
 

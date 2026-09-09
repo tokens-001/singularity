@@ -3,14 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import queue
-import threading
-import time
-from pathlib import Path
-from typing import Any, Callable
-
-import httpx
+from typing import Any
 
 from singularity.scheduler import config, tracker, witness
 
@@ -25,21 +18,6 @@ def set_exec_mode(mode: str) -> None:
     global _pending_exec_mode
     if mode in ("auto_edit", "confirm_changes"):
         _pending_exec_mode = mode
-
-# 待处理的用户消息队列：元素为 (client_id, question, reply_callback)
-_chat_queue: queue.Queue[tuple[str, str, Callable[[dict], None]]] = queue.Queue()
-
-# 已连接客户端的回复回调注册表
-_pending_replies: dict[str, Callable[[dict], None]] = {}
-_replies_lock = threading.Lock()
-
-# 守护线程控制
-_stop_event = threading.Event()
-_worker_thread: threading.Thread | None = None
-
-# 异常告警去重：key -> last_alert_timestamp
-_alert_history: dict[str, float] = {}
-_alert_lock = threading.Lock()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -157,13 +135,10 @@ def _tool_create_task(description: str, level: str = "any") -> dict:
         if t:
             t.execution_mode = mode
             tracker._write(t)
-        # 确保调度循环在跑
-        try:
-            import singularity.web.app as app_mod
-            if not app_mod._loop_running:
-                app_mod.start_loop(concurrent=2)
-        except Exception:
-            pass
+        # 确保调度循环在跑（走 _hooks，不 import web —— 见 _hooks 模块说明）
+        from singularity.scheduler import _hooks
+        if not _hooks.loop_status().get("running"):
+            _hooks.start_loop(concurrent=2)
         return {"ok": True, "task_id": task.id, "type": route_type, "description": description}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -202,19 +177,15 @@ def _tool_delete_failed_tasks() -> dict:
 
 def _tool_control_loop(action: str) -> dict:
     """控制调度循环：start/stop/status。"""
-    try:
-        import singularity.web.app as app_mod
-        action = action.lower().strip()
-        if action == "start":
-            ok = app_mod.start_loop(concurrent=2)
-            return {"ok": ok, "running": True, "message": "调度循环已启动"}
-        elif action == "stop":
-            ok = app_mod.stop_loop()
-            return {"ok": ok, "running": app_mod._loop_running, "message": "调度循环已停止"}
-        else:
-            return {"ok": True, "running": app_mod._loop_running, "concurrent": app_mod._loop_concurrent}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    from singularity.scheduler import _hooks
+    action = action.lower().strip()
+    if action == "start":
+        ok = _hooks.start_loop(concurrent=2)
+        return {"ok": ok, "running": True, "message": "调度循环已启动"}
+    elif action == "stop":
+        ok = _hooks.stop_loop()
+        return {"ok": ok, "running": _hooks.loop_status().get("running", False), "message": "调度循环已停止"}
+    return {"ok": True, **_hooks.loop_status()}
 
 def _tool_list_projects() -> list[dict]:
     """列出所有项目及状态。"""

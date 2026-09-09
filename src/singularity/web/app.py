@@ -605,6 +605,14 @@ def stop_loop():
         return True
 
 
+# scheduler 不 import web（分层倒挂）；循环控制 + SSE 广播反向注册到 _hooks，
+# 供观察者工具和 project.py 调用。未注册时 scheduler 降级为保守默认值。
+from singularity.scheduler import _hooks as _hooks_mod  # noqa: E402
+_hooks_mod.register_loop(start_loop, stop_loop,
+                         lambda: {"running": _loop_running, "concurrent": _loop_concurrent})
+_hooks_mod.register_event_sink(_sse_broadcast)
+
+
 def _is_local_origin(origin: str) -> bool:
     """精确检查 origin 是否为本地地址 (防 startswith 绕过)。"""
     try:

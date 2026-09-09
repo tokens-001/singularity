@@ -4,13 +4,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-import queue
-import threading
-import time
 from pathlib import Path
-from typing import Any, Callable
-
-import httpx
+from typing import Any
 
 from singularity.scheduler import config, tracker, witness
 from singularity.scheduler._observer_tools import (
@@ -19,21 +14,6 @@ from singularity.scheduler._observer_tools import (
 )
 
 _log = logging.getLogger("observer")
-
-# 待处理的用户消息队列：元素为 (client_id, question, reply_callback)
-_chat_queue: queue.Queue[tuple[str, str, Callable[[dict], None]]] = queue.Queue()
-
-# 已连接客户端的回复回调注册表
-_pending_replies: dict[str, Callable[[dict], None]] = {}
-_replies_lock = threading.Lock()
-
-# 守护线程控制
-_stop_event = threading.Event()
-_worker_thread: threading.Thread | None = None
-
-# 异常告警去重：key -> last_alert_timestamp
-_alert_history: dict[str, float] = {}
-_alert_lock = threading.Lock()
 
 
 # ═══════════════════════════════════════════════════════════════
