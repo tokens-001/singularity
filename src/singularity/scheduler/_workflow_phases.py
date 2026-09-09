@@ -9,6 +9,7 @@ from singularity.scheduler.project import ProjectState, Phase, save, _projects_d
 from singularity.scheduler.tracker import TaskStatus
 from singularity.scheduler._io import try_parse_json
 from singularity.scheduler import orchestrator
+from singularity.scheduler.roles import get_phase_role
 
 from singularity.scheduler.workflow import (
     _safe_dispatch, _needs_research, _should_skip, _collect_changed_files,
@@ -239,8 +240,8 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
     created = 0
     id_map = {}  # 本地任务 id (T1..Tn) → tracker task_id
     for idx, tdef in enumerate(exec_tasks):
-        # 实现层统一 implementer（砍掉 5 个工程师角色后，无 layer 路由）
-        role_key = "implementer"
+        # 实现层角色：默认 implementer（可在 .qidian/phases.json 改）
+        role_key = get_phase_role(Phase.EXECUTING) or "implementer"
 
         # 本地任务 id = T{idx+1} (拆解器不产 id 字段，depends_on_local_id 引用此 id)
         tid = tdef.get("id", "") or f"T{idx+1}"

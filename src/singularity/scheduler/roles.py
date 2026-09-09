@@ -224,6 +224,29 @@ def get_role(key: str) -> Optional[Role]:
     return ROLES.get(key)
 
 
+# 阶段 → 角色 key。默认 = 现状（不配置就不改变行为）。
+# 一个角色可用于多个阶段（implementer 用于执行+修复），所以映射表独立存放。
+_DEFAULT_PHASE_ROLES = {
+    "executing": "implementer",
+    "fixing": "implementer",
+}
+
+
+def get_phase_role(phase) -> str:
+    """查某个研发阶段该用哪个角色。未配置 → 用默认。"""
+    key = getattr(phase, "value", phase)
+    from .config import QIDIAN_DIR
+    path = QIDIAN_DIR / "phases.json"
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and key in data:
+                return str(data[key] or "")
+        except Exception as e:
+            logging.getLogger(__name__).warning("phase roles load failed: %s", e)
+    return _DEFAULT_PHASE_ROLES.get(key, "")
+
+
 # ── 模块加载: 填充 PERSONAS 和 ROLES ──
 def _apply_overrides() -> None:
     """把 .qidian/roles_custom.json 应用到 ROLES。

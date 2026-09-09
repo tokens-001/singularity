@@ -69,3 +69,38 @@ class TestRoleOverrides:
         (tmp / "roles_custom.json").write_text("{ 不是 json", encoding="utf-8")
         roles._apply_overrides()                     # 不抛，保留出厂定义
         assert roles.ROLES["base"].system_prompt == "原始提示词"
+
+
+class TestPhaseRoleMap:
+    """阶段 → 角色映射。默认值必须等于改造前的写死行为。"""
+
+    def _cfg(self, tmp_path, monkeypatch):
+        from singularity.scheduler import config, roles
+        monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+        return roles
+
+    def test_defaults_match_current_behaviour(self, tmp_path, monkeypatch):
+        roles = self._cfg(tmp_path, monkeypatch)
+        assert roles.get_phase_role("executing") == "implementer"
+        assert roles.get_phase_role("fixing") == "implementer"
+
+    def test_config_overrides_default(self, tmp_path, monkeypatch):
+        roles = self._cfg(tmp_path, monkeypatch)
+        (tmp_path / "phases.json").write_text(json.dumps({"executing": "architect"}), encoding="utf-8")
+        assert roles.get_phase_role("executing") == "architect"
+
+    def test_enum_accepted(self, tmp_path, monkeypatch):
+        roles = self._cfg(tmp_path, monkeypatch)
+        from singularity.scheduler.project import Phase
+        assert roles.get_phase_role(Phase.EXECUTING) == "implementer"
+
+    def test_unknown_phase_is_empty(self, tmp_path, monkeypatch):
+        """没配的阶段不注入角色 —— 和改造前一致（调研/架构本来就没角色）。"""
+        roles = self._cfg(tmp_path, monkeypatch)
+        assert roles.get_phase_role("researching") == ""
+        assert roles.get_phase_role("planning") == ""
+
+    def test_broken_file_falls_back_to_default(self, tmp_path, monkeypatch):
+        roles = self._cfg(tmp_path, monkeypatch)
+        (tmp_path / "phases.json").write_text("{ 坏的", encoding="utf-8")
+        assert roles.get_phase_role("executing") == "implementer"
