@@ -297,8 +297,8 @@ def fuse_architecture(task_desc: str, outputs: list[str],
 # 新融合机制 v2（QIDIAN_FUSION_V2=1）—— 见 docs/融合机制重设计.md
 #
 #   ② 提取三类（共识/分歧/独有优点）1 次
-#   ③ 共享对话：发言方陈述 → 其余逐条 accept/insist → 有 insist 才确认
-#   ④ 最后发言方定稿 → 其余确认（不认可带 issues 重写 1 次）
+#   ③ 共享对话：发言方陈述 → 其余逐条 accept/insist → 有 insist 才确认，往复至收敛
+#   ④ 发言方定稿 → 其余确认（不认可带 issues 重写 1 次）
 #
 # 相比旧两阶段：补上了「反驳通道」（insist + 解释），且定稿输入是对话结论
 # 而不是 N 份方案全文 —— 从根上压住"取并集"造成的膨胀。
@@ -358,7 +358,7 @@ _V2_ROUND1 = """你是架构委员会成员「{speaker}」。委员会已把你�
 
 约束: 只谈清单上的条目，不许重述方案全文。只输出 JSON。"""
 
-_V2_ROUND2 = """你是架构委员会成员「{speaker}」。成员「{other}」对分歧清单逐条陈述了理由。
+_V2_ROUND2 = """你是架构委员会成员「{speaker}」。以下是分歧清单与已有论证。
 
 【原始需求】
 {task}
@@ -475,6 +475,16 @@ def _j(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2)
 
 
+def _votes_into(store: dict, who: str, items: list, field: str) -> dict:
+    """把 [{id, <field>}] 收进 store[(who, id)]（只留最新一票），返回本轮结果。"""
+    cur = {}
+    for it in items or []:
+        if isinstance(it, dict) and "id" in it:
+            store[(who, it["id"])] = it.get(field, "")
+            cur[it["id"]] = it.get(field, "")
+    return cur
+
+
 def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
                          judge_model: str = "") -> str:
     """新融合机制。plans: [(模型名, 方案全文)]。任一步失败返回 ""。"""
@@ -503,65 +513,77 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
     others = [m for m in members if m != writer]
 
     # ── ③ 共享对话 ──
-    transcript, said = [], {}
+    # 轮 1 发言方陈述 → 其余成员逐条回应 → 有 insist 才让发言方确认，交替往复。
+    # 终止三选一：全 accept / 发言方全 agree（有人让步才算结论）/ 复读 / 撞轮数上限。
+    # 只认「有人让步」是刻意的 —— 否则发言方一句 question 就终局，多给的轮次是死代码。
+    max_rounds = max(2, int(os.environ.get("QIDIAN_FUSION_V2_ROUNDS", "5")))
+    transcript = []
+    resp_votes, conf_votes, gain_votes = {}, {}, {}   # (谁, 条目id) → 最新一票
     if disagreements or gains:
         d_json, g_json = _j(disagreements), _j(gains)
-        said[writer] = try_parse_json(_call_model(
+        a1 = try_parse_json(_call_model(
             _V2_ROUND1.format(speaker=writer, task=task, outputs=plans_text,
                               disagreements=d_json, unique_gains=g_json),
             writer, max_tokens=6000) or "") or {}
-        transcript.append(f"[{writer} 陈述]\n{_j(said[writer])}")
+        transcript.append(f"[{writer} 陈述]\n{_j(a1)}")
+        _votes_into(gain_votes, writer, a1.get("unique_gains"), "stance")
+        rounds, prev = 1, {}
 
-        def _respond(m):
-            r = _call_model(_V2_ROUND2.format(
-                speaker=m, other=writer, task=task, outputs=plans_text,
-                transcript="\n\n".join(transcript), unique_gains=g_json),
-                m, max_tokens=6000)
-            return m, (try_parse_json(r) if r else {})
+        while rounds < max_rounds:
+            def _respond(m):
+                r = _call_model(_V2_ROUND2.format(
+                    speaker=m, task=task, outputs=plans_text,
+                    transcript="\n\n".join(transcript), unique_gains=g_json),
+                    m, max_tokens=6000)
+                return m, (try_parse_json(r) if r else {})
 
-        for m, a in _parallel([lambda m=m: _respond(m) for m in others]):
-            said[m] = a if isinstance(a, dict) else {}
-            transcript.append(f"[{m} 回应]\n{_j(said[m])}")
+            cur = {}
+            for m, a in _parallel([lambda m=m: _respond(m) for m in others]):
+                a = a if isinstance(a, dict) else {}
+                transcript.append(f"[{m} 回应]\n{_j(a)}")
+                cur.update(_votes_into(resp_votes, m, a.get("responses"), "verdict"))
+                _votes_into(gain_votes, m, a.get("unique_gains"), "stance")
+            rounds += 1
+            if cur == prev:
+                break                       # 复读机 → 再辩也没新信息，别烧 token
+            prev = dict(cur)
+            if not any(v == "insist" for v in cur.values()):
+                break                       # 全 accept → 收敛
+            if rounds >= max_rounds:
+                break
 
-        # 有人 insist 才让发言方确认（spec：上限 3 轮）
-        insists = {r.get("id") for m in others
-                   for r in (said[m].get("responses") or [])
-                   if isinstance(r, dict) and r.get("verdict") == "insist"}
-        confirms = {}
-        if insists:
-            confirms = try_parse_json(_call_model(
+            c = try_parse_json(_call_model(
                 _V2_ROUND3.format(speaker=writer, task=task,
                                   transcript="\n\n".join(transcript)),
                 writer, max_tokens=4000) or "") or {}
-            transcript.append(f"[{writer} 确认]\n{_j(confirms)}")
-    else:
-        confirms = {}
+            transcript.append(f"[{writer} 确认]\n{_j(c)}")
+            cur_c = _votes_into(conf_votes, writer, c.get("confirms"), "verdict")
+            rounds += 1
+            if not any(v == "question" for v in cur_c.values()):
+                break                       # 发言方全认了 → 收敛
 
-    # 分歧结论：默认发言方胜；其余成员 insist 且发言方 agree（认输）→ 对方胜。
+    # 撞上限仍有 question 的点 → 按发言方处理，但别让它静默通过
+    stuck = [i for (w, i), v in conf_votes.items() if v == "question"]
+    if stuck:
+        witness.heartbeat("execution_judge", f"warn:fusion_stuck:{len(stuck)}"[:80])
+
+    # 分歧结论：默认发言方胜；对方 insist 且发言方 agree（认输）→ 对方胜。
     # ponytail: 多个 insist 方各自立场不同时只记第一个 —— N>2 才有的歧义，
     # 实际分歧点几乎都是两家对立（spec 按两方设计）。
     resolved = []
     for d in disagreements:
         did = d.get("id")
-        verdicts = {m: r.get("verdict") for m in others
-                    for r in (said.get(m, {}).get("responses") or [])
-                    if isinstance(r, dict) and r.get("id") == did}
+        vs = [v for (m, i), v in resp_votes.items() if i == did]
         winner = writer
-        if verdicts and all(v == "accept" for v in verdicts.values()):
-            winner = writer
-        elif "insist" in verdicts.values():
-            c = next((x.get("verdict") for x in (confirms.get("confirms") or [])
-                      if isinstance(x, dict) and x.get("id") == did), "")
-            if c == "agree":
-                winner = next((m for m, v in verdicts.items() if v == "insist"), writer)
+        if "insist" in vs and conf_votes.get((writer, did)) == "agree":
+            winner = next((m for (m, i), v in resp_votes.items()
+                           if i == did and v == "insist"), writer)
         resolved.append({**d, "winner": winner})
 
     # 独有做法：全体 adopt 才采纳（保守 —— 长度就是膨胀的主因）
     adopted = []
     for g in gains:
-        stances = [x.get("stance") for a in said.values()
-                   for x in (a.get("unique_gains") or [])
-                   if isinstance(x, dict) and x.get("id") == g.get("id")]
+        stances = [v for (m, i), v in gain_votes.items() if i == g.get("id")]
         if stances and all(s == "adopt" for s in stances):
             adopted.append(g)
     rejected = [g for g in gains if g not in adopted]

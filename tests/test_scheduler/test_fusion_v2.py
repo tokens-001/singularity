@@ -95,6 +95,14 @@ def test_insist_then_question_keeps_writers_view(monkeypatch):
     assert p.count('"winner": "A"') == 2
 
 
+def test_repeat_round_stops_ping_pong(monkeypatch):
+    """双方都死扛 → 复读即停，别烧到轮数上限。"""
+    calls = []
+    _stub(monkeypatch, calls=calls, r3={"confirms": [{"id": 1, "verdict": "question"}]})
+    ej.fuse_architecture_v2("需求", PLANS)
+    assert len([1 for _, p in calls if "逐条回应" in p]) == 2   # R2 只跑两轮
+
+
 def test_gain_rejected_if_any_side_rejects(monkeypatch):
     calls = []
     _stub(monkeypatch, calls=calls,
