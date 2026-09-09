@@ -1,6 +1,6 @@
 """validator.py — validation pipeline. v2: run_project_tests + crossover_review."""
 from __future__ import annotations
-import json, re, subprocess
+import json, logging, re, subprocess
 from dataclasses import dataclass, field
 from typing import Optional
 from singularity.scheduler import config

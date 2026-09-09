@@ -89,8 +89,13 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             if fail_check["blocked"]:
                 quality["warnings"].append(fail_check["reason"])
                 quality["failure_kind"] = "review_limit_hit"
-        except Exception:
-            pass
+        except Exception as e:
+            # 不能静默: 计数写不进去 = 触顶兜底永不生效 (退化成无限自动重试)
+            try:
+                from . import witness
+                witness.heartbeat('review', f'warn:record_review_failure:{e}')
+            except Exception:
+                pass
 
     # 0) 本地安全扫描 (正则筛危险代码, 零成本前置防线)
     if changed and cwd:

@@ -389,7 +389,9 @@ def ready_tasks(exclude: set[str] = None) -> list[Task]:
                 ready.append(task)
             else:
                 # 依赖未满足 → 标 BLOCKED (仅 PENDING/ROUTED 转, 已 BLOCKED 不重复写)
-                if task.status != TaskStatus.BLOCKED:
+                # PAUSED 排除在外: 它是人审暂停态, 改写成 BLOCKED 会让 task_resume
+                # 的 "只有暂停中的任务可恢复" 判定失效, 人只能手工删 pause 文件
+                if task.status not in (TaskStatus.BLOCKED, TaskStatus.PAUSED):
                     task.status = TaskStatus.BLOCKED
                     task.updated_at = time.time()
                     _write(task)

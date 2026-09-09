@@ -5,6 +5,7 @@ project_lineup 支持项目级自定义编组。
 """
 
 from __future__ import annotations
+import logging
 import threading
 import time
 from dataclasses import dataclass

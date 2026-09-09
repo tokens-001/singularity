@@ -316,10 +316,16 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
                 meta_path.write_text(_json.dumps(fusion_meta, ensure_ascii=False, indent=2))
                 # 包装成 ExecutorResult 兼容格式
                 class _FusionResult:
+                    # 字段要和 neijinglu.build_report / _save_trace 读的契约对齐,
+                    # 缺一个就 AttributeError → trace 静默不落盘
                     raw_output = fused
                     success = True
                     error = ""
                     changed_files: list = []
+                    patch_path = ""
+                    token_count = 0
+                    elapsed = 0.0
+                    tool_events: list = []
                 return DispatchResult(
                     level=level,
                     agent_cfg={"model": f"fusion({','.join(m for m,_ in outputs)})"},

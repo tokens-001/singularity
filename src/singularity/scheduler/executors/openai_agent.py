@@ -521,7 +521,9 @@ class OpenAIAgentExecutor(BaseExecutor):
     def _tests_green(self, command: str, result: str) -> bool:
         """run_command 跑了测试且 exit=0 → 测试通过。治 thinking 模型反复测不收敛撞 900s。"""
         cmd = command.lower()
-        if not any(k in cmd for k in ("pytest", "unittest", " test", "test_")):
+        # 只认真正的测试调用。原先的子串匹配会把 `grep -r test src` / `ls test_data`
+        # / `cat test.log` 当成"测试通过" → 误清工具列表, 任务被提前截断
+        if not re.search(r"\b(?:pytest|unittest)\b|\bnpm\s+(?:run\s+)?test\b", cmd):
             return False
         return "exit=0" in result
 
@@ -553,7 +555,7 @@ class OpenAIAgentExecutor(BaseExecutor):
         try:
             r = subprocess.run(
                 ["git", "status", "--porcelain"],
-                capture_output=True, text=True, cwd=str(self._cwd),
+                capture_output=True, text=True, cwd=str(self._cwd), timeout=15,
             )
             if r.returncode == 0:
                 for line in r.stdout.splitlines():

@@ -139,6 +139,7 @@ def estimate_tokens(subtasks: list[dict], parent_desc: str = "") -> dict:
     """
     # 估算参数
     TOKENS_PER_CHAR = 0.6          # 中英混合平均
+    OVERHEAD = {"any": 2000}       # 每任务固定开销 (两档后统一 any; 未知 level 走默认 2000)
     COST_PER_M = {"any": 0.30}  # $/M tokens; 旧 E/E+/D 回退到 default=0.30
     RESPONSE_MULTIPLIER = 2.0      # prompt + completion + retry buffer
 
