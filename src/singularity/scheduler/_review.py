@@ -92,6 +92,28 @@ def run_post_exec_checks(*, validation, quality, exec_result,
         except Exception:
             pass
 
+    # 0) 本地安全扫描 (正则筛危险代码, 零成本前置防线)
+    if changed and cwd:
+        try:
+            _sec = []
+            for _f in changed[:20]:
+                _p = Path(cwd) / _f
+                if not _p.exists():
+                    continue
+                _r = val_mod.security_review(_p.read_text(encoding="utf-8", errors="ignore"),
+                                             file_path=_f, severity_filter="critical")
+                _sec.extend(_r.get("issues", []))
+            if _sec:
+                quality["warnings"].append(
+                    f"安全扫描发现 {len(_sec)} 处危险代码: " +
+                    "; ".join(i["detail"][:60] for i in _sec[:3]))
+                quality["failure_kind"] = "security"
+                quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.3)
+                validation.action = "retry"
+                validation.unverified.append(f"安全扫描: {len(_sec)} 处危险模式")
+        except Exception:
+            pass
+
     # 1) run project tests (S2: 带超时包装)
     # 小改动(单文件<50行)跳过项目全量测试：独立小任务(如写 hello.py)跟项目测试套件无关，跑了会误判
     if validation.action == "pass" and changed and not _is_trivial_change(changed, cwd):

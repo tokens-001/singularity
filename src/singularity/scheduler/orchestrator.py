@@ -145,6 +145,11 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
             except Exception:
                 pass
             continue
+        try:  # 性能记录: execute 耗时 (validate/merge 在 finalize 内部, 不计)
+            from singularity.scheduler._profiler import record_perf
+            record_perf(t.id, t.route_type or "", 0.0, now - submitted_at, 0.0, 0.0)
+        except Exception:
+            pass
         if batch.merge_request:
             mq.submit(batch.merge_request)
             pending_batches[t.id] = (t, t_route, t_snap, batch)

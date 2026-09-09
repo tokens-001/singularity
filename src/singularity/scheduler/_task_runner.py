@@ -32,8 +32,6 @@ from singularity.scheduler._worktree import (
 from singularity.scheduler._planner import (
     materialize_plan, _topo_sort, _materialize_in_main,
     _maybe_complete_parents,
-    _run_committee, _run_committee_member,
-    _synthesize_plans, _llm_synthesize as _llm_synth,
 )
 from singularity.scheduler.goal_loop import GoalLoop
 
@@ -41,7 +39,7 @@ _GOAL_RE = _re.compile(r'^\[Goal\]\s*(.+?)\n', _re.ASCII)
 
 # ── 画像 ──────────────────────────────────────────
 from singularity.scheduler._token_budget import record_tokens, get_usage_stats
-from singularity.scheduler._profiler import record_perf, get_perf_stats
+from singularity.scheduler._profiler import get_perf_stats
 
 # ── 业务依赖 ────────────────────────────────────────────
 from singularity.scheduler import config
@@ -92,6 +90,8 @@ class TaskRunner:
           (commit_wt + 填 merge_request, 不直接 merge_back)。
           None → v2 路径 (直接 merge_back)。修复 reap bug 根因#1。
         """
+        from singularity.scheduler.log import set_trace_id
+        set_trace_id(task.id)  # 本任务生命周期内 log_event 都带 trace_id
         # 路由
         if task.route_locked:
             route = router_mod.RouteResult(

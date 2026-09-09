@@ -93,7 +93,6 @@ def _setup(monkeypatch, **overrides):
     monkeypatch.setattr(tr, "val_mod", _o4)
 
     monkeypatch.setattr(tr, "_run_with_retry", lambda t, ctx, agents: batch)
-    monkeypatch.setattr(tr, "_run_committee", lambda t, ctx, agents, d_agents: batch)
 
     _o5 = NS()
     _gr = NS()

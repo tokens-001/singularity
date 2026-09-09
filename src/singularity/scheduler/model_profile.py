@@ -70,6 +70,7 @@ class ModelStats:
             "elo": round(self.elo, 1),
             "failure_modes": self.failure_modes,
             "template_stats": dict(self.template_stats),
+            "last_updated": self.last_updated,
         }
 
 
@@ -297,8 +298,9 @@ class ProfileStore:
                     elo=sd.get("elo", 1500.0),
                     failure_modes=sd.get("failure_modes", {}),
                     template_stats=sd.get("template_stats", {}),
+                    last_updated=sd.get("last_updated", 0.0),
                 )
-                self._stats[key] = s
+                self._stats[key] = apply_time_decay(s)  # 旧画像降权
             for bd in data.get("breakers", []):
                 cb = CircuitBreaker(
                     model=bd["model"],
@@ -362,6 +364,7 @@ def apply_time_decay(stats: ModelStats, current_time: float = None,
     decay = 0.5 ** (age_days / half_life_days)
     stats.total_attempts = max(1, int(stats.total_attempts * decay))
     stats.successes = int(stats.successes * decay)
+    stats.last_updated = current_time  # 衰减后重置时间戳, 避免重复衰减
     return stats
 
 

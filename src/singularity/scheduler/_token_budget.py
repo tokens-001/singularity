@@ -145,10 +145,6 @@ def record_tokens(project_id: str = "", project_name: str = "", task_id: str = "
         _budget.record(project_id, project_name, task_id, model, level, tokens)
 
 
-def get_budget() -> TokenBudget:
-    return _budget
-
-
 def get_usage_stats() -> dict:
     """供 API 查询的用量统计。"""
     b = _budget

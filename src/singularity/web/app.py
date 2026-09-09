@@ -875,6 +875,7 @@ def api_task_set_mode(task_id):
 
 @app.route("/api/tasks/<task_id>/delete", methods=["POST"])
 def api_delete_task(task_id):
+    audit_log("delete_task", task_id, ip=request.remote_addr)
     data, code = _api_handler.task_delete(task_id)
     return jsonify(data), code
 
@@ -1077,6 +1078,7 @@ def api_project_run_phase(project_id):
 @app.route("/api/projects/<project_id>", methods=["DELETE"])
 def api_project_delete(project_id):
     from singularity.scheduler import project as proj_mod
+    audit_log("delete_project", project_id, ip=request.remote_addr)
     ok = proj_mod.delete(project_id)
     return jsonify({"ok": ok}), 200 if ok else 404
 
@@ -1342,6 +1344,7 @@ def api_agents_update(level, model):
 
 @app.route("/api/agents/<level>/<model>", methods=["DELETE"])
 def api_agents_remove(level, model):
+    audit_log("delete_agent", f"{level}:{model}", ip=request.remote_addr)
     data, code = _api_handler.agent_remove(level, model)
     _push_event("agent_change", f"{level}:-{model}")
     return jsonify(data), code
@@ -1373,6 +1376,7 @@ def api_store_add():
 
 @app.route("/api/api-store/<api_id>", methods=["DELETE"])
 def api_store_remove(api_id):
+    audit_log("delete_api_key", api_id, ip=request.remote_addr)
     data, code = _api_handler.api_store_remove(api_id)
     return jsonify(data), code
 
@@ -1505,6 +1509,7 @@ def api_models_import():
 
 @app.route("/api/models/<model_id>", methods=["DELETE"])
 def api_models_remove(model_id):
+    audit_log("delete_model", model_id, ip=request.remote_addr)
     data, code = _api_handler.model_remove(model_id)
     return jsonify(data), code
 

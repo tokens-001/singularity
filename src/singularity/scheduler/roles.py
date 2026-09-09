@@ -264,15 +264,6 @@ registry = AgentRegistry()
 def get_role(key: str) -> Optional[Role]:
     return ROLES.get(key)
 
-def list_roles() -> list[Role]:
-    return list(ROLES.values())
-
-def list_personas() -> list[Persona]:
-    return list(PERSONAS.values())
-
-def get_persona(key: str) -> Optional[Persona]:
-    return PERSONAS.get(key)
-
 
 # ── 模块加载: 填充 PERSONAS 和 ROLES ──
 def _init():
