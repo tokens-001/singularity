@@ -108,6 +108,11 @@ CACHE = Path(__file__).resolve().parent / ".ab_cache.json"
 
 def main():
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+    # 测的是「融合」，辩论是无关变量（其价值已单独盲评过 +3~5 分）。
+    # 跳掉辩论：委员会 5 波 → 1 波（只留初稿），快 3 倍以上。AB_NO_DEBATE=0 恢复。
+    if os.environ.get("AB_NO_DEBATE", "1") == "1":
+        de._debate = lambda task, members, chain, task_id, level, **kw: members
+        print("（已跳过辩论：只跑初稿 → 融合，隔离「融合」这一变量）")
     agents = disp.load_agents()
     chain = disp.pick_agent_fallback_chain(agents, "any")
     print(f"委员会成员: {[a.get('model') for a in chain]} | 盲评模型: {JUDGE_MODEL}")
