@@ -110,3 +110,26 @@ class TestPhaseRoleMap:
         roles = self._cfg(tmp_path, monkeypatch)
         (tmp_path / "phases.json").write_text("{ 坏的", encoding="utf-8")
         assert roles.get_phase_role("executing") == "implementer"
+
+
+class TestDefinitionLayerRoles:
+    """定义层 4 个角色并入 roles.toml 后，取提示词必须能通。
+
+    以前 _definition_role_prompt 一调就 NameError —— _OBSERVER_DEFINITION_ROLES
+    定义在 _observer_tools，本模块用 global 引用却没导入。定义层角色提示词从没生效过。
+    """
+
+    def test_all_four_roles_resolve(self):
+        from singularity.scheduler._observer_definition import _definition_role_prompt
+        for k in ("product-manager", "interaction-designer", "ui-designer", "researcher"):
+            assert len(_definition_role_prompt(k)) > 200, k
+
+    def test_legacy_key_still_matches(self):
+        """历史遗留的 observer-researcher（SKILL.md 里的 name）也要能命中。"""
+        from singularity.scheduler._observer_definition import _definition_role_prompt
+        assert _definition_role_prompt("observer-researcher") == _definition_role_prompt("researcher")
+
+    def test_unknown_key_is_empty(self):
+        from singularity.scheduler._observer_definition import _definition_role_prompt
+        assert _definition_role_prompt("完全不存在的角色") == ""
+        assert _definition_role_prompt("") == ""

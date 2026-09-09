@@ -21,53 +21,30 @@ _log = logging.getLogger("observer")
 # ═══════════════════════════════════════════════════════════════
 
 
-def _load_observer_skills() -> dict[str, dict]:
-    """加载 observer 下的 4 个定义层角色 skill。"""
-    import re
-    skills_dir = Path(__file__).resolve().parent.parent / "skills" / "observer"
-    roles = {}
-    for d in skills_dir.iterdir() if skills_dir.exists() else []:
-        if not d.is_dir():
-            continue
-        skill_md = d / "SKILL.md"
-        if not skill_md.exists():
-            continue
-        text = skill_md.read_text(encoding="utf-8")
-        # 解析 frontmatter
-        fm = {}
-        if text.startswith("---"):
-            parts = text.split("---", 2)
-            if len(parts) >= 3:
-                for line in parts[1].strip().split("\n"):
-                    if ":" in line:
-                        k, v = line.split(":", 1)
-                        fm[k.strip()] = v.strip()
-                body = parts[2].strip()
-            else:
-                body = text
-        else:
-            body = text
-        roles[fm.get("name", d.name)] = {
-            "key": d.name,
-            "name": fm.get("description", fm.get("name", d.name)),
-            "system_prompt": body,
-        }
-    return roles
+# 定义层 4 个角色已并入 roles.toml（2026-09-10）—— 和研发阶段角色同一个家，
+# 页面上可改。区别只在"谁切换"：这里是模型看对话自己戴帽子，研发阶段是代码看 phase。
+_OBSERVER_ROLE_KEYS = ("product-manager", "interaction-designer", "ui-designer", "researcher")
 
 
 def _definition_role_prompt(role_key: str) -> str:
-    """获取定义层角色 prompt。"""
-    global _OBSERVER_DEFINITION_ROLES
-    if not _OBSERVER_DEFINITION_ROLES:
-        _OBSERVER_DEFINITION_ROLES = _load_observer_skills()
-    # 精确匹配
-    role = _OBSERVER_DEFINITION_ROLES.get(role_key, {})
-    if role:
-        return role.get("system_prompt", "")
-    # 模糊匹配: 按 key 后缀
-    for k, v in _OBSERVER_DEFINITION_ROLES.items():
-        if k.endswith(role_key) or role_key in k:
-            return v.get("system_prompt", "")
+    """取定义层角色提示词。
+
+    以前这里有个 NameError：_OBSERVER_DEFINITION_ROLES 定义在 _observer_tools，
+    本模块却用 `global` 引用却没导入 —— 第一次读就炸，定义层角色提示词从没生效过。
+    现在直接查 roles（单一来源）。
+    """
+    if not role_key:
+        return ""
+    from .roles import get_role
+    r = get_role(role_key)
+    if r:
+        return r.get_full_prompt()
+    # 容错：模型输出的 key 可能带前后缀（历史上出现过 observer-researcher）
+    for k in _OBSERVER_ROLE_KEYS:
+        if k in role_key or role_key in k:
+            r = get_role(k)
+            if r:
+                return r.get_full_prompt()
     return ""
 
 
