@@ -69,6 +69,7 @@ def task_list(status_filter: str = "", level_filter: str = "") -> tuple[dict, in
         updated = t.get("updated_at", created)
         result.append({
             "id": t.get("id", t["_filename"]),
+            "project_id": t.get("project_id", ""),
             "description": (t.get("description", "") or "")[:120],
             "status": t.get("status", "unknown"),
             "route_level": t.get("route_level", ""),

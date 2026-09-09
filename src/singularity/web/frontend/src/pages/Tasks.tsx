@@ -9,6 +9,7 @@ const STATUS_COLOR: Record<string,string> = { pending:'#9a9993', running:'#2563e
 
 export default function Tasks() {
   const [tasks, setTasks] = useState<Task[]>([])
+  const [projectNames, setProjectNames] = useState<Record<string,string>>({})
   const [showCreate, setShowCreate] = useState(false)
   const [desc, setDesc] = useState('')
   const [search, setSearch] = useState('')
@@ -18,6 +19,11 @@ export default function Tasks() {
   const fetch = useCallback(() => {
     setLoading(true)
     api.tasks().then(setTasks).catch(() => toast('加载任务失败', 'error')).finally(() => setLoading(false))
+    api.projects().then((ps: any[]) => {
+      const m: Record<string,string> = {}
+      ps.forEach((p: any) => { if (p.id) m[p.id] = p.name || p.id })
+      setProjectNames(m)
+    }).catch(() => {})
   }, [])
   useEffect(() => { fetch() }, [fetch])
   useSSE(() => { fetch() })
@@ -60,6 +66,11 @@ export default function Tasks() {
             <div key={t.id} className="flex-center gap-8" title={t.description}
               style={{ padding: '8px 10px', background: '#fff', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}>
               <span className="status-dot" style={{ background: STATUS_COLOR[t.status] || '#9a9993', flexShrink: 0 }}/>
+              {t.project_id && (
+                <span className="fs-10" style={{ flexShrink: 0, padding: '1px 6px', borderRadius: 4, background: '#eef2ff', color: '#4f46e5', border: '1px solid #c7d2fe', whiteSpace: 'nowrap' }}>
+                  {projectNames[t.project_id] || t.project_id.slice(0, 8)}
+                </span>
+              )}
               <span className="truncate" style={{ flex: 1, color: '#141413' }}>{t.description.split('\n')[0]}</span>
               <span className="fs-10" style={{ color: STATUS_COLOR[t.status] || '#9a9993', flexShrink: 0 }}>{STATUS_CN[t.status] || t.status}</span>
               <span className="fs-10 text-muted mono" style={{ flexShrink: 0 }}>{t.id.slice(0, 8)}</span>

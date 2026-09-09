@@ -25,6 +25,11 @@ function togglePin(pid: string) {
   const next = pins.includes(pid) ? pins.filter(p => p !== pid) : [pid, ...pins]
   localStorage.setItem('qidian-pinned', JSON.stringify(next))
 }
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return (n/1_000_000).toFixed(1) + 'M'
+  if (n >= 1_000) return (n/1_000).toFixed(1) + 'K'
+  return String(n || 0)
+}
 
 export default function AppLayout() {
   const { sidebarCollapsed, toggleSidebar } = useAppStore()
@@ -38,11 +43,17 @@ export default function AppLayout() {
   const [pinned, setPinned] = useState<string[]>(getPinned)
   const addToast = useToast(s => s.add)
   const sidebarWidth = sidebarCollapsed ? 0 : 260
+  const [usage, setUsage] = useState<any>({})
 
   useEffect(() => {
     const f = async () => {
       try { const d: any = await api.projects(); setProjects(Array.isArray(d)?d:(d?.projects||[])) } catch { addToast('加载项目失败', 'error') }
     }
+    f(); const t = setInterval(f, 10000); return () => clearInterval(t)
+  }, [])
+
+  useEffect(() => {
+    const f = async () => { try { setUsage(await api.tokenUsage()) } catch {} }
     f(); const t = setInterval(f, 10000); return () => clearInterval(t)
   }, [])
 
@@ -104,6 +115,13 @@ export default function AppLayout() {
             })}
         </div>
 
+        <div style={{ padding: '8px 12px', borderTop: '1px solid #f3f2ec', display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+            <span style={{ color: '#6b6b68' }}>今日 {fmtTokens(usage?.daily_tokens)} tokens</span>
+            <span style={{ color: '#6b6b68' }}>${(usage?.daily_cost || 0).toFixed(2)}</span>
+          </div>
+          {usage?.warning && <div style={{ fontSize: 10, color: '#dc2626' }}>{usage.warning}</div>}
+        </div>
         <div style={{ padding: '8px 12px', borderTop: '1px solid #f3f2ec', display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ width: 22, height: 22, borderRadius: 11, background: '#d8d5cb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <User size={12} style={{color:'#9a9993'}}/>
