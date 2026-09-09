@@ -10,7 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED, as_completed
 from pathlib import Path
 
-from singularity.scheduler._types import RunContext, BatchOutput, _SnapProxy
+from singularity.scheduler._types import RunContext, BatchOutput, _SnapProxy, _pending_sse_events
 from singularity.scheduler._worktree import (
     _maybe_create_worktree, _cleanup_wt, _lock_wt, _unlock_wt,
     _anchor_ref, _build_merge_request,
@@ -427,6 +427,37 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                         changed=changed)
 
                 last_validation = validation
+
+                # ── QA 门禁 (supervisor): 硬证据失败 → 不合并 ──
+                # 位置: merge_request 已构造、_decide_cascade 之前。清掉 merge_request
+                # 后代码进不了主仓库 (v3 不 submit / v2 不 merge_back)。
+                # 只拦 verdict=fail (硬证据); escalate/retry 是软信号, 不拦, 仅 SSE 通知 Owner。
+                if pending_merge_req is not None:
+                    try:
+                        from .supervisor import supervise, qa_context
+                        _cons, _check = qa_context(task)
+                        sv = supervise(task.description, changed, _cons, _check,
+                                       getattr(exec_result, 'raw_output', '') or '',
+                                       task.id, repo_root=str(repo_root))
+                        if sv.verdict == "fail":
+                            pending_merge_req = None
+                            quality.setdefault("warnings", []).append(
+                                "QA 硬证据失败: " + "; ".join(sv.issues[:2]))
+                            quality["failure_kind"] = "qa_fail"
+                            # 压低置信度, 否则 _decide_cascade 的 cascade_accept 会直接放行
+                            validation.confidence = min(validation.confidence, 0.3)
+                            validation.action = "retry" if turn < level_max else "abort"
+                            validation.unverified.append(
+                                "QA 硬证据失败 (未合并): " + "; ".join(sv.issues[:2]))
+                        elif sv.verdict in ("escalate", "retry"):
+                            _pending_sse_events.append({
+                                "kind": "system",
+                                "msg": f"[{task.id[:8]}] QA 软信号 {sv.verdict} (不拦合并): "
+                                       + "; ".join(sv.issues[:1]),
+                                "ts": time.time(), "task_id": task.id,
+                            })
+                    except Exception as e:
+                        witness.heartbeat(task.id, f"warn:qa_gate:{e}")
 
                 cascade_action, payload = _decide_cascade(
                     task, level, turn, validation, disp_result, all_tool_events,

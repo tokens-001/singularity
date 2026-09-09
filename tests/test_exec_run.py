@@ -120,6 +120,12 @@ def install_stubs():
         "confidence": getattr(S, "_cur_conf", 0.9),
         "quality_signals": {}, "warnings": [], "failure_kind": "ok"}
 
+    # supervisor QA 门禁: 用例切 S.qa_verdict ("pass"/"fail"/"escalate")
+    import singularity.scheduler.supervisor as _sup_mod
+    S.qa_verdict = "pass"
+    _sup_mod.supervise = lambda *a, **k: type(
+        "V", (), {"verdict": S.qa_verdict, "issues": ["stub QA 问题"]})()
+
 def make_task():
     return type("T", (), {
         "id": "1234567890123", "description": "测试任务", "route_level": "any",
@@ -227,6 +233,42 @@ if __name__ == "__main__":
     b = run_case(v3=False)  # v2: merge_queue=None → 走 wt_merge_back
     check("term_reason 含 merge_conflict", "merge_conflict" in b.term_reason, b.term_reason)
     check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
+
+    print("── 路径9: QA 门禁 — 硬失败不合并 (A/B 对照) ──")
+    S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2}]
+    S.escalate_to = None
+
+    reset_wt()
+    S.qa_verdict = "pass"
+    S.dispatch_queue = [("ok", FakeExec(success=True))]
+    S.validate_queue = [FakeVal(action="pass")]
+    b_qa_pass = run_case(v3=True)
+    check("QA pass → 保留 merge_request", b_qa_pass.merge_request == "FAKE_MR",
+          f"实际 {b_qa_pass.merge_request!r}")
+
+    reset_wt()
+    S.qa_verdict = "fail"
+    S.dispatch_queue = [("ok", FakeExec(success=True)), ("ok", FakeExec(success=True))]
+    S.validate_queue = [FakeVal(action="pass"), FakeVal(action="pass")]
+    b_qa_fail = run_case(v3=True)
+    check("QA fail → merge_request 被清空", b_qa_fail.merge_request is None,
+          f"实际 {b_qa_fail.merge_request!r}")
+    check("QA fail → ok=False", b_qa_fail.ok is False, f"实际 {b_qa_fail.ok}")
+    check("QA fail → 记入 unverified",
+          any("QA 硬证据失败" in u for u in b_qa_fail.validation.unverified),
+          str(b_qa_fail.validation.unverified))
+    check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
+
+    print("── 路径10: QA 软信号 escalate → 不拦合并 ──")
+    reset_wt()
+    S.qa_verdict = "escalate"
+    S.dispatch_queue = [("ok", FakeExec(success=True))]
+    S.validate_queue = [FakeVal(action="pass")]
+    b_qa_esc = run_case(v3=True)
+    check("QA escalate → 仍保留 merge_request", b_qa_esc.merge_request == "FAKE_MR",
+          f"实际 {b_qa_esc.merge_request!r}")
+    check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
+    S.qa_verdict = "pass"   # 复位
 
     print("\n" + "=" * 48)
     total = PASS + FAIL

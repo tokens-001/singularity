@@ -116,6 +116,35 @@ def supervise(
     return verdict
 
 
+def qa_context(task) -> tuple[list, list]:
+    """取该任务的 QA 上下文: (constraints, checklist)。
+
+    constraints: Gate2 确认的约束清单 (project.constraints_checklist)
+    checklist:   架构分解里该任务的验收标准 (按 title/id 匹配 task.description)
+    非项目任务 → 双空。
+    """
+    constraints: list = []
+    checklist: list = []
+    pid = getattr(task, "project_id", "") or ""
+    if not pid:
+        return constraints, checklist
+    try:
+        from .project import load as _load_proj
+        proj = _load_proj(pid)
+        if proj:
+            constraints = proj.constraints_checklist
+            if proj.architecture:
+                for tdef in proj.architecture.get("tasks", []):
+                    if tdef.get("title", "") in task.description or tdef.get("id", "") in task.description:
+                        acc = tdef.get("acceptance", "")
+                        if acc:
+                            checklist.append(acc)
+    except Exception as e:
+        from singularity.scheduler import witness
+        witness.heartbeat('supervisor', f'warn:qa_context:{e}')
+    return constraints, checklist
+
+
 def _check_completeness(
     checklist: list[str], agent_output: str, changed_files: list[str],
 ) -> CheckResult:

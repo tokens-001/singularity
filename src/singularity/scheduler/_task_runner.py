@@ -228,25 +228,10 @@ class TaskRunner:
         qa_blocked = False   # QA 判 fail/retry/escalate → 不许标 DONE
         qa_fail = False
         try:
-            from .supervisor import supervise
-            changed = disp_result.executor_result.changed_files if disp_result else []
-            constraints, checklist = [], []
-            pid = getattr(task, 'project_id', '')
-            if pid:
-                try:
-                    from .project import load as _load_proj
-                    proj = _load_proj(pid)
-                    if proj:
-                        constraints = proj.constraints_checklist
-                        if proj.architecture:
-                            for tdef in proj.architecture.get("tasks", []):
-                                if tdef.get("title", "") in task.description or tdef.get("id", "") in task.description:
-                                    acc = tdef.get("acceptance", "")
-                                    if acc:
-                                        checklist.append(acc)
-                except Exception as e:
-                    witness.heartbeat('orch', f'warn:{e}')
+            from .supervisor import supervise, qa_context
             from .project import repo_root_for
+            changed = disp_result.executor_result.changed_files if disp_result else []
+            constraints, checklist = qa_context(task)
             sv = supervise(task.description, changed, constraints, checklist,
                           getattr(disp_result.executor_result, 'raw_output', '') if disp_result else '',
                           task.id, repo_root=str(repo_root_for(task)))
