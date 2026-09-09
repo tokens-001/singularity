@@ -137,6 +137,14 @@ def test_no_disagreements_skips_dialogue(monkeypatch):
     assert len([1 for _, p in calls if "架构定稿人" in p]) == 1
 
 
+def test_plans_total_cap_splits_evenly(monkeypatch):
+    """N 份合计上限按 N 均分 —— 否则 N=3 写满 20k×3 能顶爆上下文。"""
+    monkeypatch.setattr(ej, "_FUSION_PLAN_CHARS", 20000)
+    monkeypatch.setattr(ej, "_FUSION_PLANS_TOTAL", 300)
+    block = ej._plans_block([("A", "x" * 1000), ("B", "y" * 1000)])
+    assert block.count("x") == 150 and block.count("y") == 150
+
+
 def test_single_plan_passthrough(monkeypatch):
     monkeypatch.setattr(ej, "_call_model", lambda p, m, max_tokens=2000: "不该被调用")
     assert ej.fuse_architecture_v2("需求", [("A", "唯一方案")]) == "唯一方案"

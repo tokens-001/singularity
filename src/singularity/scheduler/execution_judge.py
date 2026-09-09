@@ -142,6 +142,9 @@ def _resolve_fusion_models(judge_model: str = "", synthesizer_model: str = "") -
 # 0 = 不限。20k 覆盖目前所有观测到的方案长度。
 _FUSION_PLAN_CHARS = int(os.environ.get("QIDIAN_FUSION_PLAN_CHARS", "20000"))
 
+# 各方案全文的合计上限（v2 用；按 N 均分）。0 = 不限。
+_FUSION_PLANS_TOTAL = int(os.environ.get("QIDIAN_FUSION_PLANS_TOTAL", "60000"))
+
 # 定稿输出上限。实测融合稿要 24k~27k 字（含 schema 必填的 tasks/risks），
 # 16000 token 撞顶被腰斩 —— 三题全部截断，且分数和"截断到哪"完美单调。
 _FUSION_MAX_TOKENS = int(os.environ.get("QIDIAN_FUSION_MAX_TOKENS", "16000"))
@@ -455,8 +458,17 @@ def _parallel(thunks: list) -> list:
 
 
 def _plans_block(plans: list[tuple[str, str]]) -> str:
-    """各方案全文（受 QIDIAN_FUSION_PLAN_CHARS 限制）。"""
+    """各方案全文。单份上限 QIDIAN_FUSION_PLAN_CHARS，合计上限 QIDIAN_FUSION_PLANS_TOTAL。
+
+    总量上限是必须的：N 份 × 单份上限没有约束时，N=3 写满就是 60k 字（≈40-60k token），
+    能顶爆 64k 上下文的模型。按 N 均分，保证每家拿到同样预算。
+    """
     lim = _FUSION_PLAN_CHARS
+    if _FUSION_PLANS_TOTAL > 0 and plans:
+        per = _FUSION_PLANS_TOTAL // len(plans)
+        lim = per if lim <= 0 else min(lim, per)
+    if lim > 0 and any(len(o) > lim for _, o in plans):
+        witness.heartbeat("execution_judge", f"warn:plans_truncated:{lim}"[:80])
     return "\n\n---\n".join(
         f"[{m}]\n{o if lim <= 0 else o[:lim]}" for m, o in plans)
 
