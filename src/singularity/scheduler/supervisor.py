@@ -41,6 +41,7 @@ def supervise(
     supervisor_model: str = "",
     implementer_model: str = "",
     repo_root: str = "",
+    tests_result: dict = None,
 ) -> SupervisionVerdict:
     """对单任务输出做四维校验。
 
@@ -54,6 +55,8 @@ def supervise(
         supervisor_model: supervisor 模型名 (用于模型隔离校验)
         implementer_model: implementer 模型名
         repo_root: 改动文件所在仓库根 (项目任务传项目 repo, 空=奇点仓库)
+        tests_result: 调用方刚跑过的项目测试结果 (run_project_tests 返回值);
+                      给了就复用, 不重复跑 pytest
     Returns:
         SupervisionVerdict with verdict and detailed checks
     """
@@ -84,7 +87,7 @@ def supervise(
     )
 
     # ── 4. 产物验证 (硬证据) ──
-    verdict.checks["artifact"] = _check_artifact(changed_files, root)
+    verdict.checks["artifact"] = _check_artifact(changed_files, root, tests_result)
 
     # ── 汇总 ──
     for check_name, result in verdict.checks.items():
@@ -246,7 +249,7 @@ def _check_laziness(
     return CheckResult(passed=True, reason="无偷懒信号")
 
 
-def _check_artifact(changed_files: list[str], root: Path) -> CheckResult:
+def _check_artifact(changed_files: list[str], root: Path, tests_result: dict = None) -> CheckResult:
     """产物验证: lint + 测试 (硬证据)。P0: 加 ruff + pytest。"""
     if not changed_files:
         return CheckResult(passed=True, reason="无改动文件,跳过")
@@ -288,14 +291,20 @@ def _check_artifact(changed_files: list[str], root: Path) -> CheckResult:
         pass  # ruff 挂了不阻塞
 
     # 3. 测试 (pytest → unittest → npm)
-    try:
-        from singularity.scheduler.validator import run_project_tests
-        test_result = run_project_tests(cwd=str(root))
-        evidence["tests"] = test_result
-        if not test_result.get("passed"):
-            errors.append(f"tests failed: {test_result.get('failures', '?')} failures")
-    except Exception:
-        pass  # test runner 挂了不阻塞，记在 supervisor 日志
+    if tests_result is not None:
+        # 调用方 (run_post_exec_checks) 刚跑过 → 复用, 不重复跑
+        evidence["tests"] = tests_result
+        if not tests_result.get("passed"):
+            errors.append(f"tests failed: {tests_result.get('failures', '?')} failures")
+    else:
+        try:
+            from singularity.scheduler.validator import run_project_tests
+            test_result = run_project_tests(cwd=str(root))
+            evidence["tests"] = test_result
+            if not test_result.get("passed"):
+                errors.append(f"tests failed: {test_result.get('failures', '?')} failures")
+        except Exception:
+            pass  # test runner 挂了不阻塞，记在 supervisor 日志
 
     if errors:
         return CheckResult(

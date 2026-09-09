@@ -130,6 +130,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                     validation.unverified.append("测试执行超时: 不默认通过, 需人工兜底")
                     _record_review_failure("test_timeout")
                     return
+            quality["test_result"] = test_result  # 供 supervisor._check_artifact 复用, 免重复跑
             if not test_result.get("passed"):
                 quality["warnings"].append(
                     f"tests failed ({test_result.get('runner','?')}): "

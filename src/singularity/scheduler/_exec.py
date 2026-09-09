@@ -440,7 +440,8 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                         _cons, _check = qa_context(task)
                         sv = supervise(task.description, changed, _cons, _check,
                                        getattr(exec_result, 'raw_output', '') or '',
-                                       task.id, repo_root=str(repo_root))
+                                       task.id, repo_root=str(repo_root),
+                                       tests_result=(quality or {}).get("test_result"))
                         qa_verdict = sv.verdict
                         qa_issues = list(sv.issues)
                         if sv.verdict == "fail":
