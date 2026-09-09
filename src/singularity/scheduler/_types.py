@@ -49,6 +49,8 @@ class BatchOutput:
     pre_search_code_context: str = ""
     tool_events: list = field(default_factory=list)   # 工具调用事件 [{tool,status,time,...}]
     turn_count: int = 0                                # 实际推理轮次
+    qa_verdict: str = ""                               # worker 内 QA 门禁判定 (pass/fail/escalate/retry; 空=未跑)
+    qa_issues: list = field(default_factory=list)      # QA 问题明细 (finalize 写 error 用, 免二次跑 supervise)
 
 
 class _SnapProxy:

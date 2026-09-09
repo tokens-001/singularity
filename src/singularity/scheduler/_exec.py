@@ -279,6 +279,8 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     planner_decomposed = False
     all_tool_events: list[dict] = []  # 收集所有 turn 的工具调用事件
     final_turn = 0                     # 实际推理轮次
+    qa_verdict = ""                    # worker 内 QA 门禁判定, 随 batch 带回给 finalize 复用
+    qa_issues: list = []
 
     snap = _SnapProxy(ctx.snapshot_ref)
 
@@ -439,6 +441,8 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                         sv = supervise(task.description, changed, _cons, _check,
                                        getattr(exec_result, 'raw_output', '') or '',
                                        task.id, repo_root=str(repo_root))
+                        qa_verdict = sv.verdict
+                        qa_issues = list(sv.issues)
                         if sv.verdict == "fail":
                             pending_merge_req = None
                             quality.setdefault("warnings", []).append(
@@ -464,6 +468,8 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     pending_merge_req, fallback_chain, tried_models, quality,
                 )
                 if cascade_action == "return":
+                    payload.qa_verdict = qa_verdict
+                    payload.qa_issues = qa_issues
                     return payload
                 if cascade_action == "break":
                     # 低置信 cascade_skip: 标记 tried 后 break 升级
@@ -492,6 +498,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
         ok=False, task_id=task.id, dispatch_result=disp_result,
         term_reason=term_reason, validation=last_validation,
         tool_events=all_tool_events, turn_count=final_turn,
+        qa_verdict=qa_verdict, qa_issues=qa_issues,
     )
 
 def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:

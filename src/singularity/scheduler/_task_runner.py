@@ -227,27 +227,33 @@ class TaskRunner:
         # 又报 QA:fail, 状态与返回值矛盾。改为 QA 通过才标 DONE。
         qa_blocked = False   # QA 判 fail/retry/escalate → 不许标 DONE
         qa_fail = False
-        try:
-            from .supervisor import supervise, qa_context
-            from .project import repo_root_for
-            changed = disp_result.executor_result.changed_files if disp_result else []
-            constraints, checklist = qa_context(task)
-            sv = supervise(task.description, changed, constraints, checklist,
-                          getattr(disp_result.executor_result, 'raw_output', '') if disp_result else '',
-                          task.id, repo_root=str(repo_root_for(task)))
-            if sv.verdict == "fail":
-                qa_blocked = qa_fail = True
-                tracker.transition(task.id, TaskStatus.FAILED,
-                                 error=f"QA:fail: " + "; ".join(sv.issues[:2]))
-            elif sv.verdict != "pass":
-                qa_blocked = True
-                # 修复 reap bug 根因#2: QA 中间态(retry/escalate/block)转 PENDING 重新入队,
-                # 回写 RUNNING 会永久卡死。
-                tracker.transition(task.id, TaskStatus.PENDING,
-                                 error=f"QA:{sv.verdict}: " + "; ".join(sv.issues[:2]))
-                reason += f"; QA:{sv.verdict}→PENDING"
-        except Exception as e:
-            witness.heartbeat('orch', f'warn:{e}')
+        # worker 里跑过门禁 (有 merge_request 的任务) 就复用它的判定, 不重复跑 supervise
+        qa_verdict = getattr(batch, "qa_verdict", "") or ""
+        qa_issues = list(getattr(batch, "qa_issues", []) or [])
+        if not qa_verdict:
+            try:
+                from .supervisor import supervise, qa_context
+                from .project import repo_root_for
+                changed = disp_result.executor_result.changed_files if disp_result else []
+                constraints, checklist = qa_context(task)
+                sv = supervise(task.description, changed, constraints, checklist,
+                              getattr(disp_result.executor_result, 'raw_output', '') if disp_result else '',
+                              task.id, repo_root=str(repo_root_for(task)))
+                qa_verdict = sv.verdict
+                qa_issues = list(sv.issues)
+            except Exception as e:
+                witness.heartbeat('orch', f'warn:{e}')
+        if qa_verdict == "fail":
+            qa_blocked = qa_fail = True
+            tracker.transition(task.id, TaskStatus.FAILED,
+                             error=f"QA:fail: " + "; ".join(qa_issues[:2]))
+        elif qa_verdict and qa_verdict != "pass":
+            qa_blocked = True
+            # 修复 reap bug 根因#2: QA 中间态(retry/escalate/block)转 PENDING 重新入队,
+            # 回写 RUNNING 会永久卡死。
+            tracker.transition(task.id, TaskStatus.PENDING,
+                             error=f"QA:{qa_verdict}: " + "; ".join(qa_issues[:2]))
+            reason += f"; QA:{qa_verdict}→PENDING"
 
         # QA 通过才标 DONE + 推进父任务。QA 拒绝的任务实际失败了, 不能推进父任务。
         # planner_decomposed 的父任务走 DECOMPOSED (等子任务聚合), 也不能标 DONE。
@@ -276,7 +282,9 @@ class TaskRunner:
                 model=getattr(disp_result, 'agent_cfg', {}).get("model", "") if disp_result else "",
                 elapsed_ms=getattr(exec_out, 'elapsed', 0) if exec_out else 0,
                 tokens=getattr(exec_out, 'token_count', 0) if exec_out else 0,
-                failure_mode=validation.verdict if not batch.ok else "",
+                # failure_mode 跟最终状态走: QA 拦下的任务 batch.ok 仍为 True, 不能记空
+                failure_mode=("" if task.status == TaskStatus.DONE
+                              else (f"QA:{qa_verdict}" if qa_blocked else validation.verdict)),
                 files_changed=getattr(exec_out, 'changed_files', []) if exec_out else [],
             )
             # 用量统计: 记录真实 token 消耗 (只统计, 不做预算拦截)
@@ -297,7 +305,8 @@ class TaskRunner:
                     task_type=route.task_type,
                     model=getattr(disp_result, 'agent_cfg', {}).get("model", "") if disp_result else "",
                     level=route.level,
-                    success=batch.ok,
+                    # 成功与否看最终状态, 不看 batch.ok (QA 拒绝的任务 batch.ok 仍可能为 True)
+                    success=(task.status == TaskStatus.DONE),
                     elapsed_ms=getattr(exec_out, 'elapsed', 0) if exec_out else 0,
                     tokens=getattr(exec_out, 'token_count', 0) if exec_out else 0,
                 )
