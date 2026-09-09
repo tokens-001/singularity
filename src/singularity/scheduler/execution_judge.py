@@ -142,7 +142,7 @@ def _resolve_fusion_models(judge_model: str = "", synthesizer_model: str = "") -
 # 0 = 不限。20k 覆盖目前所有观测到的方案长度。
 _FUSION_PLAN_CHARS = int(os.environ.get("QIDIAN_FUSION_PLAN_CHARS", "20000"))
 
-# 各方案全文的合计上限（v2 用；按 N 均分）。0 = 不限。
+# 各方案全文的合计上限（新旧路径共用；按 N 均分）。0 = 不限。
 _FUSION_PLANS_TOTAL = int(os.environ.get("QIDIAN_FUSION_PLANS_TOTAL", "60000"))
 
 # 定稿输出上限。实测融合稿要 24k~27k 字（含 schema 必填的 tasks/risks），
@@ -275,11 +275,9 @@ def fuse_architecture(task_desc: str, outputs: list[str],
     judge_model, synthesizer_model = _resolve_fusion_models(judge_model, synthesizer_model)
     _warn_same_model(judge_model, synthesizer_model, member_models)
 
-    # 阶段一: 五维分析
-    lim = _FUSION_PLAN_CHARS
-    outputs_text = "\n\n---\n".join(
-        f"[模型{i+1}]\n{o if lim <= 0 else o[:lim]}" for i, o in enumerate(outputs)
-    )
+    # 阶段一: 五维分析。走 _plans_block 共用合计上限 —— 单份上限没有总量约束时，
+    # N=3 写满 20k×3 能顶爆 64k 上下文的模型。标签保持 [模型1] 不变。
+    outputs_text = _plans_block([(f"模型{i+1}", o) for i, o in enumerate(outputs)])
     stage1_prompt = _ARCH_FUSION_STAGE1.format(
         n=len(outputs), task=task_desc[:1500], outputs=outputs_text
     )

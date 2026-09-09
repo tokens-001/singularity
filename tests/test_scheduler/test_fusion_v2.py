@@ -145,6 +145,18 @@ def test_plans_total_cap_splits_evenly(monkeypatch):
     assert block.count("x") == 150 and block.count("y") == 150
 
 
+def test_legacy_fuse_also_respects_total_cap(monkeypatch):
+    """旧两阶段路径共用同一个合计上限 —— 否则默认路径仍会顶爆上下文。"""
+    monkeypatch.setattr(ej, "_FUSION_PLAN_CHARS", 20000)
+    monkeypatch.setattr(ej, "_FUSION_PLANS_TOTAL", 200)
+    seen = []
+    monkeypatch.setattr(ej, "_call_model",
+                        lambda p, m, max_tokens=2000: (seen.append(p), "{}")[1])
+    ej.fuse_architecture("需求", ["x" * 1000, "y" * 1000])
+    assert seen[0].count("x") == 100 and seen[0].count("y") == 100
+    assert "[模型1]" in seen[0]           # 标签没变
+
+
 def test_single_plan_passthrough(monkeypatch):
     monkeypatch.setattr(ej, "_call_model", lambda p, m, max_tokens=2000: "不该被调用")
     assert ej.fuse_architecture_v2("需求", [("A", "唯一方案")]) == "唯一方案"
