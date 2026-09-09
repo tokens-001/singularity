@@ -452,6 +452,7 @@ def task_rollback(task_id: str, push_event=None) -> tuple[dict, int]:
 def task_supervise(task_id: str, data: dict, push_event=None) -> tuple[dict, int]:
     """POST /api/tasks/<id>/supervise — 监督者介入。"""
     from .supervisor import supervise
+    from .project import repo_root_for
     task = tracker.read_task(task_id)
     if task is None:
         return {"error": "任务不存在"}, 404
@@ -462,6 +463,7 @@ def task_supervise(task_id: str, data: dict, push_event=None) -> tuple[dict, int
         checklist=data.get("checklist", []),
         agent_output=data.get("agent_output", ""),
         task_id=task_id,
+        repo_root=str(repo_root_for(task)),
     )
     result = {"verdict": verdict.verdict, "action": verdict.verdict, "issues": verdict.issues}
     if push_event:

@@ -246,9 +246,10 @@ class TaskRunner:
                                         checklist.append(acc)
                 except Exception as e:
                     witness.heartbeat('orch', f'warn:{e}')
+            from .project import repo_root_for
             sv = supervise(task.description, changed, constraints, checklist,
                           getattr(disp_result.executor_result, 'raw_output', '') if disp_result else '',
-                          task.id)
+                          task.id, repo_root=str(repo_root_for(task)))
             if sv.verdict == "fail":
                 qa_blocked = qa_fail = True
                 tracker.transition(task.id, TaskStatus.FAILED,

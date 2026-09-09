@@ -40,6 +40,7 @@ def supervise(
     task_id: str = "",
     supervisor_model: str = "",
     implementer_model: str = "",
+    repo_root: str = "",
 ) -> SupervisionVerdict:
     """对单任务输出做四维校验。
 
@@ -52,11 +53,14 @@ def supervise(
         task_id: 任务 ID (用于 diff 查询)
         supervisor_model: supervisor 模型名 (用于模型隔离校验)
         implementer_model: implementer 模型名
+        repo_root: 改动文件所在仓库根 (项目任务传项目 repo, 空=奇点仓库)
     Returns:
         SupervisionVerdict with verdict and detailed checks
     """
     verdict = SupervisionVerdict(verdict="pass")
-    root = config.PROJECT_ROOT
+    # 项目任务的改动文件在项目独立 repo 下, 传错根 → _check_artifact 的
+    # py_compile/ruff 因 (root/f).exists() 为假而静默跳过, 测试还跑的是奇点自己的
+    root = Path(repo_root) if repo_root else config.PROJECT_ROOT
 
     # ── 0. 模型隔离 ──
     if supervisor_model and implementer_model and supervisor_model == implementer_model:
@@ -233,7 +237,7 @@ def _check_artifact(changed_files: list[str], root: Path) -> CheckResult:
     try:
         proc = subprocess.run(
             ["ruff", "check", "--select=E,F", *[str(root / f) for f in py_files if (root / f).exists()]],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=30, cwd=str(root),  # cwd=root: 否则 ruff 按进程 cwd 找配置/文件
         )
         if proc.returncode != 0:
             errors.append(f"ruff: {proc.stdout.strip()[:200]}")
