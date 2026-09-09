@@ -103,6 +103,9 @@ class Role:
     persona: str = ""
     system_prompt: str = ""
     output_schema: dict = field(default_factory=dict)
+    # 适用阶段（"适用阶段"是角色自己的属性 —— 调研员就是给调研用的）。
+    # 空列表 = 不属于任何研发阶段（定义层角色：切换靠对话，不靠 phase）。
+    phases: list[str] = field(default_factory=list)
 
     def get_full_prompt(self) -> str:
         """组合角色提示词 + 人格面具。"""
@@ -132,6 +135,7 @@ def _load_roles() -> dict[str, Role]:
             persona=d.get("persona", ""),
             system_prompt=d.get("system_prompt", ""),
             output_schema=d.get("output_schema", {}),
+            phases=list(d.get("phases", []) or []),
         )
     return result
 
@@ -283,6 +287,7 @@ def _apply_overrides() -> None:
                 persona=vals.get("persona", ""),
                 system_prompt=vals.get("system_prompt", ""),
                 output_schema=vals.get("output_schema") or {},
+                phases=list(vals.get("phases") or []),
             )
             continue
         if vals.get("persona") and vals["persona"] in PERSONAS:
@@ -292,6 +297,8 @@ def _apply_overrides() -> None:
                 setattr(r, f, vals[f])
         if vals.get("capabilities"):
             r.capabilities = list(vals["capabilities"])
+        if vals.get("phases") is not None:
+            r.phases = list(vals["phases"])
 
 
 def _init():

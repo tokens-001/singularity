@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import { useRun } from '../lib/toast'
 import { Plus, Trash2 } from 'lucide-react'
 
-type RoleInfo = { key: string; name: string; description: string; system_prompt: string; capabilities?: string[] }
+type RoleInfo = { key: string; name: string; description: string; system_prompt: string; capabilities?: string[]; phases?: string[] }
 type PhaseInfo = { key: string; label: string }
 
 export default function RolesTab() {
@@ -69,15 +69,24 @@ export default function RolesTab() {
       <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', marginBottom: 14, background: '#faf9f5' }}>
         <div className="fw-600 fs-12" style={{ marginBottom: 6 }}>阶段 → 角色</div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-          {phases.map(p => (
-            <div key={p.key} className="flex-center gap-6">
-              <span className="fs-11 text-muted" style={{ width: 32 }}>{p.label}</span>
-              <Select size="small" style={{ width: 150 }} value={phaseMap[p.key] || ''}
-                onChange={v => setPhaseRole(p.key, v)}
-                options={[{ value: '', label: '(不注入角色)' },
-                  ...Object.entries(roles).map(([k, r]) => ({ value: k, label: r.name || k }))]} />
-            </div>
-          ))}
+          {phases.map(p => {
+            // 只列声明了适用该阶段的角色；当前值即使不在候选里也保留，免得显示成生 key
+            const cands = Object.entries(roles).filter(([, r]) => (r.phases || []).includes(p.key))
+            const cur = phaseMap[p.key] || ''
+            if (cur && !cands.some(([k]) => k === cur)) {
+              const r = roles[cur]
+              if (r) cands.push([cur, r])
+            }
+            return (
+              <div key={p.key} className="flex-center gap-6">
+                <span className="fs-11 text-muted" style={{ width: 32 }}>{p.label}</span>
+                <Select size="small" style={{ width: 150 }} value={cur}
+                  onChange={v => setPhaseRole(p.key, v)}
+                  options={[{ value: '', label: '(不注入角色)' },
+                    ...cands.map(([k, r]) => ({ value: k, label: r.name || k }))]} />
+              </div>
+            )
+          })}
         </div>
       </div>
 

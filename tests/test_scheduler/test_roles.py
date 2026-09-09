@@ -133,3 +133,27 @@ class TestDefinitionLayerRoles:
         from singularity.scheduler._observer_definition import _definition_role_prompt
         assert _definition_role_prompt("完全不存在的角色") == ""
         assert _definition_role_prompt("") == ""
+
+
+class TestRolePhases:
+    """角色的适用阶段是角色自己的属性 —— 用于过滤「阶段 → 角色」下拉。"""
+
+    def test_loaded_from_toml(self):
+        from singularity.scheduler.roles import ROLES
+        assert ROLES["surveyor"].phases == ["researching"]
+        assert ROLES["architect"].phases == ["planning"]
+        assert set(ROLES["implementer"].phases) == {"executing", "fixing"}
+        assert ROLES["reviewer"].phases == ["reviewing"]
+        assert ROLES["qa_engineer"].phases == ["reviewing"]
+
+    def test_definition_layer_roles_have_no_phase(self):
+        """定义层角色切换靠对话，不属于研发阶段 —— 不该出现在阶段下拉里。"""
+        from singularity.scheduler.roles import ROLES
+        for k in ("product-manager", "interaction-designer", "ui-designer", "researcher"):
+            assert ROLES[k].phases == [], k
+
+    def test_override_can_change_phases(self, role_env):
+        tmp, roles = role_env
+        _write(tmp, {"base": {"phases": ["executing"]}})
+        roles._apply_overrides()
+        assert roles.ROLES["base"].phases == ["executing"]
