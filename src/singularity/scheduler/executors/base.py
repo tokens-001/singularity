@@ -117,6 +117,10 @@ class ExecError(ExecutorError):
 class BaseExecutor:
     """所有 executor 的基类。子类实现 run()。"""
 
+    # 是否真能执行 cfg["no_tools"]（禁工具）。默认 False —— 没显式实现的执行器
+    # 等于禁不掉（如 claude-cli 自带工具），调用方据此告警，而不是假装禁住了。
+    honors_no_tools = False
+
     def __init__(self, agent_cfg: dict, task: str, task_id: str,
                  baseline_ref: str = "", cwd: str = "",
                  agent_level: str = "", **kwargs):

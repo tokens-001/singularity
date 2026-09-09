@@ -31,6 +31,9 @@ from singularity.scheduler import config
 class ZhipuApiExecutor(BaseExecutor):
     """智谱 GLM-5.2 HTTP API 执行器。"""
 
+    # 纯 HTTP 补全，压根不支持工具 → 禁工具调用天然安全
+    honors_no_tools = True
+
     def run(self) -> ExecutorResult:
         api_key = os.environ.get(self.cfg.get("api_key_env", ""))
         if not api_key:

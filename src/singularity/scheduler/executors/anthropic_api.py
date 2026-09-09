@@ -21,27 +21,34 @@ ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1/messages"
 class AnthropicApiExecutor(BaseExecutor):
     """Anthropic Messages API executor with tool use support."""
 
+    honors_no_tools = True
+
     def run(self) -> ExecutorResult:
         import subprocess as _sp
 
-        api_key_env = self.agent_cfg.get("api_key_env", "ANTHROPIC_API_KEY")
+        api_key_env = self.cfg.get("api_key_env", "ANTHROPIC_API_KEY")
         api_key = os.environ.get(api_key_env, "")
         if not api_key:
             return ExecutorResult(success=False,
                                   error=f"API key not set: {api_key_env}",
                                   error_kind="exec")
 
-        base_url = self.agent_cfg.get("entry", ANTHROPIC_BASE_URL)
-        model = self.agent_cfg.get("request_template", {}).get("model") or self.agent_cfg.get("model", "claude-sonnet-4-6")
-        max_tokens = self.agent_cfg.get("request_template", {}).get("max_tokens", 4096)
-        max_turns = self.agent_cfg.get("max_turns", 10)
+        base_url = self.cfg.get("entry", ANTHROPIC_BASE_URL)
+        model = self.cfg.get("request_template", {}).get("model") or self.cfg.get("model", "claude-sonnet-4-6")
+        max_tokens = self.cfg.get("request_template", {}).get("max_tokens", 4096)
+        max_turns = self.cfg.get("max_turns", 10)
 
         import httpx
 
         # ── Build tools (convert OpenAI format to Anthropic format) ──
-        anthropic_tools = self._convert_tools(self._skill_tools + self._mcp_tools)
-
-        system_prompt = _DEFAULT_SYSTEM
+        # 架构/规划类调用(no_tools)禁工具：和 openai_agent 对齐，否则委员会"禁工具"
+        # 的承诺对 anthropic-api 类型的成员不成立（工具照注入，模型可能直接改磁盘）
+        if self.cfg.get("no_tools"):
+            anthropic_tools = []
+            system_prompt = _DEFAULT_SYSTEM_NO_TOOLS
+        else:
+            anthropic_tools = self._convert_tools(self._skill_tools + self._mcp_tools)
+            system_prompt = _DEFAULT_SYSTEM
         if self._skill_prompt:
             system_prompt += "\n" + self._skill_prompt
 
@@ -208,3 +215,7 @@ class AnthropicApiExecutor(BaseExecutor):
 _DEFAULT_SYSTEM = """You are a code engineering agent. You have access to tools for reading/writing files and running commands.
 Always use the tools to make concrete changes. Do not leave TODO comments or placeholder implementations.
 Output complete, working code. When done, just output the final result without further tool calls."""
+
+# no_tools 时用这份：上面那份明确要求"必须用工具改文件"，禁了工具还留着等于误导模型
+_DEFAULT_SYSTEM_NO_TOOLS = """You are a code engineering agent. Tools are disabled for this call —
+output your answer directly as text. Do not leave TODO comments or placeholder implementations."""

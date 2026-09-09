@@ -122,6 +122,8 @@ SYSTEM_PROMPT = """你是Singularity Dispatch的 AI Agent。你的唯一任务�
 class OpenAIAgentExecutor(BaseExecutor):
     """通用 Agent Executor — 给任何 OpenAI 兼容模型装上工具。"""
 
+    honors_no_tools = True
+
     def __init__(self, cfg: dict, task: str, task_id: str,
                  baseline_ref: str = "", cwd: str = "",
                  agent_level: str = "",
