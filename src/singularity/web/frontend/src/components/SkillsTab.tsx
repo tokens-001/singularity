@@ -63,6 +63,10 @@ export default function SkillsTab() {
         <span className="fw-600 fs-12 text-secondary">技能 ({skills.length})</span>
         <button onClick={()=>setShowForm(!showForm)} className="btn-sm"><Plus size={12}/> 新建</button>
       </div>
+      <div className="fs-10 text-muted" style={{ marginBottom: 8 }}>
+        技能 = 这个模型<b>会什么</b>（能力，绑模型）；角色 = 这个阶段<b>该干什么</b>（职责，绑阶段）。
+        提示词类约束请做成角色，技能只用来加真工具。
+      </div>
       {showForm && (
         <div className="flex-center gap-6 flex-wrap" style={{ marginBottom: 8, padding: 8, background: 'var(--bg-secondary)', borderRadius: 'var(--radius)' }}>
           <Input size="small" style={{ width: 140 }} placeholder="名称" value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/>
