@@ -651,32 +651,44 @@ class TestFusionModelResolution:
         assert long_plan in prompts[0], "阶段一提示词里方案被截断"
         assert long_plan in prompts[1], "阶段二提示词里方案被截断"
 
+    def _fake_client(self, responses):
+        """responses: [(status, sse_lines, err_text)]，按调用顺序取。返回 (Client 实例, 记录每次 body)。"""
+        seen = []
+
+        class _Resp:
+            def __init__(self, status, lines, text):
+                self.status_code, self._lines, self.text = status, lines, text
+
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): pass
+
+            def iter_lines(self):
+                for l in self._lines:
+                    yield l
+
+        class _C:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+            def stream(self, method, url, headers=None, json=None):
+                seen.append(dict(json or {}))
+                status, lines, text = responses[min(len(seen) - 1, len(responses) - 1)]
+                return _Resp(status, lines, text)
+        return _C(), seen
+
     def test_call_model_retries_without_temperature(self, monkeypatch):
         """kimi-k3 只接受 temperature=1（实测 400 'only 1 is allowed'）→ 必须去掉后重试。"""
         import httpx
         from singularity.scheduler import execution_judge as ej
         monkeypatch.setattr(ej, "_resolve_api", lambda m: ("BENCH_KEY", "http://x"))
         monkeypatch.setenv("BENCH_KEY", "k")
-        seen = []
-
-        class Resp:
-            def __init__(self, code, text):
-                self.status_code, self.text = code, text
-
-            def json(self):
-                return {"choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}]}
-
-        class Client:
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
-
-            def post(self, url, headers=None, json=None):
-                seen.append(dict(json))
-                if "temperature" in json:
-                    return Resp(400, '{"error":{"message":"invalid temperature: only 1 is allowed"}}')
-                return Resp(200, "{}")
-
-        monkeypatch.setattr(httpx, "Client", lambda **kw: Client())
+        ok_lines = ['data: {"choices":[{"delta":{"content":"OK"}}]}', 'data: [DONE]']
+        client, seen = self._fake_client([
+            (400, [], 'invalid temperature: only 1 is allowed'),
+            (200, ok_lines, ""),
+        ])
+        monkeypatch.setattr(httpx, "Client", lambda **kw: client)
         assert ej._call_model("hi", "kimi-k3") == "OK"
         assert len(seen) == 2, seen
         assert "temperature" not in seen[1], seen
@@ -690,17 +702,8 @@ class TestFusionModelResolution:
         beats = []
         monkeypatch.setattr(ej.witness, "heartbeat", lambda src, msg: beats.append(msg))
 
-        class Resp:
-            status_code, text = 500, "boom"
-
-            def json(self): return {}
-
-        class Client:
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
-            def post(self, *a, **kw): return Resp()
-
-        monkeypatch.setattr(httpx, "Client", lambda **kw: Client())
+        client, _ = self._fake_client([(500, [], "boom")])
+        monkeypatch.setattr(httpx, "Client", lambda **kw: client)
         assert ej._call_model("hi", "m") == ""
         assert any("http500" in b for b in beats), beats
 
@@ -974,15 +977,20 @@ class TestCallModelEmptyContent:
         monkeypatch.setenv("AB_TEST_KEY", "k")
         monkeypatch.setattr(ej.witness, "heartbeat", lambda *a, **k: seen.append(a))
 
-        class _R:
-            status_code = 200
-            def json(self):
-                return {"choices": [{"message": {"content": ""}, "finish_reason": "length"}]}
+        class _Resp:
+            status_code, text = 200, ""
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): pass
+            def iter_lines(self):
+                # 只有 reasoning 没有 content，且 finish_reason=length —— 思考模型烧光额度
+                yield 'data: {"choices":[{"delta":{"reasoning_content":"想"},"finish_reason":"length"}]}'
+                yield 'data: [DONE]'
 
         class _C:
             def __enter__(self): return self
             def __exit__(self, *a): return False
-            def post(self, *a, **k): return _R()
+            def stream(self, *a, **k): return _Resp()
 
         import httpx
         monkeypatch.setattr(httpx, "Client", lambda **k: _C())

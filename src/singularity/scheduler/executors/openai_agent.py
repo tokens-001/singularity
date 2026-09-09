@@ -682,11 +682,12 @@ class OpenAIAgentExecutor(BaseExecutor):
                     resp.read()                      # 先取回 body 才能读 .text
                     self._raise_for_status(resp)
                 for line in resp.iter_lines():
-                    if not line.startswith("data: "):
+                    if not line.startswith("data:"):
                         continue
-                    if line == "data: [DONE]":
+                    body = line[5:].strip()          # 容忍 "data:{...}" 无空格
+                    if body == "[DONE]":
                         break
-                    chunk = json.loads(line[6:])
+                    chunk = json.loads(body)
                     if chunk.get("usage"):
                         usage = chunk["usage"]
                     for ch in chunk.get("choices", []) or []:

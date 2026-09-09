@@ -52,8 +52,40 @@ def _resolve_api(model: str) -> tuple[str, str]:
     return _LEGACY_API.get(model, ("", ""))
 
 
+# 流式：read timeout 就是"多久没有新 token"的上限，超时即断开连接。
+# 融合定稿一次要吐 2 万字，非流式只能干等整体超时，这里最该有停滞检测。
+_STALL_TIMEOUT = float(os.environ.get("QIDIAN_STALL_TIMEOUT", "90"))
+
+
+def _stream_once(client, base_url: str, headers: dict, payload: dict) -> tuple[int, str, str, str]:
+    """一次流式 POST。返回 (status, content, finish_reason, err_text)。"""
+    with client.stream("POST", f"{base_url}/chat/completions",
+                       headers=headers, json={**payload, "stream": True}) as r:
+        if r.status_code >= 400:
+            r.read()                                  # 先取回 body 才能读 .text
+            return r.status_code, "", "", (r.text or "")[:200]
+        parts, finish = [], ""
+        for line in r.iter_lines():
+            if not line.startswith("data:"):
+                continue
+            body = line[5:].strip()                  # 容忍 "data:{...}" 无空格
+            if body == "[DONE]":
+                break
+            chunk = json.loads(body)
+            for ch in chunk.get("choices", []) or []:
+                delta = ch.get("delta") or {}
+                if delta.get("content"):
+                    parts.append(delta["content"])
+                if ch.get("finish_reason"):
+                    finish = ch["finish_reason"]
+        return 200, "".join(parts), finish, ""
+
+
 def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:
-    """调用单个模型（用于合成阶段）。未知模型 / 缺 key → 返回 ""。"""
+    """调用单个模型（用于合成/盲评）。未知模型 / 缺 key → 返回 ""。
+
+    流式（QIDIAN_STREAM=0 可退回非流式）：停滞超过 QIDIAN_STALL_TIMEOUT 秒就断开。
+    """
     env_var, base_url = _resolve_api(model)
     api_key = os.environ.get(env_var, "")
     if not api_key:
@@ -64,30 +96,28 @@ def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         payload = {"model": model, "messages": [{"role": "user", "content": prompt}],
                    "max_tokens": max_tokens, "temperature": 0.3}
-        with httpx.Client(timeout=httpx.Timeout(240.0)) as client:
-            r = client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
-            if r.status_code == 400 and "temperature" in r.text:
+        with httpx.Client(timeout=httpx.Timeout(240.0, connect=15.0, read=_STALL_TIMEOUT)) as client:
+            status, content, finish, err = _stream_once(client, base_url, headers, payload)
+            if status == 400 and "temperature" in err:
                 # 部分模型只接受 temperature=1（实测 kimi-k3：'only 1 is allowed for this model'）
                 payload.pop("temperature", None)
-                r = client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
-            if r.status_code == 200:
-                choice = r.json()["choices"][0]
-                content = choice.get("message", {}).get("content") or ""
+                status, content, finish, err = _stream_once(client, base_url, headers, payload)
+            if status == 200:
                 if not content:
                     # 思考模型把 max_tokens 全烧在 reasoning 上 → content 为空。
                     # 静默返回 "" 会让上层（融合分析/盲评）无声降级，这里显式告警。
                     witness.heartbeat('execution_judge',
-                        f'warn:empty_content:{model}:{choice.get("finish_reason", "")}'[:80])
+                                      f'warn:empty_content:{model}:{finish}'[:80])
                     return ""
-                if choice.get("finish_reason") == "length":
+                if finish == "length":
                     witness.heartbeat('execution_judge', f'warn:truncated:{model}'[:80])
                 return content
             # 非 200 以前什么都不记，上层只看到空串，查不出原因（kimi-k3 就是这样
             # 静默失败了很久：temperature 不被接受 → 400 → 空串）
             witness.heartbeat('execution_judge',
-                              f'warn:http{r.status_code}:{model}:{r.text[:40]}'[:80])
+                              f'warn:http{status}:{model}:{err[:40]}'[:80])
     except Exception as e:
-        witness.heartbeat('execution_judge', f'warn:{e}')
+        witness.heartbeat('execution_judge', f'warn:{e}'[:80])
     return ""
 
 
