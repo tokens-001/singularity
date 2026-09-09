@@ -186,3 +186,87 @@ def _repair_truncated_json(raw: str) -> dict | None:
         return None
 
 
+# ═══════════════════════════════════════════════════════════════
+# JSON Patch (RFC 6902) — 辩论轮增量修订
+# ═══════════════════════════════════════════════════════════════
+
+
+def apply_json_patch(original: str, patch_raw: str) -> str:
+    """把模型产出的 RFC 6902 补丁应用到原方案 JSON，返回修订后 JSON 字符串。
+
+    增量修订: 让模型只输出改动(约2k)而非全量重写(约20k)。
+    任一步失败(原方案非 JSON / 补丁解析失败 / 路径无效)都返回原方案，
+    宁可保留初稿也不引入坏数据。
+    """
+    doc = try_parse_json(original)
+    if doc.get("parse_error"):
+        return original
+    ops = _parse_patch_ops(patch_raw)
+    if ops is None:
+        return original
+    try:
+        for op in ops:
+            _apply_op(doc, op)
+    except Exception:
+        return original
+    return json.dumps(doc, ensure_ascii=False)
+
+
+def _parse_patch_ops(raw: str):
+    """从模型输出提取补丁数组（容忍 ```json 块 / 前后杂文）。失败返回 None。"""
+    if not raw:
+        return None
+    for m in _re.finditer(r"\[[\s\S]*\]", raw):
+        try:
+            ops = json.loads(m.group())
+        except Exception:
+            continue
+        if isinstance(ops, list):
+            return ops
+    return None
+
+
+def _apply_op(doc: dict, op: dict) -> None:
+    kind = op.get("op", "replace")
+    path = op.get("path", "")
+    keys = [
+        int(p) if p.isdigit() else p.replace("~1", "/").replace("~0", "~")
+        for p in path.strip("/").split("/") if p
+    ]
+    if not keys:
+        return
+    if kind == "remove":
+        _del_path(doc, keys)
+    else:  # replace / add
+        _set_path(doc, keys, op.get("value"), insert=(kind == "add"))
+
+
+def _set_path(doc, keys, value, insert=False) -> None:
+    cur = doc
+    for k in keys[:-1]:
+        cur = cur[k]
+    last = keys[-1]
+    if isinstance(cur, list):
+        if not isinstance(last, int):
+            raise ValueError(f"数组路径需数字索引: {last}")
+        if insert:
+            cur.insert(min(last, len(cur)), value)
+        elif last < len(cur):
+            cur[last] = value
+        else:
+            cur.append(value)  # 越界 replace 容忍为 append
+    else:
+        cur[last] = value
+
+
+def _del_path(doc, keys) -> None:
+    cur = doc
+    for k in keys[:-1]:
+        cur = cur[k]
+    last = keys[-1]
+    if isinstance(cur, list):
+        cur.pop(last)
+    else:
+        cur.pop(last)
+
+

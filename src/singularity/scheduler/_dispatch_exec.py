@@ -12,6 +12,8 @@ from singularity.scheduler import tracker, config
 from singularity.scheduler.tracker import TaskStatus
 from singularity.scheduler import witness
 from singularity.scheduler.log import timed
+from singularity.scheduler._io import apply_json_patch
+from singularity.scheduler import model_registry
 import json, os, time, logging, threading
 
 @timed(name="dispatcher")
@@ -29,6 +31,8 @@ def dispatch(
     chain = pick_agent_fallback_chain(agents, level, project_lineup=project_lineup)
     if not chain:
         raise RuntimeError(f"无可用 {level} 层 agent")
+    # 冷启动先验: 任务关键词匹配模型 strengths, 擅长的模型排到链首
+    chain = _prefer_by_strengths(task, chain)
 
     # ── 架构任务: 委员会模式 (多模型并行 → fuse_architecture 合成) ──
     # 仅架构/系统设计类任务走 3 模型碰撞, research/QA/安全/实现 单模型即可
@@ -107,9 +111,47 @@ def _run_no_tools(agent_cfg: dict, prompt: str, tag: str, level: str,
         return None
 
 
+def _is_slow_model(model_id: str) -> bool:
+    """慢模型判定: speed=slow 或 reasoning(思考链)。慢模型只出初稿, 不参与辩论后续轮。"""
+    e = model_registry.get(model_id)
+    return bool(e and (e.speed == "slow" or e.reasoning))
+
+
+# 任务关键词 → strengths 能力标签 (benchmark/手填的 strengths 作冷启动先验)
+_STRENGTH_KEYWORDS: list[tuple[tuple[str, ...], str]] = [
+    (("sql", "数据库", "查询", "query"), "数据查询"),
+    (("重构", "refactor", "多文件"), "多文件重构"),
+    (("长程", "多步", "多阶段"), "长程任务"),
+]
+
+
+def _strength_label_for(task: str) -> str:
+    """从任务描述提取匹配的 strengths 标签, 无匹配返回空串。"""
+    t = (task or "").lower()
+    for kws, label in _STRENGTH_KEYWORDS:
+        if any(k in t for k in kws):
+            return label
+    return ""
+
+
+def _prefer_by_strengths(task: str, chain: list[dict]) -> list[dict]:
+    """strengths 匹配重排: 擅长该任务能力的模型排到链首(冷启动先验)。"""
+    label = _strength_label_for(task)
+    if not label or len(chain) <= 1:
+        return chain
+
+    def _matches(a: dict) -> bool:
+        m = model_registry.get(a.get("model", ""))
+        return bool(m and label in (m.strengths or []))
+
+    matched = [a for a in chain if _matches(a)]
+    rest = [a for a in chain if not _matches(a)]
+    return matched + rest if matched else chain
+
+
 def _debate(task: str, members: list[tuple], chain: list[dict], task_id: str,
             level: str, baseline_ref: str = "", cwd: str = "",
-            max_rounds: int = 3) -> list[tuple]:
+            max_rounds: int = 2) -> list[tuple]:
     """多轮辩论: 交叉评审→修订→收敛。members: [(model, raw_output)]。
 
     每轮: 每个模型评审其他方案(挑缺陷) → 每个模型吸收对自己的点评修订方案。
@@ -121,15 +163,19 @@ def _debate(task: str, members: list[tuple], chain: list[dict], task_id: str,
     plans = {m: o for m, o in members}
     models = [m for m, _ in members]
     agent_by_model = {a.get("model"): a for a in chain}
+    # C: 慢模型只出初稿, 不评审/不修订; 快模型正常辩论(兜底: 全慢则都参与)
+    slow = {m for m in models if _is_slow_model(m)}
+    reviewers = [m for m in models if m not in slow] or models
     prev_review = ""
 
     for rnd in range(1, max_rounds + 1):
         # ── 阶段A: 交叉评审(并行) ──
         def _review(reviewer):
             others = [(m, plans[m]) for m in models if m != reviewer]
-            parts = "\n\n".join(f"【{m}】\n{p[:2500]}" for m, p in others)
+            # 完整传入他人方案, 不漏评后半部分缺陷 (输出仅点评 2-4 条, 输入完整划算)
+            parts = "\n\n".join(f"【{m}】\n{p}" for m, p in others)
             prompt = (f"你是架构委员会成员，正在评审其他成员的方案。\n"
-                      f"任务背景:\n{task[:1200]}\n\n{parts}\n\n"
+                      f"任务背景:\n{task}\n\n{parts}\n\n"
                       f"请逐一点评每位成员的方案，指出缺陷、遗漏、风险、可补充点。"
                       f"用「【成员名】点评：...」格式，每位 2-4 条，简洁。")
             return reviewer, _run_no_tools(agent_by_model.get(reviewer), prompt,
@@ -137,8 +183,8 @@ def _debate(task: str, members: list[tuple], chain: list[dict], task_id: str,
                                            level, baseline_ref, cwd)
 
         review_map = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(models), 4)) as ex:
-            futs = {ex.submit(_review, m): m for m in models}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(reviewers), 4)) as ex:
+            futs = {ex.submit(_review, m): m for m in reviewers}
             done, _ = concurrent.futures.wait(futs, timeout=300)
             for fut in done:
                 reviewer, r = fut.result()
@@ -151,23 +197,26 @@ def _debate(task: str, members: list[tuple], chain: list[dict], task_id: str,
             my_plan = plans[model]
             others_review = "\n".join(
                 f"来自 {rv} 的点评:\n{r}" for rv, r in review_map.items() if rv != model)
-            prompt = (f"这是你的架构方案:\n{my_plan[:6000]}\n\n"
-                      f"其他成员对你方案的点评:\n{others_review[:6000]}\n\n"
-                      f"请吸收合理意见，修订你的方案，输出完整修订版 JSON（保持原 Schema，直接输出 JSON）。")
+            # 增量修订: 模型只输出补丁(改动)。方案与点评完整传入——补丁 path 依赖看到全文，
+            # 截断会让模型盲猜路径; 输出已从 20k 缩到 2k, 输入完整是划算的。
+            prompt = (f"这是你的架构方案(JSON):\n{my_plan}\n\n"
+                      f"其他成员对你方案的点评:\n{others_review}\n\n"
+                      f"请吸收合理意见，输出 RFC 6902 JSON Patch 描述改动，不要重复原方案全文。\n"
+                      f"每条形如 {{\"op\":\"replace|add|remove\",\"path\":\"/tasks/0/description\",\"value\":\"...\"}}，\n"
+                      f"只列出需要改的字段，直接输出补丁数组。")
             return model, _run_no_tools(agent_by_model.get(model), prompt,
                                         f"{task_id}_rvs_{model[:6]}_{rnd}",
                                         level, baseline_ref, cwd)
 
         new_plans = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(models), 4)) as ex:
-            futs = {ex.submit(_revise, m): m for m in models}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(reviewers), 4)) as ex:
+            futs = {ex.submit(_revise, m): m for m in reviewers}
             done, _ = concurrent.futures.wait(futs, timeout=300)
             for fut in done:
                 model, r = fut.result()
                 if r:
-                    new_plans[model] = r
-        if new_plans:
-            plans = new_plans
+                    new_plans[model] = apply_json_patch(plans[model], r)
+        plans.update(new_plans)  # 只更新快模型; 慢模型保留初稿
 
         # ── 收敛判定 ──
         if prev_review and review_text and difflib.SequenceMatcher(None, prev_review, review_text).ratio() > 0.85:
