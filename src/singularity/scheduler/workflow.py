@@ -55,6 +55,21 @@ _ARCHITECT_CONTEXT = """项目需求: {description}
       "interfaces": ["对外提供的能力"]
     }}
   ],
+  "tasks": [
+    {{
+      "id": "T1",
+      "title": "任务标题 (必填, <50字)",
+      "description": "任务详细描述 (必填, <200字)",
+      "complexity": "low|medium|high (必填)",
+      "layer": "frontend/backend/data/devops (必填)",
+      "depends_on": ["T0"],
+      "acceptance": "验收标准 (必填, <100字)",
+      "estimated_files": ["涉及文件路径"]
+    }}
+  ],
+  "risks": [
+    {{"risk": "风险描述", "impact": "high/medium/low", "mitigation": "缓解措施"}}
+  ],
   "data_model": {{
     "database": "选型及理由 (必填)",
     "entities": [
@@ -87,25 +102,12 @@ _ARCHITECT_CONTEXT = """项目需求: {description}
       "rule": "具体约束 (必填)",
       "check": "如何验证 (必填)"
     }}
-  ],
-  "tasks": [
-    {{
-      "id": "T1",
-      "title": "任务标题 (必填, <50字)",
-      "description": "任务详细描述 (必填, <200字)",
-      "complexity": "low|medium|high (必填)",
-      "layer": "frontend/backend/data/devops (必填)",
-      "depends_on": ["T0"],
-      "acceptance": "验收标准 (必填, <100字)",
-      "estimated_files": ["涉及文件路径"]
-    }}
-  ],
-  "risks": [
-    {{"risk": "风险描述", "impact": "high/medium/low", "mitigation": "缓解措施"}}
   ]
 }}
 
 Schema 规则:
+- 字段顺序就是输出顺序: tasks/risks 是下游拆任务唯一的依据, 先写它们 ——
+  长输出万一被截断, 丢的必须是长尾而不是命根子
 - tasks 至少 1 个, 最多 20 个
 - complexity: low→廉价层, medium→中档层, high→强力层
 - layer 标注任务所属层: frontend/backend/data/devops

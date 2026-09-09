@@ -32,6 +32,22 @@ BRIEFS = [
     "租户隔离。需要模块划分、数据模型、API契约、任务拆解。",
 ]
 
+def arch_task(brief: str) -> str:
+    """把一句话 brief 包成**生产形态**的架构任务：角色提示词 + 需求 + 完整 schema。
+
+    生产走 _workflow_phases._run_architecture（roles.toml [architect] + _ARCHITECT_CONTEXT）。
+    以前测试直接喂裸 brief，模型各写各的格式（实测 v4-pro 出数据模型、glm-5.2 自创
+    System_Name 字段、两份都解析不出来），融合被迫做格式翻译 —— 那 1.8× 膨胀和
+    解析失败多半是这么来的。**实验必须和生产同形，否则结论不成立。**
+    """
+    from singularity.scheduler.roles import get_role
+    from singularity.scheduler.workflow import _ARCHITECT_CONTEXT
+    role = get_role("architect")
+    head = role.get_full_prompt() if role else "你是资深系统架构师。"
+    return head + "\n\n" + _ARCHITECT_CONTEXT.format(
+        description=brief, scope="", constraints="", research="无调研报告")
+
+
 RUBRIC = """你是架构评审员。下面是同一个需求的两份架构方案（甲/乙）。
 
 需求:
@@ -59,14 +75,15 @@ RUBRIC = """你是架构评审员。下面是同一个需求的两份架构方�
 def run_committee(brief, agents, chain, task_id):
     """跑真实委员会路径，截获辩论后的方案。
 
-    返回 list[str]：_dispatch_committee 传给 fuse_architecture 的是
-    `raw_outputs = [o for _, o in outputs]`，已经是纯文本列表。
+    返回 [(模型名, 方案文本)]：_dispatch_committee 调 fuse_architecture 时把
+    `member_models=[m for m, _ in outputs]` 作为 kwarg 传进来，顺手一起截获。
     """
     captured, tmp = {}, Path(tempfile.mkdtemp())
     orig_fuse, orig_dir = ej.fuse_architecture, cfg.QIDIAN_DIR
 
     def _capture(task, outputs, **kw):
         captured["plans"] = list(outputs)
+        captured["members"] = kw.get("member_models") or []
         return '{"architecture":"(intercepted)"}'
 
     ej.fuse_architecture, cfg.QIDIAN_DIR = _capture, tmp
@@ -74,7 +91,9 @@ def run_committee(brief, agents, chain, task_id):
         de._dispatch_committee(brief, "any", task_id, agents, chain)
     finally:
         ej.fuse_architecture, cfg.QIDIAN_DIR = orig_fuse, orig_dir
-    return captured.get("plans", [])
+    plans = captured.get("plans", [])
+    members = captured.get("members") or [f"model{i+1}" for i in range(len(plans))]
+    return list(zip(members, plans))
 
 
 def ask_judge(brief, a, b):
@@ -128,13 +147,14 @@ def main():
             print(f"[{i}/{n}] 用缓存（{len(plans)} 份方案）", flush=True)
         else:
             print(f"[{i}/{n}] 跑委员会… {brief[:36]}…", flush=True)
-            plans = run_committee(brief, agents, chain, f"ab{i}")
+            pairs = run_committee(arch_task(brief), agents, chain, f"ab{i}")
+            plans = [p for _, p in pairs]
             if len(plans) < 2:
                 print(f"  ✗ 辩论后只有 {len(plans)} 份方案，跳过\n")
                 continue
             print(f"  辩论完成 {time.time()-t0:.0f}s，{len(plans)} 份方案（各 {[len(p) for p in plans]} 字）", flush=True)
             t1 = time.time()
-            fused = ej.fuse_architecture(brief, list(plans))
+            fused = ej.fuse_architecture(arch_task(brief), list(plans))
             print(f"  融合完成 {time.time()-t1:.0f}s（{len(fused)} 字）", flush=True)
             cache[key] = {"plans": plans, "fused": fused}
             CACHE.write_text(json.dumps(cache, ensure_ascii=False))

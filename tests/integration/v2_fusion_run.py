@@ -23,9 +23,9 @@ def _load(name, path):
     return m
 
 
-BRIEFS = _load("ab_fusion", HERE / "ab_fusion.py").BRIEFS
+_ab = _load("ab_fusion", HERE / "ab_fusion.py")
+BRIEFS, arch_task = _ab.BRIEFS, _ab.arch_task
 _bl = _load("ab_best_baseline", HERE / "ab_best_baseline.py")
-CACHE = HERE / os.environ.get("AB_CACHE", ".ab_debate_plans_v2.json")
 BRIEF_NO = int(sys.argv[1]) if len(sys.argv) > 1 else 3
 
 _bl.MAX_CHARS = 0
@@ -44,11 +44,29 @@ def _step_of(prompt: str) -> str:
     return "?"
 
 
+def _get_plans(brief_no: int) -> list[tuple[str, str]]:
+    """方案来源：AB_PLANS 指定缓存则复用，否则用**生产形态**任务现跑一次委员会初稿。
+
+    旧缓存（.ab_debate_plans_v2.json 等）是拿裸 brief 跑的 —— 模型各写各的格式，
+    不代表生产。要比就得用 arch_task() 的完整任务重跑。
+    """
+    if os.environ.get("AB_PLANS"):
+        v = json.loads(Path(os.environ["AB_PLANS"]).read_text())[str(brief_no)]
+        print("（复用缓存方案 —— 旧缓存是裸 brief 跑的，不代表生产）")
+        return list(zip(v["members"], v["plans"]))
+    import singularity.scheduler.dispatcher as disp
+    import singularity.scheduler._dispatch_exec as de
+    de._debate = lambda task, members, chain, task_id, **kw: members   # v2 自带对话
+    agents, chain = disp.load_agents(), None
+    chain = disp.pick_agent_fallback_chain(agents, "any")
+    print(f"跑委员会初稿（生产形态任务，{len(chain)} 席）…", flush=True)
+    return _ab.run_committee(arch_task(BRIEFS[brief_no - 1]), agents, chain, f"v2_{brief_no}")
+
+
 def main():
-    cache = json.loads(CACHE.read_text())
-    v = cache[str(BRIEF_NO)]
-    plans = list(zip(v["members"], v["plans"]))
     brief = BRIEFS[BRIEF_NO - 1]
+    task = arch_task(brief)                 # 融合用生产形态任务；打分用短 brief
+    plans = _get_plans(BRIEF_NO)
 
     log = []
     real = ej._call_model
@@ -65,7 +83,7 @@ def main():
     print(f"brief {BRIEF_NO} | 阵容 {[m for m, _ in plans]} | 单稿 "
           f"{[len(p) for _, p in plans]} 字 | ② 提取用 {extractor}\n")
     print("跑 v2 融合…", flush=True)
-    fused = ej.fuse_architecture_v2(brief, plans, judge_model=extractor)
+    fused = ej.fuse_architecture_v2(task, plans, judge_model=extractor)
     ej._call_model = real
 
     if not fused:

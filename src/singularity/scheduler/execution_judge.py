@@ -159,6 +159,11 @@ def _resolve_fusion_models(judge_model: str = "", synthesizer_model: str = "") -
 # 0 = 不限。20k 覆盖目前所有观测到的方案长度。
 _FUSION_PLAN_CHARS = int(os.environ.get("QIDIAN_FUSION_PLAN_CHARS", "20000"))
 
+# 融合提示词里「需求」部分的字符上限。曾写死 1500 —— 但生产的架构任务 =
+# 角色提示词 + 需求 + 完整 schema（约 3.5k 字），截到 1500 会把 schema 和需求
+# 后半段砍掉，融合根本看不到完整需求。0 = 不限。
+_FUSION_TASK_CHARS = int(os.environ.get("QIDIAN_FUSION_TASK_CHARS", "4000"))
+
 # 各方案全文的合计上限（新旧路径共用；按 N 均分）。0 = 不限。
 _FUSION_PLANS_TOTAL = int(os.environ.get("QIDIAN_FUSION_PLANS_TOTAL", "60000"))
 
@@ -236,15 +241,17 @@ _ARCH_FUSION_STAGE2 = """你是架构合成定稿人。基于五维分析，产�
 只输出 JSON，用 ```json ... ``` 包裹。"""
 
 # 定稿输出 schema。旧两阶段和新 v2 共用 —— 单花括号（这里不经过 .format）。
+# 字段顺序 = 输出顺序。tasks/risks 是下游拆任务的唯一依据，排前面 —— 实测融合稿
+# 被截断过三次，每次丢的都是排在最末尾的它们（brief 3 因此整个 tasks 段为 0 分）。
 _ARCH_SCHEMA = """{
   "architecture": "综述 (<500字)",
   "modules": [{"name":"","responsibility":"","depends_on":[],"interfaces":[]}],
+  "tasks": [{"id":"","title":"","description":"","complexity":"","layer":"","depends_on":[],"acceptance":""}],
+  "risks": [{"risk":"","impact":"","mitigation":""}],
   "data_model": {"database":"","entities":[],"relationships":[]},
   "api_contracts": [{"method":"","path":"","description":"","input":{},"output":{},"errors":[]}],
   "tech_stack": {"language":"","framework":"","database":"","cache":"","mq":""},
   "constraints": [{"type":"","rule":"","check":""}],
-  "tasks": [{"id":"","title":"","description":"","complexity":"","layer":"","depends_on":[],"acceptance":""}],
-  "risks": [{"risk":"","impact":"","mitigation":""}],
   "test_cases": {
     "unit": [{"name":"","target_module":"","input":"","expected":""}],
     "integration": [{"name":"","interfaces_tested":[],"setup":"","expected":""}],
@@ -296,7 +303,7 @@ def fuse_architecture(task_desc: str, outputs: list[str],
     # N=3 写满 20k×3 能顶爆 64k 上下文的模型。标签保持 [模型1] 不变。
     outputs_text = _plans_block([(f"模型{i+1}", o) for i, o in enumerate(outputs)])
     stage1_prompt = _ARCH_FUSION_STAGE1.format(
-        n=len(outputs), task=task_desc[:1500], outputs=outputs_text
+        n=len(outputs), task=task_desc[:_FUSION_TASK_CHARS], outputs=outputs_text
     )
     analysis_raw = _call_model(stage1_prompt, judge_model, max_tokens=4000)
     analysis = try_parse_json(analysis_raw) if analysis_raw else {}
@@ -304,7 +311,7 @@ def fuse_architecture(task_desc: str, outputs: list[str],
     # 阶段二: 基于分析定稿
     analysis_text = json.dumps(analysis, ensure_ascii=False, indent=2) if analysis else "分析不可用"
     stage2_prompt = _ARCH_FUSION_STAGE2.format(
-        task=task_desc[:1500], analysis=analysis_text, outputs=outputs_text,
+        task=task_desc[:_FUSION_TASK_CHARS], analysis=analysis_text, outputs=outputs_text,
         schema=_ARCH_SCHEMA,
     )
     fused = _call_model(stage2_prompt, synthesizer_model, max_tokens=_FUSION_MAX_TOKENS)
@@ -545,7 +552,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
     judge = judge_model or _v2_extractor_model()
     _warn_same_model(judge, "", members)
 
-    task = task_desc[:1500]
+    task = task_desc[:_FUSION_TASK_CHARS]
     plans_text = _plans_block(plans)
 
     # ── ② 提取三类 ──
