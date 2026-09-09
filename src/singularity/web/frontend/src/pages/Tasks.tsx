@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api, Task } from '../lib/api'
 import { useSSE, useSSEConnected } from '../lib/useSSE'
 import { useVirtualRows } from '../lib/useVirtualRows'
-import { useToast } from '../lib/toast'
-import { Plus, RefreshCw, RotateCcw, XCircle, Trash2, Search } from 'lucide-react'
+import { useToast, useModal, useRun } from '../lib/toast'
+import { Plus, RefreshCw, RotateCcw, XCircle, Trash2, Search, Pause, Play, X } from 'lucide-react'
 
 const STATUS_CN: Record<string,string> = { pending:'待处理', running:'进行中', done:'已完成', failed:'失败', blocked:'已暂停', paused:'已暂停' }
 const STATUS_COLOR: Record<string,string> = { pending:'#9a9993', running:'#2563eb', done:'#16a34a', failed:'#dc2626', blocked:'#b45309', paused:'#b45309' }
@@ -15,7 +16,11 @@ export default function Tasks() {
   const [desc, setDesc] = useState('')
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
+  const [params, setParams] = useSearchParams()
+  const projectFilter = params.get('project') || ''   // 从项目页「N 任务」跳进来时带的项目 id
   const toast = useToast()
+  const modal = useModal()
+  const run = useRun()
 
   const fetch = useCallback(() => {
     setLoading(true)
@@ -34,10 +39,22 @@ export default function Tasks() {
     const t = setInterval(fetch, 10000); return () => clearInterval(t)
   }, [fetch, sseAlive])
 
-  const create = () => { if (desc.trim()) { api.createTask(desc).then(() => { setShowCreate(false); setDesc(''); fetch() }) } }
-  const act = (fn: (id: string) => Promise<any>, id: string) => { fn(id).then(fetch).catch(() => toast('操作失败', 'error')) }
+  const create = async () => {
+    if (!desc.trim()) return
+    if (!(await run(() => api.createTask(desc)))) return
+    setShowCreate(false); setDesc(''); fetch()
+  }
+  const act = async (fn: (id: string) => Promise<any>, id: string) => { if (await run(() => fn(id))) fetch() }
+  const confirmDelete = (t: Task) => modal.confirm({
+    title: '删除这个任务？',
+    content: t.description.split('\n')[0],
+    okText: '删除', okButtonProps: { danger: true }, cancelText: '取消',
+    onOk: () => act(api.deleteTask, t.id),
+  })
 
-  const list = tasks.filter(t => !search || t.description.toLowerCase().includes(search.toLowerCase()))
+  const list = tasks.filter(t =>
+    (!projectFilter || t.project_id === projectFilter) &&
+    (!search || t.description.toLowerCase().includes(search.toLowerCase())))
   // 行高固定 36px + 间距 4px（单行截断，不换行）；列表短时 start/end 覆盖全部，占位为 0
   const V = useVirtualRows(list.length, 36, 4)
 
@@ -46,6 +63,13 @@ export default function Tasks() {
       <div className="flex-center gap-8" style={{ marginBottom: 12 }}>
         <h2 className="fs-13 fw-600" style={{ color: '#141413' }}>任务</h2>
         <span className="fs-11 text-muted">{tasks.length} 个</span>
+        {projectFilter && (
+          <span className="flex-center gap-4 fs-10" style={{ padding: '2px 8px', borderRadius: 4, background: '#eef2ff', color: '#4f46e5', border: '1px solid #c7d2fe' }}>
+            项目：{projectNames[projectFilter] || projectFilter.slice(0, 8)}
+            <button onClick={() => setParams({})} aria-label="清除项目筛选"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'inherit', display: 'flex' }}><X size={10}/></button>
+          </span>
+        )}
         <div className="search-box">
           <Search size={12} color="#9a9993"/>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索..." aria-label="搜索任务" className="search-input"/>
@@ -84,8 +108,10 @@ export default function Tasks() {
               <span className="fs-10 text-muted mono" style={{ flexShrink: 0 }}>{t.id.slice(0, 8)}</span>
               <span className="flex-center gap-4">
                 {t.status === 'failed' && <button onClick={() => act(api.retryTask, t.id)} className="btn-icon" title="重试" aria-label="重试"><RotateCcw size={12}/></button>}
+                {t.status === 'running' && <button onClick={() => act(api.pauseTask, t.id)} className="btn-icon" title="暂停" aria-label="暂停"><Pause size={12}/></button>}
+                {t.status === 'paused' && <button onClick={() => act(api.resumeTask, t.id)} className="btn-icon" title="恢复" aria-label="恢复"><Play size={12}/></button>}
                 {['pending','running','paused'].includes(t.status) && <button onClick={() => act(api.cancelTask, t.id)} className="btn-icon" title="取消" aria-label="取消"><XCircle size={12}/></button>}
-                <button onClick={() => act(api.deleteTask, t.id)} className="btn-icon" title="删除" aria-label="删除" style={{ color: '#dc2626' }}><Trash2 size={12}/></button>
+                <button onClick={() => confirmDelete(t)} className="btn-icon" title="删除" aria-label="删除" style={{ color: '#dc2626' }}><Trash2 size={12}/></button>
               </span>
             </div>
           ))}

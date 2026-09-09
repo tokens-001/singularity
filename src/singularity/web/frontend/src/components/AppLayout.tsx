@@ -2,9 +2,10 @@ import { useState, useEffect } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAppStore } from '../stores/app'
 import { useSSE, useSSEConnected } from '../lib/useSSE'
-import { useToast, useModal } from '../lib/toast'
+import { useToast } from '../lib/toast'
+import { getPinned } from '../lib/pinned'
 import { api } from '../lib/api'
-import { MessageSquare, List, Settings, User, Boxes } from 'lucide-react'
+import { MessageSquare, List, Settings, Boxes } from 'lucide-react'
 
 const NAV = [
   { path: '/', label: '对话', icon: MessageSquare },
@@ -18,14 +19,6 @@ const PHASE_CN: Record<string,string> = {
   executing:'执行中', integrating:'集成', reviewing:'审查', fixing:'修复', gate3:'G3 审核', delivering:'交付', done:'完成'
 }
 
-function getPinned(): string[] {
-  try { return JSON.parse(localStorage.getItem('qidian-pinned') || '[]') } catch { return [] }
-}
-function togglePin(pid: string) {
-  const pins = getPinned()
-  const next = pins.includes(pid) ? pins.filter(p => p !== pid) : [pid, ...pins]
-  localStorage.setItem('qidian-pinned', JSON.stringify(next))
-}
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return (n/1_000_000).toFixed(1) + 'M'
   if (n >= 1_000) return (n/1_000).toFixed(1) + 'K'
@@ -40,17 +33,18 @@ export default function AppLayout() {
   const location = useLocation()
   const pathname = location.pathname
   const [projects, setProjects] = useState<any[]>([])
-  const [hovered, setHovered] = useState<string>('')
   const [pinned, setPinned] = useState<string[]>(getPinned)
   const addToast = useToast()
-  const modal = useModal()
   const sidebarWidth = sidebarCollapsed ? 0 : 260
   const [usage, setUsage] = useState<any>({})
+  const [loopRunning, setLoopRunning] = useState(false)
+  const [conflicts, setConflicts] = useState<any[]>([])
 
   const sseAlive = useSSEConnected()
 
   const loadProjects = async () => {
     try { const d: any = await api.projects(); setProjects(Array.isArray(d)?d:(d?.projects||[])) } catch { addToast('加载项目失败', 'error') }
+    setPinned(getPinned())   // 置顶在项目页改的，这里跟着重排
   }
   useEffect(() => {
     loadProjects()
@@ -59,25 +53,22 @@ export default function AppLayout() {
   }, [sseAlive])
   useSSE(loadProjects, { kinds: ['project', 'workflow', 'system', 'task'], debounceMs: 400 })
 
-  // token 用量后端没有 SSE 事件，只能轮询；拉长到 30s
+  // token 用量 / 调度状态 / 冲突 都没有 SSE 事件，只能轮询；30s 够用
   useEffect(() => {
-    const f = async () => { try { setUsage(await api.tokenUsage()) } catch {} }
+    const f = async () => {
+      const [u, s, c] = await Promise.all([
+        api.tokenUsage().catch(() => null),
+        api.loopStatus().catch(() => null),
+        api.conflicts().catch(() => null),
+      ])
+      if (u) setUsage(u)
+      if (s) setLoopRunning(!!(s as any).running)
+      if (c) setConflicts((c as any).conflicts || [])
+    }
     f(); const t = setInterval(f, 30000); return () => clearInterval(t)
   }, [])
 
   const selectProject = (pid: string) => { setActiveProject(pid); navigate('/') }
-  const deleteProject = (p: any) => {
-    modal.confirm({
-      title: `删除项目「${p.name}」？`,
-      content: '该操作不可撤销。',
-      okText: '删除', okButtonProps: { danger: true }, cancelText: '取消',
-      onOk: async () => {
-        await api.deleteProject(p.id)
-        setProjects(prev => prev.filter(x => x.id !== p.id))
-        if (activePid === p.id) { setActiveProject('_default'); navigate('/') }
-      },
-    })
-  }
 
   return (
     <div className="app-shell">
@@ -109,41 +100,31 @@ export default function AppLayout() {
               return (
                 <div key={p.id} onClick={() => selectProject(p.id)} role="button" tabIndex={0}
                   onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectProject(p.id) } }}
-                  onMouseEnter={() => setHovered(p.id)} onMouseLeave={() => setHovered('')}
                   style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', margin: '1px 0',
                     borderRadius: 6, cursor: 'pointer', fontSize: 12, color: isActive ? '#141413' : '#6b6b68',
                     background: isActive ? '#f3f2ec' : 'transparent' }}>
                   <span style={{ color: isPinned ? '#d97706' : '#b5b2a8', fontSize: 10 }}>#</span>
                   <span className="truncate" style={{ flex: 1 }}>{p.name}</span>
                   <span className="fs-10" style={{ color: '#b5b2a8' }}>{PHASE_CN[p.phase] || p.phase}</span>
-                  {hovered === p.id && (
-                    <span className="flex-center gap-4">
-                      <button onClick={e => { e.stopPropagation(); togglePin(p.id); setPinned(getPinned()) }}
-                        aria-label={isPinned ? '取消置顶' : '置顶'}
-                        style={{ background:'none',border:'none',cursor:'pointer',padding:1,fontSize:10,color: isPinned?'#d97706':'#9a9993' }}>📌</button>
-                      <button onClick={e => { e.stopPropagation(); deleteProject(p) }}
-                        aria-label="删除项目"
-                        style={{ background:'none',border:'none',cursor:'pointer',padding:1,fontSize:10,color:'#9a9993' }}>×</button>
-                    </span>
-                  )}
                 </div>
               )
             })}
         </div>
 
         <div style={{ padding: '8px 12px', borderTop: '1px solid #f3f2ec', display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11 }}>
+            <span style={{ color: loopRunning ? '#16a34a' : '#b5b2a8', fontSize: 8 }}>●</span>
+            <span style={{ color: '#6b6b68' }}>调度{loopRunning ? '运行中' : '已停'}</span>
+            {conflicts.length > 0 && (
+              <span style={{ marginLeft: 'auto', color: '#dc2626' }}
+                title={conflicts.map((c: any) => c.task_id || c.id || '').join(', ')}>⚠ {conflicts.length} 冲突</span>
+            )}
+          </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
             <span style={{ color: '#6b6b68' }}>今日 {fmtTokens(usage?.daily_tokens)} tokens</span>
             <span style={{ color: '#6b6b68' }}>${(usage?.daily_cost || 0).toFixed(2)}</span>
           </div>
           {usage?.warning && <div style={{ fontSize: 10, color: '#dc2626' }}>{usage.warning}</div>}
-        </div>
-        <div style={{ padding: '8px 12px', borderTop: '1px solid #f3f2ec', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ width: 22, height: 22, borderRadius: 11, background: '#d8d5cb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <User size={12} style={{color:'#9a9993'}}/>
-          </div>
-          <span style={{ fontSize: 11, color: '#9a9993', flex: 1 }}>local</span>
-          <button onClick={() => navigate('/config')} className="btn-icon" title="配置" aria-label="配置"><Settings size={14}/></button>
         </div>
       </div>
 

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Button, Input, Select } from 'antd'
 import { api } from '../lib/api'
-import { useToast } from '../lib/toast'
+import { useToast, useModal, useRun } from '../lib/toast'
 import { Plus, Trash2, Search, Download, X } from 'lucide-react'
 import { mcn } from '../pages/Config'
 import type { ModelInfo, ApiStoreItem } from '../lib/types'
@@ -30,6 +30,8 @@ export default function ModelsTab() {
   const [observerModelId, setObserverModelId] = useState('')
   const [benchmarking, setBenchmarking] = useState('')
   const addToast = useToast()
+  const modal = useModal()
+  const run = useRun()
 
   const fetch = async () => {
     const [m, a, ag, obs] = await Promise.all([api.models(), api.apiStore() as Promise<ApiStoreItem[]>, api.agents(), api.observerModel()])
@@ -53,7 +55,8 @@ export default function ModelsTab() {
   const importSelected = async () => {
     const toImport = (scanResults?.models||[]).filter(m=>selected.has(m.id))
     if (!toImport.length) return
-    await api.importModels(toImport); setScanResults(null); fetch()
+    if (!(await run(() => api.importModels(toImport)))) return
+    setScanResults(null); fetch()
   }
 
   const runBenchmark = async (id: string) => {
@@ -107,7 +110,12 @@ export default function ModelsTab() {
               <span className="fw-600">{a.provider||a.id}</span>
               <span className="fs-10" style={{ color: a.status==='active'?'var(--accent-green)':'var(--text-muted)' }}>{a.status==='active'?'●':'○'}</span>
               <button onClick={()=>scan(a.id)} disabled={scanning===a.id} className="btn-sm"><Search size={10}/> {scanning===a.id?'扫描中':'扫描'}</button>
-              <button onClick={()=>api.deleteApiStore(a.id).then(fetch)} className="btn-ghost-danger" aria-label={`删除 ${a.provider||a.id}`}><Trash2 size={10}/></button>
+              <button onClick={()=>modal.confirm({
+                title: `删除 API 连接「${a.provider||a.id}」？`,
+                content: '会同时移除 .env 里的 key，需要重新填写。',
+                okText: '删除', okButtonProps: { danger: true }, cancelText: '取消',
+                onOk: async () => { if (await run(() => api.deleteApiStore(a.id))) fetch() },
+              })} className="btn-ghost-danger" aria-label={`删除 ${a.provider||a.id}`}><Trash2 size={10}/></button>
             </div>
           ))}
         </div>
@@ -167,7 +175,11 @@ export default function ModelsTab() {
                   {benchmarking===m.id?'评测中…':'跑基准'}
                 </button>
               )}
-              <button onClick={()=>api.deleteModel(m.id).then(fetch)} className="btn-ghost-danger" aria-label={`删除模型 ${m.id}`}><Trash2 size={10}/></button>
+              <button onClick={()=>modal.confirm({
+                title: `删除模型「${mcn(m)}」？`,
+                okText: '删除', okButtonProps: { danger: true }, cancelText: '取消',
+                onOk: async () => { if (await run(() => api.deleteModel(m.id))) fetch() },
+              })} className="btn-ghost-danger" aria-label={`删除模型 ${m.id}`}><Trash2 size={10}/></button>
             </div>
           )
         })}

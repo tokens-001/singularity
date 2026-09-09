@@ -16,3 +16,16 @@ export function useToast() {
 export function useModal() {
   return AntApp.useApp().modal
 }
+
+/**
+ * 包一层写操作：失败时把后端返回的中文原因 toast 出来，返回是否成功。
+ * 不包的话，request() 抛出的异常没人接，界面上会「点了没反应」。
+ * 用法：if (!(await run(() => api.createProject(form)))) return
+ */
+export function useRun() {
+  const toast = useToast()
+  return async (fn: () => Promise<unknown>, okMsg?: string): Promise<boolean> => {
+    try { await fn(); if (okMsg) toast(okMsg, 'success'); return true }
+    catch (e) { toast(e instanceof Error ? e.message : String(e), 'error'); return false }
+  }
+}

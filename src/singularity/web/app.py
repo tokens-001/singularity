@@ -1118,6 +1118,9 @@ def api_project_delete(project_id):
     from singularity.scheduler import project as proj_mod
     audit_log("delete_project", project_id, ip=request.remote_addr)
     ok = proj_mod.delete(project_id)
+    if ok:
+        # 与 create 对称：不广播的话，SSE 活着时前端不会退回轮询，侧边栏会留一个幽灵项目
+        _push_event("project", json.dumps({"project_id": project_id, "deleted": True}))
     return jsonify({"ok": ok}), 200 if ok else 404
 
 @app.route("/api/projects/<project_id>/start", methods=["POST"])

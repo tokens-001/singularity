@@ -86,6 +86,7 @@ export const api = {
   startLoop: () => request('/api/loop/start',{method:'POST'}),
   stopLoop: () => request('/api/loop/stop',{method:'POST'}),
   loopStatus: () => request<any>('/api/loop/status'),
+  conflicts: () => request<any>('/api/conflicts'),
 
   mcpServers: async () => { const d = await request<any>('/api/mcp/servers'); return (d?.servers||d||[]) as any[] },
   mcpTools: async () => { const d = await request<any>('/api/mcp/tools'); return (d?.tools||d||[]) as any[] },

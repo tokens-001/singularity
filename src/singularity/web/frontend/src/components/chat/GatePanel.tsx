@@ -14,7 +14,7 @@ const Details = memo(function Details({ title, color, children }: { title: strin
   )
 })
 
-const ResearchReport = memo(function ResearchReport({ report }: { report: any }) {
+export const ResearchReport = memo(function ResearchReport({ report }: { report: any }) {
   const products = report.competitive_analysis?.products || []
   const pitfalls: string[] = report.pitfalls || []
   return (
@@ -48,7 +48,7 @@ const ResearchReport = memo(function ResearchReport({ report }: { report: any })
   )
 })
 
-const ArchitectureDetails = memo(function ArchitectureDetails({ arch }: { arch: any }) {
+export const ArchitectureDetails = memo(function ArchitectureDetails({ arch }: { arch: any }) {
   const modules = arch.modules || []
   const tasks = arch.tasks || []
   const entities = arch.data_model?.entities || []

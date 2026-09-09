@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Button, Input, Select, Tag } from 'antd'
 import { api } from '../lib/api'
+import { useRun } from '../lib/toast'
 import { Plus } from 'lucide-react'
 import type { ModelInfo, AgentItem, AgentsData, SkillInfo } from '../lib/types'
 import { modelDisplay } from '../pages/Config'
@@ -16,6 +17,7 @@ export default function SkillsTab() {
   const [matrix, setMatrix] = useState<Record<string,string[]>>({})
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ name: '', description: '', type: 'prompt', content: '' })
+  const run = useRun()
 
   const fetch = async () => {
     const [s, a] = await Promise.all([api.skills() as Promise<SkillInfo[]>, api.agents() as Promise<AgentsData>])
@@ -26,9 +28,10 @@ export default function SkillsTab() {
     }
     setAgents(flat)
     const mx: Record<string,string[]> = {}
-    for (const ag of flat) {
+    // 并发拉，别在循环里串行 await（N 个 agent 就是 N 次往返）
+    await Promise.all(flat.map(async ag => {
       try { mx[ag.model] = (await api.agentSkills(ag.model)).skills||[] } catch { mx[ag.model] = [] }
-    }
+    }))
     setMatrix({...mx})
     if (flat.length === 1 && s.length > 0 && (mx[flat[0].model]||[]).length === 0) {
       const allNames = s.map(sk=>sk.name)
@@ -49,7 +52,10 @@ export default function SkillsTab() {
     setMatrix(prev=>({...prev,[model]:allSkillNames}))
     try { await api.updateAgentSkills(model, allSkillNames) } catch { fetch() }
   }
-  const create = async () => { await api.addSkill(form); setShowForm(false); setForm({name:'',description:'',type:'prompt',content:''}); fetch() }
+  const create = async () => {
+    if (!(await run(() => api.addSkill(form)))) return
+    setShowForm(false); setForm({name:'',description:'',type:'prompt',content:''}); fetch()
+  }
 
   return (
     <div>

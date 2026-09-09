@@ -1,8 +1,12 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
-import { useToast } from '../lib/toast'
-import { Plus, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react'
+import { useToast, useModal, useRun } from '../lib/toast'
+import { getPinned, togglePin } from '../lib/pinned'
+import { useAppStore } from '../stores/app'
+import { ResearchReport, ArchitectureDetails } from '../components/chat/GatePanel'
+import { Plus, RefreshCw, ChevronDown, ChevronRight, Pin, Trash2 } from 'lucide-react'
 
 const PHASE_CN: Record<string,string> = {
   template:'模板', researching:'调研', gate1:'G1确认', planning:'规划', gate2:'G2确认',
@@ -13,46 +17,18 @@ const PC: Record<string,string> = {
   gate2:'var(--accent-yellow)', executing:'var(--accent-green)', integrating:'var(--accent-green)',
   reviewing:'#ea580c', fixing:'var(--accent-red)', gate3:'var(--accent-yellow)', delivering:'var(--accent)', done:'var(--accent-green)'
 }
+const PHASES = ['template','researching','gate1','planning','gate2','executing','integrating','reviewing','fixing','gate3','delivering','done']
 
-function ReportBlock({ data }: { data: any }) {
-  if (!data) return null
-  const products = data.competitive_analysis?.products || []
-  const pitfalls = data.pitfalls || []
+/** 12 个阶段铺满一行太吵 —— 压成一条进度条（阶段名上面那行已经有了） */
+function PhaseBar({ phase }: { phase: string }) {
+  const i = PHASES.indexOf(phase) + 1
   return (
-    <div style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', padding: '8px 10px', marginBottom: 8 }}>
-      <div className="fw-600 fs-11" style={{ marginBottom: 4 }}>📋 调研报告</div>
-      {data.recommendation && <div className="fs-11" style={{ marginBottom: 4 }}><b>推荐方案：</b>{data.recommendation}</div>}
-      {products.length > 0 && (
-        <div className="fs-11" style={{ marginBottom: 4 }}>
-          <b>竞品分析：</b>
-          {products.map((x: any, i: number) => <div key={i}>· {x.name}（{x.type}）：{x.strengths}</div>)}
-        </div>
-      )}
-      {pitfalls.length > 0 && <div className="fs-11"><b>关键坑：</b>{pitfalls.join('；')}</div>}
-    </div>
-  )
-}
-
-function ArchBlock({ data }: { data: any }) {
-  if (!data) return null
-  const modules = data.modules || []
-  const tasks = data.tasks || []
-  return (
-    <div style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', padding: '8px 10px', marginBottom: 8 }}>
-      <div className="fw-600 fs-11" style={{ marginBottom: 4 }}>🏗 架构方案</div>
-      {data.architecture && <div className="fs-11" style={{ marginBottom: 4 }}>{data.architecture}</div>}
-      {modules.length > 0 && (
-        <div className="fs-11" style={{ marginBottom: 4 }}>
-          <b>模块（{modules.length}）：</b>
-          {modules.map((m: any, i: number) => <div key={i}>· {m.name} — {m.responsibility}</div>)}
-        </div>
-      )}
-      {tasks.length > 0 && (
-        <div className="fs-11">
-          <b>任务（{tasks.length}）：</b>
-          {tasks.map((t: any, i: number) => <div key={i}>· {t.id} {t.title}</div>)}
-        </div>
-      )}
+    <div className="flex-center gap-6" style={{ marginBottom: 10 }}>
+      <div style={{ flex: 1, height: 3, background: 'var(--border)', borderRadius: 2 }}>
+        <div style={{ width: `${(i / PHASES.length) * 100}%`, height: '100%', borderRadius: 2,
+          background: PC[phase] || 'var(--accent)' }}/>
+      </div>
+      <span className="fs-10 text-muted" style={{ flexShrink: 0 }}>{i}/{PHASES.length}</span>
     </div>
   )
 }
@@ -64,7 +40,13 @@ export default function Projects() {
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState({ name: '', description: '', template: 'feature' })
   const [loading, setLoading] = useState(true)
+  const [pinned, setPinned] = useState<string[]>(getPinned)
   const toast = useToast()
+  const modal = useModal()
+  const run = useRun()
+  const activePid = useAppStore(s => s.activeProjectId)
+  const setActiveProject = useAppStore(s => s.setActiveProject)
+  const navigate = useNavigate()
 
   const fetch = async () => {
     setLoading(true)
@@ -72,7 +54,7 @@ export default function Projects() {
     setLoading(false)
   }
   useEffect(() => { fetch() }, [])
-  // project=新建项目；workflow=阶段流转（phase 变化）；task/system 兜底
+  // project=新建/删除项目；workflow=阶段流转（phase 变化）；task/system 兜底
   useSSE(() => { fetch() }, { kinds: ['project', 'workflow', 'task', 'system'], debounceMs: 400 })
 
   const toggle = async (id: string) => {
@@ -83,11 +65,23 @@ export default function Projects() {
 
   const create = async () => {
     if (!form.name) return
-    await api.createProject(form)
+    if (!(await run(() => api.createProject(form)))) return
     setShowCreate(false); setForm({ name: '', description: '', template: 'feature' }); fetch()
   }
 
-  const phases = ['template','researching','gate1','planning','gate2','executing','integrating','reviewing','fixing','gate3','delivering','done']
+  const del = (p: any) => modal.confirm({
+    title: `删除项目「${p.name}」？`,
+    content: '该操作不可撤销。',
+    okText: '删除', okButtonProps: { danger: true }, cancelText: '取消',
+    onOk: async () => {
+      if (!(await run(() => api.deleteProject(p.id)))) return
+      if (expanded === p.id) { setExpanded(null); setDetail(null) }
+      if (activePid === p.id) setActiveProject('_default')   // 删的是当前项目 → 别让对话页停在死项目上
+      fetch()
+    },
+  })
+
+  const pin = (id: string) => { togglePin(id); setPinned(getPinned()) }
 
   return (
     <div className="page-wrap-wide">
@@ -116,47 +110,52 @@ export default function Projects() {
         </div>
       ) : (
         <>
-          {projects.map((p: any) => (
-            <div key={p.id} style={{ marginBottom: 6 }}>
-              <div onClick={()=>toggle(p.id)}
-                className="flex-center gap-8" style={{ padding: '8px 10px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', cursor: 'pointer' }}>
-                <span className="text-muted">{expanded===p.id?<ChevronDown size={12}/>:<ChevronRight size={12}/>}</span>
-                <span className="fw-600 fs-13 flex-1">{p.name}</span>
-                <span className="fs-10 fw-600" style={{ color: PC[p.phase]||'var(--text-muted)' }}>{PHASE_CN[p.phase]||p.phase}</span>
-                <span className="fs-10 text-muted">{p.task_count||0} 任务</span>
-              </div>
-              {expanded === p.id && detail && (
-                <div style={{ marginLeft: 20, padding: '8px 14px', borderLeft: '1px solid var(--border)', fontSize: 12 }}>
-                  <div className="flex-center gap-4 flex-wrap" style={{ marginBottom: 8 }}>
-                    {phases.map(ph => (
-                      <span key={ph} style={{
-                        padding: '2px 6px', borderRadius: 3, fontSize: 10, fontWeight: ph===detail.phase?700:400,
-                        color: ph===detail.phase?'#fff':(PC[ph]||'var(--text-muted)'),
-                        background: ph===detail.phase?PC[ph]:'transparent',
-                        border: '1px solid '+(PC[ph]||'var(--border)')
-                      }}>{PHASE_CN[ph]||ph}</span>
-                    ))}
-                  </div>
-                  <div className="text-secondary" style={{ marginBottom: 4 }}>{detail.description}</div>
-                  {detail.repo_dir && <div className="fs-10 text-muted" style={{ marginBottom: 4 }}>📁 成品：{detail.repo_dir}</div>}
-                  {detail.research_report && <ReportBlock data={detail.research_report} />}
-                  {detail.architecture && <ArchBlock data={detail.architecture} />}
-                  {detail.phase && detail.phase.startsWith('gate') && (
-                    <div className="fs-10 text-muted" style={{ marginBottom: 8, color: 'var(--accent-yellow)' }}>
-                      🛑 {PHASE_CN[detail.phase]} — 到「对话」里审批
-                    </div>
-                  )}
-                  {detail.lineage && detail.lineage.length > 0 && (
-                    <div className="fs-10 text-muted" style={{ marginTop: 4 }}>
-                      {detail.lineage.slice(-5).map((l:any,i:number) => (
-                        <div key={i}>[{l.action}] {l.agent||''} {l.task_count?l.task_count+'任务':''}</div>
-                      ))}
-                    </div>
-                  )}
+          {projects.map((p: any) => {
+            const isPinned = pinned.includes(p.id)
+            return (
+              <div key={p.id} style={{ marginBottom: 6 }}>
+                <div onClick={()=>toggle(p.id)}
+                  className="flex-center gap-8" style={{ padding: '8px 10px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', cursor: 'pointer' }}>
+                  <span className="text-muted">{expanded===p.id?<ChevronDown size={12}/>:<ChevronRight size={12}/>}</span>
+                  <span className="fw-600 fs-13 flex-1">{p.name}</span>
+                  <span className="fs-10 fw-600" style={{ color: PC[p.phase]||'var(--text-muted)' }}>{PHASE_CN[p.phase]||p.phase}</span>
+                  <button onClick={e => { e.stopPropagation(); navigate(`/tasks?project=${p.id}`) }}
+                    title="只看该项目的任务"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px',
+                      fontSize: 10, color: '#6b6b68', textDecoration: 'underline' }}>
+                    {p.task_count||0} 任务
+                  </button>
+                  <button onClick={e=>{e.stopPropagation(); pin(p.id)}} className="btn-icon"
+                    title={isPinned?'取消置顶':'置顶'} aria-label={isPinned?'取消置顶':'置顶'}
+                    style={{ color: isPinned?'#d97706':'#b5b2a8' }}><Pin size={12}/></button>
+                  <button onClick={e=>{e.stopPropagation(); del(p)}} className="btn-icon"
+                    title="删除项目" aria-label="删除项目" style={{ color:'#dc2626' }}><Trash2 size={12}/></button>
                 </div>
-              )}
-            </div>
-          ))}
+                {expanded === p.id && detail && (
+                  <div style={{ marginLeft: 20, padding: '8px 14px', borderLeft: '1px solid var(--border)', fontSize: 12 }}>
+                    <PhaseBar phase={detail.phase} />
+                    <div className="text-secondary" style={{ marginBottom: 4 }}>{detail.description}</div>
+                    {detail.repo_dir && <div className="fs-10 text-muted" style={{ marginBottom: 4 }}>📁 成品：{detail.repo_dir}</div>}
+                    {detail.research_report && <ResearchReport report={detail.research_report} />}
+                    {detail.architecture && <ArchitectureDetails arch={detail.architecture} />}
+                    {detail.phase && detail.phase.startsWith('gate') && (
+                      <div className="flex-center gap-6 fs-10" style={{ marginBottom: 8, color: 'var(--accent-yellow)' }}>
+                        🛑 {PHASE_CN[detail.phase]} — 等待审批
+                        <button onClick={() => { setActiveProject(p.id); navigate('/') }} className="btn-sm">去对话页审批</button>
+                      </div>
+                    )}
+                    {detail.lineage && detail.lineage.length > 0 && (
+                      <div className="fs-10 text-muted" style={{ marginTop: 4 }}>
+                        {detail.lineage.slice(-5).map((l:any,i:number) => (
+                          <div key={i}>[{l.action}] {l.agent||''} {l.task_count?l.task_count+'任务':''}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
           {!loading && projects.length === 0 && (
             <div className="fs-11 text-muted" style={{ padding: 20, textAlign: 'center' }}>暂无项目，点"新建"创建</div>
           )}

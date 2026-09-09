@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Tag } from 'antd'
 import { api } from '../lib/api'
+import { useRun } from '../lib/toast'
 import { Plus } from 'lucide-react'
 import { ALL_ROLES, ROLE_LABELS, mcn } from '../pages/Config'
 import type { ModelInfo, AgentItem, AgentsData } from '../lib/types'
@@ -10,6 +11,7 @@ export default function AgentsTab() {
   const [models, setModels] = useState<ModelInfo[]>([])
   const [expanded, setExpanded] = useState<string>('')
   const [showAdd, setShowAdd] = useState(false)
+  const run = useRun()
 
   const fetch = async () => {
     const [a, m] = await Promise.all([api.agents() as Promise<AgentsData>, api.models() as Promise<ModelInfo[]>])
@@ -25,10 +27,10 @@ export default function AgentsTab() {
 
   const toggleRole = async (model: string, role: string, currentRoles: string[]) => {
     const next = currentRoles.includes(role) ? currentRoles.filter(r => r !== role) : [...currentRoles, role]
-    await api.updateAgent(model, { roles: next }); fetch()
+    if (await run(() => api.updateAgent(model, { roles: next }))) fetch()
   }
-  const disable = async (model: string) => { await api.deleteAgent(model); fetch() }
-  const enable = async (model: string) => { await api.addAgent({model, roles:['generic']}); fetch() }
+  const disable = async (model: string) => { if (await run(() => api.deleteAgent(model))) fetch() }
+  const enable = async (model: string) => { if (await run(() => api.addAgent({model, roles:['generic']}))) fetch() }
 
   return (
     <div>
