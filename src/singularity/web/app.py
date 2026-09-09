@@ -783,13 +783,12 @@ def api_fusion_config():
             return jsonify(load_toml(fusion_path))
         except Exception:
             return jsonify({})
-    # PUT: 更新指定 tier 配置 (dual/triple/super/custom)
+    # PUT: 只认 [custom]（dual/triple/super 三档火力是历史残留，从未被读过）
     data = request.get_json(silent=True) or {}
     try:
         cfg = load_toml(fusion_path)
-        for tier in ["dual", "triple", "super", "custom"]:
-            if tier in data:
-                cfg[tier] = {**cfg.get(tier, {}), **data[tier]}
+        if "custom" in data:
+            cfg["custom"] = {**cfg.get("custom", {}), **data["custom"]}
         save_toml(fusion_path, cfg)
         return jsonify({"ok": True})
     except Exception as e:

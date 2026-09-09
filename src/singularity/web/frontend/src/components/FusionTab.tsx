@@ -4,16 +4,13 @@ import { useRun, useToast } from '../lib/toast'
 import { Save } from 'lucide-react'
 
 const TIERS: [string, string][] = [
-  ['custom', '架构融合定稿（当前生效）'],
-  ['dual', 'dual 双模型'],
-  ['triple', 'triple 三模型'],
-  ['super', 'super 超级协作'],
+  ['custom', '架构融合'],
 ]
 
-/** Fusion 配置：各档位的裁判 / 定稿模型。
+/** Fusion 配置：两阶段合成（五维差异分析 → 定稿）用哪两个模型。
  *
- * 架构委员会的两阶段融合（五维差异分析 → 定稿）读的是 [custom] 段；
- * dual/triple/super 是 tier 路由的档位，当前编排层不分 tier，留着备用。
+ * 只有 [custom] 一段 —— dual/triple/super 三档火力是历史残留，唯一的读入口
+ * fuse_outputs() 全仓库零调用，从未执行过，已随配置一并删除。
  * 下拉只列「激活」模型（provider 已配置且有 key）—— 其余模型后端解析不出
  * base_url/key，调用会静默返回空、融合退化成第一个模型的初稿。
  */
