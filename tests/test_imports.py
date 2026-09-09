@@ -30,6 +30,7 @@ SAFE_IMPORTS = [
     "singularity.scheduler._io",
     "singularity.scheduler._profiler",
     "singularity.scheduler._token_budget",
+    "singularity.scheduler._model_breaker",
     "singularity.scheduler._planner",
     "singularity.scheduler._review",
     "singularity.scheduler._exec_context",
@@ -43,10 +44,8 @@ SAFE_IMPORTS = [
     "singularity.scheduler.dispatcher",
     "singularity.scheduler.execution_judge",
     "singularity.scheduler.goal_loop",
-    "singularity.scheduler.handoff",
     "singularity.scheduler.mcp",
     "singularity.scheduler.merge",
-    "singularity.scheduler.model_profile",
     "singularity.scheduler.model_registry",
     "singularity.scheduler.orchestrator",
     "singularity.scheduler.permission",
@@ -146,7 +145,7 @@ def main() -> None:
             FAIL += 1
 
     print(f"\n── Shell 脚本语法 ──")
-    for sh in ["run.sh", "start.sh"]:
+    for sh in ["start.sh"]:   # run.sh 2026-07-03 已删（ba5d52a），从清单去掉
         if check_shell(sh):
             PASS += 1
         else:

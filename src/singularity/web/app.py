@@ -1196,18 +1196,6 @@ def api_project_cost(project_id):
     data, code = _api_handler.project_cost(project_id)
     return jsonify(data), code
 
-@app.route("/api/cost")
-def api_cost():
-    from singularity.scheduler.model_profile import get_cost_summary
-    return jsonify(get_cost_summary())
-
-
-@app.route("/api/quality/trends")
-def api_quality_trends():
-    # ponytail: judge_monitor 已移除，仅返回模型画像成本数据
-    from singularity.scheduler.model_profile import get_cost_summary
-    return jsonify({"cost": get_cost_summary()})
-
 @app.route("/api/projects/<project_id>/lineage")
 def api_project_lineage(project_id):
     data, code = _api_handler.project_lineage(project_id)
@@ -1746,18 +1734,6 @@ def api_sse_events():
 
     return Response(generate(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-# ponytail: judge-monitor 已移除
-
-@app.route("/api/model-profile")
-def api_model_profile():
-    data, code = _api_handler.model_profile_status()
-    return jsonify(data), code
-
-@app.route("/api/model-profile/pattern")
-def api_model_profile_pattern():
-    data, code = _api_handler.model_profile_pattern()
-    return jsonify(data), code
 
 @app.route("/api/dag-metrics")
 def api_dag_metrics():

@@ -404,7 +404,11 @@ def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
         except Exception as _e:
             logging.getLogger(__name__).warning("route learner sort failed: %s", _e)  # learner 挂了不阻塞选择
 
-    return deduped
+    # ── 熔断过滤：刚连挂的模型本轮跳过 ──
+    # fail-open: 全池都熔断时原样返回，否则一个坏 key 能让整个调度停摆
+    from singularity.scheduler import _model_breaker
+    alive = [a for a in deduped if _model_breaker.is_available(a.get("model", ""))]
+    return alive or deduped
 
 
 

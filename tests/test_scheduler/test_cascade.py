@@ -117,6 +117,31 @@ class TestPickAgent:
         chain = pick_agent_fallback_chain(agents, "any")
         assert isinstance(chain, list)
 
+    def test_breaker_filters_open_model_but_fails_open(self, monkeypatch, tmp_path):
+        """熔断中的模型从链里剔除；全池熔断时 fail-open 原样返回，防调度停摆。"""
+        from singularity.scheduler import _model_breaker as mb
+        from singularity.scheduler.dispatcher import pick_agent_fallback_chain
+
+        monkeypatch.setattr(mb, "_path", lambda: tmp_path / "breakers.json")
+        monkeypatch.setattr(mb, "_breakers", {})
+        monkeypatch.setattr(mb, "_loaded", True)   # 别读真实 .qidian
+        monkeypatch.setattr("singularity.scheduler.dispatcher.agent_api_available", lambda a: True)
+
+        agents = {"any": [{"model": "__m_a__", "type": "claude-cli", "entry": "x"},
+                          {"model": "__m_b__", "type": "claude-cli", "entry": "x"}]}
+        assert len(pick_agent_fallback_chain(agents, "any")) == 2
+
+        for _ in range(mb.MAX_FAILURES):
+            mb.record_failure("__m_a__")
+        assert [a["model"] for a in pick_agent_fallback_chain(agents, "any")] == ["__m_b__"]
+
+        for _ in range(mb.MAX_FAILURES):
+            mb.record_failure("__m_b__")
+        assert len(pick_agent_fallback_chain(agents, "any")) == 2, "全熔断应 fail-open"
+
+        mb.record_success("__m_a__")
+        assert mb.is_available("__m_a__"), "成功后应立刻恢复"
+
 
 # ═══════════════════════════════════════════════════════════
 if __name__ == "__main__":

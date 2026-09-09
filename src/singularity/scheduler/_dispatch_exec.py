@@ -14,6 +14,7 @@ from singularity.scheduler import witness
 from singularity.scheduler.log import timed
 from singularity.scheduler._io import apply_json_patch
 from singularity.scheduler import model_registry
+from singularity.scheduler import _model_breaker
 import json, os, time, logging, threading
 
 @timed(name="dispatcher")
@@ -64,14 +65,17 @@ def dispatch(
                 baseline_ref=baseline_ref, cwd=cwd,
             )
             if result and result.raw_output:
+                _model_breaker.record_success(agent_cfg.get("model", ""))
                 return DispatchResult(
                     level=level, agent_cfg=agent_cfg,
                     executor_result=result, attempts=attempt + 1,
                 )
             exec_error = getattr(result, 'error', '') if result else 'no result'
             last_error = f"{agent_cfg.get('model', '?')}: 空输出" + (f" [{exec_error}]" if exec_error else "")
+            _model_breaker.record_failure(agent_cfg.get("model", ""))
         except Exception as e:
             last_error = f"{agent_cfg.get('model', '?')}: {type(e).__name__}: {e}"[:200]
+            _model_breaker.record_failure(agent_cfg.get("model", ""))
 
     raise RuntimeError(f"{level} 层所有 agent 均失败: {last_error}")
 

@@ -66,16 +66,6 @@ def dag_metrics():
     return tracker.dag_metrics(), 200
 
 
-def model_profile_status():
-    from .model_profile import ProfileStore
-    ps = ProfileStore(config.QIDIAN_DIR / "model_profile.json"); ps.load(); return {"profiles": ps.summary()}, 200
-
-
-def model_profile_pattern():
-    from .model_profile import ProfileStore
-    ps = ProfileStore(config.QIDIAN_DIR / "model_profile.json"); ps.load(); return {"patterns": ps.pattern_summary()}, 200
-
-
 def reports_critical():
     from . import chancellor as chan_mod; return chan_mod.recent_critical(), 200
 
