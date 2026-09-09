@@ -438,9 +438,12 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     try:
                         from .supervisor import supervise, qa_context
                         _cons, _check = qa_context(task)
+                        # 改动文件在 worktree (cwd) 里, 不在项目 repo 根 —— 传错根
+                        # 会让 _check_artifact 的 py_compile/ruff 因 (root/f).exists()
+                        # 为假而静默跳过 (端到端实测: 语法错误文件被放行合并)
                         sv = supervise(task.description, changed, _cons, _check,
                                        getattr(exec_result, 'raw_output', '') or '',
-                                       task.id, repo_root=str(repo_root),
+                                       task.id, repo_root=cwd,
                                        tests_result=(quality or {}).get("test_result"))
                         qa_verdict = sv.verdict
                         qa_issues = list(sv.issues)
