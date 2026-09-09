@@ -61,10 +61,9 @@ def main():
     ej._call_model = spy
     # AB_EXTRACT 可换掉提取模型：fusion.toml 默认的 glm-5.3 是思考模型，
     # 16000 token 全烧在 reasoning 上 → content 空 → 整条 v2 回退。
-    extractor = os.environ.get("AB_EXTRACT", "")
-    judge, _ = ej._resolve_fusion_models(extractor)
+    extractor = os.environ.get("AB_EXTRACT", "") or ej._v2_extractor_model()
     print(f"brief {BRIEF_NO} | 阵容 {[m for m, _ in plans]} | 单稿 "
-          f"{[len(p) for _, p in plans]} 字 | ② 提取用 {judge}\n")
+          f"{[len(p) for _, p in plans]} 字 | ② 提取用 {extractor}\n")
     print("跑 v2 融合…", flush=True)
     fused = ej.fuse_architecture_v2(brief, plans, judge_model=extractor)
     ej._call_model = real
@@ -72,8 +71,11 @@ def main():
     if not fused:
         print("❌ 融合返回空（会回退旧流程）")
         return
+    out_path = Path("/tmp/v2_fused.json")
+    out_path.write_text(fused)
     print(f"  融合稿 {len(fused)} 字 | tasks={'✓' if '\"tasks\"' in fused else '✗'} "
-          f"risks={'✓' if '\"risks\"' in fused else '✗'} | 调用 {len(log)} 次\n")
+          f"risks={'✓' if '\"risks\"' in fused else '✗'} | 调用 {len(log)} 次")
+    print(f"  存到 {out_path}（结尾 200 字：{fused[-200:]!r}）\n")
 
     # ── 对话过程（别只看分数）──
     print("── 调用明细 ──")

@@ -122,6 +122,10 @@ def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:
                     witness.heartbeat('execution_judge',
                                       f'warn:empty_content:{model}:{finish}'[:80])
                     return ""
+                if not finish:
+                    # 流结束却没有终止标记 → 多半被连接切断，content 可能是半截。
+                    # 实测 v2 定稿就撞过：11111 字断在 JSON 字符串中间，静默返回。
+                    witness.heartbeat('execution_judge', f'warn:no_finish:{model}'[:80])
                 if finish == "length":
                     witness.heartbeat('execution_judge', f'warn:truncated:{model}'[:80])
                 return content
@@ -472,15 +476,17 @@ def _fusion_v2_enabled() -> bool:
     return os.environ.get("QIDIAN_FUSION_V2") == "1"
 
 
-def _v2_extractor_model() -> str:
-    """v2 ② 提取用哪个模型：优先观察者模型，回退 fusion.toml 的裁判。
+# v2 ② 提取的默认模型。**必须是非思考模型**：思考模型会把 max_tokens 烧在
+# reasoning 上、content 返回空，整条 v2 废掉 —— 实测 glm-5.3 和 deepseek-v4-flash
+# 都撞过，而注册表的 reasoning 标注不可靠（v4-flash 标 false，实际会输出思考链）。
+# 别改回观察者模型：观察者就是 v4-flash，实测在提取 prompt 上返回空。
+_V2_EXTRACT_DEFAULT = os.environ.get("QIDIAN_FUSION_EXTRACT_MODEL", "glm-5.3-flash")
 
-    提取的活儿是「通读 N 份方案列清单」，输出小、要求**非思考**模型 ——
-    实测 glm-5.3（思考模型）会把 16000 token 全烧在 reasoning 上，content 返回空，
-    整条 v2 直接废掉（warn:empty_content:glm-5.3:length）。
-    """
-    from singularity.scheduler import api_store
-    return api_store.get_observer_model() or _resolve_fusion_models()[0]
+
+def _v2_extractor_model() -> str:
+    """v2 ② 提取用哪个模型：fusion.toml [custom].extract_model > 默认。"""
+    cfg = _load_fusion_config().get("custom", {}) or {}
+    return cfg.get("extract_model") or _V2_EXTRACT_DEFAULT
 
 
 def _parallel(thunks: list) -> list:
