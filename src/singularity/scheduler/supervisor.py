@@ -171,38 +171,45 @@ def _check_constraints(
 def _check_laziness(
     agent_output: str, changed_files: list[str], checklist: list[str],
 ) -> CheckResult:
-    """偷懒检测: 机械清单。"""
-    signals = []
+    """偷懒检测: 机械清单。
+
+    硬信号 = 客观文本证据 (TODO/省略/模糊措辞) → supervise 判 fail。
+    软信号 = 启发式 (改动文件数 vs checklist、无测试文件) → 判 escalate/retry。
+    理由: 文件数 ≠ 偷懒, 一个文件的精准修复也会命中; 部分任务本就不需要改测试文件。
+    把它们当硬证据会在 QA 门禁前移后把正常改动直接拦下。
+    """
+    hard_signals, soft_signals = [], []
     output_lower = agent_output.lower()
 
-    # 1. 输出远少于 checklist 预期
+    # 1. 输出远少于 checklist 预期 (软)
     if checklist and len(changed_files) < max(1, len(checklist) // 3):
-        signals.append(f"改动文件({len(changed_files)})远少于checklist({len(checklist)})预期")
+        soft_signals.append(f"改动文件({len(changed_files)})远少于checklist({len(checklist)})预期")
 
-    # 2. 用注释代替实现
+    # 2. 用注释代替实现 (硬)
     if "todo" in output_lower or "# 此处省略" in agent_output:
-        signals.append("输出含 TODO / 注释代替实现")
+        hard_signals.append("输出含 TODO / 注释代替实现")
 
-    # 3. 模糊措辞
+    # 3. 模糊措辞 (硬)
     vague_phrases = ["应该能跑", "理论上没问题", "应该没问题", "看起来是对的", "大概可以"]
     for phrase in vague_phrases:
         if phrase in agent_output:
-            signals.append(f"模糊措辞: '{phrase}'")
+            hard_signals.append(f"模糊措辞: '{phrase}'")
             break
 
-    # 4. 没有测试或验证
+    # 4. 没有测试或验证 (软)
     has_test = any(
         "test" in f.lower() or "spec" in f.lower() or "_test" in f.lower()
         for f in changed_files
     )
     if not has_test and checklist:
-        signals.append("无测试文件改动,checklist要求验证")
+        soft_signals.append("无测试文件改动,checklist要求验证")
 
+    signals = hard_signals + soft_signals
     if signals:
         return CheckResult(
             passed=False,
             reason=f"检测到 {len(signals)} 个偷懒信号",
-            evidence={"signals": signals, "hard": True},
+            evidence={"signals": signals, "hard": bool(hard_signals)},
         )
     return CheckResult(passed=True, reason="无偷懒信号")
 

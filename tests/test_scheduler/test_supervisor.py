@@ -180,3 +180,25 @@ class TestCheckLaziness:
         from singularity.scheduler.supervisor import _check_laziness
         r = _check_laziness("代码实现", ["app.py"], [])
         assert r.passed
+
+    def test_few_files_signal_is_soft(self):
+        """改动文件数 vs checklist 是启发式 → 软信号 (一个文件的精准修复也会命中)。"""
+        from singularity.scheduler.supervisor import _check_laziness
+        r = _check_laziness("代码", ["app.py"],
+                           ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"])
+        assert not r.passed
+        assert not r.evidence.get("hard")
+
+    def test_no_test_file_signal_is_soft(self):
+        """无测试文件改动是启发式 → 软信号 (部分任务本就不需要改测试)。"""
+        from singularity.scheduler.supervisor import _check_laziness
+        r = _check_laziness("代码实现完成", ["app.py"], ["实现功能", "添加测试"])
+        assert not r.passed
+        assert not r.evidence.get("hard")
+
+    def test_mixed_signals_stay_hard(self):
+        """硬信号 + 软信号同时命中 → 仍判硬。"""
+        from singularity.scheduler.supervisor import _check_laziness
+        r = _check_laziness("// TODO 待补", ["app.py"], ["a", "b", "c", "d", "e", "f"])
+        assert not r.passed
+        assert r.evidence.get("hard")
