@@ -100,6 +100,14 @@ class ConnectionManager:
                 sent += 1
             except websockets.ConnectionClosed:
                 dead.append(cid)
+            except Exception as e:  # noqa: BLE001
+                # 只捕 ConnectionClosed 的话，任何别的 send 异常（transport 正在关、
+                # OSError 等）都会从 broadcast 冒出去 → 见 _heartbeat_loop：那里没有
+                # try/except，任务**永久终止**且无人 await 到异常 —— 心跳从此静默消失。
+                # 单个客户端有问题就把它当死连接摘掉，别拖垮整个广播。
+                from singularity.scheduler import witness
+                witness.warn("observer", f"broadcast_send:{type(e).__name__}"[:80])
+                dead.append(cid)
         # 清理已断开的连接
         for cid in dead:
             self.remove(cid)
@@ -225,10 +233,21 @@ class ObserverServer:
         self._heartbeat_task: asyncio.Task | None = None
 
     async def _heartbeat_loop(self) -> None:
-        """定期心跳，清理死连接。"""
+        """定期心跳，清理死连接。
+
+        循环体必须自己兜异常：这是个 fire-and-forget 的 task，某次 broadcast 一旦抛出去，
+        任务就**永久终止**，而且没有任何人 await 到那个异常 —— 表现是"心跳从此不再发"，
+        从外面完全看不出来。
+        """
+        from singularity.scheduler import witness
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
-            await self.manager.broadcast("heartbeat", {"ts": time.time()})
+            try:
+                await self.manager.broadcast("heartbeat", {"ts": time.time()})
+            except asyncio.CancelledError:
+                raise                                   # 正常关闭，别吞
+            except Exception as e:  # noqa: BLE001
+                witness.warn("observer", f"heartbeat_failed:{type(e).__name__}"[:80])
 
     async def start(self) -> None:
         """启动 WebSocket 服务。"""
