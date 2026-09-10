@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
@@ -36,6 +36,7 @@ function PhaseBar({ phase }: { phase: string }) {
 export default function Projects() {
   const [projects, setProjects] = useState<any[]>([])
   const [expanded, setExpanded] = useState<string|null>(null)
+  const detailSeq = useRef(0)   // toggle 的请求序号，用于丢弃过期详情
   const [detail, setDetail] = useState<any>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState({ name: '', description: '', template: 'feature' })
@@ -60,7 +61,15 @@ export default function Projects() {
   const toggle = async (id: string) => {
     if (expanded === id) { setExpanded(null); setDetail(null); return }
     setExpanded(id)
-    try { const d = await api.project(id); setDetail(d) } catch { toast('加载项目详情失败', 'error') }
+    // 请求序号：快速点开 A 再点 B 时，A 的详情后到会盖掉 B 的 ——
+    // 表现为展开区显示 A 的阶段条/调研报告，标题却是 B。
+    // （同族修复见 Chat.tsx 的 fetchSeq。）
+    const seq = ++detailSeq.current
+    try {
+      const d = await api.project(id)
+      if (seq !== detailSeq.current) return   // 已经切到别的项目了，丢弃
+      setDetail(d)
+    } catch { toast('加载项目详情失败', 'error') }
   }
 
   const create = async () => {

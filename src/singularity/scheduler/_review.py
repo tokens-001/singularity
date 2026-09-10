@@ -316,6 +316,13 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                                 for i in crit[:3])
                             quality["warnings"].append(
                                 f"multi-review {f}: {len(crit)} critical: {details}")
+                            # 必须同时进 unverified：`quality` 只在本次运行内存活
+                            # （_save_trace/build_report 的签名里根本没有 quality 参数），
+                            # 只进 warnings 的话**交付报告看不到这条**，用户拿到的仍是
+                            # "delivered"。修档 #10 为 review_files_truncated 立过这条规矩，
+                            # 这里（多模型审查发现 critical）是同族却漏了。
+                            validation.unverified.append(
+                                f"多模型审查发现 {len(crit)} 处 critical (未修复): {details[:200]}")
                             quality["failure_kind"] = "review_critical"
                             quality["confidence"] = max(
                                 0.0, quality.get("confidence", 0.5) - 0.25)
@@ -425,6 +432,11 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                     quality["warnings"].append(
                         f"QA 约束验收 {len(fails)} 条未满足: " +
                         "; ".join(v.get("constraint", "")[:40] for v in fails[:3]))
+                    # 同 multi-review critical：quality 只活在内存里，交付报告看不到，
+                    # 必须同时进 unverified（否则用户拿到的仍是 "delivered"）。
+                    validation.unverified.append(
+                        f"QA 约束验收 {len(fails)} 条未满足: " +
+                        "; ".join(v.get("constraint", "")[:60] for v in fails[:3]))
                     quality["failure_kind"] = "constraint_fail"
                     quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.25)
                     validation.action = "retry"
@@ -482,6 +494,12 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                     "; ".join(f"{f.get('severity','?')}:{f.get('description','')[:40]}"
                               for f in findings[:3]))
                 if hard:
+                    # 同上：必须进 unverified。安全审计发现真漏洞却只写内存 quality 的话，
+                    # 交付报告仍然写 delivered —— 而这份报告正是给人看的那一份。
+                    validation.unverified.append(
+                        "安全审计命中 critical/high: " +
+                        "; ".join(f"{f.get('severity','?')}:{f.get('description','')[:60]}"
+                                  for f in hard[:3]))
                     quality["failure_kind"] = "security_findings"
                     quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.3)
                     validation.action = "retry"
