@@ -236,24 +236,6 @@ def _find_agent_by_model(agents: dict, model_name: str) -> dict | None:
 
 
 
-_RR_COUNTER: dict[str, int] = {}  # level -> 下次轮询起点
-
-
-def _rotate(level: str, agents_list: list) -> list:
-    """轮换：把列表旋转一下，让**下一个**模型排在最前（其余保持原序当回退链）。
-
-    为什么需要它：选模型那条路（`pick_agent_fallback_chain`）永远取链首，
-    所以同层配了多个模型也只有第一个在干活 —— 用户配了 7 个却只见 1 个被调用。
-
-    ponytail: 全局计数不加锁，低并发下偶发重复无害（只是分摊，非正确性）。
-    """
-    if len(agents_list) <= 1:
-        return agents_list
-    i = _RR_COUNTER.get(level, 0) % len(agents_list)
-    _RR_COUNTER[level] = i + 1
-    return agents_list[i:] + agents_list[:i]
-
-
 def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
                                exclude: set = None,
                                project_lineup: dict[str, list[str]] = None,
@@ -340,23 +322,11 @@ def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
         except Exception as _e:
             logging.getLogger(__name__).warning("route learner sort failed: %s", _e)  # learner 挂了不阻塞选择
 
-    # ── 轮换：让同层多个可用模型真的都用上 ──
-    # ⚠️ 必须放在**所有排序之后** —— 上面刚按学习者权重排过，先轮换会被它排回去。
-    #
-    # 为什么需要：调用方永远取链首，所以同层配了多个模型也只有第一个在干活。
-    # 用户实测：配了 7 个模型，token 账里只有 1 个被调用过。
-    # 以前只有 `pick_agent`（零调用的死函数）里有轮换，那条路根本没人走。
-    #
-    # 用户自定义排序 `_order` 在这里生效：它是用户显式给的优先级，排在轮换的基准位。
-    if len(deduped) > 1:
-        try:
-            order = (_load_custom_agents().get("_order", {}) or {}).get(level or "any", [])
-            if order:
-                rank = {m: i for i, m in enumerate(order)}
-                deduped.sort(key=lambda a: rank.get(a.get("model", ""), 999))
-        except Exception as _e:
-            logging.getLogger(__name__).warning("custom order sort failed: %s", _e)
-        deduped = _rotate(level or "any", deduped)
+    # 注：这里曾经加过"轮换"（每次换个模型打头），已撤掉。
+    # 理由：`any` 层那个列表**本质是"主力 + 备用"** —— 原设计就是永远用第一个、
+    # 挂了才用下一个。轮换会让同一项目里调研用一个模型、架构用另一个、审查又换回来，
+    # 出了问题不好归因，成本和效果也忽高忽低；而且两个模型的样本都变少，学习器收敛更慢。
+    # 想验证"哪些模型配了但没跑过"，看用量页就够了（未使用 / 配额耗尽都会标出来）。
 
     # ── 熔断过滤：刚连挂的模型本轮跳过 ──
     # fail-open: 全池都熔断时原样返回，否则一个坏 key 能让整个调度停摆
