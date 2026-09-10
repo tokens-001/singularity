@@ -30,7 +30,6 @@ _observer_stop_signal: asyncio.Event | None = None
 _executor: ThreadPoolExecutor | None = None
 
 # 启动状态标记
-_all_started = False
 
 
 class _WSClient:
@@ -311,42 +310,6 @@ def broadcast_observer(event: str, data: dict, channels: set[str] | None = None)
 
 
 # ── T5: 统一启动入口与调度事件钩子 ─────────────────────────────────────────
-
-def start_all(
-    ws_host: str = "127.0.0.1",
-    ws_port: int = 5051,
-    observer_host: str = "0.0.0.0",
-    observer_port: int = 8765,
-) -> None:
-    """统一启动所有 WebSocket 服务（bridge WS + Observer）。
-
-    供 scheduler loop / 应用入口一键调用。
-    """
-    global _all_started
-    if _all_started:
-        _log.warning("bridge.start_all: 服务已在运行，跳过")
-        return
-
-    _log.info("bridge.start_all: 启动 WebSocket 桥接与 Observer 服务")
-
-    # 1) 启动 bridge WS（JSON-RPC 认证通道）
-    try:
-        start_ws_server(host=ws_host, port=ws_port)
-    except Exception as e:
-        _log.error("bridge WS 启动失败: %s", e)
-
-    # 2) 启动 Observer WS（实时事件推送通道）
-    try:
-        start_observer_server(host=observer_host, port=observer_port)
-    except Exception as e:
-        _log.error("Observer Server 启动失败: %s", e)
-
-    _all_started = True
-    _log.info(
-        "bridge.start_all: 完成 — bridge=ws://%s:%d  observer=ws://%s:%d",
-        ws_host, ws_port, observer_host, observer_port,
-    )
-
 
 # ── 调度事件钩子 ──────────────────────────────────────────────────────────
 

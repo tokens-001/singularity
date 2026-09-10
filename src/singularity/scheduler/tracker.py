@@ -136,7 +136,7 @@ def read_task(task_id: str) -> Optional[Task]:
     try:
         return Task.from_dict(json.loads(p.read_text(encoding="utf-8")))
     except (json.JSONDecodeError, TypeError, ValueError):
-        return None  # 损坏/空文件 → 视为不存在 (与 _collect_ready_pending 一致)
+        return None  # 损坏/空文件 → 视为不存在
 
 
 _NEXT_ID_CACHE = 0
@@ -276,23 +276,6 @@ def _any_dead_dep(task: Task) -> str:
         if dep is not None and dep.status in _DEAD_END:
             return dep_id
     return ""
-
-
-def _collect_ready_pending() -> list[Task]:
-    """扫所有 pending 且依赖已完成的任务, 刷新 starvation_score。"""
-    candidates: list[Task] = []
-    for p in tasks_dir().glob("*.json"):
-        try:
-            task = Task.from_dict(json.loads(p.read_text(encoding="utf-8")))
-        except (json.JSONDecodeError, TypeError, ValueError):
-            continue
-        if task.status != TaskStatus.PENDING:
-            continue
-        if not _deps_satisfied(task):
-            continue
-        task.compute_starvation()
-        candidates.append(task)
-    return candidates
 
 
 def _sort_key(t: Task) -> tuple:

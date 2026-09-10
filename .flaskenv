@@ -1,1 +1,1 @@
-FLASK_APP=singularity.blog:create_app
+FLASK_APP=singularity.web.app
