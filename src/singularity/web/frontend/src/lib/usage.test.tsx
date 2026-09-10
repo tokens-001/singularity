@@ -20,8 +20,10 @@ const HISTORY = {
   earliest: '2026-08-13',
   days: [],
   models: [
-    { model: 'priced-model', tokens: 1_000_000, share: 0.3333, cost: 0.28, price: 0.28 },
-    { model: 'unpriced-model', tokens: 2_000_000, share: 0.6667, cost: null, price: null },
+    { model: 'priced-model', tokens: 1_000_000, share: 0.3333, cost: 0.28, price: 0.28,
+      used: true, provider: 'deepseek', provider_status: 'active' },
+    { model: 'unpriced-model', tokens: 2_000_000, share: 0.6667, cost: null, price: null,
+      used: true, provider: 'kimi', provider_status: 'active' },
   ],
   totals: { tokens: 3_000_000, tasks: 9, active_days: 1, cost: 0.28,
             unpriced_models: ['unpriced-model'] },
@@ -31,8 +33,19 @@ const HISTORY = {
 /** 一个模型都没配单价 —— 合计**没有数可报**，必须显示"未配置价格"而不是 $0.0000。 */
 const HISTORY_NONE_PRICED = {
   ...HISTORY,
-  models: [{ model: 'unpriced-model', tokens: 3_000_000, share: 1, cost: null, price: null }],
+  models: [{ model: 'unpriced-model', tokens: 3_000_000, share: 1, cost: null, price: null,
+             used: true, provider: 'kimi', provider_status: 'active' }],
   totals: { ...HISTORY.totals, cost: 0, unpriced_models: ['unpriced-model'] },
+}
+
+/** 配了但一次没用过，而且供应商欠费了 —— 这两件事都得看得见。 */
+const HISTORY_WITH_UNUSED = {
+  ...HISTORY,
+  models: [
+    ...HISTORY.models,
+    { model: 'glm-unused', tokens: 0, share: 0, cost: null, price: null,
+      used: false, provider: 'zhipu', provider_status: 'quota_exhausted' },
+  ],
 }
 
 const EMPTY = {
@@ -143,5 +156,40 @@ describe('用量页', () => {
     await act(async () => { btn.click() })
     await act(async () => { await new Promise(r => setTimeout(r, 0)) })
     expect(calls).toContain('7d')
+  })
+})
+
+describe('用量页 — 配了但没用过的模型', () => {
+  it('没用过的模型也列出来，显示"未使用"而不是消失', async () => {
+    current = HISTORY_WITH_UNUSED
+    const el = await render(<Usage />)
+    const text = el.textContent || ''
+    expect(text).toContain('glm-unused')
+    expect(text).toContain('未使用')
+  })
+
+  it('供应商欠费要露出来 —— 否则只知道"没用过"，不知道是欠费', async () => {
+    current = HISTORY_WITH_UNUSED
+    const el = await render(<Usage />)
+    expect(el.textContent).toContain('配额耗尽')
+  })
+
+  it('没用过的行占比/费用显示"—"，不拿 0 或"未配置价格"充数', async () => {
+    current = HISTORY_WITH_UNUSED
+    const el = await render(<Usage />)
+    const row = Array.from(el.querySelectorAll('.card-row'))
+      .find(r => r.textContent?.includes('glm-unused')) as HTMLElement
+    expect(row, '没找到未使用那一行').toBeTruthy()
+    const t = row.textContent || ''
+    expect(t).toContain('未使用')
+    expect(t).not.toContain('%')            // 占比那栏对没用过的模型没意义
+    expect(t).not.toContain('未配置价格')    // 没用过就没有"费用算不出来"这回事
+  })
+
+  it('活跃供应商不显示状态标签（好端端的不用打扰）', async () => {
+    current = HISTORY
+    const el = await render(<Usage />)
+    expect(el.textContent).not.toContain('配额耗尽')
+    expect(el.textContent).not.toContain('已禁用')
   })
 })

@@ -461,15 +461,43 @@ def history(range_: str = "30d") -> dict:
         for i, v in enumerate(bucket.get("hours") or []):
             if i < _HOURS:
                 hours[i] += v
+    # 配置里的模型**全都要出现在统计里**，哪怕一次没用过。
+    # 只列"花过钱的"会让你分不清"没跑过 / 跑失败了 / 配置有问题" ——
+    # 配了 7 个只显示 1 个，看着就像统计漏了。
+    # 报 **provider 状态原文**而不是 is_available 的布尔值：后者有"半开"机制
+    # （冷却期后放行一次去探测），配额耗尽的账号也会返回 True ——
+    # 那样页面上会写着"可用"，而用户真正需要看到的是"配额耗尽"。
+    avail: dict[str, dict] = {}
+    try:
+        from singularity.scheduler import api_store, model_registry
+        entries = model_registry.load_models()
+        configured = list(model_registry._load_custom().keys())
+        for mid in configured:
+            tok.setdefault(mid, 0)
+            prov = getattr(entries.get(mid), "provider", "") or ""
+            entry = api_store.get(prov) if prov else None
+            avail[mid] = {"provider": prov,
+                          "provider_status": getattr(entry, "status", None) if entry else None}
+    except Exception as e:
+        # 取配置失败不该让整页打不开 —— 退化成"只列用过的"
+        witness.warn("_token_budget", f"history_configured:{e}"[:120])
+
     total_tok = sum(tok.values()) or 1
     models = []
-    for m, v in sorted(tok.items(), key=lambda x: -x[1]):
+    # 用过的按量降序；没用过的排在后面
+    for m, v in sorted(tok.items(), key=lambda x: (-x[1], x[0])):
         c = _row_cost(v, m, prices)
         # 不给"任务数"：逐日桶按模型只存了 token，没存各自的任务数。
         # 今天的表有任务数是因为那走的是原始行；这里没有就不编，宁可不显示这一列。
-        models.append({"model": m, "tokens": v, "share": round(v / total_tok, 4),
-                       "cost": c, "price": prices.get(m)})
-    unpriced = [m["model"] for m in models if m["cost"] is None]
+        info = avail.get(m) or {}
+        models.append({"model": m, "tokens": v,
+                       "share": round(v / total_tok, 4) if v else 0.0,
+                       "cost": c, "price": prices.get(m),
+                       "used": v > 0,
+                       "provider": info.get("provider", ""),
+                       "provider_status": info.get("provider_status")})
+    # 只报"用过但没配单价"的 —— 没用过的模型没产生费用，列进警告是噪声
+    unpriced = [m["model"] for m in models if m["used"] and m["cost"] is None]
     total_cost = round(sum(m["cost"] for m in models if m["cost"] is not None), 6)
 
     active = [d for d in days if d["tokens"] > 0]

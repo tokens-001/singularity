@@ -37,6 +37,12 @@ const COL = {
 
 const COST_COL = { minWidth: 84, textAlign: 'right' as const }
 
+/** 供应商状态 → 中文。只显示非 active 的 —— 好端端的不用打扰。 */
+const STATUS_CN: Record<string, string> = {
+  quota_exhausted: '配额耗尽',
+  disabled: '已禁用',
+}
+
 export default function Usage() {
   const [h, setH] = useState<any>(null)
   const [range, setRange] = useState('30d')
@@ -101,25 +107,43 @@ export default function Usage() {
 
           {models.map((m: any) => (
             <div key={m.model} className="card-row" style={COL as any}>
-              <span className="truncate mono" style={COL.model} title={m.model}>{m.model}</span>
-              <span className="mono" style={COL.num}>{fmtTokens(m.tokens)}</span>
+              <span className="flex-center gap-4" style={COL.model}>
+                <span className="truncate mono" title={m.model}>{m.model}</span>
+                {/* 非 active 的供应商状态要露出来 —— 否则你只会看到"未使用"，
+                    而不知道是没跑过、还是账号欠费了。 */}
+                {STATUS_CN[m.provider_status] && (
+                  <span className="card-tag" style={{ color: 'var(--accent-yellow)', flexShrink: 0 }}
+                    title={`供应商 ${m.provider} 状态：${m.provider_status}`}>
+                    {STATUS_CN[m.provider_status]}
+                  </span>
+                )}
+              </span>
+              <span className="mono" style={COL.num}>
+                {m.used ? fmtTokens(m.tokens) : <span className="text-muted">未使用</span>}
+              </span>
               <span style={COL.num}>
-                <span className="mono">{Math.round((m.share || 0) * 100)}%</span>
-                <span style={{ display: 'block', height: 2, marginTop: 2, borderRadius: 1,
-                  background: 'var(--border)' }}>
-                  <span style={{ display: 'block', height: 2, borderRadius: 1,
-                    background: 'var(--accent)', width: `${Math.round((m.share || 0) * 100)}%` }} />
-                </span>
+                {m.used ? (
+                  <>
+                    <span className="mono">{Math.round((m.share || 0) * 100)}%</span>
+                    <span style={{ display: 'block', height: 2, marginTop: 2, borderRadius: 1,
+                      background: 'var(--border)' }}>
+                      <span style={{ display: 'block', height: 2, borderRadius: 1,
+                        background: 'var(--accent)', width: `${Math.round((m.share || 0) * 100)}%` }} />
+                    </span>
+                  </>
+                ) : <span className="text-muted">—</span>}
               </span>
               <span className="mono text-secondary" style={COL.num}>
                 {isUnpriced(m.price) ? <span className="text-muted">—</span> : `$${m.price.toFixed(2)}/M`}
               </span>
               <span className="mono" style={{ ...COST_COL,
-                color: isUnpriced(m.cost) ? 'var(--accent-yellow)' : 'var(--text-primary)' }}>
-                {isUnpriced(m.cost)
-                  ? <span role="button" tabIndex={0} style={{ cursor: 'pointer' }}
-                      onClick={() => navigate('/config')}>未配置价格</span>
-                  : fmtCost(m.cost)}
+                color: isUnpriced(m.cost) && m.used ? 'var(--accent-yellow)' : 'var(--text-primary)' }}>
+                {/* 没用过的模型没有费用可报 —— 显示"—"，别拿 0 或"未配置价格"充数 */}
+                {!m.used ? <span className="text-muted">—</span>
+                  : isUnpriced(m.cost)
+                    ? <span role="button" tabIndex={0} style={{ cursor: 'pointer' }}
+                        onClick={() => navigate('/config')}>未配置价格</span>
+                    : fmtCost(m.cost)}
               </span>
             </div>
           ))}

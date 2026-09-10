@@ -327,3 +327,70 @@ class TestPersistedFile:
         b1.record("p", "", "t1", "m", "any", 55, ts=_ts("2026-09-11", 10))
         b2 = _fresh()          # 重新加载
         assert b2._rollup()["2026-09-11"]["tokens"] == 55
+
+
+class TestConfiguredModelsAlwaysListed:
+    """配置里有的模型**都要出现**，哪怕一次没用过。
+
+    只列"花过钱的"会让你分不清"没跑过 / 跑失败了 / 账号欠费" ——
+    用户配了 7 个只看到 1 个，第一反应就是"统计漏了"。
+    """
+
+    def _seed_models(self, *mids):
+        from singularity.scheduler import api_store
+        from singularity.scheduler import config as cfg
+        (cfg.QIDIAN_DIR / "models_custom.json").write_text(
+            json.dumps({m: {"id": m, "provider": "deepseek", "display": m,
+                            "recommended_for": ["any"]} for m in mids}), encoding="utf-8")
+
+    def test_unused_configured_model_appears_with_zero(self, monkeypatch):
+        b = _fresh()
+        b.record("p", "", "t1", "used-model", "any", 1000, ts=time.time())
+        self._seed_models("used-model", "never-used-model")
+        _bind(monkeypatch, b)
+
+        by_name = {m["model"]: m for m in history("7d")["models"]}
+        assert "never-used-model" in by_name, "配了但没用过的模型必须也列出来"
+        assert by_name["never-used-model"]["tokens"] == 0
+        assert by_name["never-used-model"]["used"] is False
+        assert by_name["used-model"]["used"] is True
+
+    def test_unused_model_is_not_in_unpriced_warning(self, monkeypatch):
+        """没用过的模型没产生费用 —— 列进"未配置单价"警告是噪声。"""
+        b = _fresh()
+        b.record("p", "", "t1", "used-unpriced", "any", 1000, ts=time.time())
+        self._seed_models("used-unpriced", "never-used-unpriced")
+        _bind(monkeypatch, b)
+
+        assert history("7d")["totals"]["unpriced_models"] == ["used-unpriced"]
+
+    def test_reports_provider_status_not_just_available(self, monkeypatch):
+        """要报供应商状态原文 —— is_available 有"半开"机制，欠费的账号也返回 True，
+        页面上写"可用"而用户需要看到的是"配额耗尽"。"""
+        b = _fresh()
+        self._seed_models("glm-like")
+        _bind(monkeypatch, b)
+
+        row = history("7d")["models"][0]
+        assert "provider_status" in row and "provider" in row
+        assert "api_available" not in row, "别报那个会误导的布尔值"
+
+    def test_unused_models_sort_after_used(self, monkeypatch):
+        b = _fresh()
+        b.record("p", "", "t1", "zzz-used", "any", 1000, ts=time.time())
+        self._seed_models("aaa-unused", "zzz-used")
+        _bind(monkeypatch, b)
+
+        names = [m["model"] for m in history("7d")["models"]]
+        # 用过的排前面，即使字母序在后面
+        assert names.index("zzz-used") < names.index("aaa-unused")
+
+    def test_broken_model_config_still_returns_history(self, monkeypatch):
+        """取配置失败不该让整页打不开 —— 退化成"只列用过的"。"""
+        b = _fresh()
+        b.record("p", "", "t1", "m", "any", 1000, ts=time.time())
+        _bind(monkeypatch, b)
+        (config.QIDIAN_DIR / "models_custom.json").write_text("{坏 json", encoding="utf-8")
+
+        h = history("7d")
+        assert h["totals"]["tokens"] == 1000
