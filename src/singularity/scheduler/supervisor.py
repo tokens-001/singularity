@@ -430,6 +430,7 @@ def check_requirement_conformance(project_id: str, agent_output: str = "",
     # 逐条检查
     passed_items = []
     failed_items = []
+    unverifiable_items = []   # 没声明覆盖任务、关键词也没命中 → 判不了，既不算过也不算失败
     output_lower = agent_output.lower()
     files_set = set(changed_files)
 
@@ -452,6 +453,13 @@ def check_requirement_conformance(project_id: str, agent_output: str = "",
             "files_produced": has_files,
         }
 
+        # 既没声明覆盖任务、产出里也没出现需求关键词 = **无法验证**，不是"通过"。
+        # 原来 `has_files` 在 covered_by 为空时直接返回 True，于是
+        # `keyword_match or has_files` 恒真 → 这类条目无条件算过，
+        # 追溯页永远显示"全部通过"，等于这条检查不存在。
+        if not covered_by and not keyword_match:
+            unverifiable_items.append(check)
+            continue
         if keyword_match or has_files:
             passed_items.append(check)
         else:
@@ -468,6 +476,17 @@ def check_requirement_conformance(project_id: str, agent_output: str = "",
                 "failed": len(failed_items),
                 "failed_items": [f["requirement"][:80] for f in failed_items],
             },
+        )
+    if unverifiable_items:
+        return CheckResult(
+            passed=True,     # 不判失败：追溯表没写覆盖任务，多半是架构阶段没填全，
+                             # 据此拦交付会变成另一种假警报（审计里也点过这个方向）。
+                             # 但也**不能**说"全部通过" —— 如实报数，让人自己看。
+            reason=(f"需求符合性: {len(passed_items)}/{len(trace)} 通过, "
+                    f"{len(unverifiable_items)} 条无法验证(未声明覆盖任务且关键词未命中)"),
+            evidence={"hard": False, "total": len(trace),
+                      "passed": len(passed_items), "unverifiable": len(unverifiable_items),
+                      "unverifiable_items": [u["requirement"][:80] for u in unverifiable_items]},
         )
     return CheckResult(
         passed=True,
