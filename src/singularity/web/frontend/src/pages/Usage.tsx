@@ -24,10 +24,11 @@ function fmtTokens(n: number): string {
   return String(n || 0)
 }
 
+/** 日历口径（本月 = 当月 1 号起，本周 = 周一起），不是"最近 N 天"的滚动窗口。 */
 const RANGES: { v: string; label: string }[] = [
-  { v: 'all', label: '全部' },
-  { v: '30d', label: '近30天' },
-  { v: '7d', label: '近7天' },
+  { v: 'all', label: '累计至今' },
+  { v: 'month', label: '本月' },
+  { v: 'week', label: '本周' },
 ]
 
 const COL = {
@@ -45,7 +46,7 @@ const STATUS_CN: Record<string, string> = {
 
 export default function Usage() {
   const [h, setH] = useState<any>(null)
-  const [range, setRange] = useState('30d')
+  const [range, setRange] = useState('all')
   const [loading, setLoading] = useState(true)
   const addToast = useToast()
   const navigate = useNavigate()

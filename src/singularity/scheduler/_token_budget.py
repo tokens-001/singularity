@@ -382,7 +382,8 @@ def get_usage_stats() -> dict:
 
 
 # 范围 → 天数（None = 全部，即盘上最早那天起）
-_RANGES: dict[str, int | None] = {"7d": 7, "30d": 30, "all": None}
+# 日历口径，不是"最近 N 天"的滚动窗口 —— 起止日见 _range_start
+_RANGES = ("all", "month", "week")
 
 
 def _streak(days: list[dict]) -> tuple[int, int]:
@@ -410,7 +411,26 @@ def _streak(days: list[dict]) -> tuple[int, int]:
     return now, longest
 
 
-def history(range_: str = "30d") -> dict:
+def _range_start(range_: str, today: str, earliest: str) -> str:
+    """范围的起始日。**日历口径**，不是"最近 N 天"的滚动窗口。
+
+    - `all`   → 累计至今：从有记录的第一天起
+    - `month` → 本月：当月 1 号
+    - `week`  → 本周：**周一**起（中文习惯；Python 的 weekday() 就是周一=0）
+    """
+    from datetime import date as _date, timedelta as _td
+
+    if range_ == "all":
+        return earliest
+    d = _date.fromisoformat(today)
+    if range_ == "month":
+        return d.replace(day=1).isoformat()
+    if range_ == "week":
+        return (d - _td(days=d.weekday())).isoformat()
+    raise ValueError(f"range 只支持 {'/'.join(_RANGES)}")
+
+
+def history(range_: str = "all") -> dict:
     """按范围的用量历史。纯函数（读 `_budget` 的内存态），无 Flask 上下文即可测。
 
     非法 range 抛 ValueError，由 handler 转 400。
@@ -426,13 +446,9 @@ def history(range_: str = "30d") -> dict:
     earliest = stored[0][0] if stored else _day_key(time.time())
 
     today = _day_key(time.time())
-    span = _RANGES[range_]
-    if span is None:
-        start = earliest
-    else:
-        start = (_date.fromisoformat(today) - _td(days=span - 1)).isoformat()
+    start = _range_start(range_, today, earliest)
 
-    # 稠密升序补零: 热力图每一格都要有，客户端不该自己算日历
+    # 稠密升序补零: 客户端不该自己算日历
     days: list[dict] = []
     cur = _date.fromisoformat(start)
     end = _date.fromisoformat(today)

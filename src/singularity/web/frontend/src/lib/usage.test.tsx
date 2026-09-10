@@ -16,7 +16,7 @@ import { App as AntApp } from 'antd'
 
 /** 一个已定价 + 一个未定价的模型。后者是防造假断言的主角。 */
 const HISTORY = {
-  range: '30d',
+  range: 'all',
   earliest: '2026-08-13',
   days: [],
   models: [
@@ -49,7 +49,7 @@ const HISTORY_WITH_UNUSED = {
 }
 
 const EMPTY = {
-  range: '7d', earliest: '2026-09-05', days: [],
+  range: 'week', earliest: '2026-09-07', days: [],
   models: [],
   totals: { tokens: 0, tasks: 0, active_days: 0, cost: 0, unpriced_models: [] },
   activity: {},
@@ -148,14 +148,14 @@ describe('用量页', () => {
     current = HISTORY
     calls.length = 0
     const el = await render(<Usage />)
-    expect(calls).toContain('30d')          // 默认范围
+    expect(calls).toContain('all')          // 默认范围
 
     const btn = Array.from(el.querySelectorAll('button'))
-      .find(b => b.textContent === '近7天') as HTMLElement
-    expect(btn, '没找到"近7天"按钮').toBeTruthy()
+      .find(b => b.textContent === '本月') as HTMLElement
+    expect(btn, '没找到"本月"按钮').toBeTruthy()
     await act(async () => { btn.click() })
     await act(async () => { await new Promise(r => setTimeout(r, 0)) })
-    expect(calls).toContain('7d')
+    expect(calls).toContain('month')
   })
 })
 

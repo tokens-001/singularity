@@ -162,7 +162,7 @@ class TestUnpricedInvariant:
         from singularity.scheduler import model_prices
         model_prices.set_price("paid", 0.20)
 
-        h = history("7d")
+        h = history("all")
         by = {m["model"]: m for m in h["models"]}
         assert by["paid"]["cost"] == 0.2
         assert by["free_unknown"]["cost"] is None, "未配单价必须是 None，不是 0"
@@ -173,25 +173,32 @@ class TestUnpricedInvariant:
         b = _fresh()
         b.record("p", "", "t1", "m", "any", 1_000_000, ts=_ts(_days_ago(3), 12))
         _bind(monkeypatch, b)
-        assert history("7d")["models"][0]["cost"] is None
+        assert history("all")["models"][0]["cost"] is None
 
         from singularity.scheduler import model_prices
         model_prices.set_price("m", 0.5)
-        assert history("7d")["models"][0]["cost"] == 0.5, "读时算钱: 补价后历史一起变对"
+        assert history("all")["models"][0]["cost"] == 0.5, "读时算钱: 补价后历史一起变对"
 
 
 class TestRangeSlicing:
     def test_dense_ascending_days(self, monkeypatch):
+        """日历口径：本周=周一起、本月=1号起、全部=有记录的第一天起。"""
         b = _fresh()
         b.record("p", "", "t1", "m", "any", 42, ts=time.time())
         _bind(monkeypatch, b)
 
-        for rng, n in (("7d", 7), ("30d", 30)):
+        t = date.today()
+        for rng, expect_start in (
+            ("week", t - timedelta(days=t.weekday())),   # 周一
+            ("month", t.replace(day=1)),
+        ):
             h = history(rng)
-            assert len(h["days"]) == n, f"{rng} 应当稠密返回 {n} 天"
             dates = [d["date"] for d in h["days"]]
+            assert dates[0] == expect_start.isoformat(), f"{rng} 起始日不对"
             assert dates == sorted(dates), "必须升序"
             assert dates[-1] == _day_key(time.time()), "最后一天必须是今天"
+            # 稠密无洞
+            assert len(dates) == (t - expect_start).days + 1
 
     def test_all_starts_at_earliest(self, monkeypatch):
         b = _fresh()
@@ -205,31 +212,41 @@ class TestRangeSlicing:
             history("bogus")
 
     def test_days_are_zero_filled(self, monkeypatch):
+        """只有今天有量 → 本月其余的日子都要补零出现，不能缺格。"""
         b = _fresh()
         b.record("p", "", "t1", "m", "any", 7, ts=time.time())
         _bind(monkeypatch, b)
-        h = history("7d")
-        assert sum(1 for d in h["days"] if d["tokens"] == 0) == 6
+        h = history("month")
+        assert len(h["days"]) == date.today().day
+        assert sum(1 for d in h["days"] if d["tokens"] == 0) == date.today().day - 1
 
 
 class TestEmptyStore:
     def test_no_files_at_all(self, monkeypatch):
         b = _fresh()
         _bind(monkeypatch, b)
-        h = history("30d")
+        h = history("all")
         assert h["totals"]["tokens"] == 0
         assert h["totals"]["tasks"] == 0
-        assert h["models"] == []
-        assert len(h["days"]) == 30
+        # 一条记录都没有 → "累计至今"就只到今天这一天（没有更早的起点）
+        assert len(h["days"]) == 1
+        assert h["days"][0]["date"] == _day_key(time.time())
         # 0 点是个合法时刻 —— 没数据必须是 None，不能冒充"高峰在 0 点"
         assert h["activity"]["peak_hour"] is None
         assert h["activity"]["peak_day"] is None
+
+    def test_month_range_is_dense_even_with_no_data(self, monkeypatch):
+        """本月是日历口径 —— 就算没数据也要铺满整月到今天的格子。"""
+        b = _fresh()
+        _bind(monkeypatch, b)
+        h = history("month")
+        assert len(h["days"]) == date.today().day
 
     def test_corrupt_history_file_does_not_break(self, monkeypatch):
         (config.QIDIAN_DIR / "usage_daily.json").write_text("{ not json", encoding="utf-8")
         b = _fresh()
         _bind(monkeypatch, b)
-        assert history("7d")["totals"]["tokens"] == 0
+        assert history("all")["totals"]["tokens"] == 0
 
 
 class TestDayKeyIsLocal:
@@ -252,21 +269,21 @@ class TestStreakDefinition:
             b.record("p", "", f"t{k}", "m", "any", 10, ts=_ts(_days_ago(k), 12))
         _bind(monkeypatch, b)
         # 今天还没用量不算断，否则每天早上打开都是"0 天"
-        assert history("7d")["activity"]["current_streak"] == 3
+        assert history("all")["activity"]["current_streak"] == 3
 
     def test_today_counts_when_nonzero(self, monkeypatch):
         b = _fresh()
         for k in (0, 1):
             b.record("p", "", f"t{k}", "m", "any", 10, ts=_ts(_days_ago(k), 12))
         _bind(monkeypatch, b)
-        assert history("7d")["activity"]["current_streak"] == 2
+        assert history("all")["activity"]["current_streak"] == 2
 
     def test_gap_breaks_streak(self, monkeypatch):
         b = _fresh()
         for k in (0, 1, 3, 4):        # 第 2 天缺失 → 断
             b.record("p", "", f"t{k}", "m", "any", 10, ts=_ts(_days_ago(k), 12))
         _bind(monkeypatch, b)
-        h = history("7d")
+        h = history("all")
         assert h["activity"]["current_streak"] == 2
         assert h["activity"]["longest_streak"] == 2
 
@@ -276,7 +293,7 @@ class TestDurationPartial:
         b = _fresh()
         b.record("p", "", "t1", "m", "any", 100, ts=time.time())
         _bind(monkeypatch, b)
-        h = history("7d")
+        h = history("all")
         assert h["activity"]["elapsed_s"] == 0.0
         assert h["activity"]["max_elapsed_s"] == 0.0
 
@@ -285,15 +302,15 @@ class TestDurationPartial:
         b.record("p", "", "t1", "m", "any", 100, elapsed_s=30.0, ts=time.time())
         b.record("p", "", "t2", "m", "any", 100, elapsed_s=90.0, ts=time.time())
         _bind(monkeypatch, b)
-        h = history("7d")
+        h = history("all")
         assert h["activity"]["elapsed_s"] == 120.0
         assert h["activity"]["max_elapsed_s"] == 90.0
 
     def test_shaping_does_not_divide_by_zero(self, monkeypatch):
         b = _fresh()
         _bind(monkeypatch, b)
-        history("7d")   # 全零不抛
-        history("30d")
+        history("all")   # 全零不抛
+        history("all")
         history("all")
 
 
@@ -307,7 +324,7 @@ class TestConsistencyWithTodayView:
         b.record("p", "", "t2", "m", "any", 250, ts=now)
         _bind(monkeypatch, b)
 
-        h = history("7d")
+        h = history("all")
         assert h["totals"]["tokens"] == b.daily_total
         assert h["totals"]["tasks"] == sum(m["tasks"] for m in b.per_model_usage())
 
@@ -349,7 +366,7 @@ class TestConfiguredModelsAlwaysListed:
         self._seed_models("used-model", "never-used-model")
         _bind(monkeypatch, b)
 
-        by_name = {m["model"]: m for m in history("7d")["models"]}
+        by_name = {m["model"]: m for m in history("all")["models"]}
         assert "never-used-model" in by_name, "配了但没用过的模型必须也列出来"
         assert by_name["never-used-model"]["tokens"] == 0
         assert by_name["never-used-model"]["used"] is False
@@ -362,7 +379,7 @@ class TestConfiguredModelsAlwaysListed:
         self._seed_models("used-unpriced", "never-used-unpriced")
         _bind(monkeypatch, b)
 
-        assert history("7d")["totals"]["unpriced_models"] == ["used-unpriced"]
+        assert history("all")["totals"]["unpriced_models"] == ["used-unpriced"]
 
     def test_reports_provider_status_not_just_available(self, monkeypatch):
         """要报供应商状态原文 —— is_available 有"半开"机制，欠费的账号也返回 True，
@@ -371,7 +388,7 @@ class TestConfiguredModelsAlwaysListed:
         self._seed_models("glm-like")
         _bind(monkeypatch, b)
 
-        row = history("7d")["models"][0]
+        row = history("all")["models"][0]
         assert "provider_status" in row and "provider" in row
         assert "api_available" not in row, "别报那个会误导的布尔值"
 
@@ -381,7 +398,7 @@ class TestConfiguredModelsAlwaysListed:
         self._seed_models("aaa-unused", "zzz-used")
         _bind(monkeypatch, b)
 
-        names = [m["model"] for m in history("7d")["models"]]
+        names = [m["model"] for m in history("all")["models"]]
         # 用过的排前面，即使字母序在后面
         assert names.index("zzz-used") < names.index("aaa-unused")
 
@@ -392,5 +409,5 @@ class TestConfiguredModelsAlwaysListed:
         _bind(monkeypatch, b)
         (config.QIDIAN_DIR / "models_custom.json").write_text("{坏 json", encoding="utf-8")
 
-        h = history("7d")
+        h = history("all")
         assert h["totals"]["tokens"] == 1000
