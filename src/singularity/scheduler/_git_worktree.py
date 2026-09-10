@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,10 +40,6 @@ def _run(args: list[str], cwd: Path, timeout: int = _GIT_TIMEOUT) -> subprocess.
         return subprocess.CompletedProcess(args, -1, stdout="", stderr=f"timed out after {timeout}s")
 
 
-def _git_dir() -> Path:
-    return config.PROJECT_ROOT / ".git"
-
-
 def _worktrees_dir(repo_root: Path = None) -> Path:
     # worktree 放 repo 同级目录 (repo.parent/.{name}-worktrees), 避开主仓库的 git 干扰
     # (修复: worktree 若落在 singularity 的 .qidian/ 里, 任务执行时 .git 指针被删, git 解析错位)
@@ -68,10 +65,14 @@ def create(task_id: str, agent_level: str, base_ref: str = "", repo_root: Path =
     wt_path = _worktrees_dir(root) / name
 
     # 幂等: 已存在同名 worktree → 返回已有的
+    # 必须比 realpath: `git worktree list --porcelain` 报的是 realpath
+    # (实测 macOS 上 /tmp/x 输出 /private/tmp/x)。字符串直比在含符号链接的路径下会失配
+    # → 走 worktree add → rc=128 "already exists" → 被上层静默降级成无沙箱执行。
     existing = _run(["worktree", "list", "--porcelain"], root)
     if existing.returncode == 0:
+        want = os.path.realpath(str(wt_path))
         for line in existing.stdout.splitlines():
-            if line.startswith("worktree ") and line.split(maxsplit=1)[1] == str(wt_path):
+            if line.startswith("worktree ") and os.path.realpath(line.split(maxsplit=1)[1]) == want:
                 return Worktree(path=wt_path, name=name, baseline_ref=_head_ref(root), repo_root=root)
 
     baseline = base_ref if base_ref else _head_ref(root)
@@ -249,33 +250,67 @@ def merge_tree_probe(base_ref: str, ours_ref: str, theirs_ref: str, repo_root: P
     return False, conflicts
 
 
+def _project_repo_roots() -> list[Path]:
+    """奇点仓库 + 所有项目仓库（= <projects_root>/<项目名>/ 下带 .git 的目录）。"""
+    roots = [config.PROJECT_ROOT]
+    try:
+        from singularity.scheduler.project import get_projects_root
+        proot = get_projects_root()
+        if proot.exists():
+            for d in sorted(proot.iterdir()):
+                if d.is_dir() and (d / ".git").exists():
+                    roots.append(d)
+    except Exception as e:  # noqa: BLE001
+        from singularity.scheduler import witness
+        witness.warn("worktree", f"project_repo_scan:{type(e).__name__}"[:80])
+    return roots
+
+
+def _cleanup_worktree_dirs(root: Path) -> int:
+    """清掉 root 这棵仓库下 "git 已不认得" 的 worktree 目录。返回清理数。
+
+    注意不要走 _worktrees_dir()：那个函数会 mkdir，给没有 worktree 的仓库凭空建空目录。
+    """
+    import shutil
+    if not root.exists():
+        return 0
+    _run(["worktree", "prune"], root, timeout=30)
+    wtd = root.parent / f".{root.name}-worktrees"
+    if not wtd.exists():
+        return 0
+    known = _run(["worktree", "list", "--porcelain"], root)
+    if known.returncode != 0:
+        return 0
+    # git 输出 realpath，必须同口径比
+    known_paths = {os.path.realpath(l.split(maxsplit=1)[1])
+                   for l in known.stdout.splitlines() if l.startswith("worktree ")}
+    cleaned = 0
+    for d in wtd.iterdir():
+        if d.is_dir() and os.path.realpath(str(d)) not in known_paths:
+            shutil.rmtree(d, ignore_errors=True)
+            cleaned += 1
+    return cleaned
+
+
 def cleanup_orphans() -> int:
     """启动时清理上次崩溃残留的孤儿 worktree 和 pending refs。
 
+    **覆盖每一棵被管理的仓库**。原来只扫 config.PROJECT_ROOT（奇点自己），
+    而项目任务的 worktree 落在 `<projects_root>/.<项目名>-worktrees` —— 从不被清。
+    实测磁盘上有 9 月 7 日的残留一直没被扫到；按 `_MAX_WORKTREES` 的计数口径，
+    攒到 50 个之后该项目的**每个任务都会静默降级成无沙箱执行**。
+
     Returns: 清理的孤儿数量。
     """
-    import shutil
     cleaned = 0
 
-    # 1. 清理 git worktree 注册表中的孤儿条目
-    wt_dir = _git_dir() / "worktrees"
-    if wt_dir.exists():
-        _run(["worktree", "prune"], config.PROJECT_ROOT, timeout=30)
-
-    # 2. 清理磁盘上的孤儿 worktree 目录
-    qidian_wt = _worktrees_dir(config.PROJECT_ROOT)
-    if qidian_wt.exists():
-        for d in qidian_wt.iterdir():
-            if not d.is_dir():
-                continue
-            # 检查 git 是否还认得这个 worktree
-            r = _run(["worktree", "list", "--porcelain"], config.PROJECT_ROOT)
-            if str(d) not in r.stdout:
-                try:
-                    shutil.rmtree(d, ignore_errors=True)
-                    cleaned += 1
-                except Exception:
-                    pass
+    # 1+2. 每棵仓库：prune 注册表 + 删掉 git 已不认得的 worktree 目录
+    for root in _project_repo_roots():
+        try:
+            cleaned += _cleanup_worktree_dirs(root)
+        except Exception as e:  # noqa: BLE001
+            from singularity.scheduler import witness
+            witness.warn("worktree", f"orphan_cleanup:{root.name}:{type(e).__name__}"[:120])
 
     # 3. 清理孤儿 git refs (refs/qidian/pending/*)
     import subprocess as _sp

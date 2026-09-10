@@ -81,7 +81,39 @@ def _take_git(snap_id: str, root: Path) -> Snapshot:
         ).stdout.strip()
     snap = Snapshot(id=snap_id, method="git", ref=ref, created_at=time.time(), repo_root=str(root))
     _save_meta(snap)
+    _anchor_snapshot_ref(snap.id, ref, root)
     return snap
+
+
+def _anchor_snapshot_ref(snap_id: str, ref: str, root: Path) -> None:
+    """给快照 ref 打一个真 ref 锚。
+
+    `git stash create` 产出的 commit **没有任何 ref 指向它**，我们只把 SHA 写进 meta
+    json。一旦 `git gc`（默认 pruneExpire 两周）扫到，对象就没了 —— 之后
+    `stash apply <sha>` 必然失败，人工回滚救不回来。
+    任务分支那条路有 `_anchor_ref` 做同样的事，快照这条一直没有。
+
+    兜底记 HEAD 的情形不用锚（HEAD 本身就是 ref）。
+    """
+    if not ref or ref == _current_head(root):
+        return
+    try:
+        subprocess.run(["git", "update-ref", f"refs/qidian/snapshots/{snap_id}", ref],
+                       capture_output=True, text=True, cwd=str(root), timeout=15)
+    except Exception as e:  # noqa: BLE001
+        from singularity.scheduler import witness
+        witness.warn("snapshot", f"anchor_ref_failed:{snap_id}:{type(e).__name__}"[:120])
+
+
+def _release_snapshot_ref(snap_id: str, repo_root: str) -> None:
+    """删掉快照锚（元数据被清时一并清，否则 ref 会无限攒）。"""
+    if not repo_root:
+        return
+    try:
+        subprocess.run(["git", "update-ref", "-d", f"refs/qidian/snapshots/{snap_id}"],
+                       capture_output=True, text=True, cwd=repo_root, timeout=10)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _rollback_git(snap: Snapshot, root: Path) -> bool:
@@ -209,6 +241,13 @@ def purge_old_snapshot_meta(keep: int = 200) -> int:
     n = 0
     for f in files:
         if f not in to_keep:
+            # 元数据删了，对应的 ref 锚也要删 —— 否则 refs/qidian/snapshots/* 会无限攒，
+            # 每个都钉住一批 git 对象，gc 永远收不掉。
+            try:
+                meta = json.loads(f.read_text(encoding="utf-8"))
+                _release_snapshot_ref(meta.get("id") or f.stem, meta.get("repo_root", ""))
+            except Exception:  # noqa: BLE001
+                pass
             try: f.unlink(); n += 1
             except OSError: pass
     return n
