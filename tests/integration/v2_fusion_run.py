@@ -34,8 +34,14 @@ PLANS_CACHE = HERE / ".v2_plans.json"
 # 即「最先提出分歧的那个模型」—— 于是「谁先开口，谁的设计就被保留」。
 # 用来验证「定稿人自我偏好」假设：换定稿人，看被保留的是不是也跟着换。
 if os.environ.get("AB_WRITER"):
-    ej._first_speaker = lambda d, m: os.environ["AB_WRITER"]
-    print(f"⚠️ 强制定稿人 = {os.environ['AB_WRITER']}（默认取最先提分歧者）", flush=True)
+    # 两个都要打：_pick_writer 会先查 model_discipline 纪律表，命中就不走 _first_speaker，
+    # 只补后者的话这个开关会被静默忽略（"设了但没生效"）。
+    # 名字别用 `_w` —— 本文件下面 `_w` 是 witness 模块的别名，闭包按引用捕获，
+    # 撞名会让闭包在调用时取到模块对象（实测崩在 json 序列化：winner 是个 module）。
+    _forced_writer = os.environ["AB_WRITER"]
+    ej._first_speaker = lambda d, m: _forced_writer
+    ej._pick_writer = lambda d, m: _forced_writer
+    print(f"⚠️ 强制定稿人 = {_forced_writer}（默认取最先提分歧者）", flush=True)
 
 _bl.MAX_CHARS = 0
 _bl.JUDGE_MODEL = os.environ.get("AB_JUDGE", "glm-5.2")   # kimi 已停用（余额不足）
@@ -98,6 +104,13 @@ def main():
     brief = BRIEFS[BRIEF_NO - 1]
     task = arch_task(brief)                 # 融合用生产形态任务；打分用短 brief
     plans = _get_plans(BRIEF_NO)
+
+    # AB_REMAP=旧成员:新模型 → 只换名字不换稿子，用来测「辩论步换模型省多少时间、产物差多少」。
+    # 稿子不变是刻意的：这样变量只剩「谁在辩」，不掺「谁写的初稿」。
+    if os.environ.get("AB_REMAP"):
+        _old, _new = os.environ["AB_REMAP"].split(":")
+        plans = [(_new if m == _old else m, t) for m, t in plans]
+        print(f"⚠️ 成员 {_old} → {_new}（稿子仍是原模型的）", flush=True)
 
     log = []
     real = ej._call_model
