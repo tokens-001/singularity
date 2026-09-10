@@ -173,7 +173,9 @@ def test_empty_extract_retries_then_gives_up(monkeypatch):
     monkeypatch.setattr(ej, "_call_model", fake)
     assert ej.fuse_architecture_v2("需求", PLANS) == ""
     tried = [m for m, p in calls if "架构委员会秘书" in p]
-    assert len(tried) == 1 + len(ej._V2_EXTRACT_FALLBACKS)   # 首次 + 每个备选各一次
+    # 首次 + 备选表（都不在委员会里）+ 委员本人（垫底的最后手段）
+    assert tried[1:1 + len(ej._V2_EXTRACT_FALLBACKS)] == list(ej._V2_EXTRACT_FALLBACKS)
+    assert tried[1 + len(ej._V2_EXTRACT_FALLBACKS):] == ["A", "B"]
     assert len(set(tried)) == len(tried)                     # 同一个模型不重复试
 
 
@@ -196,6 +198,30 @@ def test_extract_retry_recovers(monkeypatch):
     monkeypatch.setattr(ej, "_call_model", fake)
     assert ej.fuse_architecture_v2("需求", PLANS) == "最终稿"
     assert [m for m, p in calls if "架构委员会秘书" in p][-1] == "deepseek-v4-pro"
+
+
+def test_extract_retries_with_member_when_pool_exhausted(monkeypatch):
+    """备选表被委员占满时，退到用委员本人当提取员 —— 不能一个候选都没有。
+
+    实测（2026-09-11 真流水线）：智谱欠费 → 委员会只剩 [deepseek-v4-flash,
+    deepseek-v4-pro] → 备选表里 glm-5.2 是死的、deepseek-v4-pro 又是委员
+    → "不在委员会里"的候选为空 → fusion_v2_extract_failed_all → 整条融合
+    掉到"截断 3000 字"那层。自己给自己出题只是质量问题，整条融合失败是功能没了。
+    """
+    calls = []
+
+    def fake(prompt, model, max_tokens=2000):
+        calls.append((model, prompt))
+        if "架构委员会秘书" in prompt:
+            return "" if model != "deepseek-v4-pro" else json.dumps(
+                {"consensus": ["都一致"], "disagreements": [], "unique_gains": []})
+        return "最终稿"
+
+    monkeypatch.setattr(ej, "_call_model", fake)
+    # 委员就是备选表里的两个模型 → 常规候选为空，必须退到委员本人
+    plans = [("glm-5.2", "方案甲"), ("deepseek-v4-pro", "方案乙")]
+    assert ej.fuse_architecture_v2("需求", plans, extract_model="glm-5.2") == "最终稿"
+    assert "deepseek-v4-pro" in [m for m, p in calls if "架构委员会秘书" in p]
 
 
 def test_all_empty_extract_returns_empty(monkeypatch):

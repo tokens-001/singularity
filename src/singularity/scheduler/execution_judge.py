@@ -530,17 +530,28 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
 
     deltas = _extract_once(extractor)
     prev = extractor
+    # 候选顺序：先"不在委员会里"的（避免选手给自己出题），再退到委员本人。
+    # **必须有第二档** —— 否则委员会一缩编，备选表就整个被委员占满，一个候选都不剩。
+    # 实测（2026-09-11 真流水线）：智谱欠费 → 委员会只剩 [deepseek-v4-flash,
+    # deepseek-v4-pro] → 备选表里的 glm-5.2 是死的、deepseek-v4-pro 又是委员
+    # → 无候选 → fusion_v2_extract_failed_all → 整条融合掉到"截断 3000 字"那层。
+    # 权衡：自己给自己出题只是质量问题（有 fusion_self_judge 告警），
+    # 整条融合失败是**功能没了**，后者严重得多。
+    retry_pool = ([m for m in _V2_EXTRACT_FALLBACKS if m not in members and m != extractor]
+                  + [m for m in members if m != extractor])
     if deltas is None:
         # 换模型重试。**这一步是兜底的主力**：v2 的失败几乎全在提取（思考模型把额度
-        # 烧在 reasoning 上 → 空 content），换个模型大概率就好了。比回退旧两阶段强 ——
-        # 那条路有已知致命缺陷（取并集膨胀到输入 1.8×、撞 max_tokens 腰斩、丢过 tasks 段），
-        # 兜底产出的是**已知会坏**的东西。
-        for alt in [m for m in _V2_EXTRACT_FALLBACKS if m not in members and m != extractor]:
+        # 烧在 reasoning 上 → 空 content），换个模型大概率就好了。
+        for alt in retry_pool:
             # 用 prev 不用 extractor：extractor 是**最初**那个，第二次重试时来源已经不是它了。
             # 日志写错来源 = 排查时按错的方向找（这仓库的老毛病就是日志撒谎）。
             witness.warn("execution_judge", f"extract_retry:{prev}->{alt}"[:80])
             deltas = _extract_once(alt)
             if deltas is not None:
+                if alt in members:
+                    # 用上委员了 = 自己给自己出题，外面得知道
+                    witness.warn("execution_judge",
+                                 f"extractor_is_member_fallback:{alt}"[:80])
                 break
             prev = alt
     if deltas is None:

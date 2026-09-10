@@ -1,0 +1,240 @@
+{
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "冻结接口契约与数据模型（docs/INTERFACE.md）",
+      "description": "在 docs/INTERFACE.md 冻结唯一契约：add(title)->dict、list()->list[dict]、done(task_id)->dict、remove(task_id)->dict；Task 字段 id/title/done/created_at/done_at；文件结构 {version,next_id,tasks}；退出码 0/1/2。",
+      "complexity": "low",
+      "layer": "backend",
+      "depends_on": [],
+      "acceptance": "INTERFACE.md 含四条签名、Task 字段表、文件结构示例、异常与退出码表、CLI 用法，无 TODO 占位，含签名一致性断言示例。",
+      "estimated_files": ["docs/INTERFACE.md"]
+    },
+    {
+      "id": "T2",
+      "title": "实现 todo/store.py 数据层（JSON 读写 + 容错）",
+      "description": "按 T1 契约实现持久化层：路径默认 ~/.todo.json，TODO_FILE 可覆盖；_load() 对不存在/空/非 JSON/结构非法统一降级，损坏文件备份为 .corrupt，不抛异常；_save() 用 tempfile+os.replace 原子写；add 写自增 id 与时间戳；done/remove 按 id 操作，未知 id 抛 TaskNotFound。",
+      "complexity": "medium",
+      "layer": "data",
+      "depends_on": ["T1"],
+      "acceptance": "损坏 JSON 下 list() 返回 []、不抛异常且生成 .corrupt 备份；增删改查往返一致；未知 id 抛 TaskNotFound；写盘为原子替换。",
+      "estimated_files": ["todo/store.py"]
+    },
+    {
+      "id": "T3",
+      "title": "实现 todo/cli.py 命令行层（argparse 子命令）",
+      "description": "按 T1 契约用 argparse 实现 add/list/done/remove 子命令，仅通过 todo.store 的四个函数访问数据，不直接读写文件。list 输出 id、[x]/[ ] 状态与标题。统一捕获 ValueError/TaskNotFound 转 stderr 返回 1，用法错误返回 2，成功返回 0，提供 main(argv=None)->int。",
+      "complexity": "medium",
+      "layer": "frontend",
+      "depends_on": ["T1"],
+      "acceptance": "四个子命令均可执行；todo done 99999 退出码 1；无参数或非法子命令退出码 2；--help 正常输出；源码中无直接文件读写。",
+      "estimated_files": ["todo/cli.py"]
+    },
+    {
+      "id": "T4",
+      "title": "实现 todo/__init__.py 包门面（re-export）",
+      "description": "按 T1 契约从 todo.store 显式导入并 re-export add/list/done/remove，使 todo.add 与 todo.store.add 为同一函数对象；定义 __all__ 明确公共 API（恰为四个函数名）；可含 __version__。不得在导入期创建或修改数据文件，包内不含任何业务逻辑。",
+      "complexity": "low",
+      "layer": "backend",
+      "depends_on": ["T1"],
+      "acceptance": "todo.add is todo.store.add 为真；__all__ 恰为四个函数名；import todo 后目标数据文件未被创建。",
+      "estimated_files": ["todo/__init__.py"]
+    },
+    {
+      "id": "T5",
+      "title": "端到端验收与约束校验（tests/test_e2e.py）",
+      "description": "编写 tests/test_e2e.py（验收产物，非交付源码）：覆盖 add→list→done→remove 全流程、损坏文件恢复与 .corrupt 备份、空标题报错、未知 id 报错、退出码 0/1/2、签名一致性断言、import 零副作用、id 自增不复用、5000 条下 list() 耗时上限。全部用 tmp_path + TODO_FILE 隔离。",
+      "complexity": "medium",
+      "layer": "devops",
+      "depends_on": ["T2", "T3", "T4"],
+      "acceptance": "python3 -m pytest -q 全绿；损坏恢复、签名一致、退出码 0/1/2、性能阈值四条约束各有断言且失败即红。",
+      "estimated_files": ["tests/test_e2e.py"]
+    }
+  ],
+  "risks": [
+    {
+      "risk": "cli.py、store.py、__init__.py 对函数签名或 Task 字段名理解不一致，运行时 TypeError/KeyError",
+      "impact": "high",
+      "mitigation": "T1 先冻结契约再并行开发；T5 用 inspect.signature 与 is 同一性断言机器校验三方一致"
+    },
+    {
+      "risk": "损坏 JSON 文件被静默丢弃，用户历史待办不可恢复",
+      "impact": "medium",
+      "mitigation": "损坏文件备份为 <path>.corrupt 保留原文，并向 stderr 提示，测试断言备份存在且内容等于原文"
+    },
+    {
+      "risk": "写入过程中异常导致数据文件半截损坏（非原子写）",
+      "impact": "medium",
+      "mitigation": "统一走 tempfile + os.replace 原子替换；约束断言源码中不存在直接以 'w' 打开目标文件的写路径"
+    },
+    {
+      "risk": "多个 CLI 实例并发写导致更新丢失",
+      "impact": "low",
+      "mitigation": "文档声明仅支持单用户单进程；原子替换降低半写风险；契约不做跨进程锁以免过度设计"
+    },
+    {
+      "risk": "测试或 CI 误写/污染用户真实 ~/.todo.json",
+      "impact": "medium",
+      "mitigation": "全部路径经 TODO_FILE 环境变量覆盖，测试统一使用 tmp_path 隔离"
+    }
+  ],
+  "architecture": "三层小模块 + 先冻结契约再并行实现。store 是唯一数据层，独占 ~/.todo.json 读写；cli 只调 store 的四个函数，绝不直接碰文件；__init__ 只做 re-export，零逻辑。三者共享同一契约（docs/INTERFACE.md，T1 冻结）：add/ list/done/remove 四个函数签名与 Task 字段 id/title/done/created_at/done_at；文件结构 {version,next_id,tasks}；空标题抛 ValueError，未知 id 抛 TaskNotFound（ValueError 子类）；退出码 0／1／2（成功／业务错误／用法错误）。存储用标准库 json，写入走 tempfile+os.replace 原子替换；读取遇不存在、空、非 JSON、结构非法时备份 .corrupt 并降级为空数据结构，保证不崩。数据路径默认 ~/.todo.json，可用 TODO_FILE 覆盖以便测试隔离。全部标准库，零第三方依赖，import 无副作用。",
+  "modules": [
+    {
+      "name": "todo.store",
+      "responsibility": "JSON 持久化与待办数据操作，唯一直接读写数据文件的模块",
+      "depends_on": [],
+      "interfaces": [
+        "add(title: str) -> dict",
+        "list() -> list[dict]",
+        "done(task_id: int) -> dict",
+        "remove(task_id: int) -> dict",
+        "TaskNotFound(ValueError)",
+        "内部 _load() / _save() / _data_path()"
+      ]
+    },
+    {
+      "name": "todo.cli",
+      "responsibility": "argparse 子命令解析、调用 store、输出人类可读结果与退出码",
+      "depends_on": ["todo.store"],
+      "interfaces": ["main(argv: list[str] | None = None) -> int", "python -m todo.cli {add,list,done,remove}"]
+    },
+    {
+      "name": "todo.__init__",
+      "responsibility": "包级门面：从 store 原样 re-export 四个公共函数，无业务逻辑",
+      "depends_on": ["todo.store"],
+      "interfaces": ["add", "list", "done", "remove", "__all__"]
+    },
+    {
+      "name": "tests",
+      "responsibility": "端到端验收与约束校验，覆盖 store/cli/__init__ 全部接口",
+      "depends_on": ["todo.store", "todo.cli", "todo.__init__"],
+      "interfaces": ["python3 -m pytest -q tests/test_e2e.py"]
+    }
+  ],
+  "data_model": {
+    "database": "本地 JSON 文件（默认 ~/.todo.json，可用 TODO_FILE 覆盖）。单用户单进程场景，标准库 json 足够，无需数据库服务；写入用 tempfile + os.replace 原子替换避免半写。",
+    "entities": [
+      {
+        "name": "TodoFile",
+        "fields": [
+          {"name": "version", "type": "int", "constraints": ["必填", "当前固定为 1", "非法值降级为默认结构"]},
+          {"name": "next_id", "type": "int", "constraints": ["必填", ">=1", "自增且不复用"]},
+          {"name": "tasks", "type": "list[Task]", "constraints": ["缺省为空列表", "结构非法时视为损坏"]}
+        ],
+        "indexes": []
+      },
+      {
+        "name": "Task",
+        "fields": [
+          {"name": "id", "type": "int", "constraints": ["唯一", "自增", ">=1"]},
+          {"name": "title", "type": "string", "constraints": ["非空", "去除首尾空白后长度>0"]},
+          {"name": "done", "type": "boolean", "constraints": ["默认 false"]},
+          {"name": "created_at", "type": "string", "constraints": ["ISO8601 时间戳"]},
+          {"name": "done_at", "type": "string | null", "constraints": ["未完成时为 null", "完成后写 ISO8601 时间戳"]}
+        ],
+        "indexes": ["id（唯一，通过 next_id 保证）"]
+      }
+    ],
+    "relationships": [
+      {"from": "TodoFile", "to": "Task", "type": "1:N", "via": "tasks[] 列表元素"}
+    ]
+  },
+  "api_contracts": [
+    {
+      "method": "POST",
+      "path": "/cli/add",
+      "description": "新增一条待办；对应 store.add(title)。CLI: python -m todo.cli add \"买牛奶\"",
+      "input": {"title": "string，必填，非空"},
+      "output": {"id": "int", "title": "string", "done": false, "created_at": "ISO8601", "done_at": null},
+      "errors": [
+        {"code": 400, "meaning": "title 为空或缺失 -> ValueError，stderr 提示，退出码 1"},
+        {"code": 422, "meaning": "子命令/参数用法错误由 argparse 处理，退出码 2"}
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/cli/list",
+      "description": "列出全部待办，人类可读输出（id、[x]/[ ]、标题）；对应 store.list()",
+      "input": {},
+      "output": {"tasks": [{"id": "int", "title": "string", "done": "bool", "created_at": "ISO8601", "done_at": "ISO8601|null"}]},
+      "errors": [
+        {"code": 404, "meaning": "数据文件不存在或损坏 -> 备份 .corrupt（如损坏）并输出空列表，退出码 0，不抛异常"},
+        {"code": 422, "meaning": "子命令/参数用法错误，退出码 2"}
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/cli/done",
+      "description": "把指定 id 标记为已完成；对应 store.done(task_id)，返回被更新任务的完整快照",
+      "input": {"task_id": "int，必填"},
+      "output": {"id": "int", "title": "string", "done": true, "created_at": "ISO8601", "done_at": "ISO8601"},
+      "errors": [
+        {"code": 404, "meaning": "id 不存在 -> TaskNotFound(ValueError)，stderr 提示，退出码 1"},
+        {"code": 400, "meaning": "task_id 非整数或缺失 -> ValueError，退出码 1"},
+        {"code": 422, "meaning": "子命令/参数用法错误，退出码 2"}
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/cli/remove",
+      "description": "删除指定 id 的待办；对应 store.remove(task_id)，返回被删除任务的完整快照",
+      "input": {"task_id": "int，必填"},
+      "output": {"id": "int", "title": "string", "done": "bool", "created_at": "ISO8601", "done_at": "ISO8601|null"},
+      "errors": [
+        {"code": 404, "meaning": "id 不存在 -> TaskNotFound(ValueError)，stderr 提示，退出码 1"},
+        {"code": 400, "meaning": "task_id 非整数或缺失 -> ValueError，退出码 1"},
+        {"code": 422, "meaning": "子命令/参数用法错误，退出码 2"}
+      ]
+    }
+  ],
+  "tech_stack": {
+    "language": "Python 3.8+ 标准库（json、argparse、tempfile、os、sys、datetime、pathlib），零第三方依赖",
+    "framework": "无框架；CLI 用标准库 argparse，入口 python -m todo.cli，main(argv=None)->int 以便测试注入参数",
+    "database": "本地 JSON 文件，默认 ~/.todo.json，TODO_FILE 环境变量可覆盖；tempfile+os.replace 原子写",
+    "cache": "无（单用户单进程、数据量千级，缓存属过度设计）",
+    "mq": "无（同步 CLI，无需异步消息）"
+  },
+  "constraints": [
+    {
+      "type": "reliability",
+      "rule": "读取不存在/空/非 JSON/结构非法的数据文件时，list() 返回 [] 且不抛异常，CLI 退出码为 0；若为损坏内容须备份为 <path>.corrupt",
+      "check": "tmp=$(mktemp); printf 'not json{' > $tmp; TODO_FILE=$tmp python3 -m todo.cli list; 断言退出码=0、输出空列表、$tmp.corrupt 存在且内容等于 'not json{'"
+    },
+    {
+      "type": "reliability",
+      "rule": "所有落盘必须经 tempfile + os.replace 原子替换，禁止直接以 'w' 打开数据文件写入",
+      "check": "AST 扫描 todo/store.py：断言存在 os.replace 调用，且不存在 open(<数据路径>, 'w') 形式的写路径；pytest 断言写入后目录内无 .tmp 残留"
+    },
+    {
+      "type": "maintainability",
+      "rule": "todo/__init__.py re-export 的 add/list/done/remove 与 todo/store.py 同名函数签名一致且为同一函数对象",
+      "check": "python3 -c \"import inspect,todo,todo.store as s; assert all(getattr(todo,n) is getattr(s,n) and inspect.signature(getattr(todo,n))==inspect.signature(getattr(s,n)) for n in ('add','list','done','remove'))\""
+    },
+    {
+      "type": "maintainability",
+      "rule": "仅使用 Python 标准库（含自身包 todo.*），不得引入任何第三方依赖",
+      "check": "AST 扫描 todo/*.py 的 import 名，断言全部在 sys.stdlib_module_names 内或为 todo 包内模块"
+    },
+    {
+      "type": "maintainability",
+      "rule": "import todo 与 import todo.store 无副作用：不创建、不修改、不删除数据文件",
+      "check": "p=$(mktemp -u); TODO_FILE=$p python3 -c 'import todo, todo.store'; 断言 $p 不存在；且 docs/INTERFACE.md 契约与该断言一致"
+    },
+    {
+      "type": "reliability",
+      "rule": "CLI 退出码约定：成功 0，业务错误（ValueError/TaskNotFound）1，argparse 用法错误 2",
+      "check": "pytest 参数化：add 'x'(0)、add ''(1)、done 99999(1)、remove 99999(1)、无子命令(2)、--help(0)，逐条断言 returncode"
+    },
+    {
+      "type": "reliability",
+      "rule": "Task.id 唯一、自增、由持久化的 next_id 保证，remove 后 id 不复用；未知 id 抛 TaskNotFound(ValueError 子类)",
+      "check": "pytest：连续 add 3 次断言 id==[1,2,3]；remove(2) 后再 add 断言 id==4；done(2) 断言抛 TaskNotFound 且 isinstance(e, ValueError)"
+    },
+    {
+      "type": "performance",
+      "rule": "5000 条任务下，list() 单次调用耗时 < 0.5s；add 单次调用耗时 < 0.5s",
+      "check": "pytest：TODO_FILE 指向 tmp_path，批量写入 5000 条后用 time.perf_counter 断言 list() 与单次 add 均 < 0.5"
+    }
+  ]
+}

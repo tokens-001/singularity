@@ -7,12 +7,16 @@ const TIERS: [string, string][] = [
   ['custom', '架构融合'],
 ]
 
-/** Fusion 配置：两阶段合成（五维差异分析 → 定稿）用哪两个模型。
+/** Fusion 配置：v2 融合的**提取员**用哪个模型。
  *
  * 只有 [custom] 一段 —— dual/triple/super 三档火力是历史残留，唯一的读入口
  * fuse_outputs() 全仓库零调用，从未执行过，已随配置一并删除。
  * 下拉只列「激活」模型（provider 已配置且有 key）—— 其余模型后端解析不出
  * base_url/key，调用会静默返回空、融合退化成第一个模型的初稿。
+ *
+ * v2 里**可配的只有提取员**：定稿人由 `_pick_writer` 按历史范围纪律自动选，
+ * 不看配置。旧两阶段的「裁判 / 定稿」两个字段已随 v1 一起删（后端没人读了），
+ * UI 上那两个下拉框同步去掉 —— 留着只会让人以为 v2 有这些角色（2026-09-11）。
  */
 export default function FusionTab() {
   const [cfg, setCfg] = useState<any>(null)
@@ -54,7 +58,7 @@ export default function FusionTab() {
     <div>
       <div className="flex-center gap-8" style={{ marginBottom: 10 }}>
         <span className="fw-600 fs-12 text-secondary">融合模型</span>
-        <span className="fs-10 text-muted">两阶段合成用「裁判 + 定稿」；v2 机制用「提取员」，定稿人按历史范围纪律自动选 —— 所以 v2 下这里的「定稿」不生效</span>
+        <span className="fs-10 text-muted">v2 只有一个可配的位置：提取员。定稿人按历史范围纪律自动选，不用配</span>
         <span className="flex-1"/>
         <button onClick={save} disabled={saving} className="btn-sm"><Save size={12}/> 保存</button>
       </div>
@@ -64,20 +68,6 @@ export default function FusionTab() {
           <div key={tier} className="flex-center gap-8"
             style={{ marginBottom: 6, padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius)' }}>
             <span className="fw-600 fs-11" style={{ width: 190, flexShrink: 0 }}>{label}</span>
-            <label className="fs-10 text-muted" style={{ flexShrink: 0 }}>裁判</label>
-            <select className="inp-dark" style={{ flex: 1 }} value={t.judge_model || ''}
-              aria-label={`${tier} 裁判模型`}
-              onChange={e => set(tier, 'judge_model', e.target.value)}>
-              <option value="">（未设置）</option>
-              {options(t.judge_model).map(id => <option key={id} value={id}>{labelOf(id)}</option>)}
-            </select>
-            <label className="fs-10 text-muted" style={{ flexShrink: 0 }}>定稿</label>
-            <select className="inp-dark" style={{ flex: 1 }} value={t.call_model || ''}
-              aria-label={`${tier} 定稿模型`}
-              onChange={e => set(tier, 'call_model', e.target.value)}>
-              <option value="">（未设置）</option>
-              {options(t.call_model).map(id => <option key={id} value={id}>{labelOf(id)}</option>)}
-            </select>
             {/* v2 的提取员。原来这栏 UI 上根本不存在 —— _v2_extractor_model() 一直
                 在读配置，用户却看不到也改不了，只能用代码里的默认值。 */}
             <label className="fs-10 text-muted" style={{ flexShrink: 0 }}>提取员</label>
