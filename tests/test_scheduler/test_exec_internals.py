@@ -586,22 +586,22 @@ class TestFusionModelResolution:
         assert any("http500" in b for b in beats), beats
 
     def test_warns_when_judge_is_a_committee_member(self, monkeypatch):
-        """裁判就是选手之一 → 必须告警（自己评自己，结论作废）。
+        """提取员就是选手之一 → 必须告警（自己给自己出题，结论作废）。
 
         直接测 `_warn_same_model` 本身，不绕已删的 v1 入口。
-        v2 只有 judge 一个角色（synth 固定传空串），旧的 synth 断言不再适用。
+        v2 这类位置只有提取员一个（旧的 judge/synth 双角色是 v1 的）。
         """
         from singularity.scheduler import execution_judge as ej
         beats = []
         monkeypatch.setattr(ej.witness, "warn", lambda src, msg: beats.append(msg))
-        ej._warn_same_model("deepseek-v4-flash", "", ["deepseek-v4-flash", "glm-5.3-flash"])
-        assert any("fusion_self_judge:judge" in b for b in beats), beats
+        ej._warn_same_model("deepseek-v4-flash", ["deepseek-v4-flash", "glm-5.3-flash"], role="extractor")
+        assert any("fusion_self_judge:extractor" in b for b in beats), beats
 
     def test_no_warning_when_judge_is_outsider(self, monkeypatch):
         from singularity.scheduler import execution_judge as ej
         beats = []
         monkeypatch.setattr(ej.witness, "warn", lambda src, msg: beats.append(msg))
-        ej._warn_same_model("kimi-k3", "", ["deepseek-v4-flash"])
+        ej._warn_same_model("kimi-k3", ["deepseek-v4-flash"], role="extractor")
         assert not any("fusion_self_judge" in b for b in beats), beats
 
     def test_plan_char_limit_is_applied(self, monkeypatch):

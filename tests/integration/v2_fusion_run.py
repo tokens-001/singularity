@@ -129,7 +129,7 @@ def main():
     print(f"brief {BRIEF_NO} | 阵容 {[m for m, _ in plans]} | 单稿 "
           f"{[len(p) for _, p in plans]} 字 | ② 提取用 {extractor}\n")
     print("跑 v2 融合…", flush=True)
-    fused = ej.fuse_architecture_v2(task, plans, judge_model=extractor)
+    fused = ej.fuse_architecture_v2(task, plans, extract_model=extractor)
     ej._call_model = real
 
     # 失败也要先打明细 —— 不然只能靠猜是哪一步空

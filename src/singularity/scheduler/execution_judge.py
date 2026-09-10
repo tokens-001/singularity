@@ -197,17 +197,19 @@ _ARCH_SCHEMA = """{
 }"""
 
 
-def _warn_same_model(judge: str, synth: str, members: list[str] | None) -> None:
-    """裁判/定稿人若就是某个选手，等于自己评自己 —— 结论直接作废。
+def _warn_same_model(model: str, members: list[str] | None, role: str) -> None:
+    """某个"裁判型"角色若由委员会成员本人担任，等于自己评自己 —— 结论直接作废。
 
     MAD 论文（EMNLP 2024）明确指出裁判会偏向与自己 backbone 相同的一方。
     同厂没法完全避免（3 家厂商全在委员会里时没有第三方可选），但同模型必须报警。
+
+    以前签名是 `(judge, synth, members)` —— 那是 v1 的两个角色（裁判 + 合成定稿）。
+    v2 只有提取员一个这样的位置，synth 恒传空串，所以去掉它、角色名改由调用方给。
     """
-    if not members:
+    if not members or not model:
         return
-    for role, m in (("judge", judge), ("synth", synth)):
-        if m and m in members:
-            witness.warn("execution_judge", f"fusion_self_judge:{role}:{m}"[:80])
+    if model in members:
+        witness.warn("execution_judge", f"fusion_self_judge:{role}:{model}"[:80])
 
 
 
@@ -492,19 +494,23 @@ def _votes_into(store: dict, who: str, items: list, field: str) -> dict:
 
 
 def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
-                         judge_model: str = "") -> str:
-    """新融合机制。plans: [(模型名, 方案全文)]。任一步失败返回 ""。"""
+                         extract_model: str = "") -> str:
+    """新融合机制。plans: [(模型名, 方案全文)]。任一步失败返回 ""。
+
+    参数叫 extract_model 不叫 judge_model —— v2 **没有裁判这个角色**，v1 才有。
+    提取员兼职了"分辨共识与分歧"这件事，但它就是提取员。
+    """
     if len(plans) < 2:
         return plans[0][1] if plans else ""
     members = [m for m, _ in plans]
-    judge = judge_model or _v2_extractor_model()
-    if judge in members:
+    extractor = extract_model or _v2_extractor_model()
+    if extractor in members:
         alt = next((m for m in _V2_EXTRACT_FALLBACKS if m not in members), "")
         if alt:
             witness.warn("execution_judge",
-                         f"extractor_swapped:{judge}->{alt}"[:80])
-            judge = alt
-    _warn_same_model(judge, "", members)
+                         f"extractor_swapped:{extractor}->{alt}"[:80])
+            extractor = alt
+    _warn_same_model(extractor, members, role="extractor")
 
     task = task_desc[:_FUSION_TASK_CHARS]
     plans_text = _plans_block(plans)
@@ -522,15 +528,15 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
             return None
         return d
 
-    deltas = _extract_once(judge)
-    prev = judge
+    deltas = _extract_once(extractor)
+    prev = extractor
     if deltas is None:
         # 换模型重试。**这一步是兜底的主力**：v2 的失败几乎全在提取（思考模型把额度
         # 烧在 reasoning 上 → 空 content），换个模型大概率就好了。比回退旧两阶段强 ——
         # 那条路有已知致命缺陷（取并集膨胀到输入 1.8×、撞 max_tokens 腰斩、丢过 tasks 段），
         # 兜底产出的是**已知会坏**的东西。
-        for alt in [m for m in _V2_EXTRACT_FALLBACKS if m not in members and m != judge]:
-            # 用 prev 不用 judge：judge 是**最初**那个，第二次重试时来源已经不是它了。
+        for alt in [m for m in _V2_EXTRACT_FALLBACKS if m not in members and m != extractor]:
+            # 用 prev 不用 extractor：extractor 是**最初**那个，第二次重试时来源已经不是它了。
             # 日志写错来源 = 排查时按错的方向找（这仓库的老毛病就是日志撒谎）。
             witness.warn("execution_judge", f"extract_retry:{prev}->{alt}"[:80])
             deltas = _extract_once(alt)

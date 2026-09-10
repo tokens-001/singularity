@@ -1,0 +1,290 @@
+{
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "实现 todo/store.py 数据层",
+      "description": "标准库 json/os/tempfile。路径解析：显式 path > 环境变量 TODO_STORE_PATH > ~/.todo.json。四个公共函数签名固定：add(text: str)->dict、list()->list[dict]、done(todo_id: int)->dict|None、remove(todo_id: int)->dict|None，另设别名 list_all=list。读侧对缺失/空/损坏 JSON/非数组/权限错误一律返回 []，并把损坏文件备份为 <path>.bak，绝不抛异常。写侧用同目录临时文件 + os.replace 原子替换，权限 0600。id 自增取最大值 +1。模块内禁止调用内置 list()。",
+      "complexity": "medium",
+      "layer": "data",
+      "depends_on": [],
+      "acceptance": "缺失/空/损坏/非数组/只读五种场景均不抛异常；add 后重载可见；done/remove 命中返回项、未命中返回 None；文件权限 0600。",
+      "estimated_files": ["todo/store.py"]
+    },
+    {
+      "id": "T2",
+      "title": "实现 todo/cli.py argparse 子命令",
+      "description": "argparse 定义子命令 add <text>、list、done <id>、rm <id>（rm 与 remove 同一 handler）。handler 只调 store 公共函数，把 dict 渲染成人类可读文本。提供 main(argv=None)->int：0 成功、1 业务失败（id 不存在、空文本）、2 argparse 用法错误。异常转友好中文提示，禁止 traceback。",
+      "complexity": "medium",
+      "layer": "backend",
+      "depends_on": ["T1"],
+      "acceptance": "main(['add','x']) 返回 0 且落盘；main(['done','999']) 返回 1 且无 Traceback；空数据下 list 输出『暂无待办』且返回 0。",
+      "estimated_files": ["todo/cli.py"]
+    },
+    {
+      "id": "T3",
+      "title": "实现 todo/__init__.py 公共导出",
+      "description": "从 .store 导入 add、list、done、remove、list_all，用 __all__ 声明为 ['add','list','done','remove','list_all']。不写业务逻辑，不 import cli（避免循环导入），除导出名外不加额外符号。",
+      "complexity": "low",
+      "layer": "backend",
+      "depends_on": ["T1"],
+      "acceptance": "from todo import add, list, done, remove 成功；__all__ 恰为那 5 个名字；import todo 后 sys.modules 中无 'todo.cli'。",
+      "estimated_files": ["todo/__init__.py"]
+    },
+    {
+      "id": "T4",
+      "title": "打包入口 __main__.py 与 pyproject",
+      "description": "新增 todo/__main__.py：from .cli import main; sys.exit(main())。新增 pyproject.toml（setuptools，仅 [project] 与 [project.scripts] todo='todo.cli:main'，dependencies=[]）。README.md 写清 python3 -m todo、安装后 todo、python3 -m todo.cli 三种运行方式，附子命令示例与退出码约定。",
+      "complexity": "low",
+      "layer": "devops",
+      "depends_on": ["T2", "T3"],
+      "acceptance": "python3 -m todo list 正常执行且退出码 0；pyproject 的 dependencies 为空数组；README 含三种运行方式。",
+      "estimated_files": ["todo/__main__.py", "pyproject.toml", "README.md"]
+    },
+    {
+      "id": "T5",
+      "title": "store 容错与原子写测试",
+      "description": "tests/test_store.py，用 tmp_path + monkeypatch.setenv('TODO_STORE_PATH') 隔离，绝不碰真实 ~/.todo.json。覆盖缺失文件、空文件、损坏 JSON 返回 [] 且生成 .bak、非数组降级、add 自增 id 与持久化、done/remove 命中与未命中、文件权限 0600、10000 条读写耗时。",
+      "complexity": "medium",
+      "layer": "data",
+      "depends_on": ["T1"],
+      "acceptance": "python3 -m pytest tests/test_store.py -q 全绿；删掉 store 的容错分支后至少一条测试失败（证明测试有效）。",
+      "estimated_files": ["tests/test_store.py"]
+    },
+    {
+      "id": "T6",
+      "title": "CLI 端到端测试",
+      "description": "tests/test_cli.py：直接调用 cli.main(argv) 并用 capsys 断言 stdout 与退出码，另用 subprocess 跑一次 python3 -m todo add/list/done/rm 全链路。覆盖成功路径、不存在 id 返回 1、空文本返回 1、无参数显示 usage 返回 2、输出可读性。",
+      "complexity": "medium",
+      "layer": "backend",
+      "depends_on": ["T2", "T4"],
+      "acceptance": "python3 -m pytest tests/test_cli.py -q 全绿；成功路径退出码 0，失败路径 1/2，标准输出无 Traceback。",
+      "estimated_files": ["tests/test_cli.py"]
+    },
+    {
+      "id": "T7",
+      "title": "契约一致性与零依赖扫描测试",
+      "description": "tests/test_contracts.py：用 inspect.signature 断言 store 的 add/list/done/remove 与 todo 包导出的同名函数为同一对象且签名一致；用 ast 解析 cli.py 收集对 store 的属性调用名，断言都存在于 store.__all__；用 ast 扫描 todo/*.py 全部 import，断言模块名 ∈ sys.stdlib_module_names；断言 __all__ 内容与顺序。",
+      "complexity": "medium",
+      "layer": "devops",
+      "depends_on": ["T1", "T2", "T3"],
+      "acceptance": "python3 -m pytest tests/test_contracts.py -q 全绿；把 store.done 改名或向 cli.py 注入 import requests 后该测试必须失败。",
+      "estimated_files": ["tests/test_contracts.py"]
+    }
+  ],
+  "risks": [
+    {
+      "risk": "三文件函数签名漂移（store 改名改参，cli 与 __init__ 未同步）",
+      "impact": "high",
+      "mitigation": "单一真源：函数只在 store.py 定义，__init__ 只 re-export，cli 只调用；T7 用 inspect.signature + ast 机器化校验，改名即失败。"
+    },
+    {
+      "risk": "连续写入或进程被杀导致 ~/.todo.json 被截断成非法 JSON",
+      "impact": "high",
+      "mitigation": "统一同目录临时文件 + os.replace 原子替换；读取端对损坏文件降级为 [] 并备份 .bak，永不崩溃。"
+    },
+    {
+      "risk": "公共函数名 list 遮蔽内置 list，store 内部误调用导致异常",
+      "impact": "medium",
+      "mitigation": "store 内部只用字面量与推导式构造列表；契约测试扫描模块内不出现裸 list( 调用。"
+    },
+    {
+      "risk": "损坏文件被静默降级为空列表，用户误以为数据丢失",
+      "impact": "medium",
+      "mitigation": "损坏时写 <path>.bak；cli list 检测到 .bak 存在时多打印一行提示，但退出码仍为 0。"
+    },
+    {
+      "risk": "测试污染用户真实 ~/.todo.json",
+      "impact": "medium",
+      "mitigation": "store 支持 TODO_STORE_PATH 覆盖；所有测试用 tmp_path + monkeypatch.setenv 隔离，并断言显式 path 优先于环境变量。"
+    },
+    {
+      "risk": "打包入口与 python3 -m todo 行为不一致（退出码/argv 处理不同）",
+      "impact": "low",
+      "mitigation": "__main__.py 只做 sys.exit(main())，与 console_scripts 共用同一 main()；T6 用 subprocess 两种方式各跑一次全链路。"
+    }
+  ],
+  "modules": [
+    {
+      "name": "store",
+      "responsibility": "唯一数据真源：JSON 文件持久化 + 四则业务操作，负责容错读与原子写。",
+      "depends_on": [],
+      "interfaces": [
+        "add(text: str) -> dict",
+        "list() -> list[dict]（别名 list_all）",
+        "done(todo_id: int) -> dict | None",
+        "remove(todo_id: int) -> dict | None",
+        "路径覆盖：path 参数 > TODO_STORE_PATH > ~/.todo.json"
+      ]
+    },
+    {
+      "name": "cli",
+      "responsibility": "命令行适配层：解析子命令、调用 store、渲染人类可读文本与退出码。",
+      "depends_on": ["store"],
+      "interfaces": ["main(argv: list[str] | None = None) -> int", "子命令 add/list/done/rm(remove)", "退出码 0/1/2"]
+    },
+    {
+      "name": "package",
+      "responsibility": "包公共 API 导出层，给 Python 调用方与 cli 提供统一入口。",
+      "depends_on": ["store"],
+      "interfaces": ["__all__ = ['add','list','done','remove','list_all']"]
+    },
+    {
+      "name": "packaging",
+      "responsibility": "运行方式固化：python3 -m todo、console_scripts 入口、README 说明。",
+      "depends_on": ["cli", "package"],
+      "interfaces": ["todo/__main__.py", "pyproject.toml scripts: todo = todo.cli:main"]
+    },
+    {
+      "name": "tests",
+      "responsibility": "验证层：容错、原子写、端到端行为、三文件签名契约与零第三方依赖。",
+      "depends_on": ["store", "cli", "package", "packaging"],
+      "interfaces": ["python3 -m pytest tests/ -q 全绿"]
+    }
+  ],
+  "architecture": "分层加契约驱动，三层两边界。store.py 是唯一真源且唯一碰文件系统，暴露 add/list/done/remove（附 list_all 别名规避内置 list 遮蔽），路径解析为显式 path > TODO_STORE_PATH > ~/.todo.json，兼顾测试隔离与真实使用。可靠性两条硬线：读侧对缺失、空、损坏、非数组、权限错误一律降级为空列表并备份 .bak，绝不抛异常；写侧同目录临时文件加 os.replace 原子替换并设 0600，杜绝半写文件。cli.py 只做解析与渲染，argparse 四个子命令全部经 main(argv)->int 返回码（0 成功/1 业务失败/2 用法错误），便于注入测试且不泄漏 traceback。__init__.py 只 re-export store 公共函数并用 __all__ 声明，不 import cli，避免循环依赖。三层的名字与签名由 T7 的 inspect.signature 加 ast 契约测试锁定。补 __main__.py 与 pyproject.toml 使 python3 -m todo 与安装后命令共用同一 main()。数据为单文件 JSON 数组，无数据库、无缓存、无消息队列，全标准库实现。",
+  "data_model": {
+    "database": "无数据库，选型为单文件 JSON（标准库 json）。理由：单用户 CLI、数据量 <1e4 条、需要零第三方依赖与可直接 grep/手改的可排查性。路径 ~/.todo.json，可用 TODO_STORE_PATH 或显式 path 参数覆盖。写入原子化：同目录临时文件 + os.replace，权限 0600；读取容错，损坏时备份 .bak 后返回空结构。",
+    "entities": [
+      {
+        "name": "TodoFile",
+        "fields": [
+          {"name": "items", "type": "array<Todo>", "constraints": ["顶层即为 JSON 数组", "读取时兼容 {\"todos\": [...]} 信封写法", "损坏或类型不符时降级为 []", "损坏原文件备份为 <path>.bak"]}
+        ],
+        "indexes": []
+      },
+      {
+        "name": "Todo",
+        "fields": [
+          {"name": "id", "type": "integer", "constraints": ["必填", "文件内唯一", "自增，取现有最大值 +1", "不可为 0 或负数"]},
+          {"name": "text", "type": "string", "constraints": ["必填", "去首尾空白后非空", "长度上限 1000 字符"]},
+          {"name": "done", "type": "boolean", "constraints": ["必填", "默认 false", "done() 置 true，重复调用幂等"]},
+          {"name": "created_at", "type": "string", "constraints": ["ISO8601 UTC 字符串", "创建时写入后不再修改"]}
+        ],
+        "indexes": ["id（唯一，内存中线性扫描）"]
+      }
+    ],
+    "relationships": [
+      {"from": "TodoFile", "to": "Todo", "type": "1:N", "via": "TodoFile.items[]"}
+    ]
+  },
+  "api_contracts": [
+    {
+      "method": "POST",
+      "path": "/store/add",
+      "description": "新增一条待办：分配自增 id、写入 created_at、落盘。",
+      "input": {"text": "string, 必填, 去空白后非空"},
+      "output": {"todo": {"id": 3, "text": "写周报", "done": false, "created_at": "2026-09-11T01:10:00Z"}},
+      "errors": [{"code": 400, "meaning": "text 为空或非字符串，store 抛 ValueError；cli 捕获后退出码 1"}]
+    },
+    {
+      "method": "GET",
+      "path": "/store/list",
+      "description": "读取全部待办（按 id 升序），不修改文件，永不抛异常。",
+      "input": {},
+      "output": {"todos": [{"id": 1, "text": "写周报", "done": true, "created_at": "2026-09-11T01:10:00Z"}], "count": 1},
+      "errors": [{"code": 200, "meaning": "文件缺失/损坏/无权限均降级为空列表，返回 count=0 而非报错"}]
+    },
+    {
+      "method": "PUT",
+      "path": "/store/done",
+      "description": "按 id 标记完成（幂等），返回被修改的对象并落盘。",
+      "input": {"todo_id": "integer, 必填"},
+      "output": {"todo": {"id": 1, "text": "写周报", "done": true, "created_at": "2026-09-11T01:10:00Z"}},
+      "errors": [{"code": 404, "meaning": "id 不存在，返回 None（不抛异常）；cli 退出码 1"}]
+    },
+    {
+      "method": "DELETE",
+      "path": "/store/remove",
+      "description": "按 id 删除，返回被删除的对象并落盘。",
+      "input": {"todo_id": "integer, 必填"},
+      "output": {"todo": {"id": 1, "text": "写周报", "done": true, "created_at": "2026-09-11T01:10:00Z"}},
+      "errors": [{"code": 404, "meaning": "id 不存在，返回 None（不抛异常）；cli 退出码 1"}]
+    },
+    {
+      "method": "POST",
+      "path": "/cli/add",
+      "description": "todo add <text>：调用 store.add 并打印『已添加 #<id>: <text>』。",
+      "input": {"text": "string, 位置参数, 由 argparse 保证存在"},
+      "output": {"stdout": "已添加 #3: 写周报", "exit_code": 0},
+      "errors": [{"code": 1, "meaning": "空文本或 store 写入失败"}, {"code": 2, "meaning": "缺少位置参数，argparse 打印 usage"}]
+    },
+    {
+      "method": "GET",
+      "path": "/cli/list",
+      "description": "todo list：输出『1. [x] 写周报』形式清单；空数据输出『暂无待办』。",
+      "input": {},
+      "output": {"stdout": "1. [x] 写周报\n2. [ ] 买牛奶", "exit_code": 0},
+      "errors": [{"code": 0, "meaning": "空列表同样返回 0，只打印提示行"}]
+    },
+    {
+      "method": "PUT",
+      "path": "/cli/done",
+      "description": "todo done <id>：标记完成并打印『已完成 #<id>: <text>』。",
+      "input": {"id": "integer, 位置参数，非整数由 argparse 拦截"},
+      "output": {"stdout": "已完成 #1: 写周报", "exit_code": 0},
+      "errors": [{"code": 1, "meaning": "id 不存在，打印『找不到 id=99』，无 traceback"}, {"code": 2, "meaning": "id 非整数，argparse 打印 usage"}]
+    },
+    {
+      "method": "DELETE",
+      "path": "/cli/rm",
+      "description": "todo rm <id>（别名 remove）：删除并打印『已删除 #<id>: <text>』。",
+      "input": {"id": "integer, 位置参数"},
+      "output": {"stdout": "已删除 #1: 写周报", "exit_code": 0},
+      "errors": [{"code": 1, "meaning": "id 不存在，打印『找不到 id=99』"}, {"code": 2, "meaning": "id 非整数，argparse 打印 usage"}]
+    }
+  ],
+  "tech_stack": {
+    "language": "Python >= 3.8，纯标准库（json/os/sys/tempfile/pathlib/argparse/inspect/ast；pytest 仅测试用）。理由：需求强制零第三方依赖，标准库足以覆盖解析、持久化与打包。",
+    "framework": "CLI 用标准库 argparse（子命令 + 自动 usage），打包用 setuptools console_scripts。理由：仅 4 个子命令，click/typer 引入依赖不划算；main(argv)->int 保证可测试。",
+    "database": "单文件 JSON：~/.todo.json（原子写：同目录 tmp + os.replace；损坏时备份 .bak）。理由：单用户、低并发、需人类可读可手改，无 DB 依赖。",
+    "cache": "无缓存。理由：单进程短生命周期 CLI，每次调用读盘一次，N=1e4 时读写 O(N) 小于 1s，引入缓存只会带来一致性问题。",
+    "mq": "无消息队列。理由：全同步命令式工具，无后台任务与跨进程通信需求。"
+  },
+  "constraints": [
+    {
+      "type": "reliability",
+      "rule": "读取缺失文件、空文件、损坏 JSON、非数组结构、权限错误五种情形一律不抛异常，list() 返回 []，损坏内容备份为 <path>.bak。",
+      "check": "python3 -m pytest tests/test_store.py -q -k 'corrupt or missing or permission or empty' 全绿；手工验证 printf '{bad' > /tmp/t.json && TODO_STORE_PATH=/tmp/t.json python3 -m todo list; echo $? 期望输出『暂无待办』且退出码 0。"
+    },
+    {
+      "type": "reliability",
+      "rule": "所有写入必须原子：先写同目录临时文件再 os.replace，禁止用 open(path,'w') 直接覆盖目标文件。",
+      "check": "grep -c 'os.replace' todo/store.py 大于 0，且 grep -nE \"open\\(.*['\\\"]w\" todo/store.py 无输出；pytest tests/test_store.py::test_atomic_write。"
+    },
+    {
+      "type": "maintainability",
+      "rule": "store 的 add/list/done/remove 与 todo 包导出的同名函数必须是同一对象且 inspect.signature 完全一致；函数只在 store.py 定义，其他文件禁止重复实现。",
+      "check": "python3 -m pytest tests/test_contracts.py -q -k signatures；人为把 store.done 改名为 mark_done 后该测试必须失败。"
+    },
+    {
+      "type": "maintainability",
+      "rule": "__init__.py 只做 re-export，不 import cli；__all__ 恰为 ['add','list','done','remove','list_all']，无其他公共符号。",
+      "check": "python3 -c \"import sys, todo; assert 'todo.cli' not in sys.modules; assert todo.__all__ == ['add','list','done','remove','list_all']\"；pytest tests/test_contracts.py::test_public_api。"
+    },
+    {
+      "type": "security",
+      "rule": "运行期依赖仅限标准库：todo/*.py 的所有 import 模块名必须属于 sys.stdlib_module_names；pyproject 的 dependencies 为空。",
+      "check": "pytest tests/test_contracts.py::test_no_third_party（ast 扫描）；向 cli.py 注入 'import requests' 后该测试必须失败；grep -A2 '^dependencies' pyproject.toml 为空数组。"
+    },
+    {
+      "type": "security",
+      "rule": "数据文件权限必须为 0600，且原子替换生成的新文件同样为 0600。",
+      "check": "pytest tests/test_store.py::test_file_mode；或 python3 -c \"import os,stat;print(oct(stat.S_IMODE(os.stat(os.path.expanduser('~/.todo.json')).st_mode)))\" 输出 0o600。"
+    },
+    {
+      "type": "maintainability",
+      "rule": "store.py 定义了名为 list 的公共函数，模块内部禁止调用内置 list()，列表构造只用字面量与推导式。",
+      "check": "grep -nE '(^|[^A-Za-z0-9_.])list\\(' todo/store.py 除 'def list(' 外无输出；pytest tests/test_contracts.py::test_no_builtin_list_shadow_bug。"
+    },
+    {
+      "type": "performance",
+      "rule": "单次命令的读加写总耗时为 O(N)；在 10000 条记录下 list() 与 add() 各自耗时小于 1.0s。",
+      "check": "pytest tests/test_store.py::test_perf_10k（time.perf_counter 断言 < 1.0s）。"
+    },
+    {
+      "type": "reliability",
+      "rule": "cli 的任何失败路径都只能输出人类可读提示与退出码，禁止把异常 traceback 打到终端。",
+      "check": "pytest tests/test_cli.py -q -k error；subprocess 断言返回码属于 {1,2} 且 stderr 中不含 'Traceback'。"
+    }
+  ]
+}
