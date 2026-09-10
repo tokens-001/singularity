@@ -25,7 +25,7 @@ from singularity.scheduler.project import Phase
 
 _LOOP_POLL_SECS = 3  # 队列空时的轮询间隔
 
-_USAGE = ("用法: python3 -m scheduler add|run|loop|rollback|apply|status|merge|memory [参数]\n"
+_USAGE = ("用法: python3 -m scheduler add|run|loop|rollback|apply|status|merge|memory|project|auth [参数]\n"
           '      python3 -m scheduler "<任务文本>"    # 兼容旧用法: 建任务并立即执行')
 
 
@@ -61,6 +61,8 @@ def main(argv: list = None) -> int:
         return _cmd_memory(argv[1:])
     if cmd == "project":
         return _cmd_project(argv[1:])
+    if cmd == "auth":
+        return _cmd_auth(argv[1:])
 
     # 兜底是"直接跟任务文本"(scheduler "写个函数")，但这几种输入本来就该被拒 ——
     # 它们会掉进兜底**建任务并立即跑完整流水线**(真烧钱)。见审计报告 §二 V7。

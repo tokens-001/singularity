@@ -85,9 +85,12 @@ class AuthStore:
                 needs_migrate = any("token" in d and not d.get("token_hash") for d in data.get("users", []))
                 for d in data.get("users", []):
                     u = User.from_dict(d)
+                    if not u.token_hash:
+                        # 既无 hash 也无明文 → 谁也认证不了；而且空 key 会进 _token_map，
+                        # 使 `Authorization: Bearer `（空 token）命中该用户 → 越权形态。
+                        continue
                     self._users[u.id] = u
-                    key = u.token_hash
-                    self._token_map[key] = u
+                    self._token_map[u.token_hash] = u
                 # 旧格式迁移: 明文 token → 哈希存储
                 if needs_migrate:
                     self._save()
@@ -110,12 +113,45 @@ class AuthStore:
         self._users["admin"] = admin
         self._token_map[token_h] = admin
         self._save()
-        # 只在首次创建时打印明文 token
-        print(f"[auth] admin token: {token[:8]}... (仅显示一次，请保存)")
+        # 只在首次创建时打印明文 token —— 必须打**完整**的。
+        # 原来打的是 token[:8]，于是"唯一一次显示"显示了个没法用的前缀：
+        # 谁手里都没有完整 token（落盘只有哈希、API 只回 [:8]、to_dict 不含 token）
+        # → 一开 QIDIAN_AUTH 就全员 401，且没有任何自助恢复通道。
+        # 自部署工具的惯例就是 bootstrap 打一次全量 token（Jupyter 打 token URL 同理）。
+        print(f"[auth] 管理员 token（仅此一次显示，请立刻保存）:\n  {token}")
         return admin
+
+    def rotate_token(self, user_id: str) -> Optional[User]:
+        """给已有用户换发新 token。明文只随返回值给出一次，调用方负责显示。
+
+        这是 token 过期/丢失后的**唯一自助恢复通道**：TTL 是 30 天且不做滑动续期
+        （换发才重置 created_at），到期后老 token 一律 401。没有这个方法就只能
+        删掉 users.json 重新 bootstrap —— 那会连带废掉所有其他用户。
+
+        不提供 HTTP 入口是**有意**的：能发 token 的接口一旦可被未鉴权调用就是提权洞；
+        本地 CLI 需要文件系统访问权，天然就是授权。
+        """
+        u = self._users.get(user_id)
+        if u is None:
+            return None
+        token = secrets.token_hex(16)
+        token_h = _hash_token_v2(token)
+        old_h = u.token_hash
+        u.token = token
+        u.token_hash = token_h
+        u.created_at = time.time()   # 换发即重置 TTL
+        self._token_map.pop(old_h, None)
+        self._token_map[token_h] = u
+        self._save()
+        return u
 
     def authenticate(self, token: str) -> Optional[User]:
         """哈希比对 + 过期检查。v2 优先，v1 兼容 → 命中后自动迁移。"""
+        if not token:
+            # 空/None 一律拒。除了 None.encode() 会炸，更重要的是：若某条记录
+            # 既无 hash 也无明文，_token_map 里会留下空 key，`Bearer `（空 token）
+            # 就命中该用户 → 越权。_load 已不让空 hash 进表，这里再兜一道。
+            return None
         token_h_v2 = _hash_token_v2(token)
         token_h_v1 = _hash_token(token)
         for h, u in self._token_map.items():

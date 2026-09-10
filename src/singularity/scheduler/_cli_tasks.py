@@ -1,4 +1,4 @@
-__all__ = ['_cmd_add', '_cmd_apply', '_cmd_loop', '_cmd_merge', '_cmd_rollback', '_cmd_run', '_cmd_status', '_drain_queue', '_is_merged_to_main', '_parse_concurrent', '_release_pending_ref']
+__all__ = ['_cmd_add', '_cmd_apply', '_cmd_auth', '_cmd_loop', '_cmd_merge', '_cmd_rollback', '_cmd_run', '_cmd_status', '_drain_queue', '_is_merged_to_main', '_parse_concurrent', '_release_pending_ref']
 
 """CLI sub-commands."""
 import json, os, signal, sys, time
@@ -30,6 +30,39 @@ def _parse_concurrent(args: list) -> tuple:
         rest.append(args[i])
         i += 1
     return rest, concurrent
+
+
+def _cmd_auth(argv: list) -> int:
+    """scheduler auth list                列用户
+       scheduler auth token <user_id>     换发 token（明文打印一次）
+
+    token 过期/丢失后的恢复通道。**故意只做 CLI 不做 HTTP**：
+    能发 token 的接口若可被未鉴权调用就是提权洞；本地 CLI 要文件系统权限，
+    天然就是授权。
+    """
+    from singularity.scheduler import _auth as auth_mod
+    if not argv:
+        print("用法: scheduler auth list | scheduler auth token <user_id>", file=sys.stderr)
+        return 2
+    sub, rest = argv[0], argv[1:]
+    if sub == "list":
+        users = auth_mod.get_auth().list_users()
+        if not users:
+            print("  (无用户)")
+        for u in users:
+            age = (time.time() - u["created_at"]) / 86400
+            print(f"  {u['id']:16} {u['role']:9} {u['name']:12} {age:.1f} 天")
+        return 0
+    if sub == "token" and rest:
+        u = auth_mod.get_auth().rotate_token(rest[0])
+        if u is None:
+            print(f"用户不存在: {rest[0]}（先 scheduler auth list 看有哪些）", file=sys.stderr)
+            return 1
+        print(f"[auth] {u.id} 的新 token（仅此一次显示，请立刻保存）:\n  {u.token}")
+        return 0
+    print(f"未知用法: {sub}\n用法: scheduler auth list | scheduler auth token <user_id>",
+          file=sys.stderr)
+    return 2
 
 
 def _check_env() -> None:
