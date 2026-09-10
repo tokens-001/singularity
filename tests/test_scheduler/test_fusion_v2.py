@@ -63,6 +63,25 @@ def _finalize_prompt(calls):
     return next(p for m, p in calls if "架构定稿人" in p)
 
 
+def test_pick_writer_prefers_disciplined_model(tmp_path, monkeypatch):
+    """定稿人按历史范围纪律选 —— 实测定稿人决定产物的范围纪律（乘法器 vs 过滤器）。"""
+    from singularity.scheduler import config, execution_judge as ej
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+    (tmp_path / "model_discipline.json").write_text(json.dumps({
+        "noisy": {"violations": 10, "audits": 2},   # 5.0 处/次
+        "clean": {"violations": 1, "audits": 2},    # 0.5 处/次
+    }))
+    assert ej._pick_writer([], ["noisy", "clean"]) == "clean"
+
+
+def test_pick_writer_falls_back_without_data(tmp_path, monkeypatch):
+    """没有审计数据时回退到原规则（提分歧最多者），不改变既有行为。"""
+    from singularity.scheduler import config, execution_judge as ej
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+    d = [{"raised_by": "b"}, {"raised_by": "b"}]
+    assert ej._pick_writer(d, ["a", "b"]) == "b"
+
+
 def test_finalize_prompt_carries_original_plans(monkeypatch):
     """定稿人必须拿到成员原稿。
 

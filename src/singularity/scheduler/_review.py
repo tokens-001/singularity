@@ -10,6 +10,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from singularity.scheduler import witness
+
 # D1: 审查自动修上限 (比实现层3轮更紧, 审查修不动=架构/拆解有问题)
 _REVIEW_MAX_AUTO_FIX = 2
 # D1: 审查超时阈值 (秒)
@@ -169,9 +171,20 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                 a['model'] for a in all_pool
                 if a['model'] != writer_model and disp_mod.agent_api_available(a)][:2]
 
+            if len(reviewer_models) < 2:
+                # 只有 2 个启用的 agent 时，排除 writer 就只剩 1 个 —— "多模型审查"
+                # 名不副实，而"多视角碰撞"正是核心价值主张。别让它静默退化。
+                # （扩池到模型注册表能解决，但那会调用未启用的模型、成本要用户点头。）
+                witness.warn("review",
+                             f"single_reviewer:{writer_model}:pool={len(all_pool)}"[:80])
             if reviewer_models:
                 rev_files = []; rev_models = []; all_issues = []
                 review_failed = False
+                if len(changed) > 3:
+                    # 只审前 3 个文件 —— 改得多时后面的没人看。别静默截断：
+                    # 外面看到"review_files"时得知道它不等于"全部改动"。
+                    witness.warn("review",
+                                 f"review_files_truncated:{len(changed)}->3"[:80])
                 for f in changed[:3]:
                     # S2: 多模型审查带超时
                     try:

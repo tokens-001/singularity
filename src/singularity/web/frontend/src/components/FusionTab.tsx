@@ -54,7 +54,7 @@ export default function FusionTab() {
     <div>
       <div className="flex-center gap-8" style={{ marginBottom: 10 }}>
         <span className="fw-600 fs-12 text-secondary">融合模型</span>
-        <span className="fs-10 text-muted">裁判做五维分析，定稿按分析合成最终方案</span>
+        <span className="fs-10 text-muted">两阶段合成用「裁判 + 定稿」；v2 机制用「提取员」，其定稿人由对话轮转决定</span>
         <span className="flex-1"/>
         <button onClick={save} disabled={saving} className="btn-sm"><Save size={12}/> 保存</button>
       </div>
@@ -77,6 +77,15 @@ export default function FusionTab() {
               onChange={e => set(tier, 'call_model', e.target.value)}>
               <option value="">（未设置）</option>
               {options(t.call_model).map(id => <option key={id} value={id}>{labelOf(id)}</option>)}
+            </select>
+            {/* v2 的提取员。原来这栏 UI 上根本不存在 —— _v2_extractor_model() 一直
+                在读配置，用户却看不到也改不了，只能用代码里的默认值。 */}
+            <label className="fs-10 text-muted" style={{ flexShrink: 0 }}>提取员</label>
+            <select className="inp-dark" style={{ flex: 1 }} value={t.extract_model || ''}
+              aria-label={`${tier} 提取员模型`}
+              onChange={e => set(tier, 'extract_model', e.target.value)}>
+              <option value="">（默认）</option>
+              {options(t.extract_model).map(id => <option key={id} value={id}>{labelOf(id)}</option>)}
             </select>
           </div>
         )

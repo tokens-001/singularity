@@ -554,6 +554,35 @@ def _first_speaker(disagreements: list, members: list[str]) -> str:
     return max(members, key=lambda m: cnt[m])
 
 
+def _model_discipline() -> dict:
+    """读模型范围纪律表：{model: {"violations": n, "audits": n}}。
+
+    由 tests/integration/coverage_audit.py 累积写入。实测定稿人是「乘法器」还是
+    「过滤器」直接决定产物的范围纪律 —— 同一批稿子同一需求，glm 当定稿人时把两家
+    的超范围内容都收进来（ledger 23 + RabbitMQ 7），deepseek 当定稿人时连自己的
+    RabbitMQ 都砍了（ledger 1 + RabbitMQ 1）。
+    """
+    try:
+        p = config.QIDIAN_DIR / "model_discipline.json"
+        return json.loads(p.read_text()) if p.exists() else {}
+    except Exception:
+        return {}
+
+
+def _pick_writer(disagreements: list, members: list[str]) -> str:
+    """选定稿人：优先历史范围纪律好的，没数据回退「提分歧最多者」。
+
+    纪律 = 违例数 / 审计次数，越低越好。定稿人这个位置决定产物的范围纪律，
+    而原来按「谁提分歧多」定 —— 跟纪律无关。
+    """
+    disc = _model_discipline()
+    scored = [(m, (disc.get(m) or {}).get("violations", 0) / max((disc.get(m) or {}).get("audits", 1), 1))
+              for m in members if (disc.get(m) or {}).get("audits")]
+    if scored:
+        return min(scored, key=lambda kv: kv[1])[0]
+    return _first_speaker(disagreements, members)
+
+
 def _j(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2)
 
@@ -619,7 +648,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
         witness.warn("execution_judge", "fusion_v2_empty_extract"[:80])
         return ""
 
-    writer = _first_speaker(disagreements, members)
+    writer = _pick_writer(disagreements, members)
     others = [m for m in members if m != writer]
 
     # ── ③ 共享对话 ──

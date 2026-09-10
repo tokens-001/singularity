@@ -30,6 +30,13 @@ BRIEF_NO = int(sys.argv[1]) if len(sys.argv) > 1 else 3
 # 委员会很贵，跑过就存下来，重跑融合时不用再花钱
 PLANS_CACHE = HERE / ".v2_plans.json"
 
+# AB_WRITER：强制指定定稿人。默认 writer = _first_speaker(disagreements, members)，
+# 即「最先提出分歧的那个模型」—— 于是「谁先开口，谁的设计就被保留」。
+# 用来验证「定稿人自我偏好」假设：换定稿人，看被保留的是不是也跟着换。
+if os.environ.get("AB_WRITER"):
+    ej._first_speaker = lambda d, m: os.environ["AB_WRITER"]
+    print(f"⚠️ 强制定稿人 = {os.environ['AB_WRITER']}（默认取最先提分歧者）", flush=True)
+
 _bl.MAX_CHARS = 0
 _bl.JUDGE_MODEL = os.environ.get("AB_JUDGE", "glm-5.2")   # kimi 已停用（余额不足）
 _bl.JUDGE_MAX_TOKENS = int(os.environ.get("AB_JUDGE_MAX_TOKENS", "16000"))

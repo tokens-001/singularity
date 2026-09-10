@@ -33,6 +33,13 @@ _WAVE_TIMEOUT = float(os.environ.get("QIDIAN_DEBATE_TIMEOUT", "300"))
 # 赶时间: QIDIAN_DEBATE_ROUNDS=1 (跳过二次碰撞, 质量损失未 A/B 过)。
 _DEBATE_ROUNDS = max(1, int(os.environ.get("QIDIAN_DEBATE_ROUNDS", "2")))
 
+# 辩论总时间预算。单波最坏 = 单次 _run_no_tools 的最坏耗时（_api_call 整轮预算 600s），
+# 2 轮 = 4 波 → 最坏 2400s —— 实测撞过 2300s，一题把整轮调度拖死。
+# 注意 _WAVE_TIMEOUT **管不了这个**：波用 `with ThreadPoolExecutor`，退出时
+# shutdown(wait=True) 会 join 全部线程，那个 timeout 只决定"何时去读已完成的结果"。
+# 所以预算在每轮开头检查 —— 最坏截到「预算 + 单波」，比 2400s 好一半。
+_DEBATE_TOTAL_BUDGET = float(os.environ.get("QIDIAN_DEBATE_BUDGET", "900"))
+
 
 @timed(name="dispatcher")
 def dispatch(
@@ -215,7 +222,14 @@ def _debate(task: str, members: list[tuple], chain: list[dict], task_id: str,
     reviewers = [m for m in models if m not in slow] or models
     prev_review = ""
 
+    _debate_deadline = time.time() + _DEBATE_TOTAL_BUDGET
     for rnd in range(1, max_rounds + 1):
+        if time.time() > _debate_deadline:
+            # 预算耗尽 → 不再开新轮。已完成的修订保留（plans 上面已 update），
+            # 辩论结果不完整好过整轮调度被拖死。
+            witness.warn("dispatcher",
+                         f"debate_budget_exhausted:round{rnd}/{max_rounds}"[:80])
+            break
         # ── 阶段A: 交叉评审(并行) ──
         def _review(reviewer):
             others = [(m, plans[m]) for m in models if m != reviewer]

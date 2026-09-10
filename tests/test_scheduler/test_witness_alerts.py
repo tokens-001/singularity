@@ -53,6 +53,16 @@ def test_read_alerts_empty_when_no_file(qdir):
     assert witness.read_alerts() == []
 
 
+def test_review_module_can_reach_witness():
+    """接线检查：_review 里用了模块级 witness.warn，顶部就必须有 import。
+
+    漏过一次（写 warn 时该文件顶部只有 subprocess/time/pathlib，别处用的是局部
+    import）—— 测试全绿但生产走到那行就 NameError。
+    """
+    from singularity.scheduler import _review, witness
+    assert _review.witness is witness
+
+
 def test_warn_never_raises(qdir):
     """告警本身失败不该变成新的错误源。"""
     witness.warn(None, None)
