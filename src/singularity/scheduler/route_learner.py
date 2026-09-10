@@ -62,7 +62,14 @@ class RouteLearner:
 
     def record(self, task_type: str, model: str, level: str,
                success: bool, elapsed_ms: float = 0, tokens: int = 0) -> None:
-        """任务执行完成后调用，更新模型在该任务类型下的统计。"""
+        """任务执行完成后调用，更新模型在该任务类型下的统计。
+
+        **model 为空直接丢弃**：任务被取消/分解/冲突时 `disp_result` 是 None，
+        调用方拿不到模型名就传了空串。这种样本学不到"哪个模型好"（键退化成 `type::`），
+        只会在统计里积出一条没人能解读的脏账 —— 实测真积过一条"0 成功 15 失败"的。
+        """
+        if not model:
+            return
         k = self._key(task_type, model)
         if k not in self._stats:
             self._stats[k] = LearnerStats(task_type=task_type, model=model, level=level)

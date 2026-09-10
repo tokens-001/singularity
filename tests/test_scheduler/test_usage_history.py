@@ -456,3 +456,26 @@ class TestNoTruncationOnBusyDays:
         _bind(monkeypatch, b)
         # 但历史里那 777 还在
         assert history("all")["totals"]["tokens"] == 777 + 111
+
+
+class TestRouteLearnerRejectsEmptyModel:
+    """model 为空的样本要丢掉。
+
+    任务被取消/分解/冲突时 `disp_result` 是 None，调用方拿不到模型名就传了空串。
+    这种样本学不到"哪个模型好"（键退化成 `type::`），只会在统计里积脏账 ——
+    实测真积过一条"0 成功 15 失败"的。
+    """
+
+    def test_empty_model_is_dropped(self, monkeypatch):
+        from singularity.scheduler import route_learner as rl
+        monkeypatch.setattr(rl, "_LEARNER_PATH", config.QIDIAN_DIR / "route_learner.json")
+        learner = rl.RouteLearner()
+        learner.record(task_type="default", model="", level="any", success=False)
+        assert learner._stats == {}, "空模型样本不该进统计"
+
+    def test_named_model_still_records(self, monkeypatch):
+        from singularity.scheduler import route_learner as rl
+        monkeypatch.setattr(rl, "_LEARNER_PATH", config.QIDIAN_DIR / "route_learner.json")
+        learner = rl.RouteLearner()
+        learner.record(task_type="default", model="m", level="any", success=True)
+        assert "default::m" in learner._stats

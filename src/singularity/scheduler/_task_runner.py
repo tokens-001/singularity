@@ -110,7 +110,18 @@ def _archive_task_outcome(task, route, disp_result, failure_mode: str = "") -> N
         witness.warn('orch', f'archive_experience:{e}'[:80])
 
     try:
-        record_tokens(project_id=getattr(task, 'project_id', ''), task_id=task.id,
+        # 带上项目名：原来只传 id，`project_name` 字段就永远是空串，
+        # 而 `by_project` 的响应里挂着它 —— 名不副实，谁用谁踩坑。
+        _pname = ""
+        _pid = getattr(task, 'project_id', '')
+        if _pid:
+            try:
+                from singularity.scheduler import project as _proj
+                _p = _proj.load(_pid)
+                _pname = getattr(_p, 'name', '') or ''
+            except Exception:
+                pass      # 拿不到名字不该影响记账
+        record_tokens(project_id=_pid, project_name=_pname, task_id=task.id,
                       model=model, level=task.route_level, tokens=tokens,
                       elapsed_s=elapsed)
     except Exception as e:
