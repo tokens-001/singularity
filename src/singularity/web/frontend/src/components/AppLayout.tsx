@@ -37,6 +37,7 @@ export default function AppLayout() {
   const addToast = useToast()
   const sidebarWidth = sidebarCollapsed ? 0 : 260
   const [usage, setUsage] = useState<any>({})
+  const [showModels, setShowModels] = useState(false)
   const [loopRunning, setLoopRunning] = useState(false)
   const [conflicts, setConflicts] = useState<any[]>([])
 
@@ -71,6 +72,10 @@ export default function AppLayout() {
     }
     f(); const t = setInterval(f, 30000); return () => clearInterval(t)
   }, [])
+
+  // 旧后端不返 by_model（字段缺失 → null）时整行不可点、不显示箭头，
+  // 免得箭头承诺了却展开出空
+  const models: any[] = Array.isArray(usage?.by_model) ? usage.by_model : []
 
   const selectProject = (pid: string) => { setActiveProject(pid); navigate('/') }
 
@@ -137,10 +142,27 @@ export default function AppLayout() {
                 title={conflicts.map((c: any) => c.task_id || c.id || '').join(', ')}>⚠ {conflicts.length} 冲突</span>
             )}
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-            <span style={{ color: '#6b6b68' }}>今日 {fmtTokens(usage?.daily_tokens)} tokens</span>
+          {/* 总量只说明"花了多少"，回答不了"该换谁" —— 点开看按模型的占比。
+              数据一直在 /api/token-usage 里（by_model），之前只是没渲染。 */}
+          <div onClick={models.length ? () => setShowModels(v => !v) : undefined}
+            role={models.length ? 'button' : undefined} tabIndex={models.length ? 0 : undefined}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setShowModels(v => !v) } }}
+            title={models.length ? '点开：今日各模型用量占比' : undefined}
+            style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, cursor: models.length ? 'pointer' : 'default' }}>
+            <span style={{ color: '#6b6b68' }}>今日 {fmtTokens(usage?.daily_tokens)} tokens{models.length ? (showModels ? ' ▾' : ' ▸') : ''}</span>
             <span style={{ color: '#6b6b68' }}>${(usage?.daily_cost || 0).toFixed(2)}</span>
           </div>
+          {showModels && models.slice(0, 8).map((m: any) => (
+            <div key={m.model} style={{ display: 'flex', gap: 6, fontSize: 10, color: '#9a9993' }}>
+              <span className="truncate" style={{ flex: 1 }} title={m.model}>{m.model}</span>
+              <span style={{ color: '#6b6b68' }}>{((m.share || 0) * 100).toFixed(0)}%</span>
+              <span style={{ minWidth: 34, textAlign: 'right' }}>${(m.cost || 0).toFixed(2)}</span>
+            </div>
+          ))}
+          {/* 截断了就说出来 —— 否则看着像"就这几个模型在用" */}
+          {showModels && models.length > 8 && (
+            <div style={{ fontSize: 10, color: '#b5b2a8' }}>…另有 {models.length - 8} 个模型</div>
+          )}
           {usage?.warning && <div style={{ fontSize: 10, color: '#dc2626' }}>{usage.warning}</div>}
         </div>
       </div>
