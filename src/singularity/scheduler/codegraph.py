@@ -24,19 +24,23 @@ def build_graph(project_root: Path = None, target_dirs: list[str] = None) -> dic
     Returns:
         {
             "files": {path: {"classes": [...], "functions": [...], "imports": [...]}},
-            "call_graph": {"func_name": ["called_func1", ...]},
             "import_graph": {"module": ["imported_module", ...]},
             "hierarchy": {"ClassName": ["ParentClass", ...]},
             "stats": {...},
             "generated_at": timestamp
         }
+
+    注：**没有 call_graph**。它原来在 schema 里，但 `_CallCollector.visit_Call`
+    的函数体是 `pass`（注释写着"需要维护作用域栈，先简单点"）→ 永远建不出东西，
+    `call_graph` 恒为 `{}`。一个"有键但永远是空"的字段比没有更坑 ——
+    消费方会以为它是被填过的。真要做调用图再加回来（得维护作用域栈）。
     """
-    root = project_root or Path(__file__).parent  # scheduler/ 目录
+    # 必须是 Path：传进来可能是 str，否则下面 `root / td` 会 `'str' / 'str'` TypeError
+    root = Path(project_root) if project_root else Path(__file__).parent  # scheduler/ 目录
     target_dirs = target_dirs or ["."]
 
     graph = {
         "files": {},
-        "call_graph": {},
         "import_graph": {},
         "hierarchy": {},
         "stats": {"files": 0, "classes": 0, "functions": 0},
@@ -68,8 +72,6 @@ def build_graph(project_root: Path = None, target_dirs: list[str] = None) -> dic
         }
         for cls, parents in collector.hierarchy.items():
             graph["hierarchy"][cls] = parents
-        for caller, callees in collector.calls.items():
-            graph["call_graph"][f"{module}.{caller}"] = callees
         for imp in collector.imports:
             graph["import_graph"].setdefault(module, []).append(imp)
 
