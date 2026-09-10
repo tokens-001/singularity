@@ -5,7 +5,6 @@ import { useSSE, useSSEConnected } from '../lib/useSSE'
 import { useToast } from '../lib/toast'
 import { getPinned } from '../lib/pinned'
 import { api } from '../lib/api'
-import { fmtCost, isUnpriced } from '../lib/money'
 import { MessageSquare, List, Settings, Boxes, Activity } from 'lucide-react'
 
 const NAV = [
@@ -21,12 +20,6 @@ const PHASE_CN: Record<string,string> = {
   executing:'执行中', integrating:'集成', reviewing:'审查', fixing:'修复', gate3:'G3 审核', delivering:'交付', done:'完成'
 }
 
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return (n/1_000_000).toFixed(1) + 'M'
-  if (n >= 1_000) return (n/1_000).toFixed(1) + 'K'
-  return String(n || 0)
-}
-
 export default function AppLayout() {
   const { sidebarCollapsed, toggleSidebar } = useAppStore()
   const setActiveProject = useAppStore(s => s.setActiveProject)
@@ -38,7 +31,6 @@ export default function AppLayout() {
   const [pinned, setPinned] = useState<string[]>(getPinned)
   const addToast = useToast()
   const sidebarWidth = sidebarCollapsed ? 0 : 260
-  const [usage, setUsage] = useState<any>({})
   const [loopRunning, setLoopRunning] = useState(false)
   const [conflicts, setConflicts] = useState<any[]>([])
 
@@ -55,30 +47,22 @@ export default function AppLayout() {
   }, [sseAlive])
   useSSE(loadProjects, { kinds: ['project', 'workflow', 'system', 'task'], debounceMs: 400 })
 
-  // token 用量 / 调度状态 / 冲突 都没有 SSE 事件，只能轮询；30s 够用
+  // 调度状态 / 冲突 没有 SSE 事件，只能轮询；30s 够用
   const refreshLoop = async () => {
     const s = await api.loopStatus().catch(() => null)
     if (s) setLoopRunning(!!(s as any).running)
   }
   useEffect(() => {
     const f = async () => {
-      const [u, s, c] = await Promise.all([
-        api.tokenUsage().catch(() => null),
+      const [s, c] = await Promise.all([
         api.loopStatus().catch(() => null),
         api.conflicts().catch(() => null),
       ])
-      if (u) setUsage(u)
       if (s) setLoopRunning(!!(s as any).running)
       if (c) setConflicts((c as any).conflicts || [])
     }
     f(); const t = setInterval(f, 30000); return () => clearInterval(t)
   }, [])
-
-  // 旧后端不返 by_model（字段缺失 → null）时整行不可点、不显示箭头，
-  // 免得箭头承诺了却展开出空
-  const models: any[] = Array.isArray(usage?.by_model) ? usage.by_model : []
-  // 今天用过但没配单价的模型 → 标出来，别让人以为总额就是全部
-  const unpriced: string[] = Array.isArray(usage?.unpriced_models) ? usage.unpriced_models : []
 
   const selectProject = (pid: string) => { setActiveProject(pid); navigate('/') }
 
@@ -145,35 +129,8 @@ export default function AppLayout() {
                 title={conflicts.map((c: any) => c.task_id || c.id || '').join(', ')}>⚠ {conflicts.length} 冲突</span>
             )}
           </div>
-          {/* 左下角只留"各模型的用量" —— 总额那行右边原来也放一份金额/未配置价格，
-              于是"未配置价格"连着出现两遍，看着像坏了。这里只留总量，钱放各行。 */}
-          <div style={{ fontSize: 11, color: '#6b6b68', display: 'flex', gap: 6 }}>
-            <span>今日 {fmtTokens(usage?.daily_tokens)} tokens</span>
-            {unpriced.length > 0 && (
-              <span style={{ color: '#d97706' }}
-                title={`以下模型未配置单价，未计入：${unpriced.join('、')}`}>· 有未配单价</span>
-            )}
-          </div>
-          {/* 各模型用量。费用留在这一行 —— 那是这套统计存在的理由（单价不一样）。
-              截断就说出来，否则看着像"就这几个模型在用"。 */}
-          {models.slice(0, 8).map((m: any) => (
-            <div key={m.model} style={{ display: 'flex', gap: 6, fontSize: 10, color: '#9a9993' }}>
-              <span className="truncate" style={{ flex: 1 }} title={m.model}>{m.model}</span>
-              <span style={{ color: '#6b6b68' }}>{((m.share || 0) * 100).toFixed(0)}%</span>
-              <span className="truncate" style={{ minWidth: 54, textAlign: 'right', whiteSpace: 'nowrap' }}
-                title={isUnpriced(m.cost) ? '未配置单价，无法计算费用' : undefined}
-                onClick={() => { if (isUnpriced(m.cost)) navigate('/config') }}
-                role={isUnpriced(m.cost) ? 'button' : undefined}>
-                {isUnpriced(m.cost)
-                  ? <span style={{ color: '#d97706' }}>未配置价格</span>
-                  : fmtCost(m.cost)}
-              </span>
-            </div>
-          ))}
-          {models.length > 8 && (
-            <div style={{ fontSize: 10, color: '#b5b2a8' }}>…另有 {models.length - 8} 个模型</div>
-          )}
-          {usage?.warning && <div style={{ fontSize: 10, color: '#dc2626' }}>{usage.warning}</div>}
+          {/* 用量统计整个搬到「用量」页去了 —— 侧边栏不再重复显示一份。
+              留在这里只会挤占项目列表，而且"未配置价格"那种字挤在 260px 里本来就难读。 */}
         </div>
       </div>
 
