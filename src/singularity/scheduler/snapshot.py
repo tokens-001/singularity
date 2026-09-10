@@ -93,10 +93,20 @@ def _rollback_git(snap: Snapshot, root: Path) -> bool:
         capture_output=True, text=True, cwd=str(root),
     ).stdout.strip()
     if status:
-        subprocess.run(
+        r = subprocess.run(
             ["git", "stash", "push", "--include-untracked", "-m", f"rollback-protect:{snap.id}"],
             capture_output=True, text=True, cwd=str(root),
         )
+        if r.returncode != 0:
+            # **必须中止**。原来不检查返回码就往下走 checkout -- . + clean -fd ——
+            # stash 失败时(未合并索引 / index.lock 竞争 / 磁盘满)本该被它保护的
+            # 未跟踪文件会被 clean -fd 直接删掉，**且不在 stash 里，不可恢复**。
+            # 已在 /tmp 仓库实跑复现（UU 冲突态 → stash rc=1 → 用户文件消失、stash list 为空）。
+            # merge 侧早已 fail-closed（脏工作区拒绝合并），这里是原来不对称的 fail-open。
+            from . import witness
+            witness.warn("snapshot",
+                         f"rollback_aborted:stash_failed:{r.stderr[:120]}"[:200])
+            return False
     # 丢弃当前未提交改动 ("--" 和 "." 是两个独立 arg, 不是 "-- .")
     subprocess.run(
         ["git", "checkout", "--", "."],
