@@ -4,6 +4,7 @@ import { api } from '../lib/api'
 import { useToast, useModal, useRun } from '../lib/toast'
 import { Plus, Trash2, Search, Download, X } from 'lucide-react'
 import { mcn } from '../pages/Config'
+import { fmtPrice, isUnpriced } from '../lib/money'
 import type { ModelInfo, ApiStoreItem } from '../lib/types'
 
 const COST_CN: Record<string,string> = { budget:'省', standard:'标准', premium:'贵' }
@@ -45,6 +46,39 @@ export default function ModelsTab() {
     setDisabledSet(ds); setActiveModels(act)
   }
   useEffect(() => { fetch() }, [])
+
+  /** 设置单价。存 model_prices.json，不动模型表 —— 跑基准/扫描导入擦不掉它。
+   *  留空 = 清除（回到"未配置价格"），不是设成 0。 */
+  const editPrice = (m: ModelInfo) => {
+    let draft = m.price_per_m != null ? String(m.price_per_m) : ''
+    modal.confirm({
+      title: `「${mcn(m)}」的单价`,
+      content: (
+        <div>
+          <div className="fs-11 text-muted" style={{ marginBottom: 6 }}>
+            单位：USD / 百万 token（混合价 —— 系统只记总 token，不区分输入/输出）。<br />
+            留空 = 不配置，用量页会如实显示「未配置价格」。
+          </div>
+          <Input defaultValue={draft} placeholder="例如 0.28" autoFocus
+            onChange={e => { draft = e.target.value }} />
+        </div>
+      ),
+      okText: '保存', cancelText: '取消',
+      onOk: async () => {
+        const t = draft.trim()
+        const next = t === '' ? null : Number(t)
+        if (next !== null && !Number.isFinite(next)) {
+          addToast('单价必须是数字', 'error')
+          return Promise.reject(new Error('invalid price'))
+        }
+        // 失败时 reject → 弹窗不关，用户输的值还在
+        if (!(await run(() => api.setModelPrice(m.id, next)))) {
+          return Promise.reject(new Error('save failed'))
+        }
+        fetch()
+      },
+    })
+  }
 
   const scan = async (apiId: string) => {
     setScanning(apiId)
@@ -163,6 +197,15 @@ export default function ModelsTab() {
               <span style={{ color: dotColor, fontSize: 8 }}>{disabled?'○':'●'}</span>
               <span className="fw-500 flex-1">{mcn(m)}{m.rating && m.rating !== '?' ? <span className="fs-10 text-muted" style={{marginLeft:6}}>{m.rating}</span> : <span className="card-tag" style={{marginLeft:6,opacity:.55}}>未评测</span>}</span>
               <span className="fs-10 text-muted">{COST_CN[m.cost||'']||m.cost} · {SPEED_CN[m.speed||'']||m.speed}</span>
+              {/* 单价入口。未配置时用警示色 —— 没配单价的模型在用量页算不出费用。 */}
+              <span className="fs-10" role="button" tabIndex={0}
+                title="点击设置单价（USD / 百万 token，混合价）"
+                onClick={() => editPrice(m)}
+                onKeyDown={e => { if (e.key === 'Enter') editPrice(m) }}
+                style={{ cursor: 'pointer',
+                  color: isUnpriced(m.price_per_m) ? '#d97706' : 'var(--text-secondary)' }}>
+                {fmtPrice(m.price_per_m)}
+              </span>
               {!m.api_available && <span className="fs-10" style={{color:'#d97706'}}>未配key</span>}
               {rf.length > 0 && !(rf.length === 1 && rf[0] === 'any') && (
                 <span className="flex-center gap-4">{rf.slice(0,3).map(p=><span key={p} className="card-tag">{p}</span>)}</span>

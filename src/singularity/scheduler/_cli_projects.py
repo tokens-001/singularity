@@ -1,4 +1,4 @@
-__all__ = ['_cmd_project', '_cmd_project_advance', '_cmd_project_create', '_cmd_project_delete', '_cmd_project_list', '_cmd_project_reject', '_cmd_project_show', '_phase_agent_level', '_phase_cost_estimate']
+__all__ = ['_cmd_project', '_cmd_project_advance', '_cmd_project_create', '_cmd_project_delete', '_cmd_project_list', '_cmd_project_reject', '_cmd_project_show', '_phase_agent_level', '_phase_will_run']
 
 """CLI sub-commands."""
 import json, os, sys, time
@@ -104,7 +104,9 @@ def _cmd_project_show(project_id: str) -> int:
     print(f"  phase: {proj.phase.value}")
     print(f"  template: {proj.template}")
     print(f"  auto: {proj.auto_mode}")
-    print(f"  budget: ${proj.token_budget_total:.2f} / spent: ${proj.token_spent:.2f}")
+    _spent, _unpriced = _project_today_cost(proj.id)
+    print(f"  budget: ${proj.token_budget_total:.2f} / 今日已花: ${_spent:.4f}"
+          + ("  (有模型未配置单价)" if _unpriced else ""))
     print(f"  description: {proj.description[:120]}")
     print(f"  scope: {proj.scope[:120]}")
     print(f"  constraints: {proj.raw_constraints}")
@@ -151,16 +153,21 @@ def _cmd_project_advance(project_id: str, approve: bool = False, yes: bool = Fal
                   file=sys.stderr)
             return 1
 
-    # ── 费用估算 & 确认 ──
-    cost = _phase_cost_estimate(phase, proj)
-    if cost > 0 and not yes:
+    # ── 执行前确认 ──
+    # 这里原来显示 `估算费用: ~$2.50` —— 来自一张写死的价目表，是编的。
+    # 现在只报**真实**的今日已花费；未来要花多少不预测（各模型单价差几十倍，
+    # 又不知道这次会落到哪个模型上，任何预估都是猜）。
+    if _phase_will_run(phase, proj) and not yes:
         level = _phase_agent_level(phase)
+        spent, has_unpriced = _project_today_cost(proj.id)
         print(f"[project] {proj.id[:8]}  即将进入 {phase.value} 阶段")
         print(f"  调用: {level} 层 agent")
-        print(f"  估算费用: ~${cost:.2f}  (累计已花费: ${proj.token_spent:.2f})")
-        print(f"  预算剩余: ${proj.token_budget_total - proj.token_spent:.2f}")
-        if proj.token_spent + cost > proj.token_budget_total:
-            print(f"  ⚠ 预算将超支!", file=sys.stderr)
+        print(f"  本项目今日已花费: ${spent:.4f}"
+              + ("  （有模型未配置单价，实际更高）" if has_unpriced else ""))
+        print(f"  项目预算: ${proj.token_budget_total:.2f}")
+        if spent > proj.token_budget_total:
+            # 只陈述已发生的事实，不做"将超支"的预测（那是没有依据的）
+            print(f"  ⚠ 今日花费已超过项目预算", file=sys.stderr)
         print(f"\n  确认执行? 加上 --yes 跳过此提示")
         return 1
 
@@ -184,21 +191,36 @@ def _phase_agent_level(phase: Phase) -> str:
     }.get(phase, "-")
 
 
-def _phase_cost_estimate(phase: Phase, proj) -> float:
-    """估算 phase 的费用 ($)。返回 0 表示免费。"""
-    rates = {
-        Phase.RESEARCHING: 0.02,   # 廉价层 DeepSeek/GLM 廉价
-        Phase.PLANNING: 2.50,      # 强力层 Opus/GPT 架构
-        Phase.REVIEWING: 1.00,     # 强力层审查(需推理能力出优化方案)
-    }
-    # 如果已有产出，跳过不重复收费
+def _phase_will_run(phase: Phase, proj) -> bool:
+    """该 phase 这次是否真的会调 agent。
+
+    取代原先的 `_phase_cost_estimate(phase, proj) > 0` —— 那张写死的价目表
+    （调研 $0.02 / 架构 $2.50 / 审查 $1.00）是编的，但它顺带充当了"这个阶段要不要干活"
+    的判断。这里保留判断、去掉假金额：调 agent 的层级不是 "-" 且产出尚不存在。
+    """
     if phase == Phase.RESEARCHING and proj.research_report:
-        return 0
+        return False   # 已有产出，不重复跑
     if phase == Phase.PLANNING and proj.architecture:
-        return 0
+        return False
     if phase == Phase.REVIEWING and proj.issues:
-        return 0
-    return rates.get(phase, 0)
+        return False
+    return _phase_agent_level(phase) != "-"
+
+
+def _project_today_cost(project_id: str) -> tuple[float, bool]:
+    """该项目**今日**的真实花费，以及是否存在未配置单价的模型。
+
+    注意是"今日"不是"累计"：`proj.token_spent` 那个字段全仓无人赋值、恒为 0，
+    真正的累计需要新的持久化，属另一个改动。这里只报有据可查的那个数。
+    """
+    from ._token_budget import get_usage_stats
+    try:
+        stats = get_usage_stats()
+    except Exception:
+        return 0.0, False
+    cost = next((r.get("cost", 0.0) for r in stats.get("by_project", [])
+                 if r.get("project_id") == project_id), 0.0)
+    return cost, bool(stats.get("unpriced_models"))
 
 
 def _cmd_project_reject(project_id: str) -> int:

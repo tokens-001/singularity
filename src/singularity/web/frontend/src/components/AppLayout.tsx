@@ -5,12 +5,14 @@ import { useSSE, useSSEConnected } from '../lib/useSSE'
 import { useToast } from '../lib/toast'
 import { getPinned } from '../lib/pinned'
 import { api } from '../lib/api'
-import { MessageSquare, List, Settings, Boxes } from 'lucide-react'
+import { fmtCost, isUnpriced } from '../lib/money'
+import { MessageSquare, List, Settings, Boxes, Activity } from 'lucide-react'
 
 const NAV = [
   { path: '/', label: '对话', icon: MessageSquare },
   { path: '/projects', label: '项目', icon: Boxes },
   { path: '/tasks', label: '任务', icon: List },
+  { path: '/usage', label: '用量', icon: Activity },
   { path: '/config', label: '配置', icon: Settings },
 ]
 
@@ -37,7 +39,9 @@ export default function AppLayout() {
   const addToast = useToast()
   const sidebarWidth = sidebarCollapsed ? 0 : 260
   const [usage, setUsage] = useState<any>({})
-  const [showModels, setShowModels] = useState(false)
+  // 按模型那几行**默认展开**。折叠着的时候侧边栏只有一行"今日 N tokens"，
+  // 看着跟"总量统计"没区别 —— 而用户要的正是按模型看谁在吃预算。
+  const [showModels, setShowModels] = useState(true)
   const [loopRunning, setLoopRunning] = useState(false)
   const [conflicts, setConflicts] = useState<any[]>([])
 
@@ -76,6 +80,8 @@ export default function AppLayout() {
   // 旧后端不返 by_model（字段缺失 → null）时整行不可点、不显示箭头，
   // 免得箭头承诺了却展开出空
   const models: any[] = Array.isArray(usage?.by_model) ? usage.by_model : []
+  // 今天用过但没配单价的模型 → 上面的总额只是下限，要标出来
+  const unpriced: string[] = Array.isArray(usage?.unpriced_models) ? usage.unpriced_models : []
 
   const selectProject = (pid: string) => { setActiveProject(pid); navigate('/') }
 
@@ -150,13 +156,24 @@ export default function AppLayout() {
             title={models.length ? '点开：今日各模型用量占比' : undefined}
             style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, cursor: models.length ? 'pointer' : 'default' }}>
             <span style={{ color: '#6b6b68' }}>今日 {fmtTokens(usage?.daily_tokens)} tokens{models.length ? (showModels ? ' ▾' : ' ▸') : ''}</span>
-            <span style={{ color: '#6b6b68' }}>${(usage?.daily_cost || 0).toFixed(2)}</span>
+            {/* 有模型没配单价时 daily_cost 只是下限 —— 加 "+" 并说明，别让人以为这就是全部 */}
+            <span style={{ color: unpriced.length ? '#d97706' : '#6b6b68' }}
+              title={unpriced.length ? `以下模型未配置单价，未计入：${unpriced.join('、')}` : undefined}>
+              {fmtCost(usage?.daily_cost)}{unpriced.length ? '+' : ''}
+            </span>
           </div>
           {showModels && models.slice(0, 8).map((m: any) => (
             <div key={m.model} style={{ display: 'flex', gap: 6, fontSize: 10, color: '#9a9993' }}>
               <span className="truncate" style={{ flex: 1 }} title={m.model}>{m.model}</span>
               <span style={{ color: '#6b6b68' }}>{((m.share || 0) * 100).toFixed(0)}%</span>
-              <span style={{ minWidth: 34, textAlign: 'right' }}>${(m.cost || 0).toFixed(2)}</span>
+              <span className="truncate" style={{ minWidth: 54, textAlign: 'right', whiteSpace: 'nowrap' }}
+                title={m.cost === null || m.cost === undefined ? '未配置单价，无法计算费用' : undefined}
+                onClick={() => { if (isUnpriced(m.cost)) navigate('/config') }}
+                role={isUnpriced(m.cost) ? 'button' : undefined}>
+                {isUnpriced(m.cost)
+                  ? <span style={{ color: '#d97706' }}>未配置价格</span>
+                  : fmtCost(m.cost)}
+              </span>
             </div>
           ))}
           {/* 截断了就说出来 —— 否则看着像"就这几个模型在用" */}

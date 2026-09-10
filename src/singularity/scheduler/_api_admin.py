@@ -150,16 +150,19 @@ def models_import(models: list[dict], auto_assign: bool = False):
 
 
 def model_list():
-    from . import model_registry, api_store
+    from . import model_registry, api_store, model_prices
     from . import dispatcher as disp_mod
     # 前端模型目录只显示扫描导入的模型(models_custom); 内置能力快照(models.toml)只供调度/扫描填能力, 不出现在目录
     custom_ids = set(model_registry._load_custom().keys())
     models = {mid: m for mid, m in model_registry.load_models().items() if mid in custom_ids}
     custom = disp_mod._load_custom_agents()
     disabled_by_tier = custom.get("_disabled", {})
+    prices = model_prices.load_prices()   # 循环外读一次
     return {mid: {"id": m.id, "provider": m.provider, "display": m.display,
         "recommended_for": m.recommended_for, "speed": m.speed, "cost": m.cost, "rating": m.rating,
         "reasoning": m.reasoning, "max_turns": m.max_turns, "strengths": m.strengths,
+        # None = 未配置单价。前端据此显示"未配置价格"，**不要**在别处补默认值。
+        "price_per_m": prices.get(mid),
         "notes": m.notes, "api_available": api_store.is_available(m.provider),
         "disabled_in": [t for t in m.recommended_for if mid in disabled_by_tier.get(t, [])]} for mid, m in models.items()}, 200
 
@@ -212,6 +215,36 @@ def model_update(model_id, data):
     )
     return {"ok": True, "model_id": model_id,
             "updated": {"recommended_for": sorted(new_rf)}}, 200
+
+
+def model_price_set(model_id, data):
+    """PUT /api/model-price/<id> — 设置/清除模型单价 (USD / 百万 token，混合价)。
+
+    **这里做校验**，不要照抄 `model_update`（PUT /api/models/<id> 那条路径零校验）：
+    一个 NaN 单价会让整张用量表变成 NaN，负数会凭空抵消真实花费，
+    而"价格没配好"在界面上表现为一个看着正常的错误数字 —— 正是本次要消灭的东西。
+
+    `null` / 空串 = 清除（回到"未配置价格"），不是设成 0。
+    """
+    import math
+    from . import model_prices
+    if not model_id or not str(model_id).strip():
+        return {"error": "缺模型 id"}, 400
+    raw = (data or {}).get("price_per_m")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        model_prices.set_price(model_id, None)
+        return {"ok": True, "model_id": model_id, "price_per_m": None}, 200
+    try:
+        price = float(raw)
+    except (TypeError, ValueError):
+        return {"error": f"单价必须是数字，收到 {raw!r}"}, 400
+    if not math.isfinite(price):
+        return {"error": "单价必须是有限数字"}, 400
+    if price < 0 or price > 1000:
+        return {"error": "单价需在 0 ~ 1000 之间 (USD/百万 token)"}, 400
+    model_prices.set_price(model_id, price)
+    # price 为 0 时 set_price 会删键（0 = 未配置，不是免费），如实回 None
+    return {"ok": True, "model_id": model_id, "price_per_m": price or None}, 200
 
 
 def model_benchmark(model_id):

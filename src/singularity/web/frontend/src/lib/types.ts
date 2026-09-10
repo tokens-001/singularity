@@ -4,6 +4,8 @@ export interface ModelInfo {
   id: string; display?: string; provider?: string; cost?: string; speed?: string
   rating?: string; api_available?: boolean; recommended_for?: string[]
   strengths?: string[]; notes?: string; max_turns?: number; reasoning?: boolean
+  /** 单价 (USD / 百万 token，混合价)。**null = 未配置**，别当 0 用。 */
+  price_per_m?: number | null
 }
 
 export interface ApiStoreItem {

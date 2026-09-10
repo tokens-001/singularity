@@ -234,26 +234,40 @@ def project_start(project_id: str, push_event=None) -> tuple[dict, int]:
 
 
 def project_cost(project_id: str) -> tuple[dict, int]:
-    """GET /api/projects/<id>/cost"""
+    """GET /api/projects/<id>/cost — 该项目**今日**的真实花费。
+
+    原来这里返回的是"即将进入的阶段预计花多少"，来自一张写死的价目表
+    （调研 $0.02 / 架构 $2.50 / 审查 $1.00）—— 编的，和 _cli_projects 里那张是同一份。
+    各模型单价差几十倍、又不知道这次会落到哪个模型上，向前预估没有依据，所以不再做。
+    改为报**已发生**的真实数字；`unpriced_models` 非空时 cost 是下限。
+    """
     from . import project as proj_mod
     from .project import Phase
     from .workflow import _needs_research
     p = proj_mod.load(project_id)
     if p is None:
         return {"error": "项目不存在"}, 404
-    cost_rates = {Phase.RESEARCHING: 0.02, Phase.PLANNING: 2.50, Phase.REVIEWING: 1.00}
+
+    from ._token_budget import get_usage_stats
+    try:
+        stats = get_usage_stats()
+    except Exception:
+        stats = {}
+    cost = next((r.get("cost", 0.0) for r in stats.get("by_project", [])
+                 if r.get("project_id") == project_id), 0.0)
+
+    # 下一步会调哪一档 agent —— 这个不是编的，照实说
     phase_levels = {Phase.RESEARCHING: "any", Phase.PLANNING: "any", Phase.REVIEWING: "any"}
     phase = p.phase
-    cost = 0
     level = "-"
     if phase == Phase.TEMPLATE:
         if _needs_research(p):
-            cost = cost_rates.get(Phase.RESEARCHING, 0)
             level = phase_levels.get(Phase.RESEARCHING, "-")
-    elif phase in cost_rates:
-        cost = cost_rates[phase]
-        level = phase_levels[phase]
-    return {"cost": round(cost, 2), "phase": phase.value, "level": level,
+    else:
+        level = phase_levels.get(phase, "-")
+
+    return {"cost": round(cost, 6), "phase": phase.value, "level": level,
+            "unpriced_models": stats.get("unpriced_models", []),
             "token_budget_total": p.token_budget_total or 0,
             "token_spent": p.token_spent}, 200
 

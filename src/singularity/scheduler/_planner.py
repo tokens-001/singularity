@@ -40,7 +40,7 @@ def _materialize_in_main(batch: BatchOutput, parent_task) -> None:
             from singularity.scheduler._types import _pending_sse_events
             _pending_sse_events.append({"kind": "token_estimate", "msg": (
                 f"[{parent_task.id[:8]}] 方案: {est['task_count']}个子任务, "
-                f"预估 ~{est['total_tokens']:,} tokens (${est['est_cost_usd']:.2f}), "
+                f"预估 ~{est['total_tokens']:,} tokens, "
                 f"拆分: " + ", ".join(f"{k}×{v['tokens']:,}" for k,v in est['level_breakdown'].items())
             ), "ts": time.time(), "task_id": parent_task.id, "estimate": est})
         except Exception as _e:
@@ -131,18 +131,20 @@ def materialize_plan(parent_id: str, subtasks: list[dict]) -> list[str]:
 
 
 def estimate_tokens(subtasks: list[dict], parent_desc: str = "") -> dict:
-    """估算子任务 token 消耗和费用。
+    """估算子任务的 token 消耗（**不含费用**）。
 
     返回前端可消费的格式:
-      {total_tokens, est_cost_usd, task_count, per_task: [{desc, level, tokens, cost}],
-       level_breakdown: {E: {tokens,cost}, ...}, parent_tokens}
+      {total_tokens, task_count, per_task: [{desc, level, tokens}],
+       level_breakdown: {level: {tokens}}, parent_tokens}
     """
     # 估算参数
     TOKENS_PER_CHAR = 0.6          # 中英混合平均
     OVERHEAD = {"any": 2000}       # 每任务固定开销 (两档后统一 any; 未知 level 走默认 2000)
-    COST_PER_M = {"any": 0.30}  # $/M tokens; 旧 E/E+/D 回退到 default=0.30
     RESPONSE_MULTIPLIER = 2.0      # prompt + completion + retry buffer
 
+    # 只估 token，**不估钱**。这里根本不知道子任务会落到哪个模型上，
+    # 而各模型单价差几十倍 —— 任何"均价"都是编的（原来是 `total/1e6*0.5`，
+    # 注释自认"混合均价 ~$0.5/M"）。真实的钱在 _token_budget 用实际单价算。
     total = 0
     per_task = []
     breakdown = {}
@@ -152,23 +154,20 @@ def estimate_tokens(subtasks: list[dict], parent_desc: str = "") -> dict:
         chars = len(desc)
         tokens = int(chars * TOKENS_PER_CHAR + OVERHEAD.get(level, 2000))
         tokens = int(tokens * RESPONSE_MULTIPLIER)
-        cost = tokens / 1_000_000 * COST_PER_M.get(level, 0.15)
         total += tokens
-        per_task.append({"desc": desc[:80], "level": level, "tokens": tokens, "cost": round(cost, 4)})
+        per_task.append({"desc": desc[:80], "level": level, "tokens": tokens})
         if level not in breakdown:
-            breakdown[level] = {"tokens": 0, "cost": 0.0}
+            breakdown[level] = {"tokens": 0}
         breakdown[level]["tokens"] += tokens
-        breakdown[level]["cost"] += cost
 
     # 父任务 tokens (调度开销)
     parent_tokens = int(len(parent_desc) * TOKENS_PER_CHAR * RESPONSE_MULTIPLIER) if parent_desc else 0
 
     return {
         "total_tokens": total,
-        "est_cost_usd": round(total / 1_000_000 * 0.5, 4),  # 混合均价 ~$0.5/M
         "task_count": len(subtasks),
         "per_task": per_task,
-        "level_breakdown": {k: {"tokens": v["tokens"], "cost": round(v["cost"], 4)} for k, v in breakdown.items()},
+        "level_breakdown": {k: {"tokens": v["tokens"]} for k, v in breakdown.items()},
         "parent_tokens": parent_tokens,
     }
 

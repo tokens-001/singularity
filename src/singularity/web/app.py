@@ -1613,6 +1613,16 @@ def api_models_benchmark(model_id):
     result, code = _api_handler.model_benchmark(model_id)
     return jsonify(result), code
 
+@app.route("/api/model-price/<model_id>", methods=["PUT"])
+def api_model_price_set(model_id):
+    """单价单独一条路径：它存 model_prices.json，不走 ModelEntry。
+
+    分开是为了让「跑基准」「扫描导入」这类会整行重建模型的操作擦不掉用户手填的价。
+    """
+    data = request.get_json(silent=True) or {}
+    result, code = _api_handler.model_price_set(model_id, data)
+    return jsonify(result), code
+
 # ═══════════════════════════════════════════════════════════
 # Skill 管理
 # ═══════════════════════════════════════════════════════════

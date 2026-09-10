@@ -96,3 +96,27 @@ if __name__ == "__main__":
     # 键名是 omega/delta/gamma（Dilworth 反链 / 关键路径 / 耦合密度），不是老的 total_tasks
     assert "omega" in dag and "delta" in dag, f"dag_metrics 键名变了: {sorted(dag)}"
     print(f"✅ dag_metrics self-check: nodes={dag['node_count']} omega={dag['omega']} delta={dag['delta']}")
+
+
+class TestEstimateNoMoney:
+    """estimate_tokens 只估 token，**不估钱**。
+
+    2026-09-11 前它会返回 `est_cost_usd = total/1e6*0.5`（注释自认"混合均价 ~$0.5/M"）
+    以及 per_task/level_breakdown 里的 cost —— 全是拍的数。这里没给子任务指定模型，
+    各模型单价差几十倍，任何"均价"都是编的，所以整个删掉了。
+    """
+
+    def test_no_money_in_estimate(self):
+        from singularity.scheduler._planner import estimate_tokens
+        est = estimate_tokens(
+            [{"desc": "写登录", "phase_hint": "any"}, {"desc": "写测试", "phase_hint": "any"}],
+            "给系统加登录",
+        )
+        assert "est_cost_usd" not in est, "不能再有编造的预估费用"
+        for t in est["per_task"]:
+            assert "cost" not in t, "per_task 不该带 cost"
+        for v in est["level_breakdown"].values():
+            assert "cost" not in v, "level_breakdown 不该带 cost"
+        # token 估算本身还得在
+        assert est["total_tokens"] > 0
+        assert est["task_count"] == 2

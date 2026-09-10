@@ -259,7 +259,7 @@ class TaskRunner:
                                 _pending_sse_events.append({
                                     "kind": "token_estimate", "msg": (
                                         f"[{task.id[:8]}] 自动拆分: {est['task_count']}个子任务, "
-                                        f"预估 ~{est['total_tokens']:,} tokens (${est['est_cost_usd']:.2f})"
+                                        f"预估 ~{est['total_tokens']:,} tokens"
                                     ), "ts": time.time(), "task_id": task.id, "estimate": est,
                                 })
                             except Exception as _e:

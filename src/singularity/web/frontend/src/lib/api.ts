@@ -62,6 +62,10 @@ export const api = {
   deleteModel: (id: string) => request(`/api/models/${id}`,{method:'DELETE'}),
   importModels: (data: any) => request('/api/models/import',{method:'POST',body:JSON.stringify(data)}),
   benchmarkModel: (id: string) => request(`/api/models/${id}/benchmark`,{method:'POST'}),
+  // 单价走独立端点：它存 model_prices.json，不写 ModelEntry —— 这样「跑基准」
+  // 「扫描导入」这些会整行重建模型的操作擦不掉用户手填的价。null = 清除。
+  setModelPrice: (id: string, price: number | null) =>
+    request(`/api/model-price/${id}`,{method:'PUT',body:JSON.stringify({price_per_m: price})}),
 
   apiStore: async () => { const d = await request<any>('/api/api-store'); return Object.values(d||{}) as any[] },
   addApiStore: (data: any) => request('/api/api-store',{method:'POST',body:JSON.stringify(data)}),
