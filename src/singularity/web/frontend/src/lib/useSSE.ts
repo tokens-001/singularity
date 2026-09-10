@@ -24,7 +24,12 @@ function _setConnected(v: boolean) {
 }
 
 function _ensureEs(): EventSource {
-  if (_es) return _es
+  // CLOSED 的 EventSource 不会自愈：拿到非 2xx（比如撞上后端 20 连接上限的 503）
+  // 或服务重启后，浏览器就放弃重连了。而这里原来只判 `if (_es) return _es` ——
+  // 一条死连接被所有页面共享，_connected 恒 false，静默退化成 10s 轮询，
+  // 用户只会觉得"数据变慢了"，看不出是连接死了。
+  if (_es && _es.readyState !== EventSource.CLOSED) return _es
+  if (_es) { try { _es.close() } catch {} }
   _es = new EventSource('/api/events')
   _es.onopen = () => _setConnected(true)
   _es.onmessage = (e) => {

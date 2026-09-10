@@ -25,9 +25,13 @@ export default function Tasks() {
   const modal = useModal()
   const run = useRun()
 
-  const fetch = useCallback(() => {
-    setLoading(true)
-    api.tasks().then(setTasks).catch(() => toast('加载任务失败', 'error')).finally(() => setLoading(false))
+  // initial=true 才亮骨架屏。SSE / 轮询驱动的刷新走 initial=false ——
+  // 原来每次刷新都 setLoading(true)，任务跑的时候每几百毫秒整张表被换成 5 条灰条
+  // 再换回来，根本没法稳定读或点。
+  const fetch = useCallback((initial = false) => {
+    if (initial) setLoading(true)
+    api.tasks().then(setTasks).catch(() => toast('加载任务失败', 'error'))
+      .finally(() => { if (initial) setLoading(false) })
     api.projects().then((ps: any[]) => {
       const m: Record<string,string> = {}
       ps.forEach((p: any) => { if (p.id) m[p.id] = p.name || p.id })
@@ -35,12 +39,12 @@ export default function Tasks() {
     }).catch(() => {})
     api.dagMetrics().then(setDag).catch(() => {})   // 图结构指标，拿不到就不显示
   }, [])
-  useEffect(() => { fetch() }, [fetch])
+  useEffect(() => { fetch(true) }, [fetch])
   const sseAlive = useSSEConnected()
-  useSSE(() => { fetch() }, { kinds: ['task', 'tool:start', 'tool:done', 'system'], debounceMs: 400 })
+  useSSE(() => { fetch(false) }, { kinds: ['task', 'tool:start', 'tool:done', 'system'], debounceMs: 400 })
   useEffect(() => {
     if (sseAlive) return   // SSE 活着 → 事件驱动；断了才退回轮询
-    const t = setInterval(fetch, 10000); return () => clearInterval(t)
+    const t = setInterval(() => fetch(false), 10000); return () => clearInterval(t)
   }, [fetch, sseAlive])
 
   const create = async () => {
@@ -92,7 +96,7 @@ export default function Tasks() {
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索..." aria-label="搜索任务" className="search-input"/>
         </div>
         <span className="flex-1"/>
-        <button onClick={fetch} className="btn-icon" aria-label="刷新"><RefreshCw size={14}/></button>
+        <button onClick={() => fetch(true)} className="btn-icon" aria-label="刷新"><RefreshCw size={14}/></button>
         <button onClick={() => setShowCreate(!showCreate)} className="btn-white"><Plus size={12}/> 新建</button>
       </div>
 

@@ -35,7 +35,9 @@ export default function Chat() {
   const toast = useToast()
 
   useEffect(() => {
-    useAppStore.getState().clearConversation('_default')
+    // 这里原来每次挂载都 clearConversation('_default') —— 而 Chat 是路由页，
+    // 离开对话页再回来就把通用会话（没绑项目时的聊天）整段删了，
+    // 且 store 持久化到 localStorage，刷新也找不回。没有任何"必须重置"的理由。
     fetchProjects(); fetchStatus()
   }, [])
 
@@ -83,7 +85,11 @@ export default function Chat() {
               const verdict = d?.verdict || ''
               traceCache.current.set(x.id, { files, verdict })
               setTasks(prev => prev.map(t => t.id === x.id ? { ...t, files, verdict } : t))
-            }).catch(() => {})
+            }).catch(() => {
+              // 失败要把占位删掉。原来留着空占位，而上面 `!traceCache.current.has(id)`
+              // 是唯一的重试闸门 → 一次瞬时失败 = 这个任务的产物**终生不再拉取**。
+              traceCache.current.delete(x.id)
+            })
           }
         })
       }
@@ -135,18 +141,24 @@ export default function Chat() {
 
   const send = async (text?: string) => {
     const q = (text ?? input).trim(); if (!q || loading) return
-    addChatMsg({role:'user',content:q,ts:Date.now()}); setInput(''); setLoading(true)
+    setInput(''); setLoading(true)
     stickBottom.current = true
 
-    if (activePid === '_default') {
+    // 先把项目定下来、**再**插消息。
+    // 原来顺序反了：先 addChatMsg 落到 '_default'，随后 setActiveProject 切到新项目，
+    // 渲染读的是 conversations[新id] → 用户自己那条消息当场从屏幕上消失。
+    // （addChatMsg 取 store 的 activeProjectId，setActiveProject 是同步写，顺序能保证落对会话。）
+    let pid = activePid
+    if (pid === '_default') {
       try {
         const r: any = await api.createProject({name: q.slice(0, 30), description: q, template: 'product_dev'})
-        if (r?.project?.id) { setActiveProject(r.project.id); await fetchProjects() }
+        if (r?.project?.id) { pid = r.project.id; setActiveProject(pid); await fetchProjects() }
       } catch { toast('创建项目失败', 'error') }
     }
+    addChatMsg({role:'user',content:q,ts:Date.now()})
 
     try {
-      const r = await api.observerChat(q, execMode, activePid !== '_default' ? activePid : '')
+      const r = await api.observerChat(q, execMode, pid !== '_default' ? pid : '')
       if (r.client_id) { pendingCid.current = r.client_id }
       else if (r.answer) { addChatMsg({role:'assistant',content:r.answer,ts:Date.now()}); setLoading(false) }
     } catch { addChatMsg({role:'assistant',content:'请求失败，请确认后端服务在运行。',ts:Date.now()}); setLoading(false) }
