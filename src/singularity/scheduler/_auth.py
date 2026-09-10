@@ -92,7 +92,7 @@ class AuthStore:
                 if needs_migrate:
                     self._save()
             except Exception as e:
-                witness.heartbeat('_auth', f'warn:{e}')
+                witness.warn('_auth', f'{e}')
 
     def _save(self):
         config.QIDIAN_DIR.mkdir(parents=True, exist_ok=True)

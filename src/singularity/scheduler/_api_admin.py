@@ -46,7 +46,9 @@ def agent_list() -> tuple[dict, int]:
             result[level].append({"model": c.get("model", ""), "type": c.get("type", ""),
                 "roles": c.get("roles", []), "max_turns": c.get("max_turns", 0),
                 "entry": c.get("entry", ""), "api_key_env": c.get("api_key_env", ""),
-                "default": c.get("default", False), "mode": c.get("mode", ""), "sandbox": c.get("sandbox", "")})
+                "default": c.get("default", False), "mode": c.get("mode", ""), "sandbox": c.get("sandbox", ""),
+                # 前端要用它回显思考强度（request_template 其余键前端不关心）
+                "request_template": c.get("request_template", {})})
     result["_order"] = order_map
     result["_disabled"] = custom.get("_disabled", {}) or {}
     return result, 200
@@ -143,7 +145,7 @@ def models_import(models: list[dict], auto_assign: bool = False):
                     logging.getLogger(__name__).warning("agent add during import failed: %s", _e)
         except Exception as e:
             errors.append(f"{m.get('id', '?')}: {e}")
-            witness.heartbeat('_api', f'warn:{e}'[:80])
+            witness.warn('_api', f'{e}'[:80])
     return {"ok": True, "imported": imported, "errors": errors}, 200
 
 
@@ -409,11 +411,12 @@ def status_overview():
     try:
         for level, cfgs in disp_mod.load_agents().items():
             agents[level] = [{"model": c.get("model",""), "roles": c.get("roles",[])} for c in cfgs]
-    except Exception as e: witness.heartbeat('_api', f'warn:{e}')
+    except Exception as e: witness.warn('_api', f'{e}')
     return {"counts": counts, "heartbeat_levels": loads, "running_total": sum(loads.values()),
         "avg_wait": f"{sum(pw)/len(pw):.1f}s" if pw else "--",
         "avg_done": f"{sum(dd)/len(dd):.1f}s" if dd else "--",
         "token_totals": tt, "stalled": stalled, "agents": agents,
+        "alerts": witness.read_alerts(limit=20),  # 最近告警，新→旧
         "workdir": str(proj_mod.get_projects_root())}, 200
 
 

@@ -39,14 +39,14 @@ def _list_all_tasks() -> list[dict]:
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
             data["_filename"] = f.stem; result.append(data)
-        except Exception as e: witness.heartbeat('_api', f'warn:{e}')
+        except Exception as e: witness.warn('_api', f'{e}')
     return result
 
 
 def _read_task_file(path: Path) -> Optional[dict]:
     try: return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        try: witness.heartbeat('_api', 'warn:read_task_file')
+        try: witness.warn('_api', 'read_task_file')
         except Exception as _e:
             logging.getLogger(__name__).warning("task file read failed: %s", _e)
         return None
@@ -228,7 +228,7 @@ def task_timeline(task_id: str) -> tuple[dict, int]:
                 },
             })
         except Exception as e:
-            witness.heartbeat('_api', f'warn:{e}')
+            witness.warn('_api', f'{e}')
     return {"task_id": task_id, "current_status": status, "timeline": timeline}, 200
 
 
@@ -350,7 +350,7 @@ def task_delete(task_id: str) -> tuple[dict, int]:
                 p.unlink()
                 deleted += 1
         except Exception as e:
-            witness.heartbeat('_api', f'warn:del:{e}')
+            witness.warn('_api', f'del:{e}')
     for d in (tracker.tasks_dir(), config.CANCEL_DIR, config.PAUSE_DIR,
               config.PARKED_DIR, config.HOLD_DIR):
         _rm(d / f"{task_id}.json")
@@ -368,7 +368,7 @@ def task_delete(task_id: str) -> tuple[dict, int]:
                     tracker.set_children(p.stem, [c for c in parent.children if c != task_id])
             except Exception as e:
                 # 静默 = 父任务里残留已删子任务的 id，之后查依赖关系会撞鬼
-                witness.heartbeat('_api', f'warn:orphan_child:{p.stem}:{e}'[:80])
+                witness.warn('_api', f'orphan_child:{p.stem}:{e}'[:80])
         if getattr(task, 'project_id', ''):
             try:
                 from . import project as proj_mod
@@ -377,7 +377,7 @@ def task_delete(task_id: str) -> tuple[dict, int]:
                     proj.task_ids = [t for t in proj.task_ids if t != task_id]
                     proj_mod.save(proj)
             except Exception as e:
-                witness.heartbeat('_api', f'warn:orphan_project_task:{task.project_id}:{e}'[:80])
+                witness.warn('_api', f'orphan_project_task:{task.project_id}:{e}'[:80])
 
     if deleted:
         return {"ok": True, "message": f"已删除 {deleted} 个文件"}, 200

@@ -14,6 +14,7 @@ export interface ApiStoreItem {
 export interface AgentItem {
   model: string; type?: string; entry?: string; api_key_env?: string
   max_turns?: number; default?: boolean; roles?: string[]; sandbox?: string
+  request_template?: { reasoning_effort?: string; [k: string]: any }
 }
 
 export interface AgentsData {

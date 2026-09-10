@@ -38,6 +38,7 @@ def _tool_get_system_status() -> dict[str, Any]:
         "avg_done_duration_sec": round(sum(done_durations) / len(done_durations), 1) if done_durations else 0,
         "token_totals": token_totals,
         "stalled_task_ids": stalled,
+        "recent_alerts": witness.read_alerts(limit=20),  # 最近告警，新→旧
     }
 
 
@@ -203,7 +204,7 @@ def _tool_list_projects() -> list[dict]:
 
 _TOOL_REGISTRY: list[dict] = [
     # {name, description, handler, params: {param_name: {type, description, required?}}}
-    {"name": "get_system_status", "description": "获取系统整体状态：任务计数、运行负载、平均等待/完成时间、token消耗、停滞任务列表。",
+    {"name": "get_system_status", "description": "获取系统整体状态：任务计数、运行负载、平均等待/完成时间、token消耗、停滞任务列表、最近告警。",
      "handler": _tool_get_system_status, "params": {}},
     {"name": "list_tasks", "description": "列出任务，可按状态过滤，默认按更新时间倒序。",
      "handler": _tool_list_tasks, "params": {

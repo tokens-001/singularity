@@ -321,7 +321,7 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
     except Exception as e:
         # S6: 不再静默吞错 — 记录并通知, 避免项目卡死无反馈
         try:
-            witness.heartbeat('orch', f'warn:auto_trigger:{e}')
+            witness.warn('orch', f'auto_trigger:{e}')
         except Exception:
             pass
 
@@ -372,7 +372,7 @@ def _decompose_and_create_tasks(proj, agents: dict) -> None:
         })
     except Exception as e:
         try:
-            witness.heartbeat('orch', f'warn:decompose:{e}')
+            witness.warn('orch', f'decompose:{e}')
         except Exception:
             pass
 
@@ -432,7 +432,7 @@ def _run_integration_merge_async(project_id: str, agents: dict) -> None:
                 })
     except Exception as e:
         try:
-            witness.heartbeat('orch', f'warn:integrate_async:{e}')
+            witness.warn('orch', f'integrate_async:{e}')
             _pending_sse_events.append({
                 "kind": "system", "msg": f"集成合并异常: {e}",
                 "ts": time.time(), "task_id": project_id,

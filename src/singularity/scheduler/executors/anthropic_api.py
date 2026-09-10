@@ -34,8 +34,9 @@ class AnthropicApiExecutor(BaseExecutor):
                                   error_kind="exec")
 
         base_url = self.cfg.get("entry", ANTHROPIC_BASE_URL)
-        model = self.cfg.get("request_template", {}).get("model") or self.cfg.get("model", "claude-sonnet-4-6")
-        max_tokens = self.cfg.get("request_template", {}).get("max_tokens", 4096)
+        tmpl = self.cfg.get("request_template", {})
+        model = tmpl.get("model") or self.cfg.get("model", "claude-sonnet-4-6")
+        max_tokens = tmpl.get("max_tokens", 4096)
         max_turns = self.cfg.get("max_turns", 10)
 
         import httpx
@@ -75,6 +76,10 @@ class AnthropicApiExecutor(BaseExecutor):
             }
             if anthropic_tools:
                 body["tools"] = anthropic_tools
+            if "thinking" in tmpl:
+                # 只透传不判语义：Claude 是 {type:"enabled", budget_tokens:N}，
+                # 与 OpenAI 系的 {type:"disabled"} 形状不同，由配置自己写对
+                body["thinking"] = tmpl["thinking"]
 
             try:
                 resp = httpx.post(

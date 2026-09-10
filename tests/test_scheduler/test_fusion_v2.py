@@ -63,6 +63,21 @@ def _finalize_prompt(calls):
     return next(p for m, p in calls if "架构定稿人" in p)
 
 
+def test_finalize_prompt_carries_original_plans(monkeypatch):
+    """定稿人必须拿到成员原稿。
+
+    只看「提取员转述」出来的共识/分歧结论，定稿人会凭空丢字段 —— tasks/risks
+    就这么整段丢过（提取员没提，它就真不写）。转述漏的东西定稿人补不回来，
+    因为它根本没看过原稿。
+    """
+    calls = []
+    _stub(monkeypatch, calls=calls)
+    ej.fuse_architecture_v2("需求", PLANS)
+    final = _finalize_prompt(calls)
+    assert "方案A全文" in final
+    assert "方案B全文" in final
+
+
 # ── 裁决规则 ──────────────────────────────────────────────
 
 def test_first_speaker_picks_most_disagreements(monkeypatch):
@@ -217,7 +232,7 @@ def _fake_stream(monkeypatch, result):
     monkeypatch.setattr(ej, "_resolve_api", lambda m: ("X_KEY", "https://x/v1"))
     monkeypatch.setenv("X_KEY", "k")
     warns = []
-    monkeypatch.setattr(ej.witness, "heartbeat", lambda *a, **k: warns.append(a))
+    monkeypatch.setattr(ej.witness, "warn", lambda *a, **k: warns.append(a))
     monkeypatch.setattr(ej, "_stream_once", lambda *a, **k: result)
     return warns
 
@@ -238,7 +253,7 @@ def test_call_model_truly_empty_still_warns(monkeypatch):
 def test_confirm_empty_is_warned(monkeypatch):
     """确认步骤空返回不能静默通过（实测 glm-5.2 返回 0 字）。"""
     warns = []
-    monkeypatch.setattr(ej.witness, "heartbeat", lambda *a, **k: warns.append(a))
+    monkeypatch.setattr(ej.witness, "warn", lambda *a, **k: warns.append(a))
 
     def fake(prompt, model, max_tokens=2000):
         if "架构委员会秘书" in prompt:

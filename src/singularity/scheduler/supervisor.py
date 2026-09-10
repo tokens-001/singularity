@@ -144,7 +144,7 @@ def qa_context(task) -> tuple[list, list]:
                             checklist.append(acc)
     except Exception as e:
         from singularity.scheduler import witness
-        witness.heartbeat('supervisor', f'warn:qa_context:{e}')
+        witness.warn('supervisor', f'qa_context:{e}')
     return constraints, checklist
 
 

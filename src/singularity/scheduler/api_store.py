@@ -105,9 +105,9 @@ def _seed() -> dict[str, APIEntry]:
     except Exception as e:
         try:
             from . import witness
-            witness.heartbeat("api_store", f"warn:discovery:{e}"[:80])
+            witness.warn("api_store", f"discovery:{e}"[:80])
         except Exception as e:
-            witness.heartbeat('api_store', f'warn:{e}')
+            witness.warn('api_store', f'{e}')
         pass
 
     # 补充已知但 agents.toml 里没配的 (如 Anthropic via Claude CLI)
@@ -238,6 +238,36 @@ def is_available(api_id: str) -> bool:
     if not entry or entry.status != "active":
         return False
     return bool(os.environ.get(entry.api_key_env, ""))
+
+
+# 余额不足的特征。各厂商标法不一：DeepSeek/Kimi 是 402 + "Insufficient Balance"，
+# 智谱是 400 带 1113 / "余额不足"，OpenAI 用 "insufficient_quota"。
+_QUOTA_HINTS = ("insufficient balance", "insufficient_quota", "exceeded_current_quota",
+                "quota exceeded", "余额不足", "欠费", "arrears", "please recharge")
+
+
+def note_api_error(model: str, status_code: int, body: str = "") -> str:
+    """模型调用失败时调一次。命中余额特征 → 标记 provider 为 quota_exhausted + 告警。
+
+    返回命中的 api_id（没命中返回 ""）。意义：欠费不再只是"委员会静默少一席"——
+    标成 quota_exhausted 后 is_available 会跳过它，下一轮调度不再撞同一堵墙。
+    """
+    low = (body or "").lower()
+    if status_code != 402 and not any(h in low for h in _QUOTA_HINTS):
+        return ""
+    try:
+        from singularity.scheduler import model_registry as mr
+        api_id = mr.provider_for_model(model)
+    except Exception:
+        api_id = ""
+    witness.warn("api_store",
+                 f"quota_exhausted:{api_id or model}:http{status_code}:{(body or '')[:80]}"[:200])
+    if api_id:
+        cur = get(api_id)
+        if cur and cur.status != "quota_exhausted":
+            set_status(api_id, "quota_exhausted",
+                       notes=f"自动标记 {time.strftime('%Y-%m-%d %H:%M')}: http{status_code}")
+    return api_id
 
 
 def get_observer_model() -> str:
@@ -481,11 +511,20 @@ def probe(api_id: str = "") -> dict:
             continue
         try:
             t0 = _time.time()
-            # 尝试 GET /models 端点（轻量探测）
+            # GET /models 端点（轻量探测）。**必须带 key**：不带 Authorization 一律 401，
+            # 而 401 < 500 会被下面判成 "ok" —— 探测就永远报健康（这个 bug 一直在）。
             base = entry.base_url.rstrip("/")
-            resp = httpx.get(f"{base}/models", timeout=15)
+            resp = httpx.get(f"{base}/models", timeout=15, headers={
+                "Authorization": f"Bearer {os.environ.get(entry.api_key_env, '')}"})
             latency = int((_time.time() - t0) * 1000)
-            if resp.status_code in (429, 503):
+            if resp.status_code in (401, 403):
+                results[eid] = {"status": "error", "code": resp.status_code, "latency_ms": latency,
+                                "reason": "api_key 无效或无权限"}
+            elif resp.status_code == 402:
+                set_status(eid, "quota_exhausted")
+                results[eid] = {"status": "error", "code": 402, "latency_ms": latency,
+                                "action": "auto-marked quota_exhausted"}
+            elif resp.status_code in (429, 503):
                 set_status(eid, "rate_limited" if resp.status_code == 429 else "disabled")
                 results[eid] = {"status": "error", "code": resp.status_code, "latency_ms": latency,
                                 "action": "auto-marked rate_limited" if resp.status_code == 429 else "auto-marked disabled"}

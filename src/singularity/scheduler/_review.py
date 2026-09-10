@@ -93,7 +93,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             # 不能静默: 计数写不进去 = 触顶兜底永不生效 (退化成无限自动重试)
             try:
                 from . import witness
-                witness.heartbeat('review', f'warn:record_review_failure:{e}')
+                witness.warn('review', f'record_review_failure:{e}')
             except Exception:
                 pass
 

@@ -127,19 +127,19 @@ def _run_no_tools(agent_cfg: dict, prompt: str, tag: str, level: str,
     # 禁工具是委员会的前提（纯文本出方案，别改磁盘）。claude-cli 这类自带工具的执行器
     # 禁不掉 —— 告警让它在 trace 里可见，而不是假装禁住了。
     if not getattr(executor_cls, "honors_no_tools", False):
-        witness.heartbeat("dispatcher", f"warn:no_tools_not_enforced:{etype}"[:80])
+        witness.warn("dispatcher", f"no_tools_not_enforced:{etype}"[:80])
     try:
         result = _run_executor(executor_cls, agent_cfg, prompt, tag, level,
                                baseline_ref=baseline_ref, cwd=cwd)
     except Exception as e:
         # 以前这里静默 return None —— 委员会里模型失败完全看不见。
         # 实测 3 家阵容有 2 家无声无息没产出，只能靠猜（超时？空输出？）。
-        witness.heartbeat("dispatcher", f"warn:no_tools_fail:{tag}:{type(e).__name__}"[:80])
+        witness.warn("dispatcher", f"no_tools_fail:{tag}:{type(e).__name__}"[:80])
         return None
     if result and result.raw_output:
         return result.raw_output
     err = getattr(result, "error", "") if result else "no result"
-    witness.heartbeat("dispatcher", f"warn:no_tools_empty:{tag}:{err}"[:80])
+    witness.warn("dispatcher", f"no_tools_empty:{tag}:{err}"[:80])
     return None
 
 
@@ -329,8 +329,8 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
     if len(outputs) < len(chain):
         got = {m for m, _ in outputs}
         miss = [a.get("model", "?") for a in chain if a.get("model") not in got]
-        witness.heartbeat("dispatcher",
-                          f"warn:committee_partial:{len(outputs)}/{len(chain)} 缺:{','.join(miss)}"[:80])
+        witness.warn("dispatcher",
+                     f"committee_partial:{len(outputs)}/{len(chain)} 缺:{','.join(miss)}"[:80])
 
     if not outputs:
         raise RuntimeError("委员会所有模型均无产出")

@@ -171,7 +171,7 @@ def agent_api_available(agent_cfg: dict) -> bool:
                 if not api_store.is_available(provider):
                     return False
         except Exception as e:
-            from . import witness; witness.heartbeat("dispatch", "warn", status="error", detail=f"api_check:{e}")
+            from . import witness; witness.warn("dispatch", f"api_check:{e}")
 
     # 硬限制：OpenAI 模型除非在 _order 显式列出或有显式配置，否则不可用
     if provider == "openai":
@@ -218,7 +218,7 @@ def _build_agent_from_registry(model_name: str) -> dict | None:
             "request_template": {"model": model_name, "max_tokens": config.MODEL_MAX_TOKENS},
         }
     except Exception as e:
-        from . import witness; witness.heartbeat("dispatch", "warn", status="error", detail=f"build_agent:{e}")
+        from . import witness; witness.warn("dispatch", f"build_agent:{e}")
         return None
 
 

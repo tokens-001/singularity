@@ -97,6 +97,27 @@ def _notify_agent_change():
         pass
 
 
+def _merge_tmpl(base: dict, updates: dict) -> dict:
+    """request_template 走局部更新而非整份替换。
+
+    整份替换会逼用户重抄 model/max_tokens，而漏写 model 更会连带出事：运行时
+    dispatcher 是 `setdefault("request_template", ...)`，key 已存在就不补默认值
+    → body 里没有 model，请求直接废掉。所以这里 merge 进已有 tmpl。
+
+    底座优先取已有 tmpl；agent 本来没配过（出厂状态就是这样）则补运行时默认，
+    否则只写 thinking 会得到一个连 model 都没有的 template。
+    """
+    tmpl = updates.get("request_template")
+    if isinstance(tmpl, dict):
+        from . import config
+        floor = base.get("request_template") or {
+            "model": base.get("model", ""), "max_tokens": config.MODEL_MAX_TOKENS}
+        # None = 删掉这个键。merge 语义下没有删除能力，前端「恢复默认」就回不去了。
+        merged = {**floor, **tmpl}
+        return {**updates, "request_template": {k: v for k, v in merged.items() if v is not None}}
+    return updates
+
+
 def update_agent(level: str, model: str, updates: dict) -> dict:
     custom = _load_custom_agents()
     key = level  # 两档后不再映射 E+ → E_plus
@@ -129,7 +150,7 @@ def update_agent(level: str, model: str, updates: dict) -> dict:
     cfgs = custom.get(key, [])
     for a in cfgs:
         if a.get("model") == model:
-            a.update(updates)
+            a.update(_merge_tmpl(a, updates))
             _save_custom_agents(custom)
             return a
     # 不在自定义里，从内置 TOML 复制一份
@@ -137,7 +158,7 @@ def update_agent(level: str, model: str, updates: dict) -> dict:
     for a in agents_all.get(level, []):
         if a.get("model") == model:
             new_cfg = dict(a)
-            new_cfg.update(updates)
+            new_cfg.update(_merge_tmpl(a, updates))
             custom.setdefault(key, []).append(new_cfg)
             _save_custom_agents(custom)
             return new_cfg

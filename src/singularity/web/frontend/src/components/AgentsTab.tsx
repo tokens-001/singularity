@@ -1,10 +1,20 @@
 import { useState, useEffect } from 'react'
-import { Tag } from 'antd'
+import { Select, Tag } from 'antd'
 import { api } from '../lib/api'
 import { useRun } from '../lib/toast'
 import { Plus } from 'lucide-react'
 import { mcn } from '../pages/Config'
 import type { ModelInfo, AgentItem, AgentsData } from '../lib/types'
+
+// 思考强度档位。各家解释不同（GLM-5.3 只认 low/high/max，DeepSeek 还认 medium，
+// Kimi k3 只认 max），代码不替各家做映射 —— 填了不支持的值后端会摘掉重试。
+// 实测：GLM-5.3-flash low→max 是 3.5s/0 字思考 vs 9.4s/1912 字；deepseek-v4-flash 切了几乎没差别。
+const EFFORT_OPTIONS = [
+  { value: '', label: '默认（不指定）' },
+  { value: 'low', label: 'low — 少想，快' },
+  { value: 'high', label: 'high — 标准' },
+  { value: 'max', label: 'max — 多想，慢' },
+]
 
 export default function AgentsTab() {
   const [agents, setAgents] = useState<AgentsData>({})
@@ -27,6 +37,10 @@ export default function AgentsTab() {
 
   const disable = async (model: string) => { if (await run(() => api.deleteAgent(model))) fetch() }
   const enable = async (model: string) => { if (await run(() => api.addAgent({model, roles:['generic']}))) fetch() }
+  // 空串 = 恢复默认 → 传 null，后端 merge 时删掉该键（merge 语义本来删不掉）
+  const setEffort = async (model: string, effort: string) => {
+    if (await run(() => api.updateAgent(model, { request_template: { reasoning_effort: effort || null } }))) fetch()
+  }
 
   return (
     <div>
@@ -64,7 +78,12 @@ export default function AgentsTab() {
               <div className="fs-10 text-muted" style={{ marginTop: 2 }}>{m?.provider||'?'} · max_turns={a.max_turns||5}</div>
               {isExpanded && (
                 <div style={{ marginTop: 6, borderTop: '1px solid var(--border)', paddingTop: 4 }} onClick={e => e.stopPropagation()}>
-                  <button onClick={() => disable(a.model)} className="btn-ghost-danger fs-10" style={{ padding: 0 }}>移除</button>
+                  <div className="fs-10 text-muted" style={{ marginBottom: 2 }}>思考强度</div>
+                  <Select size="small" style={{ width: '100%' }}
+                    value={a.request_template?.reasoning_effort || ''}
+                    onChange={v => setEffort(a.model, v)}
+                    options={EFFORT_OPTIONS}/>
+                  <button onClick={() => disable(a.model)} className="btn-ghost-danger fs-10" style={{ padding: 0, marginTop: 4 }}>移除</button>
                 </div>
               )}
             </div>

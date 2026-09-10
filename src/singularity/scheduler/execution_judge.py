@@ -95,7 +95,7 @@ def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:
     env_var, base_url = _resolve_api(model)
     api_key = os.environ.get(env_var, "")
     if not api_key:
-        witness.heartbeat('execution_judge', f'warn:no_key:{model}:{env_var}'[:80])
+        witness.warn('execution_judge', f'no_key:{model}:{env_var}'[:80])
         return ""
     try:
         import httpx
@@ -113,28 +113,33 @@ def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:
                     # 模型正常收尾、但把答案落在 reasoning_content 里（执行器同样这么兜）
                     # → 回退。**只有 finish != "length" 才能这么干**：撞上限时 reasoning
                     # 是半截思考、不是答案，当结果返回会误导上层。
-                    witness.heartbeat('execution_judge',
-                                      f'warn:reasoning_only:{model}:{finish}'[:80])
+                    witness.warn('execution_judge',
+                                 f'reasoning_only:{model}:{finish}'[:80])
                     return reasoning
                 if not content:
                     # 思考模型把 max_tokens 全烧在 reasoning 上 → content 为空。
                     # 静默返回 "" 会让上层（融合分析/盲评）无声降级，这里显式告警。
-                    witness.heartbeat('execution_judge',
-                                      f'warn:empty_content:{model}:{finish}'[:80])
+                    witness.warn('execution_judge',
+                                 f'empty_content:{model}:{finish}'[:80])
                     return ""
                 if not finish:
                     # 流结束却没有终止标记 → 多半被连接切断，content 可能是半截。
                     # 实测 v2 定稿就撞过：11111 字断在 JSON 字符串中间，静默返回。
-                    witness.heartbeat('execution_judge', f'warn:no_finish:{model}'[:80])
+                    witness.warn('execution_judge', f'no_finish:{model}'[:80])
                 if finish == "length":
-                    witness.heartbeat('execution_judge', f'warn:truncated:{model}'[:80])
+                    witness.warn('execution_judge', f'truncated:{model}'[:80])
                 return content
             # 非 200 以前什么都不记，上层只看到空串，查不出原因（kimi-k3 就是这样
             # 静默失败了很久：temperature 不被接受 → 400 → 空串）
-            witness.heartbeat('execution_judge',
-                              f'warn:http{status}:{model}:{err[:40]}'[:80])
+            witness.warn('execution_judge',
+                         f'http{status}:{model}:{err[:40]}'[:80])
+            try:
+                from . import api_store
+                api_store.note_api_error(model, status, err)  # 欠费 → 标 provider，下轮跳过
+            except Exception:
+                pass
     except Exception as e:
-        witness.heartbeat('execution_judge', f'warn:{e}'[:80])
+        witness.warn('execution_judge', f'{e}'[:80])
     return ""
 
 
@@ -283,7 +288,7 @@ def _warn_same_model(judge: str, synth: str, members: list[str] | None) -> None:
         return
     for role, m in (("judge", judge), ("synth", synth)):
         if m and m in members:
-            witness.heartbeat("execution_judge", f"warn:fusion_self_judge:{role}:{m}"[:80])
+            witness.warn("execution_judge", f"fusion_self_judge:{role}:{m}"[:80])
 
 
 def fuse_architecture(task_desc: str, outputs: list[str],
@@ -450,11 +455,21 @@ _V2_FINALIZE = """你是架构定稿人「{writer}」。下面是委员会的最
 【已驳回的独有做法（不要写进方案）】
 {rejected}
 
+【各成员原稿】
+下面是各成员自己的完整方案，供你核对细节、补齐上面结论没覆盖到的字段。
+**与上面结论冲突之处一律以结论为准** —— 原稿是素材，不是让你照抄或取并集。
+{plans}
+
 要求:
 1. 分歧按结论采用对应立场 —— 不折中、不两个都写
 2. 只写采纳的独有做法；驳回的一条都不要出现
 3. 长度控制在单份方案的 1.1~1.3 倍以内 —— 不取并集、不重复、不堆砌
-4. 顺便生成 test_cases（基于 PRD 成功标准 + API契约 + state_machine）
+4. 逐条核对原始需求：modules / data_model / api_contracts / tasks 里的每一项都必须能
+   指回需求中的某一条。需求没要求的（哪怕某成员提了、评审也通过了）一律不写进主方案
+   —— 确有必要就写进 risks，risk 填「范围外建议：…」，不要混进 modules/data_model/
+   api_contracts。实测教训：需求只要求计费，融合稿却继承了成员稿里的支付网关与账本，
+   在"需求边界明确"的任务上因此输给更克制的单稿。
+5. 顺便生成 test_cases（基于 PRD 成功标准 + API契约 + state_machine）
 
 输出必须严格遵循以下 JSON schema:
 
@@ -524,7 +539,7 @@ def _plans_block(plans: list[tuple[str, str]]) -> str:
         per = _FUSION_PLANS_TOTAL // len(plans)
         lim = per if lim <= 0 else min(lim, per)
     if lim > 0 and any(len(o) > lim for _, o in plans):
-        witness.heartbeat("execution_judge", f"warn:plans_truncated:{lim}"[:80])
+        witness.warn("execution_judge", f"plans_truncated:{lim}"[:80])
     return "\n\n---\n".join(
         f"[{m}]\n{o if lim <= 0 else o[:lim]}" for m, o in plans)
 
@@ -553,7 +568,7 @@ def _demote_bare_accept(items: list) -> list:
     for it in items or []:
         if (isinstance(it, dict) and it.get("verdict") == "accept"
                 and not str(it.get("reason") or "").strip()):
-            witness.heartbeat("execution_judge", "warn:bare_accept"[:80])
+            witness.warn("execution_judge", "bare_accept"[:80])
             it = {**it, "verdict": "question"}
         out.append(it)
     return out
@@ -579,8 +594,8 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
     if judge in members:
         alt = next((m for m in _V2_EXTRACT_FALLBACKS if m not in members), "")
         if alt:
-            witness.heartbeat("execution_judge",
-                              f"warn:extractor_swapped:{judge}->{alt}"[:80])
+            witness.warn("execution_judge",
+                         f"extractor_swapped:{judge}->{alt}"[:80])
             judge = alt
     _warn_same_model(judge, "", members)
 
@@ -601,7 +616,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
     gains = [g for g in (deltas.get("unique_gains") or []) if isinstance(g, dict)]
     consensus = deltas.get("consensus") or []
     if not (consensus or disagreements or gains):
-        witness.heartbeat("execution_judge", "warn:fusion_v2_empty_extract"[:80])
+        witness.warn("execution_judge", "fusion_v2_empty_extract"[:80])
         return ""
 
     writer = _first_speaker(disagreements, members)
@@ -638,7 +653,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
                 a = a if isinstance(a, dict) else {}
                 if a.get("parse_error"):
                     # 解析失败 = 这家的票全丢 → 该分歧点默认判给发言方。不吭声就查不出来。
-                    witness.heartbeat("execution_judge", f"warn:fusion_round2_json:{m}"[:80])
+                    witness.warn("execution_judge", f"fusion_round2_json:{m}"[:80])
                 transcript.append(f"[{m} 回应]\n{_j(a)}")
                 cur.update(_votes_into(resp_votes, m,
                                        _demote_bare_accept(a.get("responses")), "verdict"))
@@ -665,7 +680,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
     # 撞上限仍有 question 的点 → 按发言方处理，但别让它静默通过
     stuck = [i for (w, i), v in conf_votes.items() if v == "question"]
     if stuck:
-        witness.heartbeat("execution_judge", f"warn:fusion_stuck:{len(stuck)}"[:80])
+        witness.warn("execution_judge", f"fusion_stuck:{len(stuck)}"[:80])
 
     # 分歧结论：默认发言方胜；对方 insist 且发言方 agree（认输）→ 对方胜。
     # ponytail: 多个 insist 方各自立场不同时只记第一个 —— N>2 才有的歧义，
@@ -691,7 +706,11 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
     # ── ④ 定稿 + 确认 ──
     final_prompt = _V2_FINALIZE.format(
         writer=writer, task=task, consensus=_j(consensus), resolved=_j(resolved),
-        adopted=_j(adopted), rejected=_j(rejected), schema=_ARCH_SCHEMA)
+        adopted=_j(adopted), rejected=_j(rejected), schema=_ARCH_SCHEMA,
+        # 原文必须给。只看「提取员转述」出来的结论，定稿人会凭空丢字段 ——
+        # tasks/risks 就是这么整段丢过（提取员没提，它就真不写）。转述丢的
+        # 东西定稿人补不回来，因为它根本没看到原稿。
+        plans=_plans_block(plans))
     draft = _call_model(final_prompt, writer, max_tokens=_FUSION_MAX_TOKENS)
     if not draft:
         return ""
@@ -701,11 +720,11 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
             c = _call_model(_V2_CONFIRM.format(checker=m, writer=writer, task=task, draft=draft),
                             m, max_tokens=_FUSION_MAX_TOKENS)
             if not c:
-                witness.heartbeat("execution_judge", f"warn:fusion_confirm_empty:{m}"[:80])
+                witness.warn("execution_judge", f"fusion_confirm_empty:{m}"[:80])
                 return None
             p = try_parse_json(c)
             if not isinstance(p, dict) or p.get("parse_error"):
-                witness.heartbeat("execution_judge", f"warn:fusion_confirm_json:{m}"[:80])
+                witness.warn("execution_judge", f"fusion_confirm_json:{m}"[:80])
                 return None
             return p
         issues = []

@@ -101,7 +101,7 @@ def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True) ->
             try:
                 if 'proc' in dir(): proc.kill()
             except Exception as e:
-                witness.heartbeat('pre_search', f'warn:{e}')
+                witness.warn('pre_search', f'{e}')
         except (json.JSONDecodeError, KeyError) as e:
             res.skipped = True
             res.reason = f"解析失败: {e}"
@@ -125,9 +125,9 @@ def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True) ->
     except Exception as e:
         try:
             from . import witness
-            witness.heartbeat("pre_search", f"warn:magma:{e}"[:80])
+            witness.warn("pre_search", f"magma:{e}"[:80])
         except Exception as e:
-            witness.heartbeat('pre_search', f'warn:{e}')
+            witness.warn('pre_search', f'{e}')
         pass  # 记忆挂了不阻塞
 
     # ── Step 3: codegraph 代码结构上下文 ──
@@ -174,9 +174,9 @@ def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True) ->
     except Exception as e:
         try:
             from . import witness
-            witness.heartbeat("pre_search", f"warn:codegraph:{e}"[:80])
+            witness.warn("pre_search", f"codegraph:{e}"[:80])
         except Exception as e:
-            witness.heartbeat('pre_search', f'warn:{e}')
+            witness.warn('pre_search', f'{e}')
         pass  # codegraph 挂了不阻塞
 
     return res

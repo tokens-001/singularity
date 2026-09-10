@@ -150,7 +150,7 @@ def auto_maintain() -> dict:
     try:
         pruned = prune_expired()
     except Exception as e:
-        witness.heartbeat('memory', f'warn:lifecycle:{e}')
+        witness.warn('memory', f'lifecycle:{e}')
     stats = lifecycle_stats()
     stats["pruned"] = pruned
     return stats

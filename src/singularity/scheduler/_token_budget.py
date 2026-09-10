@@ -43,7 +43,7 @@ class TokenBudget:
                 self._budget_daily = data.get("budget_daily", 0.0)
                 self._budget_monthly = data.get("budget_monthly", 0.0)
             except Exception as e:
-                witness.heartbeat('_token_budget', f'warn:{e}')
+                witness.warn('_token_budget', f'{e}')
 
     def _save(self):
         config.QIDIAN_DIR.mkdir(parents=True, exist_ok=True)

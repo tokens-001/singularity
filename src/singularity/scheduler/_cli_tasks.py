@@ -102,11 +102,9 @@ def _drain_queue(agents: dict, max_concurrent: int = 1) -> tuple[int, int]:
         except Exception as e:
             try:
                 from . import witness
-                witness.heartbeat("main", f"warn:consolidate_mem:{e}"[:80])
+                witness.warn("main", f"consolidate_mem:{e}"[:80])
             except Exception:
-                try: witness.heartbeat('main', 'warn')
-                except Exception: pass
-            pass
+                pass  # 告警通道失败不该再套娃（warn 内部已吞 OSError）
 
     exit_code = 0
     for tid, reason, validation in results:
@@ -186,7 +184,7 @@ def _cmd_merge(args: list) -> int:
             except Exception as e:  # noqa: BLE001
                 try:
                     from . import witness
-                    witness.heartbeat("main", f"warn:task_scan:{e}"[:80])
+                    witness.warn("main", f"task_scan:{e}"[:80])
                 except Exception:
                     pass
                 continue

@@ -153,11 +153,9 @@ def _git_changed_files(baseline_ref: str = "", cwd: str = "") -> list:
     except Exception as e:  # noqa: BLE001
         try:
             from .. import witness
-            witness.heartbeat("claude_cli", f"warn:collect_changes:{e}"[:80])
+            witness.warn("claude_cli", f"collect_changes:{e}"[:80])
         except Exception:
-            try: witness.heartbeat('claude_cli', 'warn')
-            except Exception: pass
-        pass
+            pass  # 告警通道失败不该再套娃（warn 内部已吞 OSError）
 
     # 排除调度器基础设施 (.qidian/ 是 snapshot/trace/patch 产物, 不是 agent 改动)
     return [f for f in changed if not f.startswith(".qidian")]

@@ -82,7 +82,7 @@ def _load_skills_for_agent(level: str, model: str, task_desc: str = "") -> tuple
                 _SKILL_CACHE[key] = result
             return result
     except Exception as e:
-        witness.heartbeat('dispatcher', f'warn:{e}')
+        witness.warn('dispatcher', f'{e}')
     return [], "", {}
 
 
@@ -104,7 +104,7 @@ def _load_mcp_for_agent() -> tuple[list, object]:
             _MCP_CACHE = result
         return result
     except Exception as e:
-        witness.heartbeat('dispatcher', f'warn:{e}')
+        witness.warn('dispatcher', f'{e}')
     return [], None
 
 
@@ -149,7 +149,7 @@ def _make_permission_checker() -> callable:
                     _pending_sse_events.append({"kind": "approval", "msg": f"[{task_id[:8]}] {tool_name} 需审批",
                                  "ts": time.time(), "task_id": task_id})
                 except Exception as e:
-                    witness.heartbeat('dispatcher', f'warn:{e}')
+                    witness.warn('dispatcher', f'{e}')
             return True, ""
         return _check
     except Exception:

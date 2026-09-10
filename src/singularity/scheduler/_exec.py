@@ -93,7 +93,7 @@ def _inject_role_context(route_role: str) -> str:
             return role.get_full_prompt()
     except Exception as e:
         # 静默返回 "" = agent 悄悄丢掉角色提示词，行为差异在外面完全看不见
-        witness.heartbeat('orch', f'warn:role_context:{route_role}:{e}'[:80])
+        witness.warn('orch', f'role_context:{route_role}:{e}'[:80])
     return ""
 
 
@@ -473,7 +473,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                                 "ts": time.time(), "task_id": task.id,
                             })
                     except Exception as e:
-                        witness.heartbeat(task.id, f"warn:qa_gate:{e}")
+                        witness.warn(task.id, f"qa_gate:{e}")
 
                 cascade_action, payload = _decide_cascade(
                     task, level, turn, validation, disp_result, all_tool_events,
@@ -533,7 +533,7 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 if post_warnings and post_warnings.get("warnings"):
                     batch.term_reason += f"; post_hook: {', '.join(post_warnings['warnings'])}"
         except Exception as e:
-            try: witness.heartbeat(task_id=task.id, status="error", detail=f"post_hook:{e}")
+            try: witness.warn(task.id, f"post_hook:{e}")
             except Exception: pass
 
         if batch.ok or batch.planner_decomposed:
@@ -553,7 +553,7 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 from . import project as proj_mod
                 snap_mod.rollback(snap, repo_root=proj_mod.repo_root_for(task))
             except Exception as e:
-                witness.heartbeat('exec', f'warn:{e}')
+                witness.warn('exec', f'{e}')
         # v3: 不碰 PROJECT_ROOT —— 主仓库未动, worktree 已由 run() 内部 _cleanup_wt 清理
         # retry_count 由主线程在回收时按需写; worker 不写
 
@@ -596,7 +596,7 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
         )
         nj_mod.save_trace(report, task.id)
     except Exception as e:
-        witness.heartbeat('exec', f'warn:{e}')
+        witness.warn('exec', f'{e}')
 
     # ── MAGMA 多图记忆索引 + 状态更新 ──
     try:
@@ -616,7 +616,7 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
             route_type=route.task_type if route else "",
         )
     except Exception as e:
-        witness.heartbeat('exec', f'warn:{e}')
+        witness.warn('exec', f'{e}')
 
 
 def _safe_dep_list(v):

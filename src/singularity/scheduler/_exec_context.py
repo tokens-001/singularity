@@ -99,7 +99,7 @@ def _inject_memory(description: str, pyramid_level: int = 1, token_budget: int =
         lines.append("参考以上历史任务的改动方案。\n")
         return "\n".join(lines)
     except Exception as e:
-        try: witness.heartbeat("memory", f"warn:inject_memory:{e}")
+        try: witness.warn("memory", f"inject_memory:{e}")
         except Exception: pass
         return ""
 
@@ -194,7 +194,7 @@ def _summarize_events(events: list) -> str:
             summary = body["choices"][0]["message"]["content"].strip()
             return f"[摘要] {summary}（更早 {len(events)} 条已省略）"
     except Exception as e:
-        witness.heartbeat('exec', f'warn:{e}')
+        witness.warn('exec', f'{e}')
     return f"更早 {len(events)} 条已省略"
 
 

@@ -27,13 +27,13 @@ def consolidate_memory() -> int:
             lc = auto_maintain()
             if lc.get("pruned", 0) > 0:
                 _pending_sse_events.append({"kind":"memory","msg":f"pruned {lc['pruned']} events","ts":time.time()})
-        except Exception as e: witness.heartbeat('memory', f'warn:consolidate:{e}')
+        except Exception as e: witness.warn('memory', f'consolidate:{e}')
         try:
             s2 = system2_extract()
             if s2.get("added", 0) > 0:
                 for ins in s2.get("insights", []):
                     _pending_sse_events.append({"kind":"insight","msg":ins.get("summary",""),"ts":time.time()})
-        except Exception as e: witness.heartbeat('memory', f'warn:consolidate:{e}')
+        except Exception as e: witness.warn('memory', f'consolidate:{e}')
 
     try:
         from singularity.scheduler._memory_graph import find_candidate_latent_edges
@@ -64,7 +64,7 @@ def consolidate_memory() -> int:
                 added += 1
         return added
     except Exception as e:
-        try: witness.heartbeat("memory", f"warn:consolidate:{e}")
+        try: witness.warn("memory", f"consolidate:{e}")
         except Exception: pass
         return 0
 

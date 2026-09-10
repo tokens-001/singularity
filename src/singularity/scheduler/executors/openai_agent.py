@@ -145,6 +145,36 @@ SYSTEM_PROMPT_NO_TOOLS = """你是Singularity Dispatch的 AI Agent。
 - 不要以 [HANDOFF] 块结尾（那是执行类任务的格式）"""
 
 
+# 思考相关参数白名单。各家键名/取值都不同（DeepSeek/Kimi/智谱用 thinking，
+# GLM-5.3 与 DeepSeek 用 reasoning_effort，Qwen/Kimi 兼容写法用 enable_thinking），
+# 且支持面会变（GLM-5.2 能关、5.3 强制开；k2.6 能关、k2.7 强制开）。
+# 所以只做透传，**不维护"谁支持什么"的能力表** —— 那表一定会过期。
+_THINK_KEYS = ("thinking", "reasoning_effort", "enable_thinking")
+
+
+def _apply_think_params(body: dict, tmpl: dict, skip: set | None = None) -> None:
+    """把 request_template 里的思考参数原样透传进 body。配了就传，不判定支持与否。
+
+    skip 放已被 API 拒过的键（body 每轮重建，不记就每轮重撞一次 400）。
+    """
+    for k in _THINK_KEYS:
+        if k in tmpl and k not in (skip or ()):
+            body[k] = tmpl[k]
+
+
+def _drop_rejected_think_param(body: dict, err: str) -> str:
+    """400 里提到某个思考参数 → 从 body 摘掉并返回键名（没有则 ""）。
+
+    一次只摘一个：错误通常只报第一个不认识的参数，剩下的下一轮再摘。
+    """
+    low = err.lower()
+    for k in _THINK_KEYS:
+        if k in body and k in low:
+            del body[k]
+            return k
+    return ""
+
+
 class OpenAIAgentExecutor(BaseExecutor):
     """通用 Agent Executor — 给任何 OpenAI 兼容模型装上工具。"""
 
@@ -171,6 +201,8 @@ class OpenAIAgentExecutor(BaseExecutor):
         self._cwd = (Path(cwd) if cwd else config.PROJECT_ROOT).resolve()  # resolve 掉 /tmp→/private/tmp 等符号链接, 否则 write_file 的 relative_to 会炸
         self._changed_files: list[str] = []
         self._tool_events: list[dict] = []
+        # body 每轮重建，被 API 拒过的思考参数要记住，否则下一轮又加回来、又撞一次 400
+        self._rejected_think_keys: set[str] = set()
         self._agent_level = agent_level or cfg.get("_level", "")
 
         # ── 注入的依赖 ──
@@ -242,6 +274,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                 }
                 if "temperature" in tmpl:
                     body["temperature"] = tmpl["temperature"]
+                _apply_think_params(body, tmpl, self._rejected_think_keys)
             else:
                 body = {
                     "model": self._model,
@@ -259,6 +292,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                     body["max_tokens"] = 8192
                 if "temperature" in tmpl:
                     body["temperature"] = tmpl["temperature"]
+                _apply_think_params(body, tmpl, self._rejected_think_keys)
 
             try:
                 resp_data = self._api_call(body)
@@ -274,6 +308,21 @@ class OpenAIAgentExecutor(BaseExecutor):
                         "role": "system",
                         "content": "[系统] 本任务必须调用工具完成：写代码用 write_file，跑命令用 run_command。禁止只输出文字描述或计划，必须实际调用工具产出文件。",
                     })
+                    try:
+                        resp_data = self._api_call(body)
+                    except _RateLimitError:
+                        time.sleep(min(2 ** turn, 60))
+                        continue
+                    except (_NetworkError, _FormatError) as e2:
+                        return ExecutorResult(success=False, error=str(e2),
+                                              error_kind="exec", elapsed=time.time() - start,
+                                              tool_events=list(self._tool_events))
+                elif (bad := _drop_rejected_think_param(body, str(e))):
+                    # 该模型不吃这个思考参数（各家支持面不同且会变）→ 摘掉重试一次，
+                    # 并记住键名（body 每轮重建，不记就每轮再撞一次 400）
+                    self._rejected_think_keys.add(bad)
+                    witness.warn("oa_exec",
+                                 f"think_param_rejected:{self._model}:{bad}:{str(e)[:60]}"[:150])
                     try:
                         resp_data = self._api_call(body)
                     except _RateLimitError:
@@ -595,8 +644,8 @@ class OpenAIAgentExecutor(BaseExecutor):
                     if "__pycache__" in f or f.endswith((".pyc", ".pyo")):
                         continue
                     self._changed_files.append(f)
-        except Exception:
-            try: witness.heartbeat('oa_exec', 'warn')
+        except Exception as e:
+            try: witness.warn('oa_exec', f'collect_changes:{e}'[:80])
             except Exception: pass
 
     # ── API 调用 ──
@@ -656,9 +705,14 @@ class OpenAIAgentExecutor(BaseExecutor):
         except json.JSONDecodeError as e:
             raise _FormatError(f"JSON解析失败: {e}")
 
-    @staticmethod
-    def _raise_for_status(resp) -> None:
-        """状态码 → 异常分类（流式/非流式共用）。"""
+    def _raise_for_status(self, resp) -> None:
+        """状态码 → 异常分类（流式/非流式共用）。欠费顺手标记 provider。"""
+        if resp.status_code >= 400:
+            try:
+                from .. import api_store
+                api_store.note_api_error(self._model, resp.status_code, resp.text or "")
+            except Exception:
+                pass  # 标记失败不能盖掉真正的 HTTP 错误
         if resp.status_code == 429:
             raise _RateLimitError()
         if resp.status_code >= 500:

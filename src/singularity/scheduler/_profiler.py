@@ -39,7 +39,7 @@ class Profiler:
                 data = json.loads(self._path.read_text())
                 self._samples = [PerfSample(**s) for s in data[-self._max:]]
             except Exception as e:
-                witness.heartbeat('_profiler', f'warn:{e}')
+                witness.warn('_profiler', f'{e}')
 
     def _save(self):
         config.QIDIAN_DIR.mkdir(parents=True, exist_ok=True)

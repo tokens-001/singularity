@@ -149,13 +149,13 @@ class MCPClient:
                 try:
                     self._proc.kill()
                 except Exception as e:
-                    witness.heartbeat('mcp', f'warn:{e}')
+                    witness.warn('mcp', f'{e}')
             self._proc = None
         if self._http_client:
             try:
                 self._http_client.close()
             except Exception as e:
-                witness.heartbeat('mcp', f'warn:{e}')
+                witness.warn('mcp', f'{e}')
             self._http_client = None
         self._initialized = False
 
@@ -284,7 +284,7 @@ class MCPClient:
                 timeout=10.0,
             )
         except Exception as e:
-            witness.heartbeat('mcp', f'warn:{e}')
+            witness.warn('mcp', f'{e}')
 
 
 # ── MCP 注册表 ─────────────────────────────────────────────────────

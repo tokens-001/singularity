@@ -112,7 +112,7 @@ class TaskRunner:
                 if proj:
                     project_phase = proj.phase.value
         except Exception as e:
-            witness.heartbeat('orch', f'warn:{e}')
+            witness.warn('orch', f'{e}')
         # 快照 (修复 #1: 项目任务快照项目 repo)
         from . import project as proj_mod
         snap = snap_mod.take(task.id, repo_root=proj_mod.repo_root_for(task))
@@ -165,7 +165,7 @@ class TaskRunner:
             try:
                 _materialize_in_main(batch, task)
             except Exception as e:
-                witness.heartbeat('orch', f'warn:materialize:{e}')
+                witness.warn('orch', f'materialize:{e}')
             reason = f"decomposed: {term_reason}"
         elif batch.ok:
             # DONE 延后到 QA gate 之后 (见下): QA 判 fail/retry 时任务必须还能转 FAILED/PENDING
@@ -242,7 +242,7 @@ class TaskRunner:
                 qa_verdict = sv.verdict
                 qa_issues = list(sv.issues)
             except Exception as e:
-                witness.heartbeat('orch', f'warn:{e}')
+                witness.warn('orch', f'{e}')
         if qa_verdict == "fail":
             qa_blocked = qa_fail = True
             tracker.transition(task.id, TaskStatus.FAILED,
@@ -298,7 +298,7 @@ class TaskRunner:
                 )
             except Exception as e:
                 # 静默吞掉 = token 账目悄悄丢失，成本统计对不上也查不出原因
-                witness.heartbeat('orch', f'warn:record_tokens:{e}'[:80])
+                witness.warn('orch', f'record_tokens:{e}'[:80])
             # 同时记录到路由学习器
             try:
                 learner = rl_mod.load_learner()
@@ -314,12 +314,12 @@ class TaskRunner:
                 rl_mod.save_learner(learner)
             except Exception as e:
                 try:
-                    witness.heartbeat('orch', f'warn:route_learner:{e}')
+                    witness.warn('orch', f'route_learner:{e}')
                 except Exception:
                     pass
         except Exception as e:
             try:
-                witness.heartbeat('orch', f'warn:archive_experience:{e}')
+                witness.warn('orch', f'archive_experience:{e}')
             except Exception:
                 pass
         # 工具事件已由 openai_agent 实时上流(append 到 _pending_sse_events), 此处不再批量推, 避免重复
@@ -342,6 +342,6 @@ class TaskRunner:
                 report.task_ids = [task.id]
                 chan_mod.save_report(report)
         except Exception as e:
-            witness.heartbeat('orch', f'warn:{e}')
+            witness.warn('orch', f'{e}')
         results.append((task.id, reason, validation))
         return reason

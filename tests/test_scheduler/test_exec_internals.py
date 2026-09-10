@@ -308,6 +308,7 @@ class TestFinalizeResult:
             "materialize_plan": lambda tid, subs: ["child1", "child2"],
             "decompose": lambda desc: [{"desc": "sub1"}, {"desc": "sub2"}],
             "witness.heartbeat": lambda *a, **k: None,
+            "witness.warn": lambda *a, **k: None,
             "mem_mod.archive_experience": lambda *a, **k: None,
             "rl_mod.load_learner": lambda: type("L", (), {"record": lambda *a, **k: None})(),
             "rl_mod.save_learner": lambda l: None,
@@ -700,7 +701,7 @@ class TestFusionModelResolution:
         monkeypatch.setattr(ej, "_resolve_api", lambda m: ("BENCH_KEY2", "http://x"))
         monkeypatch.setenv("BENCH_KEY2", "k")
         beats = []
-        monkeypatch.setattr(ej.witness, "heartbeat", lambda src, msg: beats.append(msg))
+        monkeypatch.setattr(ej.witness, "warn", lambda src, msg: beats.append(msg))
 
         client, _ = self._fake_client([(500, [], "boom")])
         monkeypatch.setattr(httpx, "Client", lambda **kw: client)
@@ -711,7 +712,7 @@ class TestFusionModelResolution:
         """裁判/定稿人就是选手之一 → 必须告警（自己评自己，结论作废）。"""
         from singularity.scheduler import execution_judge as ej
         beats = []
-        monkeypatch.setattr(ej.witness, "heartbeat", lambda src, msg: beats.append(msg))
+        monkeypatch.setattr(ej.witness, "warn", lambda src, msg: beats.append(msg))
         monkeypatch.setattr(ej, "_load_fusion_config",
                             lambda: {"custom": {"judge_model": "deepseek-v4-flash",
                                                 "call_model": "glm-5.3-flash"}})
@@ -724,7 +725,7 @@ class TestFusionModelResolution:
     def test_no_warning_when_judge_is_outsider(self, monkeypatch):
         from singularity.scheduler import execution_judge as ej
         beats = []
-        monkeypatch.setattr(ej.witness, "heartbeat", lambda src, msg: beats.append(msg))
+        monkeypatch.setattr(ej.witness, "warn", lambda src, msg: beats.append(msg))
         monkeypatch.setattr(ej, "_load_fusion_config",
                             lambda: {"custom": {"judge_model": "glm-5.3",
                                                 "call_model": "kimi-k3"}})
@@ -885,7 +886,7 @@ class TestCommitteePerspective:
         from singularity.scheduler import execution_judge as ej
         from singularity.scheduler import config as cfg
         seen = []
-        monkeypatch.setattr(de.witness, "heartbeat", lambda *a, **k: seen.append(a))
+        monkeypatch.setattr(de.witness, "warn", lambda *a, **k: seen.append(a))
         monkeypatch.setattr(de, "_run_no_tools",
                             lambda c, prompt, tag, level, baseline_ref="", cwd="":
                             None if c.get("model") == "m2" else '{"architecture":"x"}')
@@ -904,7 +905,7 @@ class TestNoToolsFailureVisibility:
     def _run(self, monkeypatch, behavior):
         from singularity.scheduler import _dispatch_exec as de
         seen = []
-        monkeypatch.setattr(de.witness, "heartbeat", lambda *a, **k: seen.append(a))
+        monkeypatch.setattr(de.witness, "warn", lambda *a, **k: seen.append(a))
         monkeypatch.setattr(de, "_run_executor", behavior)
         r = de._run_no_tools({"model": "m", "type": "openai-agent"}, "p", "tag", "any")
         return r, seen
@@ -978,7 +979,7 @@ class TestCallModelEmptyContent:
         seen = []
         monkeypatch.setattr(ej, "_resolve_api", lambda m: ("AB_TEST_KEY", "http://x"))
         monkeypatch.setenv("AB_TEST_KEY", "k")
-        monkeypatch.setattr(ej.witness, "heartbeat", lambda *a, **k: seen.append(a))
+        monkeypatch.setattr(ej.witness, "warn", lambda *a, **k: seen.append(a))
 
         class _Resp:
             status_code, text = 200, ""

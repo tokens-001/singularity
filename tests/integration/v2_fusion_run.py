@@ -35,18 +35,17 @@ _bl.JUDGE_MODEL = os.environ.get("AB_JUDGE", "glm-5.2")   # kimi 已停用（余
 _bl.JUDGE_MAX_TOKENS = int(os.environ.get("AB_JUDGE_MAX_TOKENS", "16000"))
 
 # 告警实时打出来 —— 以前只打"回复 N 字"，分不清是限流还是额度烧光。
+# 注意 hook 的是 warn()：告警 2026-09-10 起从 heartbeat 独立到 alerts.jsonl 了。
 from singularity.scheduler import witness as _w
-_real_heartbeat = _w.heartbeat
+_real_warn = _w.warn
 
 
-def _heartbeat(*a, **kw):
-    detail = a[1] if len(a) > 1 else kw.get("status", "")
-    if str(detail).startswith("warn:"):
-        print(f"   ⚠ {detail}", flush=True)
-    return _real_heartbeat(*a, **kw)
+def _warn(scope, msg):
+    print(f"   ⚠ {scope}: {msg}", flush=True)
+    return _real_warn(scope, msg)
 
 
-_w.heartbeat = _heartbeat
+_w.warn = _warn
 
 STEPS = [("② 提取三类", "架构委员会秘书"), ("③ 轮1 陈述", "陈述己方理由"),
          ("③ 回应", "逐条回应"), ("③ 确认", "对你的论证给出了回应"),
@@ -122,7 +121,7 @@ def main():
     if not fused:
         print("\n❌ 融合返回空（会回退旧流程）")
         return
-    out_path = Path("/tmp/v2_fused.json")
+    out_path = Path(f"/tmp/v2_fused_{BRIEF_NO}.json")
     out_path.write_text(fused)
     print(f"  融合稿 {len(fused)} 字 | tasks={'✓' if '\"tasks\"' in fused else '✗'} "
           f"risks={'✓' if '\"risks\"' in fused else '✗'} | 调用 {len(log)} 次")
@@ -132,6 +131,10 @@ def main():
     for step, model, prompt, out in log:
         if step.startswith("③"):
             print(f"\n── {step}（{model}）──\n{(out or '(空)')[:700]}")
+
+    if os.environ.get("AB_SKIP_SCORE") == "1":
+        print("\n(AB_SKIP_SCORE=1，跳过打分 —— 判据改用 pairwise_run.py 的配对比较)")
+        return
 
     # ── 打分 ──
     print("\n打分中…", flush=True)

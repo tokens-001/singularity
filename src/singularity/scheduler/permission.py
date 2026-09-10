@@ -106,7 +106,7 @@ class PermissionStore:
                         self._profiles[p.name] = p
                 self._agent_bindings = data.get("bindings", {})
             except Exception as e:
-                witness.heartbeat('permission', f'warn:{e}')
+                witness.warn('permission', f'{e}')
 
     def _save(self):
         config.QIDIAN_DIR.mkdir(parents=True, exist_ok=True)

@@ -41,7 +41,7 @@ def _anchor_ref(task_id: str, commit_sha: str, repo_root=None) -> bool:
     )
     if r.returncode != 0:
         from singularity.scheduler import witness
-        witness.heartbeat('worktree', f'warn:anchor_ref {task_id[:8]}: {r.stderr[:100]}')
+        witness.warn('worktree', f'anchor_ref {task_id[:8]}: {r.stderr[:100]}')
         return False
     return True
 
@@ -77,7 +77,7 @@ def cleanup_task_artifacts(task_id: str, repo_root) -> int:
                 p.unlink()
                 deleted += 1
         except Exception as e:
-            witness.heartbeat('_api', f'warn:del:{e}')
+            witness.warn('_api', f'del:{e}')
 
     # E+ patch 暂存 (.md)
     _rm(config.PATCH_DIR / f"{task_id}.md")
@@ -100,7 +100,7 @@ def cleanup_task_artifacts(task_id: str, repo_root) -> int:
                 if not wt_path.exists():
                     deleted += 1
     except Exception as e:
-        witness.heartbeat('_api', f'warn:wt_del:{e}')
+        witness.warn('_api', f'wt_del:{e}')
 
     # 锚定 ref (refs/qidian/pending/{task_id})
     try:
@@ -108,7 +108,7 @@ def cleanup_task_artifacts(task_id: str, repo_root) -> int:
     except Exception as e:
         # 静默 = 锚定 ref 残留，下次清理对不上号
         from singularity.scheduler import witness
-        witness.heartbeat('_api', f'warn:release_ref:{task_id}:{e}'[:80])
+        witness.warn('_api', f'release_ref:{task_id}:{e}'[:80])
     return deleted
 
 
@@ -127,7 +127,7 @@ def _maybe_create_worktree(task_id: str, level: str, agent_cfg: dict, snapshot_r
             witness.heartbeat(task_id, f"worktree_limit:{count}>={_MAX_WORKTREES}")
             return None
     except Exception as e:
-        witness.heartbeat('_worktree', f'warn:{e}')
+        witness.warn('_worktree', f'{e}')
     try:
         return wt_create(task_id, level, base_ref=snapshot_ref, repo_root=repo_root)  # 修复 #8
     except Exception:  # noqa: BLE001
@@ -141,7 +141,7 @@ def _cleanup_wt(wt) -> None:
     try:
         wt_cleanup(wt)
     except Exception as e:
-        witness.heartbeat('_worktree', f'warn:{e}')
+        witness.warn('_worktree', f'{e}')
 
 
 def _lock_wt(wt: Worktree) -> None:

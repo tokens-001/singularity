@@ -255,8 +255,12 @@ def _build_status_context(project_id: str = "") -> str:
         "裁判统计": judge,
         "最近事件": recent,
     }, ensure_ascii=False, indent=2)
-    # 简单 hash: 任务总数+运行数+最近更新时间的组合
-    ctx_hash = f"{status.get('task_counts',{}).get('total',0)}:{status.get('running_total',0)}:{tasks[0].get('updated_at',0) if tasks else 0}"
+    # 简单 hash: 任务总数+运行数+最近更新时间+最新告警 ts（后者不加的话，
+    # 任务没动但新告警进来时会复用旧 ctx，观察者永远看不到新告警）
+    _alerts = status.get("recent_alerts") or []
+    ctx_hash = (f"{status.get('task_counts',{}).get('total',0)}:{status.get('running_total',0)}"
+                f":{tasks[0].get('updated_at',0) if tasks else 0}"
+                f":{_alerts[0].get('ts', 0) if _alerts else 0}")
     if ctx_hash == _last_ctx_hash and _last_ctx:
         return _last_ctx
     _last_ctx = ctx
