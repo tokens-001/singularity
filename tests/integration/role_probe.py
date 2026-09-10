@@ -32,11 +32,15 @@ from singularity.scheduler import orchestrator, project as proj_mod, tracker
 ROLE = os.environ.get("PROBE_ROLE", "implementer")
 DEADLINE = int(os.environ.get("PROBE_DEADLINE", "600"))
 
+# 任务拿掉 "todo" 字样：2026-09-11 首轮 A/B 就是被这个词毁的 ——
+# supervisor 的偷懒判据当时是裸子串 `"todo" in output`，而任务本身叫 todo.py，
+# 于是**输出越完整越必被判失败**（详细记录见 docs/审计报告-20260911.md）。
+# 判据已修，但实验仍换掉这个词，免得留残余混杂。
 DESC = (
-    "写一个命令行待办工具 todo.py（单文件，只用标准库）：\n"
-    "① 支持 add / list / done / remove 四个子命令；\n"
-    "② 数据存到 ~/.todo.json，**读损坏的文件不能崩**（给出可读提示）；\n"
-    "③ list 的输出要人类可读（带序号 / 勾选状态）；\n"
+    "写一个命令行书签管理工具 bookmark.py（单文件，只用标准库）：\n"
+    "① 支持 add / list / search / remove 四个子命令；\n"
+    "② 数据存到 ~/.bookmarks.json，**读损坏的文件不能崩**（给出可读提示）；\n"
+    "③ list 的输出要人类可读（带序号 / 标签 / 添加日期）；\n"
     "④ 文件末尾加一段 __main__ 自测。"
 )
 
@@ -87,11 +91,14 @@ def main() -> int:
         body = f.read_text(encoding="utf-8", errors="replace")
         h = hashlib.sha256(body.encode()).hexdigest()[:12]
         print(f"  {f.relative_to(repo)}  {len(body)} 字  sha={h}")
-    out = repo / "todo.py"
+    arm = "A_有角色" if ROLE else "B_无角色"
+    out = repo / "bookmark.py"
     if out.exists():
-        Path(f"/tmp/role_{tag}.py").write_text(out.read_text(encoding="utf-8"),
+        Path(f"/tmp/role_{arm}.py").write_text(out.read_text(encoding="utf-8"),
                                                encoding="utf-8")
-        print(f"  → 存到 /tmp/role_{tag}.py")
+        print(f"  → 存到 /tmp/role_{arm}.py")
+    else:
+        print(f"  → 没有 bookmark.py 产物")
     return 0
 
 
