@@ -32,6 +32,7 @@ export default function Chat() {
   const pendingCid = useRef<string>('')
   const projectsRef = useRef<any[]>([])
   const traceCache = useRef<Map<string, { files: string[]; verdict: string }>>(new Map())
+  const fetchSeq = useRef(0)   // fetchTasks 的请求序号，用于丢弃过期响应
   const toast = useToast()
 
   useEffect(() => {
@@ -67,8 +68,13 @@ export default function Chat() {
     try { const d: any = await api.projects(); const list = Array.isArray(d)?d:(d?.projects||[]); setProjects(list); projectsRef.current = list } catch { toast('加载项目失败', 'error') }
   }
   const fetchTasks = async () => {
+    // 请求序号：只认最后一次发出的请求的结果。
+    // 原来 A/B 两个项目快速来回切时，先发的那次响应后到会**覆盖**新项目的列表
+    // （闭包里的 activePid 只决定过滤条件，拦不住"先发后到"）。
+    const seq = ++fetchSeq.current
     try {
       const t = await api.tasks()
+      if (seq !== fetchSeq.current) return   // 已有更新的请求发出 → 丢弃这次结果
       if (Array.isArray(t)) {
         const filtered = activePid !== '_default' ? t.filter((x: any) => x.project_id === activePid) : t
         const list = filtered.slice(0, 20)
