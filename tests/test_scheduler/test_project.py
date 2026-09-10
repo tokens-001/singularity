@@ -4,7 +4,8 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from singularity.scheduler import config
-from singularity.scheduler.project import create, Phase, save, list_all, _path
+from singularity.scheduler import project as repo_mod
+from singularity.scheduler.project import create, Phase, save, list_all, delete, _path
 
 
 @pytest.fixture(autouse=True)
@@ -142,3 +143,47 @@ class TestProjectWorkflow:
         self.p.architecture_redo()
         assert self.p.phase == Phase.PLANNING
         assert self.p.architecture is None
+
+
+class TestProjectDelete:
+    """删除项目必须删干净 —— 残留 <id>/ 空目录会被 repo_dir() 兜底分支当活项目重建。"""
+
+    def test_delete_removes_json_and_dir(self):
+        p = create("test_del_clean", template="product_dev")
+        d = config.QIDIAN_DIR / "projects" / p.id
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "repo").mkdir()
+        assert d.exists() and _path(p.id).exists()
+
+        assert delete(p.id) is True
+        assert not _path(p.id).exists()
+        assert not d.exists(), "删项目后残留空目录 → repo_dir() 兜底会把项目'养'回来"
+
+    def test_delete_missing_project_is_false(self):
+        assert delete("9999999999999") is False
+
+    def test_delete_handles_readonly_agent_output(self):
+        """agent 产出常带 0555/0444 —— 裸 rmtree 会 PermissionError 并把残骸留在原地。"""
+        import os
+        p = create("test_del_ro", template="product_dev")
+        d = config.QIDIAN_DIR / "projects" / p.id
+        (d / "sub").mkdir(parents=True)
+        f = d / "sub" / "f.txt"
+        f.write_text("x")
+        os.chmod(f, 0o444)
+        os.chmod(d / "sub", 0o555)
+
+        assert delete(p.id) is True
+        assert not d.exists(), "只读子目录让删除留下残骸"
+
+    def test_repo_dir_does_not_resurrect_deleted_project(self):
+        """复现 2026-09-11 的"项目文件会消失": 删完项目后再碰它, 空目录被 mkdir 养回来,
+        load() 仍返 None 而目录在 → 现场看起来像文件自己没了。兜底分支不许再建目录。"""
+        p = create("test_del_resurrect", template="product_dev")
+        pid = p.id
+        assert delete(pid) is True
+
+        repo_mod.repo_dir(pid)  # 任何后续动作(重试/probe/调度循环)都会走到这
+
+        assert not (config.QIDIAN_DIR / "projects" / pid).exists(), \
+            "兜底分支把已删项目的空目录重建了 → 症状复现"

@@ -216,7 +216,13 @@ def repo_dir(project_id: str) -> Path:
     proj = load(project_id)
     if proj and proj.name:
         return get_projects_root() / _sanitize_name(proj.name)
-    return get_project_dir(project_id) / "repo"  # 兜底：找不到项目定义时回退旧路径
+    # 兜底：项目定义已经不在了(被删 / JSON 损坏)。
+    # **绝对不能 mkdir** —— 建出来的空目录让 load() 依旧返 None 而目录却"在",
+    # 现场就成了"空目录在、JSON 没了", 看起来像项目文件自己消失(2026-09-11 结案的那个)。
+    # 需要目录的调用方自己建 (ensure_repo 就自带 mkdir), 这里只负责别撒谎。
+    from singularity.scheduler import witness
+    witness.warn("project", f"repo_dir_fallback:{project_id}"[:200])
+    return _projects_dir() / project_id / "repo"
 
 
 def _settings_path() -> Path:
@@ -313,6 +319,16 @@ def delete(project_id: str) -> bool:
             # 事后也解释不了"为什么删了项目还占着空间"。
             from singularity.scheduler import witness
             witness.warn("project", f"delete_orphan:{f.name}:{type(e).__name__}"[:200])
+    # 项目工作目录也必须删。留着空目录不"无害": repo_dir() 的兜底分支
+    # (load 返 None → get_project_dir() mkdir) 会把空目录当活项目接着重建,
+    # 于是现场长成"空目录在、JSON 没了" —— 看起来像项目文件自己消失。
+    d = _projects_dir() / project_id
+    if d.exists():
+        # 用 _forcibly_remove_tree 而不是裸 rmtree: agent 产出的目录常带 0555/0444,
+        # 裸 rmtree 会 PermissionError 然后**把残骸留在原地** —— 正是本次要修的症状。
+        from singularity.scheduler._git_worktree import _forcibly_remove_tree
+        _forcibly_remove_tree(d)
+        deleted = True
     return deleted
 
 
