@@ -1141,14 +1141,34 @@ def api_project_start(project_id):
     data, code = _api_handler.project_start(project_id, _push_event)
     return jsonify(data), code
 
+def _project_repo_root(project_id: str):
+    """项目文件面板要看的仓库根。
+
+    原实现把 `project_id` 收下就丢，root 一律算成奇点仓库根 —— 于是任何项目
+    （包括不存在的 id）列出来的都是**奇点自己的源码树**，切项目也没有任何变化。
+    """
+    try:
+        from singularity.scheduler import project as proj_mod
+        if proj_mod.load(project_id) is None:
+            return None
+        d = proj_mod.repo_dir(project_id)
+        return str(d) if d.exists() else None
+    except Exception:
+        return None
+
+
 @app.route("/api/projects/<project_id>/files")
 def api_project_files(project_id):
     """列出项目文件树 (git ls-files)。"""
     import subprocess, os
+    root = _project_repo_root(project_id)
+    if root is None:
+        return jsonify({"files": [], "error": "项目不存在或仓库未创建"}), 404
     try:
-        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+        # -c core.quotePath=false: 否则中文文件名会以八进制转义返回（"docs/\346..."），
+        # 前端显示成乱码、点开必 404，且首字符是引号会把 startswith 之类的过滤全打破。
         result = subprocess.run(
-            ['git', 'ls-files', '--cached', '--others', '--exclude-standard'],
+            ['git', '-c', 'core.quotePath=false', 'ls-files', '--cached', '--others', '--exclude-standard'],
             capture_output=True, text=True, cwd=root, timeout=5)
         files = [f.strip() for f in result.stdout.split('\n') if f.strip() and not f.strip().startswith('.qidian/')]
         # 只显示源代码, 排除文档/数据/配置/测试
@@ -1166,8 +1186,11 @@ _SENSITIVE_SUFFIXES = (".key", ".pem", ".p12", ".pfx", ".crt")
 def api_project_file_content(project_id, filepath):
     """读取文件内容。"""
     import os
+    _root = _project_repo_root(project_id)
+    if _root is None:
+        return jsonify({"content": "", "error": "项目不存在或仓库未创建"}), 404
     try:
-        root = os.path.realpath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+        root = os.path.realpath(_root)
         fpath = os.path.realpath(os.path.join(root, filepath))
         # 真实路径边界校验（防 ../ 穿越，startswith 字符串前缀可被绕过）
         if fpath != root and not fpath.startswith(root + os.sep):
@@ -1190,14 +1213,16 @@ def api_project_file_content(project_id, filepath):
 def api_project_diff(project_id):
     """最近的 git diff (HEAD~1..HEAD)。"""
     import subprocess, os
+    root = _project_repo_root(project_id)
+    if root is None:
+        return jsonify({"stat": "", "diff": "", "error": "项目不存在或仓库未创建"}), 404
     try:
-        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
         result = subprocess.run(
-            ['git', 'diff', 'HEAD~3..HEAD', '--stat'],
+            ['git', '-c', 'core.quotePath=false', 'diff', 'HEAD~3..HEAD', '--stat'],
             capture_output=True, text=True, cwd=root, timeout=5)
         stat = result.stdout.strip()
         result2 = subprocess.run(
-            ['git', 'diff', 'HEAD~3..HEAD', '--', ':(exclude).qidian', ':(exclude)node_modules', ':(exclude)*.pyc'],
+            ['git', '-c', 'core.quotePath=false', 'diff', 'HEAD~3..HEAD', '--', ':(exclude).qidian', ':(exclude)node_modules', ':(exclude)*.pyc'],
             capture_output=True, text=True, cwd=root, timeout=5)
         diff = result2.stdout[:50000]
         return jsonify({"stat": stat, "diff": diff})

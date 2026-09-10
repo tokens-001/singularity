@@ -108,8 +108,13 @@ def _run_executor(executor_cls, agent_cfg: dict, full_task: str, task_id: str,
 
 
 def _run_no_tools(agent_cfg: dict, prompt: str, tag: str, level: str,
-                  baseline_ref: str = "", cwd: str = "") -> str | None:
-    """跑一个禁工具的单模型调用, 返回 raw_output 或 None(失败静默)。"""
+                  baseline_ref: str = "", cwd: str = "") -> tuple[str, int, float] | None:
+    """跑一个禁工具的单模型调用。
+
+    返回 `(raw_output, token_count, elapsed)` 或 None。带上用量是必须的：
+    原来只回 raw_output，调用方拿不到 token，架构阶段（委员会 + 融合）
+    就成了唯一**不进 token 账**的阶段（见 _FusionResult 的注释）。
+    """
     agent_cfg = _ensure_agent_type(agent_cfg)
     agent_cfg = {**agent_cfg, "no_tools": True}
     etype = agent_cfg.get("type", "claude-cli")
@@ -129,7 +134,9 @@ def _run_no_tools(agent_cfg: dict, prompt: str, tag: str, level: str,
         witness.warn("dispatcher", f"no_tools_fail:{tag}:{type(e).__name__}"[:80])
         return None
     if result and result.raw_output:
-        return result.raw_output
+        return (result.raw_output,
+                int(getattr(result, "token_count", 0) or 0),
+                float(getattr(result, "elapsed", 0.0) or 0.0))
     err = getattr(result, "error", "") if result else "no result"
     witness.warn("dispatcher", f"no_tools_empty:{tag}:{err}"[:80])
     return None
@@ -191,6 +198,8 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
 
     # 并行派发初稿 (禁工具, 直接输出 JSON 方案)
     outputs = []
+    member_tokens = 0            # 委员会成员的实际用量，回填给 _FusionResult
+    member_elapsed = 0.0
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(chain), 4)) as ex:
         futures = {}
         for i, a in enumerate(chain):
@@ -208,9 +217,12 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
         for fut in done:
             agent_cfg = futures[fut]
             try:
-                raw = fut.result()
-                if raw:
+                got = fut.result()
+                if got:
+                    raw, _tk, _el = got
                     outputs.append((agent_cfg.get("model", "?"), raw))
+                    member_tokens += _tk
+                    member_elapsed += _el
             except Exception:
                 pass  # 单个模型失败不阻断委员会
 
@@ -227,10 +239,13 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
     if len(outputs) == 1:
         model, raw = outputs[0]
         from singularity.scheduler.executors.base import ExecutorResult
+        # 同样要带上用量：这条路径原来连 token_count 都没有，整个架构阶段不进账。
         return DispatchResult(
             level=level,
             agent_cfg=chain[0],
-            executor_result=ExecutorResult(success=True, raw_output=raw),
+            executor_result=ExecutorResult(success=True, raw_output=raw,
+                                           token_count=member_tokens,
+                                           elapsed=member_elapsed),
             attempts=1,
         )
 
@@ -270,7 +285,7 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
                 error = ""
                 changed_files: list = []
                 patch_path = ""
-                token_count = 0
+                token_count = 0     # 占位，真实值在类体外回填（见下）
                 elapsed = 0.0
                 tool_events: list = []
 
@@ -278,6 +293,14 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
             # 必须在类体**外**赋值：class body 不做闭包查找，写在里面会 NameError。
             # 不带这个属性时调用方取到 None 直接跳过（非委员会路径）。
             _FusionResult.fusion_meta = fusion_meta
+            # 回填真实用量。原来这里是硬编码的 token_count = 0 / elapsed = 0.0，
+            # 而 _task_runner._archive_task_outcome 正是读这两个字段，
+            # record_tokens 又有 `if tokens > 0` 闸 —— 于是架构阶段（委员会 + 融合，
+            # 整个流水线最贵的一段）**一条用量都不进账**，成本统计永远对不上。
+            # 注意：这里只覆盖**成员初稿**的用量；v2 融合自己那几步模型调用
+            # （提取/辩论/定稿）仍没回传，是已知的剩余缺口。
+            _FusionResult.token_count = member_tokens
+            _FusionResult.elapsed = member_elapsed
             return DispatchResult(
                 level=level,
                 agent_cfg={"model": f"fusion({','.join(m for m,_ in outputs)})"},

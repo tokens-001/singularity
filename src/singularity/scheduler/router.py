@@ -54,12 +54,19 @@ def _llm_classify(task: str) -> RouteResult:
 
     try:
         # 从 agents.json 取任意可用模型
-        from singularity.scheduler.dispatcher import load_agents
-        agents = load_agents()
+        from singularity.scheduler import dispatcher as disp_mod
+        agents = disp_mod.load_agents()
         agent_cfg = None
         for tier in ("any",):
             for a in agents.get(tier, []):
-                if a.get("model"):
+                if not a.get("model"):
+                    continue
+                # agent_api_available 会**就地**补全 type/provider/entry/api_key_env ——
+                # 直接读 agents_custom.json 拿到的 entry/api_key_env 都是空串
+                # （真值在模型注册表里，由 _build_agent_from_registry 补）。
+                # 不补的话下面 api_key 为空 → 永远 return RouteResult() →
+                # **所有任务都被判成 default**，路由分类整体失效。
+                if disp_mod.agent_api_available(a) and a.get("entry"):
                     agent_cfg = a
                     break
             if agent_cfg:
@@ -82,9 +89,15 @@ def _llm_classify(task: str) -> RouteResult:
             "max_tokens": 80, "temperature": 0,
         }
 
+        # entry 可能本来就是完整端点（注册表里存的是 .../v1/chat/completions），
+        # 无脑再拼一次会得到 .../chat/completions/chat/completions → 404。
+        url = base_url.rstrip("/")
+        if not url.endswith("/chat/completions"):
+            url = f"{url}/chat/completions"
+
         client = httpx.Client(timeout=httpx.Timeout(10.0, connect=5.0))
         resp = client.post(
-            f"{base_url.rstrip('/')}/chat/completions",
+            url,
             json=body,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         )

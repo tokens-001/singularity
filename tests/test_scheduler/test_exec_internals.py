@@ -727,7 +727,7 @@ class TestCommitteePerspective:
         seen = []
         monkeypatch.setattr(de, "_run_no_tools",
                             lambda c, prompt, tag, level, baseline_ref="", cwd="":
-                            (seen.append(prompt), '{"architecture":"x"}')[1])
+                            (seen.append(prompt), ('{"architecture":"x"}', 0, 0.0))[1])
         monkeypatch.setattr(ej, "fuse_architecture_v2", lambda *a, **k: '{"architecture":"fused"}')
         monkeypatch.setattr(cfg, "QIDIAN_DIR", tmp_path)
         de._dispatch_committee("模块划分 数据模型", "any", "tid", {},
@@ -753,7 +753,7 @@ class TestCommitteePerspective:
         monkeypatch.setattr(de.witness, "warn", lambda *a, **k: seen.append(a))
         monkeypatch.setattr(de, "_run_no_tools",
                             lambda c, prompt, tag, level, baseline_ref="", cwd="":
-                            None if c.get("model") == "m2" else '{"architecture":"x"}')
+                            None if c.get("model") == "m2" else ('{"architecture":"x"}', 0, 0.0))
         monkeypatch.setattr(ej, "fuse_architecture_v2", lambda *a, **k: '{}')
         monkeypatch.setattr(cfg, "QIDIAN_DIR", tmp_path)
         de._dispatch_committee("模块划分 数据模型", "any", "tid", {},
@@ -777,7 +777,7 @@ class TestCommitteeDegradationVisibility:
         monkeypatch.setattr(de.witness, "warn", lambda *a: seen.append(a))
         monkeypatch.setattr(de, "_run_no_tools",
                             lambda c, p, tag, level, baseline_ref="", cwd="":
-                            '{"architecture":"x"}')
+                            ('{"architecture":"x"}', 0, 0.0))
         monkeypatch.setattr(de, "_run_executor", lambda *a, **k: None)  # 别真调通用合成
         monkeypatch.setattr(cfg, "QIDIAN_DIR", tmp_path)
         monkeypatch.setattr(ej, "fuse_architecture_v2",
@@ -804,7 +804,7 @@ class TestCommitteeDegradationVisibility:
         monkeypatch.setattr(de.witness, "warn", lambda *a: None)
         monkeypatch.setattr(de, "_run_no_tools",
                             lambda c, p, tag, level, baseline_ref="", cwd="":
-                            '{"architecture":"x"}')
+                            ('{"architecture":"x"}', 0, 0.0))
 
         def fake_run_executor(executor_cls, agent_cfg, prompt, tag, level, **kw):
             seen["agent_cfg"] = agent_cfg
@@ -833,7 +833,7 @@ class TestFusionMetaHandoff:
         from singularity.scheduler import config as cfg
         monkeypatch.setattr(de, "_run_no_tools",
                             lambda c, p, tag, level, baseline_ref="", cwd="":
-                            '{"architecture":"' + (c.get("model") or "?") + '"}')
+                            ('{"architecture":"' + (c.get("model") or "?") + '"}', 0, 0.0))
         monkeypatch.setattr(ej, "fuse_architecture_v2",
                             lambda *a, **k: '{"architecture":"fused"}')
         monkeypatch.setattr(cfg, "QIDIAN_DIR", tmp_path)
@@ -888,7 +888,7 @@ class TestNoToolsFailureVisibility:
             raw_output = "方案"
             error = ""
         r, seen = self._run(monkeypatch, lambda *a, **k: _R())
-        assert r == "方案"
+        assert r[0] == "方案"
         assert not seen, seen
 
 
