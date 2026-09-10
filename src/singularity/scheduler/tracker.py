@@ -66,6 +66,10 @@ class Task:
     route_level: str = "any"  # 两档后统一 "any" (E/E+/D 已废弃)
     route_gate: bool = False
     route_type: str = "default"
+    # _workflow_phases 建项目子任务时写、_exec 首轮读（Step 4 角色提示词注入）。
+    # 这个字段曾经**不存在** —— 写入侧走 transition(**kwargs) 被 hasattr 静默丢弃，
+    # 读取侧 getattr(task,'route_role',None) 永远拿到 ""，于是角色提示词从没注入过。
+    route_role: str = ""
     snapshot_id: str = ""
     error: str = ""
     retry_count: int = 0
@@ -96,6 +100,7 @@ class Task:
         d.setdefault("children", [])
         d.setdefault("depth", 0)
         d.setdefault("route_locked", False)
+        d.setdefault("route_role", "")     # 旧任务文件没这个键，不补会 cls(**d) 报错
         d.setdefault("held", False)
         d.setdefault("held_reason", "")
         d.setdefault("project_id", "")
@@ -189,6 +194,23 @@ def create(
     return task
 
 
+def _apply_attrs(task: Task, kwargs: dict, task_id: str, caller: str) -> None:
+    """把 transition/cas 的 kwargs 落到 Task 上；**Task 不认的键必须留痕**。
+
+    以前是 `if hasattr(task, k): setattr(...)` —— 拼错或字段不存在就静默丢弃，
+    写入方以为设上了、读取方拿到默认值，两边都"正常"。实际踩过：
+    `route_role`（字段根本不存在）被这样丢了一年，角色提示词从来没注入过。
+    """
+    unknown = [k for k in kwargs if not hasattr(task, k)]
+    for k, v in kwargs.items():
+        if k not in unknown:
+            setattr(task, k, v)
+    if unknown:
+        from singularity.scheduler import witness
+        witness.warn("tracker",
+                     f"{caller}_unknown_kwargs:{','.join(unknown)}:task={task_id[:8]}"[:200])
+
+
 def transition(task_id: str, new_status: TaskStatus, force: bool = False, **kwargs) -> Optional[Task]:
     """改状态。终态 (DONE/FAILED/ROLLED_BACK) 只允许 _TERMINAL_EXIT 白名单内的流转,
     其余改判拒绝并返回 None (force=True 可绕过, 仅 GATE3 打回这类显式重置用)。"""
@@ -206,9 +228,7 @@ def transition(task_id: str, new_status: TaskStatus, force: bool = False, **kwar
                 pass
             return None
         task.status = new_status
-        for k, v in kwargs.items():
-            if hasattr(task, k):
-                setattr(task, k, v)
+        _apply_attrs(task, kwargs, task_id, "transition")
         task.updated_at = time.time()
         _write(task)
         _invalidate_scan_cache()
@@ -296,9 +316,7 @@ def cas(
         if task is None or task.status != expect_from:
             return False
         task.status = to
-        for k, v in kwargs.items():
-            if hasattr(task, k):
-                setattr(task, k, v)
+        _apply_attrs(task, kwargs, task_id, "cas")
         task.updated_at = time.time()
         _write(task)
         _invalidate_scan_cache()  # 抢占成功也失效扫描缓存 (否则 2s TTL 窗口内重复调度)

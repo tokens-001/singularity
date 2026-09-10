@@ -1,6 +1,22 @@
 """Project state machine + workflow tests."""
 from unittest.mock import patch, MagicMock
+
+import pytest
+
+from singularity.scheduler import config
 from singularity.scheduler.project import create, Phase, save, list_all, _path
+
+
+@pytest.fixture(autouse=True)
+def _isolated_qidian_dir(tmp_path, monkeypatch):
+    """把 QIDIAN_DIR 指到临时目录 —— 这个文件里的测试会**真建项目**。
+
+    以前不隔离：每次跑测试都往生产数据目录 `.qidian/projects/` 写文件，而 teardown
+    只 unlink 状态文件、不删 sidecar（`.architecture.md` / `.executable_tasks.json`
+    / `.fusion-models.md`），于是攒下了几百个孤儿（实测 199 组）。
+    隔离以后这两个问题一起消失，原来那个 teardown_class 也就不需要了。
+    """
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
 
 
 class TestProjectState:
@@ -23,14 +39,7 @@ class TestProjectState:
         p.confirm_gate(Phase.GATE1, "rejected")
         assert p.phase == Phase.TEMPLATE
 
-    @classmethod
-    def teardown_class(cls):
-        for p in list_all():
-            if "test_" in p.name:
-                try:
-                    _path(p.id).unlink()
-                except Exception:
-                    pass
+    # teardown_class 已删：QIDIAN_DIR 隔离后所有产物落在 tmp_path，pytest 自己清。
 
 
 class TestProjectWorkflow:

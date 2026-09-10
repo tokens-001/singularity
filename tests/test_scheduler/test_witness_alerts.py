@@ -119,3 +119,28 @@ def test_executor_actually_wires_the_hook(qdir, monkeypatch):
     with pytest.raises(oa._FormatError):     # 该抛的还是抛，标记只是顺带
         oa.OpenAIAgentExecutor._raise_for_status(FakeExec(), FakeResp())
     assert api_store.get("deepseek").status == "quota_exhausted"
+
+
+def test_no_message_written_into_heartbeat_level():
+    """不变量：`witness.heartbeat(task_id, level)` 的第二参数只能是真的 agent level。
+
+    往里塞 f-string 消息会：① 被存成一个伪 level（status 还是 "running"），
+    状态面板的"运行中"虚高、负载列表出现垃圾条目；② 任务到终态时那个心跳文件
+    被 `_cleanup_terminal_heartbeat` unlink —— 信息等于没记。
+    非任务状态的信息走 `witness.warn`（append-only，不受清理影响）。
+
+    这条防的是回归：2026-09-10 在 _worktree / _exec 里又抓到 4 处这么写的。
+    """
+    import re
+    from pathlib import Path
+    import singularity.scheduler as pkg
+
+    bad = []
+    for py in Path(pkg.__file__).parent.rglob("*.py"):
+        for i, line in enumerate(py.read_text(encoding="utf-8").splitlines(), 1):
+            if "def heartbeat" in line or line.lstrip().startswith("#"):
+                continue
+            m = re.search(r"heartbeat\(\s*[^,]+,\s*(.*?)\)\s*$", line)
+            if m and m.group(1).lstrip().startswith(("f'", 'f"')):
+                bad.append(f"{py.name}:{i}: {line.strip()[:70]}")
+    assert not bad, "心跳第二参数被当成消息用了（应改走 witness.warn）:\n" + "\n".join(bad)

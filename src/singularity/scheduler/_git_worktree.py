@@ -229,17 +229,23 @@ def merge_tree_probe(base_ref: str, ours_ref: str, theirs_ref: str, repo_root: P
     )
     if r.returncode == 0:
         return True, []
-    # 命令错误: stderr 有内容且 stdout 无文件路径 → 不是真冲突
-    if not r.stdout.strip() and r.stderr.strip():
-        return False, []
-    # 真冲突: 解析 stdout 冲突文件 (merge-tree --name-only 输出路径列表)
+    # 输出格式（git 2.38+ `--write-tree --name-only`，实测 2.50）：
+    #   第 1 行 = 写入的 tree OID
+    #   随后若干行 = 冲突文件名
+    #   空行
+    #   之后是人类可读消息块（"Auto-merging X" / "CONFLICT (...): ..."）
+    # 以前靠 `"/" in line or "." in line` 滤掉 tree OID —— 实测有两个错：
+    #   ① 根目录下**无扩展名**的冲突文件（Makefile/Dockerfile/LICENSE）两个条件都不满足，
+    #      被一起滤掉；若它是唯一冲突，conflict_files 为空 → _drain_one 判成"命令错误"
+    #      → 任务标 **failed 终态**，而不是 parking 等人工解决。任务就这么死了。
+    #   ② "Auto-merging README.md" 这类消息行**含 "."**，被当成冲突文件名混进列表。
+    # 按格式解析：跳过第 1 行，收到空行为止。
     conflicts = []
-    for line in r.stdout.splitlines():
+    for line in r.stdout.splitlines()[1:]:
         line = line.strip()
-        if not line or line.startswith("<<") or line.startswith("CONFLICT"):
-            continue
-        if "/" in line or "." in line:
-            conflicts.append(line)
+        if not line:
+            break            # 空行 = 文件名列表结束，后面全是消息
+        conflicts.append(line)
     return False, conflicts
 
 

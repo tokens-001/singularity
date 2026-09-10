@@ -585,6 +585,137 @@ class TestDebateWaves:
         de._debate("任务", members, chain, "tid", "any", max_rounds=2)
         assert len(calls) == 8, calls
 
+    def test_single_reviewer_pulls_the_slow_one_back_in(self, monkeypatch):
+        """N=2 且一个慢 → 慢模型也拉进来辩论，不能留下单人空转。
+
+        只剩一个 reviewer 时辩论没有任何信息流动：它评的是**别人**的方案，
+        轮到它修订时，「其他成员对你方案的点评」里只剩它自己那条、被 rv != model
+        滤掉 → 空字符串，它对着空点评"吸收合理意见"。慢模型则冻结在初稿。
+        实测：调用数从 4 掉到 2，修订 prompt 点评段 0 字 —— 花钱、没产出、无告警。
+        """
+        from singularity.scheduler import _dispatch_exec as de
+        calls = []
+        monkeypatch.setattr(de.witness, "warn", lambda *a, **k: None)
+
+        def fake(cfg, prompt, tag, level, baseline_ref="", cwd=""):
+            calls.append((tag, prompt))
+            return "点评" if "_rev_" in tag else '[{"op":"add","path":"/x","value":1}]'
+        monkeypatch.setattr(de, "_run_no_tools", fake)
+        monkeypatch.setattr(de, "_is_slow_model", lambda m: m == "m2")
+        de._debate("任务", [("m1", '{"a": 1}'), ("m2", '{"b": 2}')],
+                   [{"model": "m1"}, {"model": "m2"}], "tid", "any", max_rounds=1)
+
+        assert len(calls) == 4, calls                     # 两人都评审 + 两人都修订
+        for tag, p in calls:
+            if "_rvs_" in tag:
+                seg = p.split("其他成员对你方案的点评:")[1].split("请吸收合理意见")[0]
+                assert seg.strip(), f"{tag} 的点评段是空的 → 辩论空转"
+
+    def test_all_slow_lineup_does_not_warn(self, monkeypatch):
+        """全员慢 → 兜底参与是**正常**行为，不该刷告警。
+
+        告警只留给异常（凑不齐人但有得凑）。正常阵容刷告警会把告警通道淹掉 ——
+        这个仓库刚为"告警没人看"付过代价。
+        """
+        from singularity.scheduler import _dispatch_exec as de
+        warns = []
+        monkeypatch.setattr(de.witness, "warn", lambda *a, **k: warns.append(a))
+        monkeypatch.setattr(de, "_run_no_tools",
+                            lambda cfg, p, tag, level, baseline_ref="", cwd="":
+                            (warns.append(("_call", tag)), "[]")[1])
+        monkeypatch.setattr(de, "_is_slow_model", lambda m: True)
+        de._debate("任务", [("m1", "{}"), ("m2", "{}")],
+                   [{"model": "m1"}, {"model": "m2"}], "tid", "any", max_rounds=1)
+        assert not any("degraded" in str(w) for w in warns), warns
+        assert any("_call" in str(w) for w in warns)      # 确实跑了辩论
+
+    def test_two_reviewers_still_bench_the_slow_one(self, monkeypatch):
+        """N=3 且一个慢 → 慢模型仍只出初稿（兜底不该误伤正常阵容）。"""
+        from singularity.scheduler import _dispatch_exec as de
+        calls = []
+        monkeypatch.setattr(de.witness, "warn", lambda *a, **k: None)
+        monkeypatch.setattr(de, "_run_no_tools",
+                            lambda cfg, p, tag, level, baseline_ref="", cwd="":
+                            (calls.append(tag), "[]")[1])
+        monkeypatch.setattr(de, "_is_slow_model", lambda m: m == "m3")
+        de._debate("任务", [("m1", '{"a": 1}'), ("m2", '{"b": 2}'), ("m3", '{"c": 3}')],
+                   [{"model": m} for m in ("m1", "m2", "m3")], "tid", "any", max_rounds=1)
+        assert not any("_rev_m3" in c or "_rvs_m3" in c for c in calls), calls
+        assert sum("_rev_" in c for c in calls) == 2      # 两个快模型正常互评
+
+    def test_slow_gate_reads_speed_not_reasoning(self, monkeypatch):
+        """慢闸只看 speed —— reasoning 是「响应怎么解析」的字段，不是「跑得慢」。
+
+        曾经是 `speed == "slow" or reasoning`：管理界面上开关一次「推理模型」，
+        就顺手把该模型踢出辩论，且无声。当前没有模型同时 reasoning=True 且
+        speed!=slow，所以这半句一直没暴露。
+        """
+        from singularity.scheduler import _dispatch_exec as de
+
+        class E:
+            def __init__(self, speed, reasoning):
+                self.speed, self.reasoning = speed, reasoning
+
+        for speed, reasoning, want in [("fast", True, False),      # 推理但快 → 该参与
+                                       ("medium", True, False),
+                                       ("slow", False, True),      # 非推理但慢 → 该禁
+                                       ("slow", True, True)]:
+            monkeypatch.setattr(de.model_registry, "get",
+                                lambda _m, e=E(speed, reasoning): e)
+            assert de._is_slow_model("x") is want, (speed, reasoning)
+
+    def test_debate_budget_stops_new_rounds(self, monkeypatch):
+        """预算耗尽 → 不再开新轮，但已完成的修订保留。
+
+        这条护栏必须有测试：它拦的是「整轮调度被拖死」（实测 3 家 2 轮撞过 2300s），
+        失效的代价不是分数低一点，是整个队列停摆。
+        """
+        import types
+        from singularity.scheduler import _dispatch_exec as de
+        calls, warns = [], []
+        clock = {"t": 0.0}
+        monkeypatch.setattr(de, "time", types.SimpleNamespace(time=lambda: clock["t"]))
+        monkeypatch.setattr(de.witness, "warn", lambda *a, **k: warns.append(a))
+        monkeypatch.setattr(de, "_is_slow_model", lambda m: False)
+        monkeypatch.setattr(de, "_DEBATE_TOTAL_BUDGET", 10)
+
+        def fake(cfg, p, tag, level, baseline_ref="", cwd=""):
+            calls.append(tag)
+            clock["t"] += 5          # 一次调用推进 5；一轮 2 波 × 2 人 = 20 → 第 2 轮超预算
+            return "点评" if "_rev_" in tag else '[{"op":"add","path":"/x","value":1}]'
+        monkeypatch.setattr(de, "_run_no_tools", fake)
+
+        out = de._debate("任务", [("m1", '{"a":1}'), ("m2", '{"b":2}')],
+                         [{"model": "m1"}, {"model": "m2"}], "tid", "any", max_rounds=5)
+        assert any("debate_budget_exhausted" in str(w) for w in warns), warns
+        assert len(calls) == 4, calls            # 只跑完第 1 轮的 2 波
+        assert out and len(out) == 2             # 仍返回各成员方案，不返回空
+
+    def test_empty_review_does_not_enter_the_pool(self, monkeypatch):
+        """某成员评审返回空 → 跳过它，别把空点评混进汇总。
+
+        混进去的话，被点评方的修订 prompt 里会出现「来自 X 的点评：」后面什么都没有 ——
+        等于给出一个空位让它猜，比不给更糟。
+        """
+        from singularity.scheduler import _dispatch_exec as de
+        seen = []
+        monkeypatch.setattr(de.witness, "warn", lambda *a, **k: None)
+
+        def fake(cfg, p, tag, level, baseline_ref="", cwd=""):
+            seen.append((tag, p))
+            if "_rev_m2" in tag:
+                return ""                                    # m2 评审空手而归
+            return "点评" if "_rev_" in tag else "[]"
+        monkeypatch.setattr(de, "_run_no_tools", fake)
+        monkeypatch.setattr(de, "_is_slow_model", lambda m: False)
+        de._debate("任务", [("m1", '{"a":1}'), ("m2", '{"b":2}')],
+                   [{"model": "m1"}, {"model": "m2"}], "tid", "any", max_rounds=1)
+        revise_prompts = [p for t, p in seen if "_rvs_" in t]
+        assert revise_prompts, seen
+        assert any("来自 m1 的点评" in p for p in revise_prompts)
+        assert not any("来自 m2 的点评" in p for p in revise_prompts), \
+            "空点评被当成一条点评混进汇总了"
+
     def test_patch_is_noop_helper(self):
         from singularity.scheduler import _dispatch_exec as de
         assert de._patch_is_noop("[]") is True
@@ -896,6 +1027,116 @@ class TestCommitteePerspective:
         de._dispatch_committee("模块划分 数据模型", "any", "tid", {},
                                [{"model": "m1"}, {"model": "m2"}])
         assert any("committee_partial" in str(x) for x in seen), seen
+
+
+class TestCommitteeDegradationVisibility:
+    """委员会/融合的降级路径必须留痕。
+
+    分支覆盖实测：`_dispatch_committee` 的降级分支（辩论抛异常 / 融合抛异常 /
+    融合空手而归）此前**一条测试都没有**，而它们原本全是 `except Exception: pass`
+    —— 失败在这一层完全不可见，外面只看到"融合跑完了"。
+    """
+
+    def _run(self, monkeypatch, tmp_path, *, debate=None, fuse=None):
+        from singularity.scheduler import _dispatch_exec as de
+        from singularity.scheduler import execution_judge as ej
+        from singularity.scheduler import config as cfg
+        seen = []
+        monkeypatch.setattr(de.witness, "warn", lambda *a: seen.append(a))
+        monkeypatch.setattr(de, "_run_no_tools",
+                            lambda c, p, tag, level, baseline_ref="", cwd="":
+                            '{"architecture":"x"}')
+        monkeypatch.setattr(de, "_is_slow_model", lambda m: False)
+        monkeypatch.setattr(de, "_run_executor", lambda *a, **k: None)  # 别真调通用合成
+        monkeypatch.setattr(cfg, "QIDIAN_DIR", tmp_path)
+        # 显式关掉 v2：这几条测的是**旧两阶段**路径（默认已改成 v2 开）
+        monkeypatch.setenv("QIDIAN_FUSION_V2", "0")
+        if debate is not None:
+            monkeypatch.setattr(de, "_debate", debate)
+        monkeypatch.setattr(ej, "fuse_architecture",
+                            fuse or (lambda *a, **k: '{"architecture":"fused"}'))
+        de._dispatch_committee("模块划分 数据模型", "any", "tid", {},
+                               [{"model": "m1"}, {"model": "m2"}])
+        return [str(x) for x in seen]
+
+    def test_debate_crash_is_warned(self, monkeypatch, tmp_path):
+        def boom(*a, **k):
+            raise RuntimeError("辩论炸了")
+        warns = self._run(monkeypatch, tmp_path, debate=boom)
+        assert any("debate_failed" in w and "RuntimeError" in w for w in warns), warns
+
+    def test_fusion_crash_is_warned(self, monkeypatch, tmp_path):
+        def boom(*a, **k):
+            raise RuntimeError("融合炸了")
+        warns = self._run(monkeypatch, tmp_path, fuse=boom)
+        assert any("fusion_failed" in w and "RuntimeError" in w for w in warns), warns
+
+    def test_v2_failure_falls_back_to_legacy_loudly(self, monkeypatch, tmp_path):
+        """v2 空手而归 → 悄悄走旧流程是查不出问题的（v2 排查痛过好几轮）。"""
+        from singularity.scheduler import _dispatch_exec as de
+        from singularity.scheduler import execution_judge as ej
+        from singularity.scheduler import config as cfg
+        seen = []
+        monkeypatch.setattr(de.witness, "warn", lambda *a: seen.append(a))
+        monkeypatch.setattr(de, "_run_no_tools",
+                            lambda c, p, tag, level, baseline_ref="", cwd="":
+                            '{"architecture":"x"}')
+        monkeypatch.setattr(de, "_is_slow_model", lambda m: False)
+        monkeypatch.setattr(de, "_debate", lambda *a, **k: a[1])
+        monkeypatch.setattr(de, "_run_executor", lambda *a, **k: None)
+        monkeypatch.setattr(cfg, "QIDIAN_DIR", tmp_path)
+        monkeypatch.setenv("QIDIAN_FUSION_V2", "1")
+        monkeypatch.setattr(ej, "fuse_architecture_v2", lambda *a, **k: "")
+        monkeypatch.setattr(ej, "fuse_architecture",
+                            lambda *a, **k: '{"architecture":"legacy"}')
+        de._dispatch_committee("模块划分 数据模型", "any", "tid", {},
+                               [{"model": "m1"}, {"model": "m2"}])
+        warns = [str(x) for x in seen]
+        assert any("fusion_v2_failed_fallback_legacy" in w for w in warns), warns
+
+    def test_fusion_empty_falls_back_loudly(self, monkeypatch, tmp_path):
+        warns = self._run(monkeypatch, tmp_path, fuse=lambda *a, **k: "")
+        assert any("fusion_empty_fallback_synthesis" in w for w in warns), warns
+
+
+class TestFusionMetaHandoff:
+    """委员会产物随 DispatchResult 回传，不落 .qidian/.last_fusion.json 全局单文件。
+
+    那个全局文件在并发下会串项目：Flask threaded=True + 调度循环 concurrent=2，
+    HTTP(_api_projects.run_phase) 和后台循环(app.py 结果处理) 两条路径都能进委员会，
+    两个架构任务写同一路径 → 后写的覆盖先写的，先写的那家读到**别人的**产物；
+    读不到时整段静默跳过。另外非委员会路径会捡到上一轮残留的文件。
+    """
+
+    def _run(self, monkeypatch, tmp_path):
+        from singularity.scheduler import _dispatch_exec as de
+        from singularity.scheduler import execution_judge as ej
+        from singularity.scheduler import config as cfg
+        monkeypatch.setattr(de, "_run_no_tools",
+                            lambda c, p, tag, level, baseline_ref="", cwd="":
+                            '{"architecture":"' + (c.get("model") or "?") + '"}')
+        monkeypatch.setattr(de, "_is_slow_model", lambda m: False)
+        monkeypatch.setattr(ej, "fuse_architecture",
+                            lambda *a, **k: '{"architecture":"fused"}')
+        monkeypatch.setattr(cfg, "QIDIAN_DIR", tmp_path)
+        # 显式关掉 v2：这几条测的是**旧两阶段**路径（默认已改成 v2 开）
+        monkeypatch.setenv("QIDIAN_FUSION_V2", "0")
+        return de._dispatch_committee("模块划分 数据模型", "any", "tid", {},
+                                      [{"model": "m1"}, {"model": "m2"}])
+
+    def test_fusion_meta_rides_on_result(self, monkeypatch, tmp_path):
+        """属性名两边必须对得上 —— 对不上就是静默 None，正是这次要防的失败模式。"""
+        r = self._run(monkeypatch, tmp_path)
+        fm = getattr(r.executor_result, "fusion_meta", None)
+        assert fm, "委员会产物没挂在返回结果上 → _run_planning 取不到"
+        assert sorted(fm["models"]) == ["m1", "m2"]   # 收集自 wait() 的 done 集合，不保序
+        assert fm["fused"] == '{"architecture":"fused"}'
+        assert len(fm["outputs"]) == 2
+
+    def test_no_global_handoff_file_left_behind(self, monkeypatch, tmp_path):
+        self._run(monkeypatch, tmp_path)
+        assert not (tmp_path / ".last_fusion.json").exists(), \
+            "又写回全局交接文件了 → 并发会串项目"
 
 
 class TestNoToolsFailureVisibility:

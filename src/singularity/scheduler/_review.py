@@ -6,6 +6,7 @@ D1: 审查失败上限 (auto-fix max 2轮) + 超时一律判FAIL + 安全项标�
 """
 
 from __future__ import annotations
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -16,6 +17,61 @@ from singularity.scheduler import witness
 _REVIEW_MAX_AUTO_FIX = 2
 # D1: 审查超时阈值 (秒)
 _REVIEW_TIMEOUT_SEC = 600  # 10 minutes
+
+
+def _norm(v) -> str:
+    """LLM 返回的枚举值（severity / status…）归一化后再比：小写 + 去空白。
+
+    审查判官是模型，输出会在大小写/空格上飘（"Critical"、"Fail "、"HIGH"）。
+    直接拿字面量精确匹配的话，一个字母的差别就能让 critical/fail 匹配不上 →
+    被当成软信号**放行** —— 正是这个仓库修过一轮的 fail-open。
+    缺失/None 归一成空串；空串不匹配任何硬拦档，等价于"没给这个字段"。
+    """
+    # 不能写 d.get(k, "")：键存在但值为 None 时默认值不生效，
+    # str(None) 会得到 "none" 这种凭空的档位。
+    return "" if v is None else str(v).strip().lower()
+
+
+def _sev(item) -> str:
+    """LLM 返回的 severity，归一化后比。见 _norm。"""
+    return _norm((item or {}).get("severity"))
+
+
+def _expand_review_pool(disp_mod, writer_model: str, chosen: list[str],
+                        want: int = 2) -> list[str]:
+    """启用的 agent 凑不齐 reviewer 时，从**模型注册表**补人。
+
+    为什么需要：2 模型阵容里排除 writer 就只剩 1 个，"多模型审查"名不副实，
+    而多视角碰撞正是核心价值主张。原先是只告警不补（warn:single_reviewer）。
+
+    扩池会调用**未启用**的模型 —— 是真花钱，所以三条约束：
+      ① 只在少到名不副实时才补（调用方判 len < want），不会把每次审查都变成全池
+      ② 补够 want 就停
+      ③ 每次补都告警（花钱的事必须留痕）
+    QIDIAN_REVIEW_POOL_EXPAND=0 可整体关掉。
+    """
+    if os.environ.get("QIDIAN_REVIEW_POOL_EXPAND", "1") == "0":
+        return []
+    try:
+        from . import model_registry as mr
+        skip = {writer_model} | set(chosen)
+        out: list[str] = []
+        for mid in mr.load_models():
+            if mid in skip:
+                continue
+            cfg = {"model": mid}
+            # agent_api_available 会**就地**补全 type/provider/api_key_env；
+            # 补不出 type 说明注册表里没有这个模型的可用配置（或 provider 没配 key）。
+            # 它内部还有一道 OpenAI 硬限制（不在 _order 里就不放行），别绕过。
+            if disp_mod.agent_api_available(cfg) and cfg.get("type"):
+                out.append(mid)
+                if len(chosen) + len(out) >= want:
+                    break
+        return out
+    except Exception as e:
+        # 扩池失败不该阻断审查 —— 退回单 reviewer，但要留痕
+        witness.warn("review", f"review_pool_expand_failed:{type(e).__name__}"[:80])
+        return []
 
 
 def _is_trivial_change(changed: list[str], cwd: str) -> bool:
@@ -129,7 +185,11 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                 fut = ex.submit(val_mod.run_project_tests, cwd=cwd)
                 try:
                     test_result = fut.result(timeout=_REVIEW_TIMEOUT_SEC)
-                except concurrent.futures.TimeoutExpired:
+                # 必须是 TimeoutError，**不是 TimeoutExpired** —— 后者在 concurrent.futures
+                # 命名空间里根本不存在（Python 3.14 连 _base.TimeoutExpired 都没了）。
+                # 写成 TimeoutExpired 时求值异常类会抛 AttributeError，被外层 except 接走：
+                # 这条分支永远进不来，`return`（不再往下跑更贵的步骤）也跟着失效。
+                except concurrent.futures.TimeoutError:
                     quality["warnings"].append(f"审查超时(>{_REVIEW_TIMEOUT_SEC}s) — 不默认通过, 升GATE2兜底")
                     quality["failure_kind"] = "review_timeout"
                     quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.4)
@@ -173,10 +233,16 @@ def run_post_exec_checks(*, validation, quality, exec_result,
 
             if len(reviewer_models) < 2:
                 # 只有 2 个启用的 agent 时，排除 writer 就只剩 1 个 —— "多模型审查"
-                # 名不副实，而"多视角碰撞"正是核心价值主张。别让它静默退化。
-                # （扩池到模型注册表能解决，但那会调用未启用的模型、成本要用户点头。）
-                witness.warn("review",
-                             f"single_reviewer:{writer_model}:pool={len(all_pool)}"[:80])
+                # 名不副实，而"多视角碰撞"正是核心价值主张。先从注册表补人；
+                # 补不到才退化成单 reviewer（并留痕）。
+                extra = _expand_review_pool(disp_mod, writer_model, reviewer_models)
+                if extra:
+                    witness.warn("review",
+                                 f"review_pool_expanded:{'+'.join(extra)}"[:120])
+                    reviewer_models += extra
+                else:
+                    witness.warn("review",
+                                 f"single_reviewer:{writer_model}:pool={len(all_pool)}"[:80])
             if reviewer_models:
                 rev_files = []; rev_models = []; all_issues = []
                 review_failed = False
@@ -193,7 +259,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                                 filepath=f, models=reviewer_models, cwd=cwd, diff_only=True,
                                 requirements=_review_requirements(task))
                             review = fut.result(timeout=_REVIEW_TIMEOUT_SEC)
-                    except concurrent.futures.TimeoutExpired:
+                    except concurrent.futures.TimeoutError:   # 不是 TimeoutExpired，见上面注释
                         quality["warnings"].append("多模型审查超时 — 不默认通过")
                         quality["failure_kind"] = "review_timeout"
                         quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.4)
@@ -205,8 +271,8 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                     rev_models = review.get("models_used", [])
                     issues = review.get("issues", [])
                     if issues:
-                        crit = [i for i in issues if i.get("severity") == "critical"]
-                        warns = [i for i in issues if i.get("severity") == "warning"]
+                        crit = [i for i in issues if _sev(i) == "critical"]
+                        warns = [i for i in issues if _sev(i) == "warning"]
                         if crit:
                             details = "; ".join(
                                 f"{i.get('model','')}:{i.get('detail','')[:60]}"
@@ -252,9 +318,9 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                     writer_model=writer_model, cwd=cwd)
                 if review.get("issues"):
                     crit = [i for i in review["issues"]
-                            if i.get("severity") == "critical"]
+                            if _sev(i) == "critical"]
                     warns = [i for i in review["issues"]
-                             if i.get("severity") == "warning"]
+                             if _sev(i) == "warning"]
                     if crit:
                         quality["warnings"].append(
                             f"review found {len(crit)} critical issues: " +
@@ -309,7 +375,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                 qa = val_mod.qa_acceptance_review(constraints, diff_text, cwd)
                 if qa.get("verdict") == "needs_fix":
                     fails = [v for v in qa.get("verifications", [])
-                             if v.get("status") in ("fail", "warning")]
+                             if _norm(v.get("status")) in ("fail", "warning")]
                     quality["warnings"].append(
                         f"QA 约束验收 {len(fails)} 条未满足: " +
                         "; ".join(v.get("constraint", "")[:40] for v in fails[:3]))
@@ -359,7 +425,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             findings = sa.get("findings", []) if sa.get("verdict") == "needs_fix" else []
             if findings:
                 # 阈值: 仅 critical/high 硬拦 (真漏洞); medium/low = 加固建议/设计不完整, 软信号不硬拦
-                hard = [f for f in findings if f.get("severity") in ("critical", "high")]
+                hard = [f for f in findings if _sev(f) in ("critical", "high")]
                 quality["warnings"].append(
                     f"安全审计 {len(findings)} 条问题: " +
                     "; ".join(f"{f.get('severity','?')}:{f.get('description','')[:40]}"

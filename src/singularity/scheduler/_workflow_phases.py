@@ -2,7 +2,6 @@ __all__ = ['_run_execution', '_run_planning', '_run_research', '_validate_archit
 
 import json, os, time, logging
 
-from singularity.scheduler import config
 from singularity.scheduler import tracker
 from singularity.scheduler import dispatcher as disp_mod
 from singularity.scheduler.project import ProjectState, Phase, save, _projects_dir
@@ -123,13 +122,16 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     project.architecture = arch
     # ponytail: 保存阶段产出文件供后续阶段复用
     _save_phase_output(project.id, "architecture.md", raw)
-    # Step 2: 多模型碰撞 → 保存各模型原始输出
+    # Step 2: 多模型碰撞 → 保存各模型原始输出。
+    # 直接从本次 dispatch 的结果取（_dispatch_committee 挂在 executor_result 上）——
+    # 曾走 QIDIAN_DIR/.last_fusion.json 这个全局单文件，并发下会串项目，见那边的注释。
+    # 非委员会路径没有这个属性 → fm 为 None，跳过。
+    # isinstance 不能省：getattr 的默认值只在**属性不存在**时生效，任何带该属性的
+    # 对象（MagicMock 就会凭空生成一个）都会溜进来，后面 fm.get 一用就炸。
     import json as _json
-    fusion_meta_path = config.QIDIAN_DIR / ".last_fusion.json"
-    if fusion_meta_path.exists():
+    fm = getattr(getattr(disp_result, "executor_result", None), "fusion_meta", None)
+    if isinstance(fm, dict) and fm:
         try:
-            fm = _json.loads(fusion_meta_path.read_text())
-            # 委员会中间产物结构化落 ProjectState (消除 .last_fusion.json 全局文件孤岛)
             project.committee_fusion = {
                 "models": fm.get("models", []),
                 "count": fm.get("count", 0),
@@ -140,8 +142,11 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
                 "\n\n---\n".join(f"## 模型: {fm['models'][i]}\n\n{fm['outputs'][i][:3000]}" for i in range(len(fm['models']))))
             _save_phase_output(project.id, "fusion-meta.json",
                 _json.dumps({"models": fm["models"], "count": fm["count"]}, ensure_ascii=False))
-            fusion_meta_path.unlink()
-        except Exception: pass
+        except Exception as e:
+            # 不能静默：落盘失败 → ProjectState 上和各阶段产出文件里都没有各模型产物，
+            # 前端「融合」页空白、后续阶段看不到委员会的中间结果，且查不出为什么。
+            from singularity.scheduler import witness
+            witness.warn("workflow", f"save_committee_fusion:{type(e).__name__}:{e}"[:200])
     traceability = arch.get("traceability", [])
     if traceability:
         _save_phase_output(project.id, "traceability.json",

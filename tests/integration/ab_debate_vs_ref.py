@@ -9,8 +9,8 @@
 注意：负向结论不能直接否定辩论 —— 可能是 ① 裁判偏心 ② 样本不够
 ③ 5.3-flash 在架构任务上本来就强于榜单排名。正向结论才有说服力。
 
-关键：走真实生产路径（不替换 fuse_architecture），跑完读 .qidian/.last_fusion.json
-拿署名 —— 这是之前两轮实验丢掉的归因。
+关键：走真实生产路径（不替换 fuse_architecture），跑完从返回的 DispatchResult 上
+拿各成员署名 —— 这是之前两轮实验丢掉的归因。
 
 用法: .venv/bin/python tests/integration/ab_debate_vs_ref.py [brief数 默认1]
       AB_REPEATS=2  AB_REF=glm-5.3-flash  AB_JUDGES=glm-5.3,kimi-k3
@@ -21,7 +21,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 import singularity.scheduler.dispatcher as disp
 from singularity.scheduler import _dispatch_exec as de
-from singularity.scheduler import config as cfg
 
 HERE = Path(__file__).resolve().parent
 
@@ -47,26 +46,23 @@ PLANS = HERE / os.environ.get("AB_CACHE", ".ab_debate_plans.json")
 _bl.MAX_CHARS = 0
 _bl.JUDGE_MAX_TOKENS = 16000
 
-# ⚠️ 生产默认：v4-pro（reasoning=true）被判为 slow → 只出初稿、不参与辩论，
-# 实际只有 glm-5.2 单边评审。本实验要测「两个都辩论」，故脚本内临时解除这道闸。
-# 与生产默认不同 —— 结论只对「两个都辩论」这个假设情形成立。
+# 慢模型闸现已只看 speed（v4-pro 是 speed=medium，本来就不进闸），
+# 这个开关只对真的 speed=slow 的阵容（kimi-k3 / kimi-k2.6）还有意义。
 if os.environ.get("AB_FORCE_DEBATE", "1") == "1":
     de._is_slow_model = lambda m: False
-    print("⚠️ 已解除慢模型闸：两个成员都参与辩论（生产默认 v4-pro 不辩论）", flush=True)
+    print("已关闭慢模型闸：全部成员都参与辩论", flush=True)
 
 
 def run_committee(brief, i):
     """走真实路径跑委员会（含辩论+融合），返回 (署名的稿子, 融合稿, 耗时)。"""
     chain = [{"model": m} for m in MEMBERS]
-    meta_path = cfg.QIDIAN_DIR / ".last_fusion.json"
-    if meta_path.exists():
-        meta_path.unlink()                       # 确保读到的是这一次的
     t0 = time.time()
-    de._dispatch_committee(brief, "any", f"abref{i}", {}, chain)
+    r = de._dispatch_committee(brief, "any", f"abref{i}", {}, chain)
     dt = time.time() - t0
-    if not meta_path.exists():
+    # 委员会产物挂在返回值上（不再落 .qidian/.last_fusion.json 全局文件）
+    meta = getattr(getattr(r, "executor_result", None), "fusion_meta", None)
+    if not meta:
         return None, None, dt
-    meta = json.loads(meta_path.read_text())
     return list(zip(meta["models"], meta["outputs"])), meta["fused"], dt
 
 

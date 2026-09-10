@@ -327,6 +327,20 @@ def test_bare_accept_does_not_converge(monkeypatch):
 
 # ── 提取模型不能是委员本人 ────────────────────────────────
 
+def test_v2_is_the_default(monkeypatch):
+    """v2 已转正（2026-09-10）：默认开，QIDIAN_FUSION_V2=0 回退旧两阶段。
+
+    这条锁的是**默认值这个决定本身**，不是"v2 更好" —— v2 与旧两阶段至今没有跑过
+    头对头比较，现有证据都是"融合 vs 单稿"。回退开关必须一直有效。
+    """
+    monkeypatch.delenv("QIDIAN_FUSION_V2", raising=False)
+    assert ej._fusion_v2_enabled() is True
+    monkeypatch.setenv("QIDIAN_FUSION_V2", "0")
+    assert ej._fusion_v2_enabled() is False
+    monkeypatch.setenv("QIDIAN_FUSION_V2", "1")
+    assert ej._fusion_v2_enabled() is True
+
+
 def test_extractor_swapped_when_it_is_a_member(monkeypatch):
     calls = []
     _stub(monkeypatch, calls=calls)

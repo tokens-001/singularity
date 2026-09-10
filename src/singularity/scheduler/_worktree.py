@@ -123,8 +123,14 @@ def _maybe_create_worktree(task_id: str, level: str, agent_cfg: dict, snapshot_r
         wtd = _worktrees_dir(repo_root)
         count = len(list(wtd.iterdir())) if wtd.exists() else 0
         if count >= _MAX_WORKTREES:
+            # 走 warn 不走 heartbeat：heartbeat 的第二参数是 agent_level，把消息塞进去会被
+            # 存成一个伪 level（status 还是 "running"），任务到终态时又被清理逻辑 unlink
+            # —— 等于没记，还让状态面板的"运行中"虚高。
+            # 而且这里是**真降级**：拿不到 worktree → 调用方直接用仓库根跑（_exec.py:317，无沙箱）。
             from . import witness
-            witness.heartbeat(task_id, f"worktree_limit:{count}>={_MAX_WORKTREES}")
+            witness.warn("worktree",
+                         f"worktree_limit_reached:{count}>={_MAX_WORKTREES},"
+                         f"unsandboxed:{task_id[:8]}"[:200])
             return None
     except Exception as e:
         witness.warn('_worktree', f'{e}')

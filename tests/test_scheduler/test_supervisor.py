@@ -209,3 +209,52 @@ class TestCheckLaziness:
         r = _check_laziness("// TODO 待补", ["app.py"], ["a", "b", "c", "d", "e", "f"])
         assert not r.passed
         assert r.evidence.get("hard")
+
+
+class TestArtifactLintSkip:
+    """_check_artifact 的 lint 段：目标文件不在 root 下时必须跳过。
+
+    以前会把**空的**路径列表交给 `ruff check --select=E,F`，而 cwd=root ——
+    不带路径的 ruff 是"扫当前目录"，等于拿整个仓库别人的 E/F 违规把这个任务
+    判成硬失败（reason=质量门禁失败）。代码注释本意就是"跳过"。
+    """
+
+    def test_skips_when_no_changed_file_under_root(self, tmp_path, monkeypatch):
+        """必须直接断言"没拿空路径去调 ruff"。
+
+        本机没装 ruff，只断言证据文本的话旧代码会走 FileNotFoundError 分支、
+        恰好也含 "skipped" —— 测试在旧代码上照样绿，等于没测。打桩 subprocess.run
+        才看得出它到底有没有被调用。
+        """
+        from types import SimpleNamespace
+        from singularity.scheduler import supervisor as sv
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(list(cmd))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(sv.subprocess, "run", fake_run)
+        # changed_files 是别处的相对路径 → root 下根本不存在
+        r = sv._check_artifact(["pkg/other.py"], tmp_path, tests_result={"passed": True})
+        assert [c for c in calls if c and c[0] == "ruff"] == [], \
+            f"无目标文件时不该调 ruff（空路径 = 扫整个仓库）: {calls}"
+        assert r.passed, f"不该因为没 lint 目标就判失败: {r.reason}"
+
+    def test_still_checks_existing_files(self, tmp_path, monkeypatch):
+        """文件真在 root 下时照常走 lint（别把正常路径也跳过了）。"""
+        from types import SimpleNamespace
+        from singularity.scheduler import supervisor as sv
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(list(cmd))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(sv.subprocess, "run", fake_run)
+        (tmp_path / "ok.py").write_text("x = 1\n")
+        r = sv._check_artifact(["ok.py"], tmp_path, tests_result={"passed": True})
+        ruff_calls = [c for c in calls if c and c[0] == "ruff"]
+        assert len(ruff_calls) == 1, f"该调 ruff 却没调: {calls}"
+        assert "ok.py" in " ".join(ruff_calls[0]), ruff_calls[0]
+        assert r.passed, r.reason

@@ -276,19 +276,28 @@ def _check_artifact(changed_files: list[str], root: Path, tests_result: dict = N
                 errors.append(f"{f}: compile timeout")
 
     # 2. Lint (ruff check)
-    try:
-        proc = subprocess.run(
-            ["ruff", "check", "--select=E,F", *[str(root / f) for f in py_files if (root / f).exists()]],
-            capture_output=True, text=True, timeout=30, cwd=str(root),  # cwd=root: 否则 ruff 按进程 cwd 找配置/文件
-        )
-        if proc.returncode != 0:
-            errors.append(f"ruff: {proc.stdout.strip()[:200]}")
-        else:
-            evidence["lint"] = "ruff passed"
-    except FileNotFoundError:
-        evidence["lint"] = "ruff not installed, skipped"
-    except Exception:
-        pass  # ruff 挂了不阻塞
+    # 目标文件全不在 root 下时必须**跳过**，不能把空路径列表交给 ruff：
+    # 不带路径的 `ruff check` 是"扫当前目录"，cwd 又是 root，等于扫整个仓库并
+    # 按别人代码的 E/F 违规把这个任务判成硬失败（reason=质量门禁失败）。
+    # 注：ruff 未在本项目 venv 安装（pyproject 里是 dev 可选依赖），空参数行为
+    # 没有实测过 —— 这里只是不再依赖那个未验证的行为。
+    lint_targets = [str(root / f) for f in py_files if (root / f).exists()]
+    if not lint_targets:
+        evidence["lint"] = "no changed py file under root, skipped"
+    else:
+        try:
+            proc = subprocess.run(
+                ["ruff", "check", "--select=E,F", *lint_targets],
+                capture_output=True, text=True, timeout=30, cwd=str(root),  # cwd=root: 否则 ruff 按进程 cwd 找配置/文件
+            )
+            if proc.returncode != 0:
+                errors.append(f"ruff: {proc.stdout.strip()[:200]}")
+            else:
+                evidence["lint"] = "ruff passed"
+        except FileNotFoundError:
+            evidence["lint"] = "ruff not installed, skipped"
+        except Exception:
+            pass  # ruff 挂了不阻塞
 
     # 3. 测试 (pytest → unittest → npm)
     if tests_result is not None:

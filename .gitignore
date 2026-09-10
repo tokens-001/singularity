@@ -29,3 +29,8 @@ tests/integration/.ab_solo_cache.json
 tests/integration/.bench_plans.json
 tests/integration/.ab_debate_plans*.json
 tests/integration/.ab_role_cache*.json
+tests/integration/.v2_plans.json
+tests/integration/.extract_recall_cache.json
+
+# archify 生成产物（源在 docs/archify/*.json；flow.html 是手写的，保留）
+docs/archify/singularity-current.html

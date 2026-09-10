@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "奇点 Singularity — 主干架构（2026-09-10）",
+    "subtitle": "四阶段流水线主干；组件按代码模块，非文档里的旧 16 角色",
+    "locale": "zh-CN"
+  },
+  "layout": {
+    "mode": "grid",
+    "cols": 6,
+    "cellW": 200,
+    "cellH": 84,
+    "gapX": 120,
+    "gapY": 60,
+    "origin": [
+      70,
+      90
+    ]
+  },
+  "components": [
+    {
+      "id": "entry",
+      "type": "frontend",
+      "label": "入口",
+      "sublabel": "Web/SSE · 观察者 · CLI",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "orch",
+      "type": "backend",
+      "label": "Orchestrator",
+      "sublabel": "主调度循环 · 阶段流转",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "tracker",
+      "type": "database",
+      "label": "Tracker",
+      "sublabel": "任务状态机 · .qidian/",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "route",
+      "type": "backend",
+      "label": "Router / Dispatcher",
+      "sublabel": "分级选层 · 派发",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "committee",
+      "type": "messagebus",
+      "label": "委员会 + 融合",
+      "sublabel": "v2：提取→辩论→定稿",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "exec",
+      "type": "backend",
+      "label": "Executor",
+      "sublabel": "工具循环 · 调模型 API",
+      "row": 0,
+      "col": 3
+    },
+    {
+      "id": "wt",
+      "type": "backend",
+      "label": "Worktree",
+      "sublabel": "沙箱 · 每任务一个",
+      "row": 1,
+      "col": 3
+    },
+    {
+      "id": "gate",
+      "type": "security",
+      "label": "GATE / Review",
+      "sublabel": "门禁 → 多模型审查 → 安全审计",
+      "row": 0,
+      "col": 4
+    },
+    {
+      "id": "sup",
+      "type": "backend",
+      "label": "Supervisor",
+      "sublabel": "四维机械校验",
+      "row": 1,
+      "col": 4
+    },
+    {
+      "id": "merge",
+      "type": "backend",
+      "label": "合并落盘",
+      "sublabel": "串行 drain · 冲突 parking",
+      "row": 0,
+      "col": 5
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "调度层",
+      "wraps": [
+        "orch",
+        "tracker",
+        "route"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "执行层",
+      "wraps": [
+        "exec",
+        "wt",
+        "sup"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "审查层",
+      "wraps": [
+        "gate",
+        "merge"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "entry",
+      "to": "orch"
+    },
+    {
+      "from": "orch",
+      "to": "tracker"
+    },
+    {
+      "from": "orch",
+      "to": "route"
+    },
+    {
+      "from": "route",
+      "to": "committee"
+    },
+    {
+      "from": "route",
+      "to": "exec"
+    },
+    {
+      "from": "exec",
+      "to": "wt"
+    },
+    {
+      "from": "exec",
+      "to": "gate"
+    },
+    {
+      "from": "gate",
+      "to": "sup"
+    },
+    {
+      "from": "gate",
+      "to": "merge"
+    }
+  ]
+}

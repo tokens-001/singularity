@@ -371,11 +371,24 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
 
     # 选模型: 指定 > 强力层可用 > 前3个
     if models:
+        enabled = (agents.get("any", []) or
+                   sum((v for v in agents.values() if isinstance(v, list)), []))
         model_cfgs = []
         for name in models:
-            for a in (agents.get("any",[]) or sum((v for v in agents.values() if isinstance(v,list)),[])):
+            found = None
+            for a in enabled:
                 if a.get("model") == name and _disp.agent_api_available(a):
-                    model_cfgs.append(a); break
+                    found = a
+                    break
+            if found is None:
+                # 不在启用池里 → 可能是 _review._expand_review_pool 补的注册表模型。
+                # 不补这一步的话，传进来的名字会被**静默跳过**：扩了等于没扩，
+                # 而且外面看到的是"multi-review 跑过了"。
+                cand = {"model": name}          # agent_api_available 会就地补全 type 等
+                if _disp.agent_api_available(cand) and cand.get("type"):
+                    found = cand
+            if found is not None:
+                model_cfgs.append(found)
     else:
         model_cfgs = [a for a in agents.get("any",[]) if _disp.agent_api_available(a)][:3]
 
@@ -662,6 +675,15 @@ def security_audit_review(diff_text, cwd, requirements=""):
 
 【代码改动 diff】
 {diff_text[:6000] if diff_text else '(无 diff)'}
+
+severity 判定标准 —— **只有 critical/high 会拦下合并**，别把设计不完整往上报：
+- critical = 可被直接利用的漏洞（注入、越权、明文密钥、未校验的外部输入直达危险操作）
+- high     = 明确的安全缺陷，需要真实攻击条件但仍应阻断（缺失鉴权、敏感信息进日志）
+- medium   = 加固建议，当前不可直接利用（缺限流、错误信息过详细）
+- low      = 最佳实践（依赖版本偏旧但无已知 CVE）
+
+⚠️ "需求没要求的安全能力没做"（没做审计日志、没做字段加密…）是**需求范围**问题，
+   不是本次改动的安全漏洞 —— 归 medium/low 并写进 remediation，不要标 critical。
 
 只输出 JSON：
 {{"findings":[{{"severity":"critical|high|medium|low","category":"auth|injection|secrets|dependency|privacy","cwe":"CWE-xxx","location":"文件:行号","description":"问题","remediation":"建议"}}],"summary":{{"verdict":"clean|needs_fix|critical","critical":0,"high":0,"medium":0,"low":0,"recommendation":"一句话"}}}}"""

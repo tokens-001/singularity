@@ -54,7 +54,7 @@ export default function FusionTab() {
     <div>
       <div className="flex-center gap-8" style={{ marginBottom: 10 }}>
         <span className="fw-600 fs-12 text-secondary">融合模型</span>
-        <span className="fs-10 text-muted">两阶段合成用「裁判 + 定稿」；v2 机制用「提取员」，其定稿人由对话轮转决定</span>
+        <span className="fs-10 text-muted">两阶段合成用「裁判 + 定稿」；v2 机制用「提取员」，定稿人按历史范围纪律自动选 —— 所以 v2 下这里的「定稿」不生效</span>
         <span className="flex-1"/>
         <button onClick={save} disabled={saving} className="btn-sm"><Save size={12}/> 保存</button>
       </div>

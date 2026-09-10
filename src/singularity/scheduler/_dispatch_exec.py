@@ -164,9 +164,16 @@ def _patch_is_noop(raw: str) -> bool:
 
 
 def _is_slow_model(model_id: str) -> bool:
-    """慢模型判定: speed=slow 或 reasoning(思考链)。慢模型只出初稿, 不参与辩论后续轮。"""
+    """慢模型判定: speed=slow。慢模型只出初稿, 不参与辩论后续轮。
+
+    只看 speed —— 曾经是 `speed == "slow" or e.reasoning`，但那半句是错的：
+    reasoning 字段的语义是「响应怎么解析（有没有 reasoning_content）」，
+    不是「跑得慢不慢」，两件事只是相关。串起来的后果是管理界面上一开关
+    「推理模型」就顺手把人踢出辩论，且无声。要禁某个模型参与辩论，
+    把它的 speed 设成 slow 就行 —— 那是这个字段该干的事。
+    """
     e = model_registry.get(model_id)
-    return bool(e and (e.speed == "slow" or e.reasoning))
+    return bool(e and e.speed == "slow")
 
 
 # 任务关键词 → strengths 能力标签 (benchmark/手填的 strengths 作冷启动先验)
@@ -217,9 +224,20 @@ def _debate(task: str, members: list[tuple], chain: list[dict], task_id: str,
     plans = {m: o for m, o in members}
     models = [m for m, _ in members]
     agent_by_model = {a.get("model"): a for a in chain}
-    # C: 慢模型只出初稿, 不评审/不修订; 快模型正常辩论(兜底: 全慢则都参与)
+    # C: 慢模型只出初稿, 不评审/不修订; 快模型正常辩论。
+    # 兜底: 凑不齐两个 reviewer 就全员参与 —— **不是"全慢才兜底"**。
+    # 只剩一个 reviewer 时辩论是空转: 它评的是别人的方案, 而轮到它修订时,
+    # 「别人对我方案的点评」里只剩它自己那条, 被 rv != model 滤掉 → 空字符串。
+    # 实测 N=2 且一个慢: 调用减半且修订 prompt 里点评段 0 字, 慢模型冻结在初稿。
+    # 辩论要么正常跑要么别跑, 空转的代价和真辩论一样。
     slow = {m for m in models if _is_slow_model(m)}
-    reviewers = [m for m in models if m not in slow] or models
+    reviewers = [m for m in models if m not in slow]
+    if len(reviewers) < 2:
+        if reviewers and slow:
+            witness.warn("dispatcher",
+                         f"debate_reviewers_degraded:{len(reviewers)}"
+                         f"of{len(models)},all_in"[:80])
+        reviewers = models
     prev_review = ""
 
     _debate_deadline = time.time() + _DEBATE_TOTAL_BUDGET
@@ -365,37 +383,49 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
     )
 
     if _is_architecture_task(task):
-        # QIDIAN_FUSION_V2=1 → 新机制（提取三类→共享对话→定稿），失败回退旧流程
-        fused = fuse_architecture_v2(task, list(outputs)) if _fusion_v2_enabled() else ""
+        # QIDIAN_FUSION_V2=0 可关；默认走新机制（提取三类→共享对话→定稿），失败回退旧流程
+        v2_on = _fusion_v2_enabled()
+        fused = fuse_architecture_v2(task, list(outputs)) if v2_on else ""
+        if v2_on and not fused:
+            # v2 内部只在**它自己认得的**失败上告警（提取空/解析失败/确认空…），
+            # 这里补一条统一的：外面至少要能看出"这轮走的是旧流程"。
+            witness.warn("dispatcher", "fusion_v2_failed_fallback_legacy"[:80])
         if not fused:
             # 多轮辩论: 交叉评审收敛(互相补充缺陷)。辩论失败 → 用初稿继续融合
             try:
                 outputs = _debate(task, outputs, chain, task_id, level,
                                   baseline_ref=baseline_ref, cwd=cwd)
-            except Exception:
-                pass
+            except Exception as e:
+                # 不阻断，但必须留痕：辩论没跑 = 拿初稿直接融合，成品会弱一档。
+                # 静默的话外面只看得到"融合跑完了"，查不出这轮为什么偏弱。
+                witness.warn("dispatcher",
+                             f"debate_failed:{type(e).__name__}:{e}"[:200])
             # 架构方案: 两阶段 fusion (Step 2)
             raw_outputs = [o for _, o in outputs]
             try:
                 fused = fuse_architecture(task, raw_outputs,  # 裁判/定稿模型取自 fusion.toml [custom]
                                           member_models=[m for m, _ in outputs])
-            except Exception:
+            except Exception as e:
+                witness.warn("dispatcher",
+                             f"fusion_failed:{type(e).__name__}:{e}"[:200])
                 fused = ""
+            if not fused:
+                # 落到下面的通用合成：每条产出截断到 3000 字。架构方案 20k+ 字，
+                # 这是**降级**不是等价替换，必须留痕。
+                witness.warn("dispatcher", "fusion_empty_fallback_synthesis"[:80])
         if fused:
-            raw_outputs = [o for _, o in outputs]
-            # Save individual model outputs for display
-            from singularity.scheduler.config import QIDIAN_DIR
-            import json as _json
-            # Store in fusion metadata that the workflow can pick up
+            # 委员会产物随 DispatchResult 回传给调用方（_workflow_phases 再落 ProjectState）。
+            # 曾经写 QIDIAN_DIR/.last_fusion.json 这个全局单文件 —— 并发下会串项目：
+            # Flask threaded=True + 调度循环 concurrent=2，HTTP(_api_projects.run_phase)
+            # 和后台循环(app.py 结果处理)两条路径都能进委员会，两个架构任务先后写同一路径，
+            # 后写的覆盖先写的，先写的那家读到的是**别人的**模型/产物；读不到时整段静默跳过。
+            # 走内存没有这些问题，顺带修掉「非委员会路径捡到上一轮残留文件」。
             fusion_meta = {
                 "models": [m for m, _ in outputs],
-                "outputs": raw_outputs,
+                "outputs": [o for _, o in outputs],
                 "fused": fused,
                 "count": len(outputs),
             }
-            # Write to a temp file that workflow can read
-            meta_path = QIDIAN_DIR / ".last_fusion.json"
-            meta_path.write_text(_json.dumps(fusion_meta, ensure_ascii=False, indent=2))
             # 包装成 ExecutorResult 兼容格式
             class _FusionResult:
                 # 字段要和 neijinglu.build_report / _save_trace 读的契约对齐,
@@ -408,6 +438,11 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
                 token_count = 0
                 elapsed = 0.0
                 tool_events: list = []
+
+            # 各模型初稿 + 融合稿，给 _run_planning 落 ProjectState 用。
+            # 必须在类体**外**赋值：class body 不做闭包查找，写在里面会 NameError。
+            # 不带这个属性时调用方取到 None 直接跳过（非委员会路径）。
+            _FusionResult.fusion_meta = fusion_meta
             return DispatchResult(
                 level=level,
                 agent_cfg={"model": f"fusion({','.join(m for m,_ in outputs)})"},

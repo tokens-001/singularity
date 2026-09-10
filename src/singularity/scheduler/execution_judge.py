@@ -500,8 +500,20 @@ _V2_EXTRACT_MAX_TOKENS = int(os.environ.get("QIDIAN_FUSION_EXTRACT_TOKENS", "")
 
 
 def _fusion_v2_enabled() -> bool:
-    """读 env（不缓存）—— 测试和 A/B 都要能中途切换。"""
-    return os.environ.get("QIDIAN_FUSION_V2") == "1"
+    """v2 融合是否启用。**默认开**，`QIDIAN_FUSION_V2=0` 关掉。
+
+    读 env 不缓存 —— 测试和 A/B 都要能中途切换。
+
+    为什么转正（2026-09-10）：旧两阶段是"整份方案互评 + 五维分析 + 重写"，实测会
+    取并集把输出撑到输入之和的 1.8 倍，撞 max_tokens 被腰斩（brief 3 因此丢过整个
+    tasks 段）。v2 用「提取三类 → 结构化辩论(accept/insist) → 定稿」从机制上压住
+    膨胀，实测长度 0.98× 且融合 ≥ 最好成员。
+
+    **未做，别当已验证**：v2 与旧两阶段**没有跑过头对头**——现有全部证据都是
+    "融合 vs 单稿"。所以这次转正换掉的正是现役默认，风险方向是"v2 成功了但更差"，
+    自动回退救不了。回退：`QIDIAN_FUSION_V2=0`。
+    """
+    return os.environ.get("QIDIAN_FUSION_V2", "1") != "0"
 
 
 # v2 ② 提取的默认模型。**必须是非思考模型**：思考模型会把 max_tokens 烧在

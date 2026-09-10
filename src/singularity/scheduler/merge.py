@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 
 from singularity.scheduler import config
 from singularity.scheduler import tracker
+from singularity.scheduler import witness
 from singularity.scheduler.tracker import TaskStatus
 from singularity.scheduler._git_worktree import merge_ref, merge_tree_probe
 
@@ -109,16 +110,27 @@ class MergeQueue:
         本队列不再做 requeue 检查。_deps_satisfied 保留供防御性调用。
         """
         results: list[MergeResult] = []
+        # 连续 defer 计数。原判据是 `len(results) >= len(self._queue)` —— 错的：
+        # results 只在**合成功**后才增长，所以"一个都没合 + 有请求被依赖卡住"时
+        # 它恒为 0，永远不成立 → 队列原地转圈。实测 1 个依赖未满足的请求就能
+        # 让 drain() 永不返回，而它挂在调度主循环的第⑥步（orchestrator:197），
+        # 卡住 = 整个调度停摆。
+        # 正确判据：连着 defer 满一圈（次数 ≥ 队列长度）说明这一圈毫无进展。
+        deferred = 0
         while self._queue:
+            if deferred >= len(self._queue):
+                # 全是依赖未满足 → 这轮不合它们，留到依赖 DONE 后的下一轮。
+                # 必须留痕：静默跳过会让人以为"队列空了"。
+                witness.warn("merge", f"drain_dep_blocked:{len(self._queue)}"[:80])
+                break
             req = self._queue.popleft()
             # 防御性检查: 依赖任务未完成 → 延迟合并
             if not self._deps_satisfied(req):
                 self._queue.append(req)  # 放回队尾
-                if len(results) >= len(self._queue):
-                    break  # 全都不满足依赖, 避免死循环
+                deferred += 1
                 continue
-            result = self._drain_one(req)
-            results.append(result)
+            deferred = 0                 # 有进展就重置，后面的请求还有机会
+            results.append(self._drain_one(req))
         return results
 
     def _deps_satisfied(self, req: MergeRequest) -> bool:

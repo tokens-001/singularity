@@ -289,7 +289,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     pre_warnings = val_mod.pre_execution_hook(task.description, snap)
     if pre_warnings:
         for w in pre_warnings:
-            witness.heartbeat(task.id, f"pre_hook: {w[:80]}")
+            witness.warn("exec", f"pre_hook: {w[:80]}"[:200])
 
     # 容灾: 获取 fallback 链, 当前 agent 失败自动切下一个
     # 如果任务已重试多次，强制优先用 premium 模型
@@ -362,7 +362,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     tried_models.add(agent_cfg.get("model", ""))
                     fallback_chain = [a for a in fallback_chain if a.get("model", "") not in tried_models]
                     if fallback_chain:
-                        witness.heartbeat(task.id, f"fallback: {agent_cfg.get('model','')}→{fallback_chain[0].get('model','')}")
+                        witness.warn("exec", f"fallback: {agent_cfg.get('model','')}→{fallback_chain[0].get('model','')}"[:200])
                         break  # 跳出 turn loop, 用新 agent (finally 清理本 wt)
                     last_validation = val_mod.ValidationReport(
                         verdict="未知",
@@ -488,7 +488,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     tried_models.add(agent_cfg.get("model", ""))
                     fallback_chain = [a for a in fallback_chain if a.get("model", "") not in tried_models]
                     if fallback_chain:
-                        witness.heartbeat(task.id, f"cascade_skip:{agent_cfg.get('model','')}→{fallback_chain[0].get('model','')} conf={validation.confidence:.2f}")
+                        witness.warn("exec", f"cascade_skip:{agent_cfg.get('model','')}→{fallback_chain[0].get('model','')} conf={validation.confidence:.2f}"[:200])
                     break  # 跳出 turn loop，用更好的模型 (finally 清理本 wt)
                 # cascade_action == "continue": 中置信 retry
                 feedback = payload

@@ -129,13 +129,13 @@ def _tool_create_task(description: str, level: str = "any") -> dict:
             gate = r.gate_required
         except Exception:
             gate = False
+        # execution_mode 一并走 transition 的 kwargs —— 以前是"读出来改完再 _write"，
+        # 那两步都在 tracker._LOCK **外面**，中间调度线程若 CAS 走了（PENDING→ROUTED），
+        # 这里的陈旧对象会把状态写回去（实测复现 lost update）→ 任务退回可调度态、
+        # 可能被重复派发。transition 支持任意已存在属性，并进去就原子了。
         tracker.transition(task.id, tracker.TaskStatus.PENDING, route_level=level,
-                          route_locked=True, route_type=route_type, route_gate=gate)
-        # 写 execution_mode 到 task
-        t = tracker.read_task(task.id)
-        if t:
-            t.execution_mode = mode
-            tracker._write(t)
+                          route_locked=True, route_type=route_type, route_gate=gate,
+                          execution_mode=mode)
         # 确保调度循环在跑（走 _hooks，不 import web —— 见 _hooks 模块说明）
         from singularity.scheduler import _hooks
         if not _hooks.loop_status().get("running"):

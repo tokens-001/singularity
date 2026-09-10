@@ -306,8 +306,13 @@ def delete(project_id: str) -> bool:
         deleted = True
     # 删除关联产出文件
     for f in _projects_dir().glob(f"{project_id}.*"):
-        try: f.unlink(); deleted = True
-        except Exception: pass
+        try:
+            f.unlink(); deleted = True
+        except Exception as e:
+            # 不能静默：项目记录删了但这些产出文件还在 → 磁盘上留下查不到归属的孤儿，
+            # 事后也解释不了"为什么删了项目还占着空间"。
+            from singularity.scheduler import witness
+            witness.warn("project", f"delete_orphan:{f.name}:{type(e).__name__}"[:200])
     return deleted
 
 

@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>奇点 — 一个需求进来之后</title>
+<style>
+  :root{
+    --bg:#0f1419; --card:#1a222c; --card2:#212c38; --line:#2c3a49;
+    --ink:#e6edf5; --dim:#93a4b8; --accent:#4d90e0;
+    --gate:#c99a3a; --gatebg:#2a2416; --ok:#3f9e6a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB",sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto;padding:34px 28px 60px}
+  h1{font-size:22px;margin:0 0 6px;font-weight:650;letter-spacing:.2px}
+  .sub{color:var(--dim);font-size:13px;line-height:1.8;margin:0 0 30px}
+  .sub code,.box code{background:#1c2530;padding:1px 6px;border-radius:4px;font-size:12px}
+
+  .cols{display:flex;gap:34px;align-items:flex-start}
+  .flow{flex:0 0 660px}
+  .rail{flex:1;position:sticky;top:34px}
+
+  .step{display:flex;gap:16px;align-items:stretch}
+  .num{flex:0 0 34px;display:flex;flex-direction:column;align-items:center}
+  .dot{width:30px;height:30px;border-radius:50%;background:var(--card2);
+       border:1.5px solid var(--line);display:flex;align-items:center;justify-content:center;
+       font-size:13px;font-weight:650;color:var(--dim);flex:0 0 auto}
+  .bar{width:2px;background:var(--line);flex:1;margin:2px 0}
+  .step:last-child .bar{display:none}
+
+  .box{flex:1;background:var(--card);border:1px solid var(--line);border-radius:10px;
+       padding:13px 17px;margin-bottom:14px}
+  .box h3{margin:0 0 4px;font-size:15px;font-weight:640}
+  .box p{margin:0;font-size:13px;line-height:1.75;color:var(--dim)}
+  .box p b{color:#c8d8ea;font-weight:600}
+
+  .step.gate .dot{background:var(--gatebg);border-color:var(--gate);color:var(--gate)}
+  .step.gate .box{background:var(--gatebg);border-color:#4a3c1b}
+  .step.gate .box h3{color:#e8c274}
+  .step.gate .box p{color:#b3a077}
+
+  .step.key .box{border-color:#3a5d8a;background:#182232}
+  .step.key .dot{border-color:#3a5d8a;color:#8fb8ea}
+
+  .rail h2{font-size:13px;color:var(--dim);font-weight:600;
+           margin:0 0 12px;letter-spacing:.4px;text-transform:none}
+  .railbox{background:var(--card);border:1px dashed #3a4a5c;border-radius:10px;
+           padding:13px 16px;margin-bottom:12px}
+  .railbox h4{margin:0 0 4px;font-size:13.5px;font-weight:640;color:#bcd2ea}
+  .railbox p{margin:0;font-size:12px;line-height:1.7;color:var(--dim)}
+  .railtag{display:inline-block;font-size:10px;color:#7f93a8;border:1px solid #3a4a5c;
+           border-radius:20px;padding:1px 8px;margin-bottom:12px}
+
+  .foot{margin-top:26px;font-size:12px;color:#718294;line-height:1.9}
+  .foot b{color:#a8bccf}
+</style>
+
+<div class="wrap">
+  <h1>奇点 —— 一个需求进来之后</h1>
+  <p class="sub">
+    你把一句需求丢进去（比如"做一个待办工具，拆成三个文件"），它自己走完下面九步，
+    产出一个能跑的项目。右边三个东西<b>全程都在后台转</b>。
+  </p>
+
+  <div class="cols">
+    <div class="flow">
+
+      <div class="step">
+        <div class="num"><div class="dot">1</div><div class="bar"></div></div>
+        <div class="box"><h3>建项目</h3>
+          <p>你写需求、定范围。这一步只登记，不干活。</p></div>
+      </div>
+
+      <div class="step">
+        <div class="num"><div class="dot">2</div><div class="bar"></div></div>
+        <div class="box"><h3>调研</h3>
+          <p>一个模型去查资料、<b>试着写小 demo 验证技术路线</b>。
+             （今天那个跑到仓库里的 <code>poc/</code> 就是这步产的）</p></div>
+      </div>
+
+      <div class="step gate">
+        <div class="num"><div class="dot">3</div><div class="bar"></div></div>
+        <div class="box"><h3>GATE1 —— 等你点头</h3>
+          <p>调研结果给你看，你决定继续还是打回。设成自动模式就跳过。</p></div>
+      </div>
+
+      <div class="step key">
+        <div class="num"><div class="dot">4</div><div class="bar"></div></div>
+        <div class="box"><h3>架构（出方案）</h3>
+          <p>几个模型<b>各写一份方案</b> → 互相挑刺、辩论 → 融合成一份。</p></div>
+      </div>
+
+      <div class="step gate">
+        <div class="num"><div class="dot">5</div><div class="bar"></div></div>
+        <div class="box"><h3>GATE2 —— 等你点头</h3>
+          <p>融合方案给你看。你点头后，它被拆成一堆<b>子任务</b>。</p></div>
+      </div>
+
+      <div class="step key">
+        <div class="num"><div class="dot">6</div><div class="bar"></div></div>
+        <div class="box"><h3>实现（写代码）</h3>
+          <p>每个子任务：开一个独立的 git 副本（叫 worktree，就是<b>沙箱</b>，任务之间互不干扰）
+             → 派一个 agent 进去写 → 跑测试。</p></div>
+      </div>
+
+      <div class="step">
+        <div class="num"><div class="dot">7</div><div class="bar"></div></div>
+        <div class="box"><h3>审查（三关）</h3>
+          <p>机械检查（语法、测试过不过）→ 多模型审查 → 安全审计。
+             <b>任何一关不过就打回重做。</b></p></div>
+      </div>
+
+      <div class="step">
+        <div class="num"><div class="dot">8</div><div class="bar"></div></div>
+        <div class="box"><h3>合并</h3>
+          <p>各子任务的产出<b>排队</b>合回主仓库。排队是为了避免两个任务同时改一个文件撞车。</p></div>
+      </div>
+
+      <div class="step gate">
+        <div class="num"><div class="dot">9</div><div class="bar"></div></div>
+        <div class="box"><h3>GATE3 / 交付</h3>
+          <p>最后点头，打包成品。</p></div>
+      </div>
+
+    </div>
+
+    <div class="rail">
+      <span class="railtag">全程后台运行</span>
+      <h2>贯穿始终的三样东西</h2>
+
+      <div class="railbox"><h4>Orchestrator 调度器</h4>
+        <p>主循环。一直在问"下一个该跑谁？跑完了没？" —— 上面九步的推进全靠它。</p></div>
+
+      <div class="railbox"><h4>Tracker 任务表</h4>
+        <p>每个任务的状态存在 <code>.qidian/tasks/</code> 下的 JSON 文件里。
+           <b>没有数据库</b>，所以出问题可以直接打开文件看。</p></div>
+
+      <div class="railbox"><h4>模型 API</h4>
+        <p>所有"思考"都调外部模型：DeepSeek / 智谱 / Kimi。</p></div>
+
+      <p class="foot">
+        <b>说明：</b>这张图讲的是<b>流程</b>——一个需求怎么走完全程。<br>
+        不涉及"哪个代码文件依赖哪个"（那是另一回事，也是我前面画错题的那张矩阵）。
+      </p>
+    </div>
+  </div>
+</div>
+</html>
