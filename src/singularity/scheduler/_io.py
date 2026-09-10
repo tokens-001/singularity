@@ -83,10 +83,14 @@ def _format_kv(k: str, v) -> str:
     elif isinstance(v, (int, float)):
         return f"{k} = {v}"
     elif isinstance(v, str):
-        # 含特殊字符用引号
-        return f'{k} = "{v}"'
+        # 必须转义: 值里带 " 或换行会把 TOML 写坏，而读侧 `except: return {}`
+        # 会把解析失败吞成空配置 —— 用户的设置静默消失且查不出原因。
+        esc = (v.replace("\\", "\\\\").replace('"', '\\"')
+                .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t"))
+        return f'{k} = "{esc}"'
     else:
-        return f'{k} = "{v}"'
+        esc = str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+        return f'{k} = "{esc}"'
 
 
 # ═══════════════════════════════════════════════════════════════

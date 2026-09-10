@@ -126,10 +126,39 @@ def _guard_task_id():
         "api_task_trace", "api_task_timeline", "api_apply_patch",
         "api_supervise", "api_resolve_conflict",
         "api_memory_chain",
+        # 补全：这几个也用 <task_id> 拼 PAUSE_DIR/… 或 tasks_dir()/… 路径，
+        # 原来漏在名单外 —— 与其余 14 个端点的校验强度不一致。
+        "api_pause_task", "api_resume_task", "api_task_set_mode",
+        "api_task_approval", "api_task_update",
     ):
         tid = request.view_args.get("task_id", "") if request.view_args else ""
         if tid and not _validate_task_id(tid):
             return jsonify({"error": "非法的 task_id 格式"}), 400
+
+
+# 允许 JSON 顶层是**数组**的端点（其余一律要求对象）。
+_JSON_ARRAY_OK = {"api_models_import"}
+
+
+@app.before_request
+def _guard_json_body_shape():
+    """JSON body 顶层必须是对象。
+
+    三十多处 handler 都是 `body = request.get_json(silent=True) or {}` 然后直接
+    `.get()` / 下标。调用方一旦误发数组（脚本、表单、curl 手滑），就会
+    AttributeError / TypeError → 500 + 一坨 HTML 报错页（前端 json() 解析再炸一次）。
+    这里统一挡成 400 + 一句能看懂的话。
+    """
+    if request.method not in ("POST", "PUT", "PATCH"):
+        return None
+    if request.endpoint in _JSON_ARRAY_OK:
+        return None
+    if not request.is_json:
+        return None
+    body = request.get_json(silent=True)
+    if body is not None and not isinstance(body, dict):
+        return jsonify({"error": f"JSON body 必须是对象，收到 {type(body).__name__}"}), 400
+    return None
 
 
 _PROJECT_ID_RE = _re_valid.compile(r"^[a-zA-Z0-9_-]{1,64}$")

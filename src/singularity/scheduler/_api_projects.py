@@ -132,7 +132,16 @@ def project_gate_confirm(project_id: str, gate: str = "", decision: str = "",
     if proj is None:
         return {"error": "项目不存在"}, 404
 
-    gate_phase = Phase(gate) if gate else proj.phase
+    if gate:
+        # Phase(gate) 对垃圾值直接抛 ValueError → 未捕获 → 500 + HTML。
+        # 前端路由也没校验（_VALID_DECISIONS 定义了却没人用），所以这里必须挡。
+        try:
+            gate_phase = Phase(gate)
+        except ValueError:
+            valid = [p.value for p in Phase if p.value.startswith("gate")]
+            return {"error": f"非法 gate: {gate!r}，可选 {valid}"}, 400
+    else:
+        gate_phase = proj.phase
     if decision == "approved":
         next_p = proj.confirm_gate(gate_phase, "approved")
         proj_mod.save(proj)
