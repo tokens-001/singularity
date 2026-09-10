@@ -253,6 +253,12 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
     ensure_repo(project.id)
 
     created = 0
+    # 重新规划时必须先清空旧任务 id。GATE3 以 design 打回 → 回 PLANNING → 重跑 GATE2/EXECUTING，
+    # 这一轮只会 append 新 task；旧 id 留着的后果是——下次 impl 打回时
+    # workflow.handle_gate3_reject 会遍历整个 task_ids，把**上一版架构已废弃的 DONE 任务**
+    # 一起重置成 PENDING 重跑，_collect_changed_files 也会把它们的残留产物算进交付报告。
+    # 上面 `if not exec_tasks: return` 已保证这里不会是空批次清空。
+    project.task_ids = []
     id_map = {}  # 本地任务 id (T1..Tn) → tracker task_id
     for idx, tdef in enumerate(exec_tasks):
         # 实现层角色：默认 implementer（可在 .qidian/phases.json 改）

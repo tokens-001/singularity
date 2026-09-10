@@ -405,12 +405,28 @@ def _decompose_and_create_tasks(proj, agents: dict) -> None:
         from singularity.scheduler.project import ensure_repo
         ensure_repo(proj.id)
 
-        for t in tasks:
-            task = tracker.create(t["desc"], project_id=proj.id)
+        # 与 _run_execution 对齐。这条兜底原来只写 desc，丢了四样东西：
+        #   ① **depends_on 完全没有** —— 架构里的 DAG 被压平，本该串行的任务同时开跑，
+        #      产物互相看不见 + 争同一批文件 + 合并冲突；
+        #   ② route_level 取 t["suggested_level"]，而那是"层"(impl/backend)不是档位；
+        #   ③ 不绑 route_role → 角色提示词不会注入（那条链路本来就死过两个半月）；
+        #   ④ 旧 task_ids 不清 —— 与重规划那条同一个病（见 _workflow_phases）。
+        from singularity.scheduler.roles import get_phase_role
+        from singularity.scheduler.project import Phase
+        role_key = get_phase_role(Phase.EXECUTING) or "implementer"
+        proj.task_ids = []
+        id_map: dict[str, str] = {}
+        for idx, t in enumerate(tasks):
+            local_id = t.get("id", "") or f"T{idx+1}"
+            arch_deps = t.get("depends_on", []) or t.get("depends_on_local_id", [])
+            dep_ids = [id_map[d] for d in arch_deps if d in id_map]
+            task = tracker.create(t["desc"], project_id=proj.id, depends_on=dep_ids)
             tracker.transition(task.id, tracker.TaskStatus.PENDING,
-                             route_level=t.get("suggested_level", "any"),
-                             route_locked=True)
+                             route_level="any",
+                             route_locked=True,
+                             route_role=role_key)
             proj.task_ids.append(task.id)
+            id_map[local_id] = task.id
 
         from singularity.scheduler.project import save
         save(proj)
