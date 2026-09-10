@@ -18,7 +18,10 @@ from singularity.scheduler.executors import (
     ClaudeCliExecutor, ZhipuApiExecutor, OpenAIAgentExecutor, AnthropicApiExecutor,
 )
 
-_ESCALATION = {}
+# 档位 → 下一档 的映射表。**故意为空**：两档制已合并成单档("any")，
+# 没有"下一档"可升。`escalate()` 因此恒返回 None（详见它的 docstring）。
+# 将来重加档位时在这里填表即可，调用方不用动。
+_ESCALATION: dict[str, str] = {}
 
 
 def _all_agents_list(agents: dict) -> list[dict]:

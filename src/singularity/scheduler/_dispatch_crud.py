@@ -166,7 +166,15 @@ def update_agent(level: str, model: str, updates: dict) -> dict:
 
 
 def escalate(level: str) -> str | None:
-    # 两档后: 空 level 不升级 (已从全池选)
+    """升到下一档。**当前恒返回 None** —— 这是设计事实，不是坏了。
+
+    两档制已合并成单档（"any"，全池选人），所以**根本没有"下一档"**。
+    `_ESCALATION` 也是空表、全仓无人填。调用方 `_exec.py` 依赖这个 None 收尾
+    （终态 `no_escalation_path`，已改成如实报而不是假装"升级用尽"）。
+
+    留着这个口子是为了将来重加档位时不用动调用方 —— 往 `_ESCALATION` 填表即可。
+    **别指望它现在会返回非 None。**
+    """
     if not level:
         return None
     return _ESCALATION.get(level)

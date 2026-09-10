@@ -54,6 +54,10 @@ export default function AppLayout() {
   useSSE(loadProjects, { kinds: ['project', 'workflow', 'system', 'task'], debounceMs: 400 })
 
   // token 用量 / 调度状态 / 冲突 都没有 SSE 事件，只能轮询；30s 够用
+  const refreshLoop = async () => {
+    const s = await api.loopStatus().catch(() => null)
+    if (s) setLoopRunning(!!(s as any).running)
+  }
   useEffect(() => {
     const f = async () => {
       const [u, s, c] = await Promise.all([
@@ -115,6 +119,19 @@ export default function AppLayout() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11 }}>
             <span style={{ color: loopRunning ? '#16a34a' : '#b5b2a8', fontSize: 8 }}>●</span>
             <span style={{ color: '#6b6b68' }}>调度{loopRunning ? '运行中' : '已停'}</span>
+            {/* 原来只显示状态、**没有任何启停入口**（api.ts 的 startLoop/stopLoop 零调用）——
+                侧边栏写着"运行中/已停"却没法操作，只能去敲 CLI。 */}
+            <button
+              className="btn-icon"
+              style={{ fontSize: 11, padding: '0 5px' }}
+              title={loopRunning ? '停止调度循环' : '启动调度循环'}
+              onClick={async () => {
+                try {
+                  await (loopRunning ? api.stopLoop() : api.startLoop())
+                } catch { /* 失败也无所谓，下面的重拉会显示真实状态 */ }
+                setTimeout(refreshLoop, 400)
+              }}
+            >{loopRunning ? '停' : '启'}</button>
             {conflicts.length > 0 && (
               <span style={{ marginLeft: 'auto', color: '#dc2626' }}
                 title={conflicts.map((c: any) => c.task_id || c.id || '').join(', ')}>⚠ {conflicts.length} 冲突</span>

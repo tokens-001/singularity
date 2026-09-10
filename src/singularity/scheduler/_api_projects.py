@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import time
 
 from pathlib import Path
@@ -177,10 +178,41 @@ def project_run_phase(project_id: str, phase_name: str = "",
         return {"error": "项目未设定阶段"}, 400
     phase = phase_name or proj.phase.value
     agents = disp_mod.load_agents()
-    result = wf_mod.run_phase(proj, agents)
+    if not _start_background(project_id, phase, wf_mod.run_phase, proj, agents):
+        return {"ok": True, "phase": phase, "running": True,
+                "note": "该项目已有阶段在跑，本次未重复启动"}, 200
     if push_event:
         push_event("system", f"[{project_id[:8]}] {phase} 阶段已启动")
-    return {"ok": True, "phase": phase, "result": str(result)}, 200
+    return {"ok": True, "phase": phase, "started": True}, 200
+
+
+# 正在跑阶段的项目。run_phase 是分钟级的（连续调 _run_research/_run_planning/
+# _run_execution，每个都是模型调用），原来**同步跑在 Flask 请求线程里** ——
+# 前端 fetch 早就超时了，结果也拿不到。改为后台线程 + 立即返回，
+# 进度走 SSE（推送/项目页本来就靠它）。同时挡重复启动。
+_RUNNING_PHASES: set[str] = set()
+_PHASE_LOCK = threading.Lock()
+
+
+def _start_background(project_id: str, label: str, fn, *args) -> bool:
+    """在后台线程跑 fn(*args)。已有同名项目在跑 → 返回 False（不重复启动）。"""
+    with _PHASE_LOCK:
+        if project_id in _RUNNING_PHASES:
+            return False
+        _RUNNING_PHASES.add(project_id)
+
+    def _worker():
+        try:
+            fn(*args)
+        except Exception as e:
+            from singularity.scheduler import witness as _w
+            _w.warn("workflow", f"{label}:{type(e).__name__}:{e}"[:120])
+        finally:
+            with _PHASE_LOCK:
+                _RUNNING_PHASES.discard(project_id)
+
+    threading.Thread(target=_worker, name=f"phase-{project_id[:8]}", daemon=True).start()
+    return True
 
 
 def project_start(project_id: str, push_event=None) -> tuple[dict, int]:
@@ -192,10 +224,13 @@ def project_start(project_id: str, push_event=None) -> tuple[dict, int]:
     if proj is None:
         return {"error": "项目不存在"}, 404
     agents = disp_mod.load_agents()
-    result = wf_mod.start_project_workflow(proj, agents)
+    if not _start_background(project_id, "start_workflow",
+                             wf_mod.start_project_workflow, proj, agents):
+        return {"ok": True, "running": True,
+                "note": "该项目已有流程在跑，本次未重复启动"}, 200
     if push_event:
         push_event("system", f"[{project_id[:8]}] workflow 已启动")
-    return {"ok": True, "workflow": result}, 200
+    return {"ok": True, "started": True}, 200
 
 
 def project_cost(project_id: str) -> tuple[dict, int]:
