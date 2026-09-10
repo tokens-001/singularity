@@ -74,12 +74,23 @@ def _expand_review_pool(disp_mod, writer_model: str, chosen: list[str],
         return []
 
 
-def _is_trivial_change(changed: list[str], cwd: str) -> bool:
+def _diff_cmd(base_ref: str, *paths) -> list[str]:
+    """取 diff 的命令。`base_ref` 非空就带上它当基准。
+
+    **为什么必须有基准**：worktree 路径下，改动在 `validate()` **之前**就被
+    `_exec._process_planner_or_merge` 里的 `commit_wt` 提交了。裸 `git diff`
+    （跟 HEAD 比）对已提交的改动恒为空 —— 审查/QA/安全审计全都看不到任何改动，
+    整层质量把关形同虚设。基准要用**执行前快照**的 ref（`validator._diff_base(snap)`）。
+    """
+    return ["git", "diff", base_ref, *paths] if base_ref else ["git", "diff", *paths]
+
+
+def _is_trivial_change(changed: list[str], cwd: str, base_ref: str = "") -> bool:
     """单文件且 diff < 50 行 → 跳过审查。"""
     if len(changed) != 1:
         return False
     try:
-        r = subprocess.run(["git", "diff", changed[0]],
+        r = subprocess.run(_diff_cmd(base_ref, changed[0]),
                          capture_output=True, text=True, timeout=10, cwd=cwd)
         line_count = len([l for l in (r.stdout or "").split("\n") if l])
         return line_count < 50
@@ -116,10 +127,14 @@ def _review_requirements(task) -> str:
 
 
 def run_post_exec_checks(*, validation, quality, exec_result,
-                          task, agent_cfg, level, cwd, changed) -> None:
+                          task, agent_cfg, level, cwd, changed,
+                          base_ref: str = "") -> None:
     """Run project tests + multi-model review after agent execution.
 
     Mutates validation and quality dicts in place.
+
+    base_ref: 取 diff 的基准（执行前快照 ref）。**不传 = 审查看不到任何改动**
+    （worktree 里改动已被 commit_wt 提交）—— 调用方必须传。
 
     D1: 审查超时/失败上限 — 累计自动修 >= _REVIEW_MAX_AUTO_FIX → 升GATE2兜底。
     S2: 超时检测改为真实 (用 ThreadPoolExecutor 带 timeout 包装耗时操作)。
@@ -181,7 +196,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
     # ⚠️ 2026-09-11 审计 P0-1 已知缺陷：worktree 里改动在 validate **之前**已被 commit_wt
     # 提交，_is_trivial_change 里的裸 `git diff` 恒为 0 行 → **单文件改动恒判 trivial**。
     # 本次只做披露、不改判据（多模型审查开销大，是否全开另行决定）。
-    _trivial = bool(changed) and _is_trivial_change(changed, cwd)
+    _trivial = bool(changed) and _is_trivial_change(changed, cwd, base_ref)
     if validation.action == "pass" and changed and _trivial:
         validation.unverified.append(
             "审查已跳过: 改动被判为小改动(单文件, diff<50行) — 未跑项目测试/未多模型审查")
@@ -287,7 +302,8 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                         try:
                             fut = _ex.submit(val_mod.multi_model_review,
                                 filepath=f, models=reviewer_models, cwd=cwd, diff_only=True,
-                                requirements=_review_requirements(task))
+                                requirements=_review_requirements(task),
+                                base_ref=base_ref)
                             review = fut.result(timeout=_REVIEW_TIMEOUT_SEC)
                         finally:
                             _ex.shutdown(wait=False)
@@ -404,7 +420,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             _record_review_failure("review_error")
 
     # 3) QA 约束验收: qa_engineer 角色对照约束清单验证 (补 multi_model_review 不查的约束维度)
-    if validation.action == "pass" and changed and not _is_trivial_change(changed, cwd):
+    if validation.action == "pass" and changed and not _is_trivial_change(changed, cwd, base_ref):
         try:
             proj = None
             if project_id:
@@ -415,7 +431,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                 diff_text = ""
                 try:
                     diff_text = "\n\n".join(
-                        subprocess.run(["git", "diff", f],
+                        subprocess.run(_diff_cmd(base_ref, f),
                                        capture_output=True, text=True, timeout=10, cwd=cwd).stdout
                         for f in changed[:3])
                 except Exception as e:
@@ -451,7 +467,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             _record_review_failure("constraint_error")
 
     # 3.5) 需求符合性对账: 消费 traceability.json, 只写软信号 + warning (机械关键词, 先不设 hard gate)
-    if validation.action == "pass" and project_id and not _is_trivial_change(changed, cwd):
+    if validation.action == "pass" and project_id and not _is_trivial_change(changed, cwd, base_ref):
         try:
             from .supervisor import check_requirement_conformance
             conf = check_requirement_conformance(
@@ -469,12 +485,12 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             quality["warnings"].append(f"需求符合性对账 error: {e}")
 
     # 4) 安全审计: security_auditor 角色 LLM 五维审计 (补正则抓不到的复杂漏洞)
-    if validation.action == "pass" and changed and not _is_trivial_change(changed, cwd):
+    if validation.action == "pass" and changed and not _is_trivial_change(changed, cwd, base_ref):
         try:
             diff_text = ""
             try:
                 diff_text = "\n\n".join(
-                    subprocess.run(["git", "diff", f],
+                    subprocess.run(_diff_cmd(base_ref, f),
                                    capture_output=True, text=True, timeout=10, cwd=cwd).stdout
                     for f in changed[:3])
             except Exception as e:

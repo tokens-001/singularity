@@ -363,7 +363,7 @@ JSON:"""
 
 def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
                        max_chunk_lines: int = 300, diff_only: bool = False,
-                       requirements: str = "") -> dict:
+                       requirements: str = "", base_ref: str = "") -> dict:
     """多模型并行独立审查一个文件。分段→并行派发→汇总。
 
     Args:
@@ -386,9 +386,12 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
     review_level = "any"
 
     if diff_only:
-        # 获取该文件的 git diff
+        # 获取该文件的 git diff。**必须带基准**（见 _diff_base）：worktree 里改动
+        # 已被 commit_wt 提交，裸 `git diff` 恒为空 → 一个模型都不会被调，
+        # 却返回 {"issues":[]} 让上层以为"审过且没问题"。
         try:
-            r = subprocess.run(["git", "diff", filepath],
+            r = subprocess.run(["git", "diff", base_ref, filepath] if base_ref
+                             else ["git", "diff", filepath],
                              capture_output=True, text=True, timeout=10, cwd=root)
             code = (r.stdout or "").strip()
             if not code:

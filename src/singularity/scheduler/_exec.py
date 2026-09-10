@@ -427,7 +427,10 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                         validation=validation, quality=quality,
                         exec_result=exec_result, task=task,
                         agent_cfg=agent_cfg, level=level, cwd=cwd,
-                        changed=changed)
+                        changed=changed,
+                        # 执行前快照的 ref 当 diff 基准。不传的话审查什么都看不到 ——
+                        # worktree 里改动在 validate 之前就被 commit_wt 提交了。
+                        base_ref=val_mod._diff_base(snap))
 
                 # 审查结论接回决策: run_post_exec_checks 只改 quality["confidence"],
                 # 而 _decide_cascade 读 validation.confidence (审查前就赋了值) → 惩罚传不到,
