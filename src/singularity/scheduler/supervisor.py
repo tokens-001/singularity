@@ -25,7 +25,9 @@ class CheckResult:
 
 @dataclass
 class SupervisionVerdict:
-    verdict: str                    # "pass" | "fail" | "retry" | "escalate"
+    verdict: str                    # "pass" | "fail" | "block" | "retry" | "escalate"
+    reason: str = ""                # 提前返回时的原因（如模型隔离违规）; 原来没这字段,
+                                    # `verdict.reason = ...` 只是给实例挂了个野属性 → 理由丢失
     checks: dict[str, CheckResult] = field(default_factory=dict)
     issues: list[str] = field(default_factory=list)
     hard_evidence_count: int = 0    # 硬证据通过的检查数

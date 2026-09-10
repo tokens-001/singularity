@@ -455,10 +455,15 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                                        tests_result=(quality or {}).get("test_result"))
                         qa_verdict = sv.verdict
                         qa_issues = list(sv.issues)
-                        if sv.verdict == "fail":
+                        # "block" 必须和 "fail" 同等对待：supervise 在**模型隔离违规**
+                        # （supervisor 与 implementer 同模型）时返回 "block"，注释写明是"硬锁"。
+                        # 但消费端原来只认 "fail" / ("escalate","retry") —— "block" 两条都不中，
+                        # 直接穿过去、**合并照走**，那个硬锁从来没生效过。
+                        if sv.verdict in ("fail", "block"):
                             pending_merge_req = None
                             quality.setdefault("warnings", []).append(
-                                "QA 硬证据失败: " + "; ".join(sv.issues[:2]))
+                                ("QA 阻断: " if sv.verdict == "block" else "QA 硬证据失败: ")
+                                + "; ".join(sv.issues[:2] or [getattr(sv, "reason", "")]))
                             quality["failure_kind"] = "qa_fail"
                             # 压低置信度, 否则 _decide_cascade 的 cascade_accept 会直接放行
                             validation.confidence = min(validation.confidence, 0.3)
