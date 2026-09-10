@@ -56,7 +56,10 @@ def rebuild_from_traces() -> int:
         description = trace_data.get("task", "")
         changed_files = trace_data.get("changed_files", [])
 
-        task_data = tracker_mod._read(task_id)
+        # 真名是 read_task；原来写 tracker_mod._read —— 那个函数不存在，
+        # 于是 rebuild_from_traces（/api/memory/rebuild）每次必 AttributeError →
+        # 整个"从 traces 重建记忆"的功能从来没跑通过。
+        task_data = tracker_mod.read_task(task_id)
         depends_on = task_data.depends_on if task_data else []
         created_at = task_data.created_at if task_data else None
 
@@ -65,6 +68,20 @@ def rebuild_from_traces() -> int:
             changed_files=changed_files, depends_on=depends_on,
             created_at=created_at,
         )
+        # trace 里本来就有 final_status / route，原来只喂了 task/描述/文件 —— 把终态丢了。
+        # 后果：**从 traces 重建出来**的事件 attrs.status 恒空 →
+        # system2_extract（DCPM System 2）分不出成功/失败组、产出恒为 0。
+        # （实测存量 65 条事件里 62 条无 status，全是这条路径产生的。）
+        try:
+            _route = trace_data.get("route") or {}
+            update_attrs(
+                task_id,
+                status=(trace_data.get("final_status") or ""),
+                route_level=((task_data.route_level if task_data else "") or "any"),
+                route_type=(_route.get("task_type") or "default"),
+            )
+        except Exception as e:
+            witness.warn("memory", f"rebuild_update_attrs:{type(e).__name__}"[:80])
         count += 1
 
     return count

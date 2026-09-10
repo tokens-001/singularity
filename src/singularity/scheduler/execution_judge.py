@@ -627,6 +627,14 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
                 writer, max_tokens=_FUSION_MAX_TOKENS) or "") or {}
             transcript.append(f"[{writer} 确认]\n{_j(c)}")
             cur_c = _votes_into(conf_votes, writer, c.get("confirms"), "verdict")
+            # 确认调用失败/空返回时 c 是 {} → cur_c 为空 → 下面 `not any(...)` 成立
+            # → 被当成"发言方全认了"退出。静默的后果是：conf_votes 里一张票都没有，
+            # 于是所有分歧点走默认裁决 —— **全部判给发言方**，坚持方的 insist 被丢掉。
+            # 轮 2 的解析失败有告警（fusion_round2_json），轮 3 原来没有；补上。
+            if not c.get("confirms"):
+                witness.warn("execution_judge", "fusion_round3_empty"[:80])
+                rounds += 1
+                break
             rounds += 1
             if not any(v == "question" for v in cur_c.values()):
                 break                       # 发言方全认了 → 收敛
@@ -644,10 +652,16 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
         did = d.get("id")
         vs = [v for (m, i), v in resp_votes.items() if i == did]
         winner = writer
-        if "insist" in vs and conf_votes.get((writer, did)) == "agree":
+        conf = conf_votes.get((writer, did))
+        if "insist" in vs and conf == "agree":
             winner = next((m for (m, i), v in resp_votes.items()
                            if i == did and v == "insist"), writer)
-        resolved.append({**d, "winner": winner})
+        entry = {**d, "winner": winner}
+        if conf is None:
+            # 没有发言方的确认票 ≠ 发言方赢了 —— 只是"没人投过票，走默认"。
+            # 标出来，免得定稿人（和事后看产物的人）把它当成一个**有依据**的裁决。
+            entry["basis"] = "default_no_confirm_vote"
+        resolved.append(entry)
 
     # 独有做法：全体 adopt 才采纳（保守 —— 长度就是膨胀的主因）
     adopted = []
