@@ -293,8 +293,12 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
         etype = synthesizer.get("type", "claude-cli")
         executor_cls = _EXECUTOR_BY_TYPE.get(etype)
         if executor_cls:
+            # no_tools 必须带上 —— 委员会全程不改磁盘（见 _run_no_tools 的说明：
+            # "禁工具是委员会的前提（纯文本出方案，别改磁盘）"）。兜底这条以前漏了：
+            # 合成 agent 带着工具、cwd 又是奇点自己的仓库根，于是把目标项目的架构
+            # 直接写进了**奇点仓库的 docs/**（2026-09-11 实测产出 docs/ARCHITECTURE.json）。
             synth_result = _run_executor(
-                executor_cls, synthesizer, synthesis_prompt,
+                executor_cls, {**synthesizer, "no_tools": True}, synthesis_prompt,
                 f"{task_id}_synth", level,
                 baseline_ref=baseline_ref, cwd=cwd,
             )

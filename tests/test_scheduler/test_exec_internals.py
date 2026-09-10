@@ -790,6 +790,33 @@ class TestCommitteeDegradationVisibility:
         warns = self._run(monkeypatch, tmp_path, fuse=lambda *a, **k: "")
         assert any("fusion_empty_fallback_synthesis" in w for w in warns), warns
 
+    def test_fallback_synthesizer_is_tool_free(self, monkeypatch, tmp_path):
+        """兜底合成也必须禁工具 —— 否则它会往奇点自己的仓库里写文件。
+
+        实测（2026-09-11 真流水线）：融合失败 → 兜底合成 → 合成 agent **带着工具**、
+        cwd 是奇点仓库根 → 把目标项目的架构写成了 `docs/ARCHITECTURE.json`。
+        委员会本身禁工具（`_run_no_tools`），这条兜底漏了。
+        """
+        from singularity.scheduler import _dispatch_exec as de
+        from singularity.scheduler import execution_judge as ej
+        from singularity.scheduler import config as cfg
+        seen = {}
+        monkeypatch.setattr(de.witness, "warn", lambda *a: None)
+        monkeypatch.setattr(de, "_run_no_tools",
+                            lambda c, p, tag, level, baseline_ref="", cwd="":
+                            '{"architecture":"x"}')
+
+        def fake_run_executor(executor_cls, agent_cfg, prompt, tag, level, **kw):
+            seen["agent_cfg"] = agent_cfg
+            return None                      # 合成"失败"，走完这条分支即可
+
+        monkeypatch.setattr(de, "_run_executor", fake_run_executor)
+        monkeypatch.setattr(cfg, "QIDIAN_DIR", tmp_path)
+        monkeypatch.setattr(ej, "fuse_architecture_v2", lambda *a, **k: "")
+        de._dispatch_committee("模块划分 数据模型", "any", "tid", {},
+                               [{"model": "m1"}, {"model": "m2"}])
+        assert seen.get("agent_cfg", {}).get("no_tools") is True, seen
+
 
 class TestFusionMetaHandoff:
     """委员会产物随 DispatchResult 回传，不落 .qidian/.last_fusion.json 全局单文件。
