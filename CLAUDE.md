@@ -32,9 +32,10 @@
 
 ### 验证
 
-- `pytest tests/test_scheduler/ -q`（306 个，~0.9s，全绿基线）
+- `pytest tests/test_scheduler/ -q`（552 个，~6s，全绿基线）
 - `.venv/bin/python tests/test_exec_run.py`（`_exec.run()` 退出路径，桩测试不碰真 API）
+- `.venv/bin/python tests/test_review_gate.py`（门禁能不能看到改动 —— 真 git + 真快照，不 mock；桩测试测不出这个时序）
 - `.venv/bin/python tests/smoke_test.py`（走 HTTP，40 项；需先 `.venv/bin/python -m singularity.web.app` 起后端）
 
-> 后两条必须用 venv 解释器：系统 `python3`（homebrew 3.14）没装 singularity，直接跑会 `ModuleNotFoundError`。
+> 后三条必须用 venv 解释器：系统 `python3`（homebrew 3.14）没装 singularity，直接跑会 `ModuleNotFoundError`。
 > `pytest` 那条不受影响 —— `pyproject.toml` 给 pytest 配了 `pythonpath`。
