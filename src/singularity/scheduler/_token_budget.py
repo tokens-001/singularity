@@ -383,7 +383,7 @@ def get_usage_stats() -> dict:
 
 # 范围 → 天数（None = 全部，即盘上最早那天起）
 # 日历口径，不是"最近 N 天"的滚动窗口 —— 起止日见 _range_start
-_RANGES = ("all", "month", "week")
+_RANGES = ("all", "month", "week", "today")
 
 
 def _streak(days: list[dict]) -> tuple[int, int]:
@@ -417,12 +417,15 @@ def _range_start(range_: str, today: str, earliest: str) -> str:
     - `all`   → 累计至今：从有记录的第一天起
     - `month` → 本月：当月 1 号
     - `week`  → 本周：**周一**起（中文习惯；Python 的 weekday() 就是周一=0）
+    - `today` → 当天：只有今天一格
     """
     from datetime import date as _date, timedelta as _td
 
     if range_ == "all":
         return earliest
     d = _date.fromisoformat(today)
+    if range_ == "today":
+        return today
     if range_ == "month":
         return d.replace(day=1).isoformat()
     if range_ == "week":

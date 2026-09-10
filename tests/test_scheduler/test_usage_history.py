@@ -411,3 +411,16 @@ class TestConfiguredModelsAlwaysListed:
 
         h = history("all")
         assert h["totals"]["tokens"] == 1000
+
+
+class TestTodayRange:
+    def test_today_is_a_single_day(self, monkeypatch):
+        b = _fresh()
+        b.record("p", "", "t1", "m", "any", 42, ts=time.time())
+        b.record("p", "", "t2", "m", "any", 99, ts=_ts(_days_ago(3), 12))
+        _bind(monkeypatch, b)
+
+        h = history("today")
+        assert len(h["days"]) == 1, "当天就该只有一格"
+        assert h["days"][0]["date"] == _day_key(time.time())
+        assert h["totals"]["tokens"] == 42, "不该把前几天的算进来"

@@ -24,11 +24,13 @@ function fmtTokens(n: number): string {
   return String(n || 0)
 }
 
-/** 日历口径（本月 = 当月 1 号起，本周 = 周一起），不是"最近 N 天"的滚动窗口。 */
+/** 日历口径（本周 = 周一起，本月 = 当月 1 号起），不是"最近 N 天"的滚动窗口。
+ *  由宽到窄排列。 */
 const RANGES: { v: string; label: string }[] = [
   { v: 'all', label: '累计至今' },
   { v: 'month', label: '本月' },
   { v: 'week', label: '本周' },
+  { v: 'today', label: '今日' },
 ]
 
 const COL = {
