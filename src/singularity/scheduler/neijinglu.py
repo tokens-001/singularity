@@ -143,6 +143,14 @@ def build_report(
     pre_search_memory: dict = None,
 ) -> DeliveryReport:
     """组装交付报告。"""
+    # validation 允许为 None —— worker 异常 / 超时路径确实会传 None（orchestrator 那两处）。
+    # 以前直接往下走，validation.action 抛 AttributeError 被 _save_trace 的 except 吞掉，
+    # 结果是**任务失败时反而写不出 trace** —— 最需要看现场的时候什么都没有。
+    if validation is None:
+        validation = ValidationReport(
+            verdict="阻断", action="abort",
+            unverified=["未执行验证（worker 异常 / 超时）"],
+        )
     report = DeliveryReport(
         task=task,
         route=route,

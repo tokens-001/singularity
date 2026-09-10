@@ -278,7 +278,10 @@ class TaskRunner:
             mem_mod.archive_experience(
                 task_id=task.id, description=task.description,
                 status="done" if task.status == TaskStatus.DONE else "failed",
-                route_level=route.level,
+                # route_level 来自 task：RouteResult 没有 level（两档制后已废弃）。
+                # 这里曾经读 route.level → 每任务必抛 AttributeError → **同一个 try 里的
+                # record_tokens 和 learner.record 一起被跳过**，三个子系统全静默失效。
+                route_level=task.route_level,
                 model=getattr(disp_result, 'agent_cfg', {}).get("model", "") if disp_result else "",
                 elapsed_ms=getattr(exec_out, 'elapsed', 0) if exec_out else 0,
                 tokens=getattr(exec_out, 'token_count', 0) if exec_out else 0,
@@ -293,7 +296,7 @@ class TaskRunner:
                     project_id=getattr(task, 'project_id', ''),
                     task_id=task.id,
                     model=getattr(disp_result, 'agent_cfg', {}).get("model", "") if disp_result else "",
-                    level=route.level,
+                    level=task.route_level,
                     tokens=getattr(exec_out, 'token_count', 0) if exec_out else 0,
                 )
             except Exception as e:
@@ -305,7 +308,7 @@ class TaskRunner:
                 learner.record(
                     task_type=route.task_type,
                     model=getattr(disp_result, 'agent_cfg', {}).get("model", "") if disp_result else "",
-                    level=route.level,
+                    level=task.route_level,
                     # 成功与否看最终状态, 不看 batch.ok (QA 拒绝的任务 batch.ok 仍可能为 True)
                     success=(task.status == TaskStatus.DONE),
                     elapsed_ms=getattr(exec_out, 'elapsed', 0) if exec_out else 0,

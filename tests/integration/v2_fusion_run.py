@@ -6,7 +6,7 @@ _call_model 被包了一层记录 prompt/回复，跑完把对话过程打出来
 用法: .venv/bin/python tests/integration/v2_fusion_run.py [brief号 默认3]
       AB_CACHE=.ab_debate_plans_v2.json  AB_JUDGE=kimi-k3  QIDIAN_FUSION_V2_ROUNDS=5
 """
-import os, sys, json, importlib.util
+import os, sys, json, time, importlib.util
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
@@ -106,8 +106,9 @@ def main():
 
     def spy(prompt, model, max_tokens=2000):
         mt = max(max_tokens, min_tok) if min_tok else max_tokens
+        t0 = time.perf_counter()
         out = real(prompt, model, mt)
-        log.append((_step_of(prompt), model, prompt, out))
+        log.append((_step_of(prompt), model, prompt, out, time.perf_counter() - t0))
         return out
 
     ej._call_model = spy
@@ -121,9 +122,14 @@ def main():
     ej._call_model = real
 
     # 失败也要先打明细 —— 不然只能靠猜是哪一步空
-    print("── 调用明细 ──")
-    for step, model, prompt, out in log:
-        print(f"  {step:<12} {model:<24} prompt {len(prompt):>6} 字 → 回复 {len(out or '')} 字")
+    print("── 调用明细（按发生顺序）──")
+    total = 0.0
+    for step, model, prompt, out, dt in log:
+        total += dt
+        print(f"  {step:<12} {model:<24} prompt {len(prompt):>6} 字 → "
+              f"回复 {len(out or ''):>6} 字   {dt:6.1f}s")
+    print(f"  {'合计':<12} {len(log)} 次调用，串行累计 {total:.0f}s")
+    print(f"  {'最慢一步':<12} {max(log, key=lambda r: r[4])[0] if log else '-'}")
 
     if not fused:
         print("\n❌ 融合返回空（会回退旧流程）")
@@ -135,7 +141,7 @@ def main():
     print(f"  存到 {out_path}（结尾 200 字：{fused[-200:]!r}）\n")
 
     # ── 对话过程（别只看分数）──
-    for step, model, prompt, out in log:
+    for step, model, prompt, out, _dt in log:
         if step.startswith("③"):
             print(f"\n── {step}（{model}）──\n{(out or '(空)')[:700]}")
 

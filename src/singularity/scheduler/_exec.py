@@ -609,10 +609,13 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
             created_at=task.created_at,
         )
         # 补充事件属性: 终态 + route info
+        # route_level 取自 task 而非 route —— RouteResult 没有 level 字段（两档制后
+        # E/E+/D 已废弃，见 pre_search.apply_escalation 的注释）。曾经读 route.level，
+        # 每任务必抛 AttributeError 被下面那层 except 吞掉，于是这条 update_attrs 从没执行过。
         final_status = "rolled_back" if rolled_back else task.status.value
         mem_mod.update_attrs(task.id,
             status=final_status,
-            route_level=route.level if route else "",
+            route_level=task.route_level,
             route_type=route.task_type if route else "",
         )
     except Exception as e:

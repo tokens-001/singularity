@@ -1,10 +1,39 @@
-"""neijinglu.py 单元测试 — _is_redundant_failure + format_report 纯逻辑。
+"""neijinglu.py 单元测试 — _is_redundant_failure + format_report + build_report 纯逻辑。
 
-ponytail: 不测 build_report (LLM调用) 和 save_trace (文件IO)。
+ponytail: 不测 save_trace (文件IO)。
 """
 
 import json
 import pytest
+
+
+class TestBuildReportValidationNone:
+    """worker 异常 / 超时路径确实会传 validation=None（orchestrator 那两处 _save_trace）。
+
+    旧代码在这里抛 AttributeError，被 _save_trace 的 except 吞成一条 warn ——
+    结果是**任务失败时反而写不出 trace**，最需要看现场的时候什么都没有。
+    """
+
+    def test_none_validation_does_not_raise(self):
+        from singularity.scheduler.neijinglu import build_report
+        from singularity.scheduler.router import RouteResult
+
+        r = build_report(task="t: 挂了", route=RouteResult(), executor_result=None,
+                         validation=None, snapshot=None)
+        assert r.final_status == "blocked"
+        assert r.validation.action == "abort"
+        assert r.validation.unverified          # 必须说清"没验证过"，不能假装验过了
+
+    def test_real_validation_behaviour_unchanged(self):
+        """有 validation 时结论不变 —— 修 None 不能把正常路径也改成 blocked。"""
+        from singularity.scheduler.neijinglu import build_report
+        from singularity.scheduler.router import RouteResult
+        from singularity.scheduler.validator import ValidationReport
+
+        r = build_report(task="t", route=RouteResult(), executor_result=None,
+                         validation=ValidationReport(verdict="通过", action="pass"),
+                         snapshot=None)
+        assert r.final_status == "delivered"
 
 
 class TestFormatReport:
