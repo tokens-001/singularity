@@ -54,8 +54,22 @@ def _run(monkeypatch, tmp_path, *, project_id="", changed=("a.py", "b.py"),
     monkeypatch.setattr(sup, "check_requirement_conformance",
                         lambda *a, **k: conformance or SimpleNamespace(passed=True, evidence={}))
 
+    # 必须造**真** git 仓库：门禁取 diff 走的是 git，非 git 目录下 diff 恒空，
+    # 会命中"审查看到的 diff 为空"的披露（那是真实行为，但会让"全绿"用例失真）。
+    # 先提交一版、再改内容且**不暂存** → `git diff <file>` 才有东西可看。
+    import subprocess as _sp
+    def _g(*a):
+        return _sp.run(["git", *a], cwd=str(tmp_path), capture_output=True, text=True)
+    _g("init", "-q")
+    _g("config", "user.email", "t@t")
+    _g("config", "user.name", "t")
     for f in changed:
         (tmp_path / f).write_text("x = 1\n")
+    _g("add", "-A")
+    _g("commit", "-qm", "base")
+    for f in changed:
+        (tmp_path / f).write_text("x = 2\n")
+
     validation = SimpleNamespace(action="pass", unverified=[])
     quality = {"warnings": [], "confidence": 0.5, "quality_signals": {}}
     rv.run_post_exec_checks(

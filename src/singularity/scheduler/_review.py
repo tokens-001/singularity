@@ -220,6 +220,13 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             elif test_result.get("runner") != "none":
                 quality["quality_signals"]["tests_passed"] = test_result.get("total", 0)
                 quality["confidence"] = min(1.0, quality.get("confidence", 0.5) + 0.1)
+            else:
+                # runner == "none" = pytest/unittest/npm 三个全不可用或全超时，
+                # 返回的 passed 仍是初值 True。这是**没跑**，不是**跑过了**。
+                # 不加分也不拦（test_validator.test_run_tests_no_tests 锁定了那个语义），
+                # 但必须披露 —— 否则交付报告把"没验证"和"验证通过"混为一谈。
+                validation.unverified.append(
+                    "项目测试未执行: 无可用 runner (pytest/unittest/npm 均不可用)")
         except Exception as e:
             quality["warnings"].append(f"test execution error: {e}")
             quality["failure_kind"] = "test_error"
@@ -318,8 +325,12 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                             validation.action = "retry"
                     all_issues.extend(issues)
                     if review.get("verdicts"):
+                        # prompt 契约（validator.multi_model_review）的枚举是 pass|retry|abort，
+                        # 原来比的是 "needs_fix" —— 那个值永远不会出现，分支从不成立：
+                        # 多个模型都判 retry/abort 但 issues 为空时，没有任何后果
+                        # （不 retry、不 unverified、不记 failure）。按真实枚举改。
                         needs_fix = [v for v in review["verdicts"]
-                                     if v.get("verdict") == "needs_fix"]
+                                     if _norm(v.get("verdict")) in ("retry", "abort", "needs_fix")]
                         if len(needs_fix) >= 2:
                             validation.action = "retry"
                             review_failed = True
@@ -390,8 +401,13 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                         subprocess.run(["git", "diff", f],
                                        capture_output=True, text=True, timeout=10, cwd=cwd).stdout
                         for f in changed[:3])
-                except Exception:
-                    pass
+                except Exception as e:
+                    quality["warnings"].append(f"QA 验收取 diff 失败: {e}")
+                if not diff_text.strip():
+                    # 空 diff 时模型看到的是 "(无 diff)"，多半回 accepted —— 那是"没得看"，
+                    # 不是"看过了没问题"。必须披露，否则又是一次静默放行。
+                    validation.unverified.append(
+                        "QA 约束验收看到的 diff 为空: 结论不构成有效验收")
                 qa = val_mod.qa_acceptance_review(constraints, diff_text, cwd)
                 if _norm(qa.get("verdict")) == "needs_fix":
                     fails = [v for v in qa.get("verifications", [])
@@ -439,8 +455,13 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                     subprocess.run(["git", "diff", f],
                                    capture_output=True, text=True, timeout=10, cwd=cwd).stdout
                     for f in changed[:3])
-            except Exception:
-                pass
+            except Exception as e:
+                quality["warnings"].append(f"安全审计取 diff 失败: {e}")
+            if not diff_text.strip():
+                # 空 diff 时模型看到 "(无 diff)"，多半回 clean —— 那是"没得审"，
+                # 不是"审过且干净"。安全项更不能混为一谈，必须披露。
+                validation.unverified.append(
+                    "安全审计看到的 diff 为空: 结论不构成有效审计")
             sa = val_mod.security_audit_review(diff_text, cwd)
             findings = sa.get("findings", []) if _norm(sa.get("verdict")) == "needs_fix" else []
             if findings:
