@@ -155,21 +155,47 @@ def test_parse_error_returns_empty(monkeypatch):
     assert ej.fuse_architecture_v2("需求", PLANS) == ""
 
 
-def test_empty_extract_returns_empty(monkeypatch):
-    """提取返回空 → 必须回退，不能拿空议程去定稿。
+def test_empty_extract_retries_then_gives_up(monkeypatch):
+    """提取返回空 → 换模型逐个重试，全试完才放弃。
 
     实测踩过：glm-5.3 把 8000 token 烧在 reasoning 上返回空 content，
     旧代码当成"两家没分歧"，跳过整段对话直接定稿，写出 25 分的稿。
+
+    2026-09-11 起失败会换 `_V2_EXTRACT_FALLBACKS` 里的模型重试 —— 提取是 v2 唯一的
+    早退点，重试比"回退旧两阶段"划算得多（后者已被证明从未触发、且本身有致命缺陷）。
     """
     calls = []
 
     def fake(prompt, model, max_tokens=2000):
-        calls.append(prompt)
+        calls.append((model, prompt))
         return "" if "架构委员会秘书" in prompt else "最终稿"
 
     monkeypatch.setattr(ej, "_call_model", fake)
     assert ej.fuse_architecture_v2("需求", PLANS) == ""
-    assert len(calls) == 1                    # 提取失败就停，没有往下走
+    tried = [m for m, p in calls if "架构委员会秘书" in p]
+    assert len(tried) == 1 + len(ej._V2_EXTRACT_FALLBACKS)   # 首次 + 每个备选各一次
+    assert len(set(tried)) == len(tried)                     # 同一个模型不重复试
+
+
+def test_extract_retry_recovers(monkeypatch):
+    """换模型重试成功 → 整条 v2 正常往下走，不该失败。
+
+    这是删掉旧两阶段之后 v2 的**唯一兜底**，必须真的能救回来。
+    """
+    calls = []
+
+    def fake(prompt, model, max_tokens=2000):
+        calls.append((model, prompt))
+        if "架构委员会秘书" in prompt:
+            if model != "deepseek-v4-pro":
+                return ""                       # 前两个提取模型返回空
+            return json.dumps({"consensus": ["都同意模块划分"],
+                               "disagreements": [], "unique_gains": []})
+        return "最终稿"
+
+    monkeypatch.setattr(ej, "_call_model", fake)
+    assert ej.fuse_architecture_v2("需求", PLANS) == "最终稿"
+    assert [m for m, p in calls if "架构委员会秘书" in p][-1] == "deepseek-v4-pro"
 
 
 def test_all_empty_extract_returns_empty(monkeypatch):
@@ -194,18 +220,6 @@ def test_plans_total_cap_splits_evenly(monkeypatch):
     monkeypatch.setattr(ej, "_FUSION_PLANS_TOTAL", 300)
     block = ej._plans_block([("A", "x" * 1000), ("B", "y" * 1000)])
     assert block.count("x") == 150 and block.count("y") == 150
-
-
-def test_legacy_fuse_also_respects_total_cap(monkeypatch):
-    """旧两阶段路径共用同一个合计上限 —— 否则默认路径仍会顶爆上下文。"""
-    monkeypatch.setattr(ej, "_FUSION_PLAN_CHARS", 20000)
-    monkeypatch.setattr(ej, "_FUSION_PLANS_TOTAL", 200)
-    seen = []
-    monkeypatch.setattr(ej, "_call_model",
-                        lambda p, m, max_tokens=2000: (seen.append(p), "{}")[1])
-    ej.fuse_architecture("需求", ["x" * 1000, "y" * 1000])
-    assert seen[0].count("x") == 100 and seen[0].count("y") == 100
-    assert "[模型1]" in seen[0]           # 标签没变
 
 
 def test_single_plan_passthrough(monkeypatch):
@@ -294,14 +308,6 @@ def test_confirm_empty_is_warned(monkeypatch):
     assert any("fusion_confirm_empty" in str(w) for w in warns)
 
 
-# ── 旧路径 prompt 仍然可格式化（schema 抽出去别抽坏了）────
-
-def test_stage2_prompt_formats():
-    p = ej._ARCH_FUSION_STAGE2.format(
-        task="t", analysis="a", outputs="o", schema=ej._ARCH_SCHEMA)
-    assert '"test_cases"' in p and "{schema}" not in p
-
-
 # ── 空口 accept 不算让步（Not Just RLHF, arXiv 2605.12991）────
 
 def test_demote_bare_accept():
@@ -323,22 +329,6 @@ def test_bare_accept_does_not_converge(monkeypatch):
               "unique_gains": [{"id": 1, "stance": "adopt", "reason": "好"}]})
     ej.fuse_architecture_v2("需求", PLANS)
     assert any("对你的论证给出了回应" in p for _, p in calls)
-
-
-# ── 提取模型不能是委员本人 ────────────────────────────────
-
-def test_v2_is_the_default(monkeypatch):
-    """v2 已转正（2026-09-10）：默认开，QIDIAN_FUSION_V2=0 回退旧两阶段。
-
-    这条锁的是**默认值这个决定本身**，不是"v2 更好" —— v2 与旧两阶段至今没有跑过
-    头对头比较，现有证据都是"融合 vs 单稿"。回退开关必须一直有效。
-    """
-    monkeypatch.delenv("QIDIAN_FUSION_V2", raising=False)
-    assert ej._fusion_v2_enabled() is True
-    monkeypatch.setenv("QIDIAN_FUSION_V2", "0")
-    assert ej._fusion_v2_enabled() is False
-    monkeypatch.setenv("QIDIAN_FUSION_V2", "1")
-    assert ej._fusion_v2_enabled() is True
 
 
 def test_extractor_swapped_when_it_is_a_member(monkeypatch):

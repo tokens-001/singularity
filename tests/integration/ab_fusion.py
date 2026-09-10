@@ -1,8 +1,8 @@
-"""A/B: 辩论后「融合」(stage1+stage2, 2 波) 值不值？
+"""A/B: 「融合」值不值？（v2：提取→辩论→定稿）
 
 同一 brief 跑一次真实委员会，截获辩论后的 N 份方案，然后：
-  A = fuse_architecture(方案们)   ← 现状（7 波）
-  B = 方案[0]                     ← 跳过融合（5 波，省约 30% 时间）
+  A = fuse_architecture_v2(方案们)  ← 现状（提取→辩论→定稿）
+  B = 方案[0]                     ← 跳过融合
 两臂共用同一次委员会运行，差异只在最后一步 —— 隔离「融合」这一变量。
 
 盲评：用委员会之外的模型打分，甲/乙 顺序互换各评一次取平均，抵消位置偏好。
@@ -73,27 +73,25 @@ RUBRIC = """你是架构评审员。下面是同一个需求的两份架构方�
 
 
 def run_committee(brief, agents, chain, task_id):
-    """跑真实委员会路径，截获辩论后的方案。
+    """跑真实委员会路径，截获方案。
 
-    返回 [(模型名, 方案文本)]：_dispatch_committee 调 fuse_architecture 时把
-    `member_models=[m for m, _ in outputs]` 作为 kwarg 传进来，顺手一起截获。
+    返回 [(模型名, 方案文本)]：v2 的调用是 `fuse_architecture_v2(task, plans)`，
+    plans 本身就是 [(模型名, 方案文本)]，直接截获即可（旧 v1 是 outputs + 单独的
+    member_models kwarg，那条路径 2026-09-11 已删）。
     """
     captured, tmp = {}, Path(tempfile.mkdtemp())
-    orig_fuse, orig_dir = ej.fuse_architecture, cfg.QIDIAN_DIR
+    orig_fuse, orig_dir = ej.fuse_architecture_v2, cfg.QIDIAN_DIR
 
-    def _capture(task, outputs, **kw):
-        captured["plans"] = list(outputs)
-        captured["members"] = kw.get("member_models") or []
+    def _capture(task, plans, **kw):
+        captured["plans"] = [tuple(x) for x in plans]
         return '{"architecture":"(intercepted)"}'
 
-    ej.fuse_architecture, cfg.QIDIAN_DIR = _capture, tmp
+    ej.fuse_architecture_v2, cfg.QIDIAN_DIR = _capture, tmp
     try:
         de._dispatch_committee(brief, "any", task_id, agents, chain)
     finally:
-        ej.fuse_architecture, cfg.QIDIAN_DIR = orig_fuse, orig_dir
-    plans = captured.get("plans", [])
-    members = captured.get("members") or [f"model{i+1}" for i in range(len(plans))]
-    return list(zip(members, plans))
+        ej.fuse_architecture_v2, cfg.QIDIAN_DIR = orig_fuse, orig_dir
+    return captured.get("plans", [])
 
 
 def ask_judge(brief, a, b):
@@ -127,11 +125,8 @@ CACHE = Path(__file__).resolve().parent / ".ab_cache.json"
 
 def main():
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 1
-    # 测的是「融合」，辩论是无关变量（其价值已单独盲评过 +3~5 分）。
-    # 跳掉辩论：委员会 5 波 → 1 波（只留初稿），快 3 倍以上。AB_NO_DEBATE=0 恢复。
-    if os.environ.get("AB_NO_DEBATE", "1") == "1":
-        de._debate = lambda task, members, chain, task_id, level, **kw: members
-        print("（已跳过辩论：只跑初稿 → 融合，隔离「融合」这一变量）")
+    # 注：旧版这里会给 de._debate 打桩以跳过委员会辩论。v2 的辩论在融合内部
+    # （由 QIDIAN_FUSION_V2_NO_DEBATE 控制），委员会本来就只跑初稿，这个桩已删。
     agents = disp.load_agents()
     chain = disp.pick_agent_fallback_chain(agents, "any")
     print(f"委员会成员: {[a.get('model') for a in chain]} | 盲评模型: {JUDGE_MODEL}")
@@ -154,7 +149,7 @@ def main():
                 continue
             print(f"  辩论完成 {time.time()-t0:.0f}s，{len(plans)} 份方案（各 {[len(p) for p in plans]} 字）", flush=True)
             t1 = time.time()
-            fused = ej.fuse_architecture(arch_task(brief), list(plans))
+            fused = ej.fuse_architecture_v2(arch_task(brief), list(pairs))
             print(f"  融合完成 {time.time()-t1:.0f}s（{len(fused)} 字）", flush=True)
             cache[key] = {"plans": plans, "fused": fused}
             CACHE.write_text(json.dumps(cache, ensure_ascii=False))

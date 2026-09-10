@@ -1,8 +1,12 @@
 """execution_judge.py — Fusion 多模型合成模块
 
-架构方案阶段多个模型各出一份 → fuse_architecture 两阶段合成
-（五维差异分析 → 按 schema 去重定稿）。
-裁判/定稿模型取自 fusion.toml [custom]，见 _resolve_fusion_models。
+架构方案阶段多个模型各出一份 → `fuse_architecture_v2` 合成
+（提取三类 → 结构化辩论 → 按 schema 定稿）。
+
+旧两阶段 `fuse_architecture` 已于 2026-09-11 删除：它有已知致命缺陷（取并集膨胀到
+输入之和 1.8×、撞 max_tokens 腰斩、丢过整个 tasks 段），却被当作 v2 失败时的兜底 ——
+而告警日志显示它**从未在真机触发过**。兜底改由「提取失败换模型重试」承担，见
+`fuse_architecture_v2` 里的 `_extract_once`。
 """
 
 import json
@@ -143,22 +147,6 @@ def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:
     return ""
 
 
-def _resolve_fusion_models(judge_model: str = "", synthesizer_model: str = "") -> tuple[str, str]:
-    """定稿/裁判模型：显式参数 > fusion.toml [custom] > 硬编码默认。
-
-    [custom] 是 fusion.toml 里唯一非 tier 段（dual/triple/super 是 tier），
-    架构委员会按 agent 链选人、不分 tier，所以读它。
-    """
-    cfg = _load_fusion_config().get("custom", {}) or {}
-    judge = judge_model or cfg.get("judge_model") or "deepseek-chat"
-    synth = synthesizer_model or cfg.get("call_model") or judge
-    return judge, synth
-
-
-# ═══════════════════════════════════════════════════
-# 架构方案专用 Fusion (Step 2: 3模型碰撞)
-# ═══════════════════════════════════════════════════
-
 # 融合阶段每份方案的字符上限。曾写死 2000 —— 而方案实际 8k~20k 字，裁判和定稿人
 # 只看得到前 ~15%，等于蒙眼合成（实测 brief2 单稿 13114/14433/11873 字）。
 # 0 = 不限。40k 覆盖目前所有观测到的方案长度（初稿额度放开后单稿到 31k 字，
@@ -180,75 +168,6 @@ _FUSION_PLANS_TOTAL = int(os.environ.get("QIDIAN_FUSION_PLANS_TOTAL", "120000"))
 # 但给 2000 会撞顶返回空（warn:empty_content:*:length）。
 _FUSION_MAX_TOKENS = int(os.environ.get("QIDIAN_FUSION_MAX_TOKENS", "")
                          or config.MODEL_MAX_TOKENS)
-
-_ARCH_FUSION_STAGE1 = """你是架构合成裁判。以下 {n} 个模型对同一需求独立产出了架构方案。
-
-【原始需求】
-{task}
-
-【各模型架构方案】
-{outputs}
-
-请输出五维差异分析 JSON:
-
-{{
-  "consensus": [
-    {{"point": "所有模型一致的点", "confidence": "high"}}
-  ],
-  "contradictions": [
-    {{
-      "dimension": "modules/data_model/api/tech_stack/tasks",
-      "point": "矛盾点",
-      "positions": {{"model_1": "观点", "model_2": "观点"}},
-      "resolution": "你的裁决及理由",
-      "winner": "model_1|model_2|merge"
-    }}
-  ],
-  "unique_insights": [
-    {{"point": "只有一个模型提出的好想法", "source": "model_name", "adopt": true}}
-  ],
-  "blind_spots": [
-    {{"what": "所有模型都遗漏的需求点", "suggestion": "补充建议"}}
-  ]
-}}
-
-分析原则:
-- contradictions 必须给出明确裁决，不能"两者都对"
-- modules 维度: 对比模块划分粒度、命名、依赖关系
-- data_model 维度: 对比实体设计、字段、关系、索引
-- api_contracts 维度: 对比接口定义、错误处理
-- tech_stack 维度: 对比技术选型及理由
-- tasks 维度: 对比任务拆解、复杂度评定、依赖关系
-- blind_spots 对照原始需求逐条检查"""
-
-_ARCH_FUSION_STAGE2 = """你是架构合成定稿人。基于五维分析，产出一份统一的架构方案。
-
-【原始需求】
-{task}
-
-【五维分析】
-{analysis}
-
-【各模型原始方案（参考）】
-{outputs}
-
-合成规则（吸收重写，不是拼接、也不是择一 —— 最终方案质量必须高于任何单一输入）:
-1. consensus → 直接锁定，写入最终方案
-2. contradictions → 按裁决采用 winner 的观点
-3. unique_insights (adopt=true) → 补充进最终方案
-4. blind_spots → 补充缺失部分
-5. 模块名/实体名去重: 同名合并，异名同义选更清晰的名字
-6. API 去重: 同路径同方法 → 保留更完整的 spec
-7. 任务去重: 同描述 → 合并，保留更详细的那个
-8. 约束去重: 同含义 → 保留更严格的验证方式
-9. 风险去重: 同风险 → 合并缓解措施取并集
-10. 顺便生成 test_cases: 基于 PRD 成功标准 + API契约 + state_machine 生成测试用例
-
-输出必须严格遵循以下 JSON schema:
-
-{schema}
-
-只输出 JSON，用 ```json ... ``` 包裹。"""
 
 # 定稿输出 schema。旧两阶段和新 v2 共用 —— 单花括号（这里不经过 .format）。
 # 字段顺序 = 输出顺序。tasks/risks 是下游拆任务的唯一依据，排前面 —— 实测融合稿
@@ -290,42 +209,6 @@ def _warn_same_model(judge: str, synth: str, members: list[str] | None) -> None:
         if m and m in members:
             witness.warn("execution_judge", f"fusion_self_judge:{role}:{m}"[:80])
 
-
-def fuse_architecture(task_desc: str, outputs: list[str],
-                      judge_model: str = "",
-                      synthesizer_model: str = "",
-                      member_models: list[str] | None = None) -> str:
-    """架构方案专用两阶段融合。
-
-    阶段一: 五维差异分析 (consensus/contradictions/insights/blind_spots)
-    阶段二: 基于分析定稿，schema 去重合并
-
-    裁判/定稿模型默认取 fusion.toml [custom]（见 _resolve_fusion_models），
-    传参可覆盖。以前这里写死 deepseek-chat，导致 fusion.toml 整份不生效。
-    """
-    if not outputs or len(outputs) < 2:
-        return outputs[0] if outputs else ""
-
-    judge_model, synthesizer_model = _resolve_fusion_models(judge_model, synthesizer_model)
-    _warn_same_model(judge_model, synthesizer_model, member_models)
-
-    # 阶段一: 五维分析。走 _plans_block 共用合计上限 —— 单份上限没有总量约束时，
-    # N=3 写满 20k×3 能顶爆 64k 上下文的模型。标签保持 [模型1] 不变。
-    outputs_text = _plans_block([(f"模型{i+1}", o) for i, o in enumerate(outputs)])
-    stage1_prompt = _ARCH_FUSION_STAGE1.format(
-        n=len(outputs), task=task_desc[:_FUSION_TASK_CHARS], outputs=outputs_text
-    )
-    analysis_raw = _call_model(stage1_prompt, judge_model, max_tokens=_FUSION_MAX_TOKENS)
-    analysis = try_parse_json(analysis_raw) if analysis_raw else {}
-
-    # 阶段二: 基于分析定稿
-    analysis_text = json.dumps(analysis, ensure_ascii=False, indent=2) if analysis else "分析不可用"
-    stage2_prompt = _ARCH_FUSION_STAGE2.format(
-        task=task_desc[:_FUSION_TASK_CHARS], analysis=analysis_text, outputs=outputs_text,
-        schema=_ARCH_SCHEMA,
-    )
-    fused = _call_model(stage2_prompt, synthesizer_model, max_tokens=_FUSION_MAX_TOKENS)
-    return fused if fused else outputs[0]
 
 
 # ═══════════════════════════════════════════════════
@@ -499,23 +382,6 @@ _V2_EXTRACT_MAX_TOKENS = int(os.environ.get("QIDIAN_FUSION_EXTRACT_TOKENS", "")
                              or config.MODEL_MAX_TOKENS)
 
 
-def _fusion_v2_enabled() -> bool:
-    """v2 融合是否启用。**默认开**，`QIDIAN_FUSION_V2=0` 关掉。
-
-    读 env 不缓存 —— 测试和 A/B 都要能中途切换。
-
-    为什么转正（2026-09-10）：旧两阶段是"整份方案互评 + 五维分析 + 重写"，实测会
-    取并集把输出撑到输入之和的 1.8 倍，撞 max_tokens 被腰斩（brief 3 因此丢过整个
-    tasks 段）。v2 用「提取三类 → 结构化辩论(accept/insist) → 定稿」从机制上压住
-    膨胀，实测长度 0.98× 且融合 ≥ 最好成员。
-
-    **未做，别当已验证**：v2 与旧两阶段**没有跑过头对头**——现有全部证据都是
-    "融合 vs 单稿"。所以这次转正换掉的正是现役默认，风险方向是"v2 成功了但更差"，
-    自动回退救不了。回退：`QIDIAN_FUSION_V2=0`。
-    """
-    return os.environ.get("QIDIAN_FUSION_V2", "1") != "0"
-
-
 # v2 ② 提取的默认模型。**必须是非思考模型**：思考模型会把 max_tokens 烧在
 # reasoning 上、content 返回空，整条 v2 废掉 —— 实测 glm-5.3 和 deepseek-v4-flash
 # 都撞过，而注册表的 reasoning 标注不可靠（v4-flash 标 false，实际会输出思考链）。
@@ -644,14 +510,35 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
     plans_text = _plans_block(plans)
 
     # ── ② 提取三类 ──
-    raw = _call_model(_V2_EXTRACT.format(n=len(plans), task=task, outputs=plans_text),
-                      judge, max_tokens=_V2_EXTRACT_MAX_TOKENS)
-    deltas = try_parse_json(raw) if raw else {}
-    # 提取失败必须回退旧流程，不能"空着往下走"。三种失败都实测过：
+    # 提取失败必须回退，不能"空着往下走"。三种失败都实测过：
     #   - raw 空（思考模型把 max_tokens 烧在 reasoning 上）→ 实测 glm-5.3 撞过
     #   - try_parse_json 失败返回 {"parse_error": True}（仍是 dict）
     #   - 三样全空 = 没提取到，不是"两家没分歧"
-    if not raw or not isinstance(deltas, dict) or deltas.get("parse_error"):
+    def _extract_once(model: str):
+        raw = _call_model(_V2_EXTRACT.format(n=len(plans), task=task, outputs=plans_text),
+                          model, max_tokens=_V2_EXTRACT_MAX_TOKENS)
+        d = try_parse_json(raw) if raw else {}
+        if not raw or not isinstance(d, dict) or d.get("parse_error"):
+            return None
+        return d
+
+    deltas = _extract_once(judge)
+    prev = judge
+    if deltas is None:
+        # 换模型重试。**这一步是兜底的主力**：v2 的失败几乎全在提取（思考模型把额度
+        # 烧在 reasoning 上 → 空 content），换个模型大概率就好了。比回退旧两阶段强 ——
+        # 那条路有已知致命缺陷（取并集膨胀到输入 1.8×、撞 max_tokens 腰斩、丢过 tasks 段），
+        # 兜底产出的是**已知会坏**的东西。
+        for alt in [m for m in _V2_EXTRACT_FALLBACKS if m not in members and m != judge]:
+            # 用 prev 不用 judge：judge 是**最初**那个，第二次重试时来源已经不是它了。
+            # 日志写错来源 = 排查时按错的方向找（这仓库的老毛病就是日志撒谎）。
+            witness.warn("execution_judge", f"extract_retry:{prev}->{alt}"[:80])
+            deltas = _extract_once(alt)
+            if deltas is not None:
+                break
+            prev = alt
+    if deltas is None:
+        witness.warn("execution_judge", "fusion_v2_extract_failed_all"[:80])
         return ""
     disagreements = [d for d in (deltas.get("disagreements") or []) if isinstance(d, dict)]
     gains = [g for g in (deltas.get("unique_gains") or []) if isinstance(g, dict)]
@@ -671,7 +558,16 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
     max_rounds = max(2, int(os.environ.get("QIDIAN_FUSION_V2_ROUNDS", "5")))
     transcript = []
     resp_votes, conf_votes, gain_votes = {}, {}, {}   # (谁, 条目id) → 最新一票
-    if disagreements or gains:
+
+    # 消融开关（实验用）：不跑辩论，提取完直接定稿。
+    # **副作用必须知道**：不投票 ⇒ unique_gains 全部落选（采纳门槛是"全体 adopt"，
+    # 空票不算 adopt）。所以这条路径不是"少辩论"，是"只保留共识 + 分歧默认判给发言方"。
+    # 拿它跟全量跑配对比较，才答得了"辩论到底值不值"。
+    _skip_debate = os.environ.get("QIDIAN_FUSION_V2_NO_DEBATE") == "1"
+    if _skip_debate and (disagreements or gains):
+        witness.warn("execution_judge", "fusion_v2_debate_skipped"[:80])
+
+    if (disagreements or gains) and not _skip_debate:
         d_json, g_json = _j(disagreements), _j(gains)
         a1 = try_parse_json(_call_model(
             _V2_ROUND1.format(speaker=writer, task=task, outputs=plans_text,
@@ -784,7 +680,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
 def decompose_architecture(arch_json: dict) -> list[dict]:
     """拆解器: 把 unified_architecture.tasks 转成可执行 task 列表。
 
-    输入: fuse_architecture 输出的 unified_architecture JSON
+    输入: fuse_architecture_v2 输出的 unified_architecture JSON
     输出: [{desc, suggested_level, depends_on_local_id, context_snippet, acceptance}, ...]
 
     context_snippet: 从架构文档提取的任务相关上下文 (模块/接口/约束)

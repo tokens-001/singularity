@@ -17,28 +17,13 @@ from singularity.scheduler import model_registry
 from singularity.scheduler import _model_breaker
 import json, os, time, logging, threading
 
-# ── 委员会辩论的时间预算 ──
+# ── 委员会收集初稿的时间预算 ──
 # 单次模型调用本身有上限（claude-cli 300s / openai-agent 240s），所以一波的耗时
 # 取决于最慢的那个模型。把波超时调小只会让慢模型白跑——输出被丢弃、token 照花。
-# 真正省时间的是少一波，见 _DEBATE_ROUNDS。
 # 这个 timeout 也不决定"何时返回"：调用点用 with ThreadPoolExecutor(...)，退出时
 # shutdown(wait=True) 会 join 所有线程（实测 timeout=0.3s 仍等了 3s），它只决定
 # "何时去读已完成的结果"。调小它救不了总耗时。
 _WAVE_TIMEOUT = float(os.environ.get("QIDIAN_DEBATE_TIMEOUT", "300"))
-# 辩论轮数。默认 2 = 「第 1 轮 + 二次碰撞」：
-#   第 1 轮没有 prev_review 可比, 收敛判断必然短路(设计如此), 但第 1 轮的修订补丁
-#   可能引入新缺陷 —— 第 2 轮评审专门抓这个。砍到 1 就退化成固定单轮。
-# 注意收敛判断只在 max_rounds>=3 时才真省下工作: 在末轮末尾 break 与循环自然
-# 结束等价, 所以 2 轮的价值是二次碰撞, 不是"提前收敛"。
-# 赶时间: QIDIAN_DEBATE_ROUNDS=1 (跳过二次碰撞, 质量损失未 A/B 过)。
-_DEBATE_ROUNDS = max(1, int(os.environ.get("QIDIAN_DEBATE_ROUNDS", "2")))
-
-# 辩论总时间预算。单波最坏 = 单次 _run_no_tools 的最坏耗时（_api_call 整轮预算 600s），
-# 2 轮 = 4 波 → 最坏 2400s —— 实测撞过 2300s，一题把整轮调度拖死。
-# 注意 _WAVE_TIMEOUT **管不了这个**：波用 `with ThreadPoolExecutor`，退出时
-# shutdown(wait=True) 会 join 全部线程，那个 timeout 只决定"何时去读已完成的结果"。
-# 所以预算在每轮开头检查 —— 最坏截到「预算 + 单波」，比 2400s 好一半。
-_DEBATE_TOTAL_BUDGET = float(os.environ.get("QIDIAN_DEBATE_BUDGET", "900"))
 
 
 @timed(name="dispatcher")
@@ -59,7 +44,7 @@ def dispatch(
     # 冷启动先验: 任务关键词匹配模型 strengths, 擅长的模型排到链首
     chain = _prefer_by_strengths(task, chain)
 
-    # ── 架构任务: 委员会模式 (多模型并行 → fuse_architecture 合成) ──
+    # ── 架构任务: 委员会模式 (多模型并行 → fuse_architecture_v2 合成) ──
     # 仅架构/系统设计类任务走 3 模型碰撞, research/QA/安全/实现 单模型即可
     from .execution_judge import _is_architecture_task
     if _is_architecture_task(task) and len(chain) >= 2:
@@ -150,32 +135,6 @@ def _run_no_tools(agent_cfg: dict, prompt: str, tag: str, level: str,
     return None
 
 
-def _patch_is_noop(raw: str) -> bool:
-    """修订输出是否表示「无需改动」—— 空补丁数组 / 空白。
-
-    只在无歧义时才算 noop：解析失败一律当「有改动」，宁可多辩一轮也不误停。
-    注意用 _parse_patch_ops 而非 try_parse_json —— 后者只返回 dict，`[]` 会被判成解析失败。
-    """
-    s = (raw or "").strip()
-    if not s:
-        return True
-    ops = _parse_patch_ops(s)
-    return ops is not None and not ops
-
-
-def _is_slow_model(model_id: str) -> bool:
-    """慢模型判定: speed=slow。慢模型只出初稿, 不参与辩论后续轮。
-
-    只看 speed —— 曾经是 `speed == "slow" or e.reasoning`，但那半句是错的：
-    reasoning 字段的语义是「响应怎么解析（有没有 reasoning_content）」，
-    不是「跑得慢不慢」，两件事只是相关。串起来的后果是管理界面上一开关
-    「推理模型」就顺手把人踢出辩论，且无声。要禁某个模型参与辩论，
-    把它的 speed 设成 slow 就行 —— 那是这个字段该干的事。
-    """
-    e = model_registry.get(model_id)
-    return bool(e and e.speed == "slow")
-
-
 # 任务关键词 → strengths 能力标签 (benchmark/手填的 strengths 作冷启动先验)
 _STRENGTH_KEYWORDS: list[tuple[tuple[str, ...], str]] = [
     (("sql", "数据库", "查询", "query"), "数据查询"),
@@ -208,108 +167,6 @@ def _prefer_by_strengths(task: str, chain: list[dict]) -> list[dict]:
     return matched + rest if matched else chain
 
 
-def _debate(task: str, members: list[tuple], chain: list[dict], task_id: str,
-            level: str, baseline_ref: str = "", cwd: str = "",
-            max_rounds: int = _DEBATE_ROUNDS) -> list[tuple]:
-    """多轮辩论: 交叉评审→修订→收敛。members: [(model, raw_output)]。
-
-    每轮: 每个模型评审其他方案(挑缺陷) → 每个模型吸收对自己的点评修订方案。
-    收敛: 本轮评审 vs 上轮评审相似度 > 0.85 视为无新缺陷, 或达 max_rounds 硬上限。
-    每轮 2 波串行(评审、修订), 所以 max_rounds 直接决定辩论阶段的波数。
-    收敛只在 max_rounds>=3 时省波: 末轮末尾 break 与循环自然结束等价。
-    """
-    import concurrent.futures
-    import difflib
-
-    plans = {m: o for m, o in members}
-    models = [m for m, _ in members]
-    agent_by_model = {a.get("model"): a for a in chain}
-    # C: 慢模型只出初稿, 不评审/不修订; 快模型正常辩论。
-    # 兜底: 凑不齐两个 reviewer 就全员参与 —— **不是"全慢才兜底"**。
-    # 只剩一个 reviewer 时辩论是空转: 它评的是别人的方案, 而轮到它修订时,
-    # 「别人对我方案的点评」里只剩它自己那条, 被 rv != model 滤掉 → 空字符串。
-    # 实测 N=2 且一个慢: 调用减半且修订 prompt 里点评段 0 字, 慢模型冻结在初稿。
-    # 辩论要么正常跑要么别跑, 空转的代价和真辩论一样。
-    slow = {m for m in models if _is_slow_model(m)}
-    reviewers = [m for m in models if m not in slow]
-    if len(reviewers) < 2:
-        if reviewers and slow:
-            witness.warn("dispatcher",
-                         f"debate_reviewers_degraded:{len(reviewers)}"
-                         f"of{len(models)},all_in"[:80])
-        reviewers = models
-    prev_review = ""
-
-    _debate_deadline = time.time() + _DEBATE_TOTAL_BUDGET
-    for rnd in range(1, max_rounds + 1):
-        if time.time() > _debate_deadline:
-            # 预算耗尽 → 不再开新轮。已完成的修订保留（plans 上面已 update），
-            # 辩论结果不完整好过整轮调度被拖死。
-            witness.warn("dispatcher",
-                         f"debate_budget_exhausted:round{rnd}/{max_rounds}"[:80])
-            break
-        # ── 阶段A: 交叉评审(并行) ──
-        def _review(reviewer):
-            others = [(m, plans[m]) for m in models if m != reviewer]
-            # 完整传入他人方案, 不漏评后半部分缺陷 (输出仅点评 2-4 条, 输入完整划算)
-            parts = "\n\n".join(f"【{m}】\n{p}" for m, p in others)
-            prompt = (f"你是架构委员会成员，正在评审其他成员的方案。\n"
-                      f"任务背景:\n{task}\n\n{parts}\n\n"
-                      f"请逐一点评每位成员的方案，指出缺陷、遗漏、风险、可补充点。"
-                      f"用「【成员名】点评：...」格式，每位 2-4 条，简洁。")
-            return reviewer, _run_no_tools(agent_by_model.get(reviewer), prompt,
-                                           f"{task_id}_rev_{reviewer[:6]}_{rnd}",
-                                           level, baseline_ref, cwd)
-
-        review_map = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(reviewers), 4)) as ex:
-            futs = {ex.submit(_review, m): m for m in reviewers}
-            done, _ = concurrent.futures.wait(futs, timeout=_WAVE_TIMEOUT)
-            for fut in done:
-                reviewer, r = fut.result()
-                if r:
-                    review_map[reviewer] = r
-        review_text = "\n".join(f"评审({m}):\n{r}" for m, r in review_map.items())
-
-        # ── 阶段B: 修订(并行) ──
-        def _revise(model):
-            my_plan = plans[model]
-            others_review = "\n".join(
-                f"来自 {rv} 的点评:\n{r}" for rv, r in review_map.items() if rv != model)
-            # 增量修订: 模型只输出补丁(改动)。方案与点评完整传入——补丁 path 依赖看到全文，
-            # 截断会让模型盲猜路径; 输出已从 20k 缩到 2k, 输入完整是划算的。
-            prompt = (f"这是你的架构方案(JSON):\n{my_plan}\n\n"
-                      f"其他成员对你方案的点评:\n{others_review}\n\n"
-                      f"请吸收合理意见，输出 RFC 6902 JSON Patch 描述改动，不要重复原方案全文。\n"
-                      f"每条形如 {{\"op\":\"replace|add|remove\",\"path\":\"/tasks/0/description\",\"value\":\"...\"}}，\n"
-                      f"只列出需要改的字段，直接输出补丁数组。")
-            return model, _run_no_tools(agent_by_model.get(model), prompt,
-                                        f"{task_id}_rvs_{model[:6]}_{rnd}",
-                                        level, baseline_ref, cwd)
-
-        new_plans, raw_revisions = {}, []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(reviewers), 4)) as ex:
-            futs = {ex.submit(_revise, m): m for m in reviewers}
-            done, _ = concurrent.futures.wait(futs, timeout=_WAVE_TIMEOUT)
-            for fut in done:
-                model, r = fut.result()
-                if r:
-                    raw_revisions.append(r)
-                    new_plans[model] = apply_json_patch(plans[model], r)
-        plans.update(new_plans)  # 只更新快模型; 慢模型保留初稿
-
-        # 自适应终止: 所有修订都说「无需改动」(或一个修订都没回来) → 再辩是重复, 提前停。
-        # max_rounds=2 时这是唯一能省波的机会（省掉第 2 轮的 2 波）。
-        if not raw_revisions or all(_patch_is_noop(r) for r in raw_revisions):
-            break
-
-        # ── 收敛判定 ──
-        # 末轮的 break 与循环自然结束等价 → 这个判据只在 max_rounds>=3 时才省波
-        if prev_review and review_text and difflib.SequenceMatcher(None, prev_review, review_text).ratio() > 0.85:
-            break
-        prev_review = review_text
-
-    return [(m, plans[m]) for m in models if m in plans]
 
 
 def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
@@ -378,41 +235,19 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
         )
 
     # 合成: 架构任务用专用 fusion，其他用通用委员会合成
-    from .execution_judge import (
-        _is_architecture_task, _fusion_v2_enabled, fuse_architecture, fuse_architecture_v2,
-    )
+    from .execution_judge import _is_architecture_task, fuse_architecture_v2
 
     if _is_architecture_task(task):
-        # QIDIAN_FUSION_V2=0 可关；默认走新机制（提取三类→共享对话→定稿），失败回退旧流程
-        v2_on = _fusion_v2_enabled()
-        fused = fuse_architecture_v2(task, list(outputs)) if v2_on else ""
-        if v2_on and not fused:
-            # v2 内部只在**它自己认得的**失败上告警（提取空/解析失败/确认空…），
-            # 这里补一条统一的：外面至少要能看出"这轮走的是旧流程"。
-            witness.warn("dispatcher", "fusion_v2_failed_fallback_legacy"[:80])
+        # v2 是唯一路径。旧两阶段 2026-09-11 删除 —— 它本身有致命缺陷（取并集膨胀到
+        # 输入之和 1.8×、撞 max_tokens 腰斩、丢过整个 tasks 段），却被当作 v2 失败时的
+        # 兜底；而告警日志显示它**从未在真机触发过**。现在的兜底是 v2 内部的
+        # 「提取失败换模型重试」，那条比它强得多。QIDIAN_FUSION_V2 开关随之一并删除
+        # （它的语义本来就是"回退旧流程"，没有旧流程了）。
+        fused = fuse_architecture_v2(task, list(outputs))
         if not fused:
-            # 多轮辩论: 交叉评审收敛(互相补充缺陷)。辩论失败 → 用初稿继续融合
-            try:
-                outputs = _debate(task, outputs, chain, task_id, level,
-                                  baseline_ref=baseline_ref, cwd=cwd)
-            except Exception as e:
-                # 不阻断，但必须留痕：辩论没跑 = 拿初稿直接融合，成品会弱一档。
-                # 静默的话外面只看得到"融合跑完了"，查不出这轮为什么偏弱。
-                witness.warn("dispatcher",
-                             f"debate_failed:{type(e).__name__}:{e}"[:200])
-            # 架构方案: 两阶段 fusion (Step 2)
-            raw_outputs = [o for _, o in outputs]
-            try:
-                fused = fuse_architecture(task, raw_outputs,  # 裁判/定稿模型取自 fusion.toml [custom]
-                                          member_models=[m for m, _ in outputs])
-            except Exception as e:
-                witness.warn("dispatcher",
-                             f"fusion_failed:{type(e).__name__}:{e}"[:200])
-                fused = ""
-            if not fused:
-                # 落到下面的通用合成：每条产出截断到 3000 字。架构方案 20k+ 字，
-                # 这是**降级**不是等价替换，必须留痕。
-                witness.warn("dispatcher", "fusion_empty_fallback_synthesis"[:80])
+            # 落到下面的通用合成：每条产出截断到 3000 字。架构方案 20k+ 字，
+            # 这是**降级**不是等价替换，必须留痕。
+            witness.warn("dispatcher", "fusion_empty_fallback_synthesis"[:80])
         if fused:
             # 委员会产物随 DispatchResult 回传给调用方（_workflow_phases 再落 ProjectState）。
             # 曾经写 QIDIAN_DIR/.last_fusion.json 这个全局单文件 —— 并发下会串项目：

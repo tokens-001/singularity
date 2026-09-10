@@ -88,8 +88,6 @@ def _get_plans(brief_no: int) -> list[tuple[str, str]]:
             print("（复用本脚本上次跑的委员会初稿）")
             return [tuple(x) for x in d[str(brief_no)]]
     import singularity.scheduler.dispatcher as disp
-    import singularity.scheduler._dispatch_exec as de
-    de._debate = lambda task, members, chain, task_id, **kw: members   # v2 自带对话
     agents = disp.load_agents()
     chain = disp.pick_agent_fallback_chain(agents, "any")
     print(f"跑委员会初稿（生产形态任务，{len(chain)} 席）…", flush=True)
