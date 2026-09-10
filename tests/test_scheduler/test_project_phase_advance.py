@@ -76,6 +76,32 @@ def test_all_done_advances(tmp_path, monkeypatch):
     assert p.phase is proj_mod.Phase.INTEGRATING
 
 
+def test_decompose_fallback_reads_project_architecture(tmp_path, monkeypatch):
+    """兜底拆解必须读 `proj.architecture`。
+
+    它以前读 `<项目目录>/architecture.json` —— **全仓没有任何代码写这个文件**，
+    所以永远卡在第一步 `if not arch_path.exists(): return`，一次都没救成功过。
+    真进入"executing 且没任务"的项目只能一直卡着（2026-09-11 真流水线实测：
+    卡 13 分钟、零日志）。
+    """
+    from singularity.scheduler import config
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+    monkeypatch.setattr(tracker.config, "QIDIAN_DIR", tmp_path)
+    monkeypatch.setattr(proj_mod, "ensure_repo", lambda _id: tmp_path)
+
+    p = proj_mod.ProjectState(
+        id="proj1", name="测试项目", raw_constraints=[], owner_confirm={},
+        constraints_checklist=[], task_ids=[], issues=[], supervision_log=[],
+        lineage=[], handoffs=[], agent_lineup={},
+    )
+    p.architecture = {"tasks": [{"id": "T1", "title": "实现 X",
+                                 "description": "创建 x.py", "layer": "impl"}]}
+    monkeypatch.setattr(proj_mod, "save", lambda _p: None)
+
+    orch._decompose_and_create_tasks(p, {})
+    assert len(p.task_ids) == 1, "架构里有任务却没建出来 = 兜底还在读那个没人写的文件"
+
+
 def test_no_decomposable_tasks_is_surfaced_not_silently_stuck(tmp_path, monkeypatch):
     """架构拆不出任务 → 必须留痕，不能无声卡死。
 

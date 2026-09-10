@@ -380,26 +380,21 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
 
 
 def _decompose_and_create_tasks(proj, agents: dict) -> None:
-    """P2: 从架构文档拆解任务并创建 tracker task。"""
-    import json as _json
-    try:
-        from singularity.scheduler.project import get_project_dir
-        arch_path = get_project_dir(proj.id) / "architecture.json"
-        if not arch_path.exists():
-            return
-        arch = _json.loads(arch_path.read_text(encoding="utf-8"))
-        fused = arch.get("unified_architecture", "")
-        if not fused:
-            return
+    """P2 兜底: 项目进了 executing 却一个任务都没有时，从架构再拆一次。
 
-        # 解析 unified_architecture JSON
-        try:
-            arch_json = _json.loads(fused) if isinstance(fused, str) else fused
-        except (_json.JSONDecodeError, TypeError):
-            # 尝试提取 JSON 块
-            import re
-            m = re.search(r'\{[\s\S]*\}', str(fused))
-            arch_json = _json.loads(m.group()) if m else {}
+    正常路径用不到它 —— `run_phase` → `_workflow_phases._run_execution` 在项目进入
+    executing **之前**就把任务建好了。这条只在"没建上"时兜底。
+
+    ⚠️ 它以前读 `<项目目录>/architecture.json` —— **全仓没有任何代码写这个文件**
+    （唯一提及它的就是这里），所以永远卡在第一步 `if not arch_path.exists(): return`：
+    一次都没救成功过。真进入"executing 且没任务"的项目，只能一直卡着（2026-09-11
+    真流水线实测：卡了 13 分钟、零日志）。
+    改成读 `proj.architecture` —— 跟 `_run_execution` 同源。
+    """
+    try:
+        arch_json = proj.architecture or {}
+        if not isinstance(arch_json, dict):
+            return
 
         from singularity.scheduler.execution_judge import decompose_architecture
         tasks = decompose_architecture(arch_json)
