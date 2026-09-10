@@ -21,6 +21,13 @@ class ExperienceRecord:
     task_id: str
     description: str
     status: str           # done / failed / rolled_back
+    # 两档制后恒为 "any"。**这个声明以前漏了** —— 而 to_dict / from_dict /
+    # archive_experience 三处都在用它（构造传它、序列化读它），于是：
+    #   构造 → TypeError: unexpected keyword argument 'route_level'
+    #   序列化 → AttributeError: 'ExperienceRecord' object has no attribute ...
+    # 两头都炸 ⇒ **经验归档从上线起一次都没成功过**。2026-09-11 真机验证抓到：
+    # 跑完一个任务，experiences.json 根本没被创建。
+    route_level: str = ""
     model: str = ""            # 实际执行模型
     elapsed_ms: float = 0
     tokens: int = 0

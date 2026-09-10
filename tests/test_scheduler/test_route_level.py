@@ -54,3 +54,19 @@ def test_save_trace_records_route_level(tmp_path, monkeypatch):
     assert seen["route_level"] == "any"          # 两档制后恒为 any
     assert seen["route_type"] == "feature"       # route.task_type 是存在的字段
     assert seen["status"] == "pending"
+
+
+def test_experience_record_roundtrip():
+    """ExperienceRecord 必须能"构造 → 序列化 → 读回"走通。
+
+    它的 to_dict / from_dict / archive_experience 三处都用 route_level，
+    而 dataclass 的字段声明漏了它 —— 构造抛 TypeError、序列化抛 AttributeError，
+    两头都炸 ⇒ **经验归档从上线起一次都没成功过**（2026-09-11 真机验证抓到：
+    跑完一个任务，experiences.json 根本没被创建）。
+    """
+    from singularity.scheduler._memory_experience import ExperienceRecord
+
+    rec = ExperienceRecord(task_id="t1", description="d", status="done",
+                           route_level="any", model="m", elapsed_ms=1.0)
+    assert rec.to_dict()["route_level"] == "any"
+    assert ExperienceRecord.from_dict(rec.to_dict()).route_level == "any"
