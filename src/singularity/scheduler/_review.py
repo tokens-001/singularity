@@ -247,10 +247,16 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                 rev_files = []; rev_models = []; all_issues = []
                 review_failed = False
                 if len(changed) > 3:
-                    # 只审前 3 个文件 —— 改得多时后面的没人看。别静默截断：
-                    # 外面看到"review_files"时得知道它不等于"全部改动"。
+                    # 只审前 3 个文件 —— 改得多时后面的没人看（成本控制：每个文件都要多模型
+                    # 审查一轮）。这条截断是**有意为之**，不是 bug。
+                    # 但必须**同时**记进 unverified：本模块的原则是"可以放行，但不把通过和
+                    # 已验证混为一谈"（见文件头）。只发告警的话，交付报告仍写 delivered，
+                    # 而 1/4 的改动没有任何人看过 —— 告警是给排障的人看的，报告是给用户看的。
                     witness.warn("review",
                                  f"review_files_truncated:{len(changed)}->3"[:80])
+                    validation.unverified.append(
+                        f"{len(changed) - 3} 个改动文件未审查（只审了前 3 个）: "
+                        + ", ".join(str(f) for f in changed[3:]))
                 for f in changed[:3]:
                     # S2: 多模型审查带超时
                     try:

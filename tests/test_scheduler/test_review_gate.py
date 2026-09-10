@@ -271,3 +271,25 @@ def test_qa_constraint_error_retries(monkeypatch, tmp_path):
     v, q = _run(monkeypatch, tmp_path, project_id="p1",
                 constraints=[{"text": "必须用 PostgreSQL"}], qa=boom)
     assert v.action == "retry" and q["failure_kind"] == "constraint_error"
+
+
+# ── 审查截断的诚实披露 ──────────────────────────────────────
+
+def test_more_than_three_files_records_unreviewed(monkeypatch, tmp_path):
+    """只审前 3 个文件是**有意为之**（成本控制），但必须记进 unverified。
+
+    本模块的原则：「可以放行，但不把'通过'和'已验证'混为一谈」—— verdict=通过 +
+    unverified 非空 = 诚实放行（交付状态变 delivered_unverified）。
+    旧代码只发一条告警就完事：排障的人看得到，**用户看的交付报告仍写 delivered**，
+    而 1/4 的改动没有任何人看过。
+    """
+    v, _ = _run(monkeypatch, tmp_path, pool=[{"model": "r1"}, {"model": "r2"}],
+                changed=("a.py", "b.py", "c.py", "d.py"))
+    assert any("未审查" in u and "d.py" in u for u in v.unverified), v.unverified
+
+
+def test_three_files_not_flagged_as_unreviewed(monkeypatch, tmp_path):
+    """刚好 3 个是全审了的，不该误报。"""
+    v, _ = _run(monkeypatch, tmp_path, pool=[{"model": "r1"}, {"model": "r2"}],
+                changed=("a.py", "b.py", "c.py"))
+    assert not any("未审查" in u for u in v.unverified), v.unverified
