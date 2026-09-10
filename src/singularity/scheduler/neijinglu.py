@@ -109,8 +109,11 @@ class DeliveryReport:
                 "top_decisions": self.pre_search_top_decisions or [],
                 "memory": self.pre_search_memory or {},
             },
-            "changed_files": self.executor_result.changed_files,
-            "patch_path": self.executor_result.patch_path,
+            # 必须判空：worker 异常 / 执行超时两条路径传的就是 executor_result=None，
+            # 而 save_trace 第一行就调 to_dict() → AttributeError 被上层 except 吞掉 →
+            # **最该看现场的那两条路径反而没有 trace 文件**。同函数下面几行本来就有判空，这里是漏改。
+            "changed_files": self.executor_result.changed_files if self.executor_result else [],
+            "patch_path": self.executor_result.patch_path if self.executor_result else None,
             "validation": {
                 "verdict": self.validation.verdict,
                 "action": self.validation.action,

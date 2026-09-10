@@ -187,11 +187,15 @@ def system2_extract() -> dict:
     failures: dict[str, list] = defaultdict(list)
 
     for tid, ev in events.items():
-        if not isinstance(ev, dict):
+        # `_load_events()` 返回的是 {tid: EventNode} —— **对象**，不是 dict。
+        # 原来这里写 `if not isinstance(ev, dict): continue` → 每一条都被跳过 →
+        # successes/failures 恒空 → system2_extract 从上线起每轮都在跑、产出永远是 0。
+        attrs = getattr(ev, "attrs", None)
+        if not isinstance(attrs, dict):
             continue
-        status = ev.get("attrs", {}).get("status", "") if isinstance(ev.get("attrs"), dict) else ""
-        task_type = ev.get("attrs", {}).get("route_type", "default") if isinstance(ev.get("attrs"), dict) else "default"
-        level = ev.get("attrs", {}).get("route_level", "any") if isinstance(ev.get("attrs"), dict) else "any"
+        status = attrs.get("status", "")
+        task_type = attrs.get("route_type", "default")
+        level = attrs.get("route_level", "any")
         key = f"{task_type}×{level}"
         if status in ("done", "pass", "merged"):
             successes[key].append(tid)

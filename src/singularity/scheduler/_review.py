@@ -393,7 +393,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                 except Exception:
                     pass
                 qa = val_mod.qa_acceptance_review(constraints, diff_text, cwd)
-                if qa.get("verdict") == "needs_fix":
+                if _norm(qa.get("verdict")) == "needs_fix":
                     fails = [v for v in qa.get("verifications", [])
                              if _norm(v.get("status")) in ("fail", "warning")]
                     quality["warnings"].append(
@@ -442,7 +442,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             except Exception:
                 pass
             sa = val_mod.security_audit_review(diff_text, cwd)
-            findings = sa.get("findings", []) if sa.get("verdict") == "needs_fix" else []
+            findings = sa.get("findings", []) if _norm(sa.get("verdict")) == "needs_fix" else []
             if findings:
                 # 阈值: 仅 critical/high 硬拦 (真漏洞); medium/low = 加固建议/设计不完整, 软信号不硬拦
                 hard = [f for f in findings if _sev(f) in ("critical", "high")]

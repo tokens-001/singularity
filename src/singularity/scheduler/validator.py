@@ -278,6 +278,23 @@ def _extract_json_obj(text: str):
         return None
 
 
+def _norm_verdict(v, default: str) -> str:
+    """LLM 返回的外层 verdict 归一化后再比：小写 + 去空白，缺失/空 → default。
+
+    判官是模型，输出会在大小写/空格上飘（"Critical" / "CRITICAL" / " critical "）。
+    精确匹配会让它匹配不上 → 消费端把 findings 整条丢弃 → **真漏洞随代码合并**。
+
+    本仓库修过一轮同类 fail-open（09-10 修的是 severity 字段，见修复归档 #2），
+    这次漏的是 verdict 字段 —— 同一个病，换了字段。
+    注意：default 仍是放行档（clean/accepted）。模型不吐 verdict 时仍会静默通过，
+    这是**已知的 fail-open 残留**，要改得先有测量，本次不动。
+    """
+    if v is None:
+        return default
+    s = str(v).strip().lower()
+    return s or default
+
+
 def crossover_review(task_desc, raw_output, changed_files, writer_level, writer_model="", cwd=None):
     """Use a DIFFERENT model to review agent output. Returns {issues,verdict,summary}."""
     if not changed_files:
@@ -669,8 +686,8 @@ def qa_acceptance_review(constraints, diff_text, cwd, requirements=""):
     if not d:
         return {"verdict": "needs_fix", "verifications": [], "summary": f"QA 输出非 JSON: {raw[:200]}"}
 
-    verdict = (d.get("summary") or {}).get("verdict", "accepted")
-    if verdict == "rejected":
+    verdict = _norm_verdict((d.get("summary") or {}).get("verdict"), "accepted")
+    if verdict in ("rejected", "needs_fix"):
         verdict = "needs_fix"  # 归一化：qa_engineer 三档 verdict 里 rejected 同样触发修复
     return {"verdict": verdict, "verifications": d.get("verification", []), "summary": raw[:300]}
 
@@ -740,7 +757,7 @@ severity 判定标准 —— **只有 critical/high 会拦下合并**，别把�
              "remediation": "重试安全审计；若持续失败需人工介入"}
         ], "summary": f"安全审计输出非 JSON: {raw[:200]}"}
 
-    verdict = (d.get("summary") or {}).get("verdict", "clean")
-    if verdict == "critical":
+    verdict = _norm_verdict((d.get("summary") or {}).get("verdict"), "clean")
+    if verdict in ("critical", "needs_fix"):
         verdict = "needs_fix"  # 归一化：critical 同样触发修复
     return {"verdict": verdict, "findings": d.get("findings", []), "summary": raw[:300]}

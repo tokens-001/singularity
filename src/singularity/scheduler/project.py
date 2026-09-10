@@ -320,11 +320,15 @@ def save(project: ProjectState) -> None:
     project.updated_at = time.time()
     p = _path(project.id)
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(
-        json.dumps(project.to_dict(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    tmp.replace(p)  # 原子写
+    # 必须持锁: tmp 是**确定性路径**(<id>.tmp)，两个线程同时 save 同一项目会
+    # 共用同一 tmp → 写入交错/后写覆盖前写(lost update)。调用方跨三类线程:
+    # 调度循环、_merge_executor、Flask 请求线程。tracker.py 同类保存已加锁，这里漏了。
+    with _LOCK:
+        tmp.write_text(
+            json.dumps(project.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        tmp.replace(p)  # 原子写
     # SSE 推送项目进度
     _push_project_event(project)
 

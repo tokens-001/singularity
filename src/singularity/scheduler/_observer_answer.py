@@ -79,10 +79,11 @@ def _answer_question(question: str, project_id: str = "") -> str:
             if any(w in q for w in ("通过", "继续", "确认", "同意", "ok", "yes", "好", "可以", "行")):
                 session["phase"] = "done"
                 try:
-                    from singularity.scheduler.project import load as load_project, Phase
+                    from singularity.scheduler.project import load as load_project, Phase, save as save_project
                     proj = load_project(project_id)
                     if proj:
                         proj.confirm_gate(Phase.GATE1, "approved")
+                        save_project(proj)  # 必须落盘: confirm_gate 只改内存对象, load() 每次重新解析
                 except Exception:
                     pass
                 return "✅ GATE1 已通过。定义阶段完成，已进入架构规划阶段。请在项目页推进架构设计（多模型委员会出方案）。"
@@ -101,16 +102,20 @@ def _answer_question(question: str, project_id: str = "") -> str:
                 if proj.phase == Phase.GATE2:
                     if any(w in q for w in ("通过", "继续", "确认", "同意", "ok", "yes", "好", "可以", "行")):
                         proj.confirm_gate(Phase.GATE2, "approved")
+                        save_project(proj)
                         return "✅ GATE2 已通过。进入实现阶段，前端/后端/数据/DevOps工程师将并行开发。"
                     elif any(w in q for w in ("修改", "改", "不对", "重来", "不通过")):
                         proj.confirm_gate(Phase.GATE2, "rejected")
+                        save_project(proj)
                         return "已退回架构阶段。请描述需要修改的内容，将重新生成架构方案。"
                 elif proj.phase == Phase.GATE3:
                     if any(w in q for w in ("通过", "继续", "确认", "同意", "ok", "yes", "好", "可以", "行")):
                         proj.confirm_gate(Phase.GATE3, "approved")
+                        save_project(proj)
                         return "✅ GATE3 已通过。进入交付阶段，DevOps工程师将打包归档。"
                     elif any(w in q for w in ("修改", "改", "不对", "重来", "不通过")):
                         proj.confirm_gate(Phase.GATE3, "rejected")
+                        save_project(proj)
                         return "已退回实现阶段。请描述需要修复的问题。"
         except Exception:
             pass

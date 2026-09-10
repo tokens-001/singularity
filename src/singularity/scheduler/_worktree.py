@@ -136,7 +136,12 @@ def _maybe_create_worktree(task_id: str, level: str, agent_cfg: dict, snapshot_r
         witness.warn('_worktree', f'{e}')
     try:
         return wt_create(task_id, level, base_ref=snapshot_ref, repo_root=repo_root)  # 修复 #8
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        # 原来这里是裸 `return None` —— 连一条 warn 都没有。这是**真降级**:
+        # 调用方 _exec.py 拿不到 wt 就用仓库根当 cwd(无沙箱), 且 _exec 的
+        # `elif wt:` 不成立 → 不构造 MergeRequest → 改动落在真仓库、不进合并队列。
+        # 最常走的触发路径: 残留 worktree 目录 → `git worktree add` rc=128。
+        witness.warn("worktree", f"wt_create_failed:{type(e).__name__}:{e}:unsandboxed:{task_id[:8]}"[:200])
         return None
 
 
