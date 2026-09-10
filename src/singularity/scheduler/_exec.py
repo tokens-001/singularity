@@ -496,7 +496,14 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
 
             next_level = disp_mod.escalate(level)
             if next_level is None:
-                term_reason = f"escalation_exhausted (level={level})"
+                # escalate() **恒返回 None** —— `_ESCALATION` 是空表且全仓无人填，
+                # 也就是说"升级到下一档"这条设计路径从未生效过。
+                # 原来无论内层因为什么 break 到这里，终态一律写 escalation_exhausted，
+                # 把真实原因（低置信 / cascade 跳过 / executor 全失败）从终态上抹掉了 ——
+                # 排障时只看得到"升级用尽"，看不到"其实根本没有升级档"。
+                # 带上最后一次校验的 action，让终态说真话。
+                _why = getattr(last_validation, "action", "") or "unknown"
+                term_reason = f"no_escalation_path (level={level}, last_action={_why})"
                 break
             level = next_level
             # 升级后重建 fallback 链 (新层级的新 agent 列表)

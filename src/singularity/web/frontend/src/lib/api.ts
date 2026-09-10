@@ -75,7 +75,10 @@ export const api = {
   deleteSkill: (name: string) => request(`/api/skills/${name}`,{method:'DELETE'}),
   agentSkills: async (model: string) => { const d = await request<any>(`/api/agents/any/${model}/skills`); return { skills: d?.skill_names || d?.skills || [], available: d?.available || [] } },
   updateAgentSkills: (model: string, skills: string[]) =>
-    request(`/api/agents/any/${model}/skills`,{method:'PUT',body:JSON.stringify({skills})}),
+    // 键名必须是 skill_names：后端读的是 body.get("skill_names", [])。
+    // 原来发 {skills} → 后端永远取到 [] → 把该模型的技能**覆盖成空数组**：
+    // 界面上标签高亮成已选中、刷新即失效，而服务端数据已经被清掉了。
+    request(`/api/agents/any/${model}/skills`,{method:'PUT',body:JSON.stringify({skill_names: skills})}),
 
   fusionConfig: () => request<any>('/api/fusion/config'),
   updateFusionConfig: (data: any) => request('/api/fusion/config',{method:'PUT',body:JSON.stringify(data)}),

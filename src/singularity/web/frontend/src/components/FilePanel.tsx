@@ -23,14 +23,24 @@ export default function FilePanel({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     if (activePid === '_default') return
+    // 后端把错误也放在合法 JSON 里（{"files":[], "error":"..."}），
+    // 只判 `if (d.files)` 会把"读取失败"显示成"暂无文件"—— 必须优先看 error。
     fetch(`/api/projects/${activePid}/files`).then(r => r.json()).then(d => {
-      if (d.files) {
-        const nodes = buildTree(d.files)
-        setTree(nodes)
-        setExpanded(new Set(nodes.map(n => n.path)))
+      if (d.error) {
+        setTree([])
+        toast(`加载文件列表失败: ${d.error}`, 'error')
+        return
       }
+      const nodes = buildTree(d.files || [])
+      setTree(nodes)
+      setExpanded(new Set(nodes.map(n => n.path)))
     }).catch(() => { toast('加载文件列表失败', 'error') })
     fetch(`/api/projects/${activePid}/diff`).then(r => r.json()).then(d => {
+      if (d.error) {
+        setDiffData({ stat: '', diff: '' })
+        toast(`加载 diff 失败: ${d.error}`, 'error')
+        return
+      }
       setDiffData({ stat: d.stat || '', diff: d.diff || '' })
     }).catch(() => { toast('加载diff失败', 'error') })
   }, [activePid])
@@ -83,6 +93,12 @@ export default function FilePanel({ onClose }: { onClose: () => void }) {
     try {
       const r = await fetch(`/api/projects/${activePid}/files/${path}`)
       const d = await r.json()
+      // 403/404 的后端响应体也是合法 JSON，只是 content 为空。
+      // 直接 `|| '(空文件)'` 会把"禁止访问/文件不存在"显示成"这是个空文件"。
+      if (d.error) {
+        setFileContent(`无法读取: ${d.error}`)
+        return
+      }
       setFileContent(d.content || '(空文件)')
     } catch {
       setFileContent('加载失败')
