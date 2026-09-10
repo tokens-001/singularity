@@ -1,0 +1,50 @@
+# 环境: python 3.14.5 / darwin / 原型目录 /Users/jingzhe/projects/singularity/docs/research/todo-cli/poc_proto
+== PoC1 损坏文件韧性（期望：不抛异常、返回可写状态、原文件被隔离备份）==
+  不存在            -> list()->0 条 备份=0 (可恢复写入)
+  空文件            -> list()->0 条 备份=1 (可恢复写入)
+  被截断的 JSON      -> list()->0 条 备份=1 (可恢复写入)
+  纯垃圾文本          -> list()->0 条 备份=1 (可恢复写入)
+  JSON null      -> !!! 抛异常 TypeError: isinstance() arg 2 must be a type, a tuple of types, or a union 备份=0 (写失败 TypeError)
+  顶层是字符串         -> !!! 抛异常 TypeError: isinstance() arg 2 must be a type, a tuple of types, or a union 备份=0 (写失败 TypeError)
+  顶层是裸数组         -> !!! 抛异常 TypeError: isinstance() arg 2 must be a type, a tuple of types, or a union 备份=0 (写失败 TypeError)
+  items 不是数组     -> !!! 抛异常 TypeError: isinstance() arg 2 must be a type, a tuple of types, or a union 备份=0 (写失败 TypeError)
+  items 含脏元素     -> !!! 抛异常 TypeError: isinstance() arg 2 must be a type, a tuple of types, or a union 备份=0 (写失败 TypeError)
+  非法 UTF-8       -> list()->0 条 备份=1 (可恢复写入)
+  带 BOM          -> list()->0 条 备份=1 (可恢复写入)
+
+== PoC2 原子写：写盘中途失败不得破坏已有数据 ==
+!! poc2_atomic_write 实验失败: TypeError: isinstance() arg 2 must be a type, a tuple of types, or a union
+
+== PoC3 落盘路径解析（~ 展开、HOME 覆写、异常 HOME）==
+  HOME=/tmp/poc_home_a -> DEFAULT_PATH= /tmp/poc_home_a/.todo.json | Path.home()= /tmp/poc_home_a
+  HOME=/tmp/poc_home_b -> DEFAULT_PATH= /tmp/poc_home_b/.todo.json | Path.home()= /tmp/poc_home_b
+  显式 --file 生效: True  内容非空: True
+  文件权限（默认 umask）: 0o600 目录权限: 0o700
+
+== PoC4 并发写：读-改-写丢失更新量化（无锁实现的上界）==
+!! poc4_concurrency 实验失败: TypeError: isinstance() arg 2 must be a type, a tuple of types, or a union
+
+== PoC5 CLI 端到端（子进程真跑 python3 -m todo.cli）==
+  OK  exit=0(期望0) argv=add 买牛奶            -> 已添加 #1: 买牛奶
+  BAD exit=1(期望0) argv=add 写周报 并 复盘       -> Traceback (most recent call last): ⏎   File "<frozen runpy>", line 203, in _run_module_as_
+  BAD exit=1(期望0) argv=list               -> Traceback (most recent call last): ⏎   File "<frozen runpy>", line 203, in _run_module_as_
+  BAD exit=1(期望0) argv=list --all         -> Traceback (most recent call last): ⏎   File "<frozen runpy>", line 203, in _run_module_as_
+  BAD exit=1(期望0) argv=done 1             -> Traceback (most recent call last): ⏎   File "<frozen runpy>", line 203, in _run_module_as_
+  OK  exit=1(期望1) argv=done 999           -> Traceback (most recent call last): ⏎   File "<frozen runpy>", line 203, in _run_module_as_
+  OK  exit=1(期望1) argv=remove 999         -> Traceback (most recent call last): ⏎   File "<frozen runpy>", line 203, in _run_module_as_
+  BAD exit=1(期望0) argv=remove 2           -> Traceback (most recent call last): ⏎   File "<frozen runpy>", line 203, in _run_module_as_
+  OK  exit=2(期望2) argv=add                -> 错误: task text must not be empty
+  OK  exit=0(期望0) argv=--help             -> usage: todo [-h] [--file FILE] [--json] {add,list,done,remove} ... ⏎  ⏎ 命令行待办工具 ⏎  ⏎ posit
+  OK  exit=2(期望2) argv=(空)                -> usage: todo [-h] [--file FILE] [--json] {add,list,done,remove} ... ⏎ todo: error: the foll
+  --json 可机器消费: 
+
+== PoC6 三文件契约一致性（inspect.signature 比对）==
+  add     store(text: 'str', path: 'str | os.PathLike[str] | None' = None) -> 'dict[str, Any]'  __init__(text: 'str', path: 'str | os.PathLike[str] | None' = None) -> 'dict[str, Any]'  同一对象=True  PASS=True
+  list    store(path=None, include_done: 'bool' = True) -> 'list[dict[str, Any]]'  __init__(path=None, include_done: 'bool' = True) -> 'list[dict[str, Any]]'  同一对象=True  PASS=True
+  done    store(item_id: 'int', path=None) -> 'dict[str, Any] | None'  __init__(item_id: 'int', path=None) -> 'dict[str, Any] | None'  同一对象=True  PASS=True
+  remove  store(item_id: 'int', path=None) -> 'bool'  __init__(item_id: 'int', path=None) -> 'bool'  同一对象=True  PASS=True
+  __all__ = ['add', 'list', 'done', 'remove']
+
+== PoC7 性能（本地 SSD，全量读-改-写模型）==
+!! poc7_perf 实验失败: TypeError: isinstance() arg 2 must be a type, a tuple of types, or a union
+
