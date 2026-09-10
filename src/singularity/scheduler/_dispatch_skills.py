@@ -147,9 +147,14 @@ def _make_permission_checker() -> callable:
                 if not ok:
                     return False, reason
             if needs_approval(agent_level, agent_model, tool_name):
+                # `require_approval` 目前**只播报不拦**（下面照样 return True）。
+                # 真正生效的只有 blocked_tools/paths/commands。这不是遗漏不遗漏的问题 ——
+                # 全仓没有任何"工具级审批"的落地通道（api_task_approval 是空壳），
+                # 真拦下去就是死锁。所以这里如实说清"没拦"，别让人看审计流时误以为拦住了。
                 try:
-                    _pending_sse_events.append({"kind": "approval", "msg": f"[{task_id[:8]}] {tool_name} 需审批",
-                                 "ts": time.time(), "task_id": task_id})
+                    _pending_sse_events.append({"kind": "approval",
+                        "msg": f"[{task_id[:8]}] {tool_name} 标记为需审批（当前不阻断，仅通知）",
+                        "ts": time.time(), "task_id": task_id})
                 except Exception as e:
                     witness.warn('dispatcher', f'{e}')
             return True, ""
