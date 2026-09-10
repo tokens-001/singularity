@@ -138,6 +138,26 @@ class TestCheckLaziness:
         assert not r.passed
         assert r.evidence.get("hard")
 
+    def test_todo_in_filename_is_not_laziness(self):
+        """文件名/路径里的 "todo" 不是偷懒标记（2026-09-11 实测误伤）。
+
+        **在旧代码上会红、且红得对**（因断言失败，不是因 TypeError）：
+        旧判据是裸子串 `"todo" in agent_output.lower()`，下面每一句都会被判 fail。
+
+        真实事故：一个**完整实现**了 todo.py（原子写、损坏文件容错、内置自测）
+        的任务，因为交付物叫 todo.py，被判 `QA:fail: [laziness]` → 未合并 → 产物为零。
+        """
+        from singularity.scheduler.supervisor import _check_laziness
+        for text in ("这是 todo.py 的实现",
+                     "<!-- @files: todo.py -->",
+                     "# todo.py 的实现",
+                     "数据存到 .todo.json 路径",
+                     "todo_list 里没有遗漏"):
+            assert _check_laziness(text, ["todo.py"], ["实现功能"]).passed, text
+        # 对照：真正的注释标记仍然必须拦下
+        assert not _check_laziness("# TODO: 实现", ["app.py"], ["实现功能"]).passed
+        assert not _check_laziness("x = 1  # TODO", ["app.py"], ["实现功能"]).passed
+
     def test_omit_comment_fails(self):
         """输出含 # 此处省略 → 失败。"""
         from singularity.scheduler.supervisor import _check_laziness

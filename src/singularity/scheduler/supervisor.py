@@ -8,6 +8,7 @@ Opus二审核心设计: PASS必须落在非LLM硬证据上。
 
 from __future__ import annotations
 import json
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -201,6 +202,20 @@ def _check_constraints(
     return CheckResult(passed=True, reason=f"约束 {len(constraints)} 条全部合规")
 
 
+# "用注释代替实现" 的偷懒标记。必须认**注释标记形态**，不能认裸子串。
+#
+# 原来判据是 `"todo" in agent_output.lower()` —— 子串匹配，于是任何输出里出现
+# "todo" 四个字母就命中：`todo.py`、`.todo.json`、`todo_list`、甚至任务本身就叫
+# "写一个 todo 工具"。2026-09-11 实测：一个**完整实现**了 todo.py（含原子写、
+# 损坏文件容错、内置自测）的任务，就因为这个文件名被判 fail、未合并、产物为零。
+#
+# 现判据 = 注释前缀(+ # // /* <!-- ;) 紧跟 TODO，且 TODO 后不紧跟 . 或 _
+# （后者才是文件名/标识符：todo.py / .todo.json / todo_list）：
+#   ✅ "# TODO: 实现" / "// TODO 待补" / "x = 1  # TODO" / "# TODO"
+#   ❌ "todo.py" / "<!-- @files: todo.py -->" / "# todo.py 的实现" / "# todo_list"
+_TODO_MARKER = re.compile(r"(?:#|//|/\*+|<!--|;)\s*todo\b(?![._])", re.IGNORECASE)
+
+
 def _check_laziness(
     agent_output: str, changed_files: list[str], checklist: list[str],
 ) -> CheckResult:
@@ -212,14 +227,13 @@ def _check_laziness(
     把它们当硬证据会在 QA 门禁前移后把正常改动直接拦下。
     """
     hard_signals, soft_signals = [], []
-    output_lower = agent_output.lower()
 
     # 1. 输出远少于 checklist 预期 (软)
     if checklist and len(changed_files) < max(1, len(checklist) // 3):
         soft_signals.append(f"改动文件({len(changed_files)})远少于checklist({len(checklist)})预期")
 
-    # 2. 用注释代替实现 (硬)
-    if "todo" in output_lower or "# 此处省略" in agent_output:
+    # 2. 用注释代替实现 (硬) —— 见 _TODO_MARKER：认注释标记，不认裸子串
+    if _TODO_MARKER.search(agent_output) or "# 此处省略" in agent_output:
         hard_signals.append("输出含 TODO / 注释代替实现")
 
     # 3. 模糊措辞 (硬)
