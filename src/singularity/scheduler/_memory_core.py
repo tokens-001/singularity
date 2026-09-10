@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -227,6 +228,25 @@ _INTENT_EDGE_WEIGHTS = {
 # 快通道: 同步摄入 (Fast Path — "Synaptic Ingestion")
 # ═══════════════════════════════════════════════════════════
 
+# 读-改-写全程互斥。memory JSON 有两个线程族在写：
+#   调度线程（_save_trace → index_task/update_attrs）与
+#   Flask 请求线程（/api/memory/rebuild → 重建 / consolidate）。
+# 保存本身是原子的（_write_json → atomic_write_json），但 "load → 改 → save" 整段不是：
+# 后写者拿旧快照盖掉先写者 = 丢更新（与 route_learner 那条同型）。
+_LOCK = threading.RLock()
+
+
+def _locked(fn):
+    """让一个写入口的 load→改→save 全程持锁。"""
+    from functools import wraps
+
+    @wraps(fn)
+    def _w(*a, **k):
+        with _LOCK:
+            return fn(*a, **k)
+    return _w
+
+
 def _load_events() -> dict[str, EventNode]:
     """加载全部事件节点。"""
     raw: dict = _read_json(_EVENTS_PATH) or {}
@@ -274,6 +294,7 @@ def _infer_mem_type(description: str) -> str:
     return "code_change"
 
 
+@_locked
 def index_task(
     task_id: str,
     description: str,
@@ -383,6 +404,7 @@ def index_task(
 # 快通道辅助: 补充事件属性 (task 完成后更新 status 等)
 # ═══════════════════════════════════════════════════════════
 
+@_locked
 def update_attrs(task_id: str, **kwargs) -> None:
     """更新事件节点的 attrs 字段。"""
     events = _load_events()

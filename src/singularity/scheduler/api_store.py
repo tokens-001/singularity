@@ -232,11 +232,30 @@ def set_status(api_id: str, status: str, notes: str = "") -> Optional[APIEntry]:
     return entry
 
 
+# 被标记的 provider 多久之后允许再试一次。
+# 没有这个就是"有去无回"：一次 429/欠费把它永久摘出池子，而
+#   - 前端没接 setStatus 入口，CLI 也没有 → 只能手敲 curl
+#   - 自动恢复也没戏：mark 之后就没人再问它了
+# 实测线上：智谱被一次 http429（body 含"余额不足"）标成 quota_exhausted 后一直没恢复。
+_RECOVERY_COOLDOWN = 30 * 60      # 30 分钟
+
+
 def is_available(api_id: str) -> bool:
-    """检查 API 是否可用 (active 且有 key)。"""
+    """检查 API 是否可用 (active 且有 key)。
+
+    非 active 的 provider 过了冷却期后**放行一次**（半开，与 _model_breaker 同思路）：
+    撞上真欠费会被 note_api_error 重新标记、冷却重新计时；已经充值或只是被偶发限流
+    误伤的，则自然回到池子里。
+    """
     entry = get(api_id)
-    if not entry or entry.status != "active":
+    if not entry:
         return False
+    if entry.status == "disabled":
+        return False                      # 人工显式关闭 → 不自动放行，别覆盖用户意图
+    if entry.status != "active":
+        marked_at = getattr(entry, "updated_at", 0) or 0
+        if (time.time() - marked_at) < _RECOVERY_COOLDOWN:
+            return False
     return bool(os.environ.get(entry.api_key_env, ""))
 
 
