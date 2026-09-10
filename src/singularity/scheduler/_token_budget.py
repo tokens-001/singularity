@@ -130,6 +130,47 @@ class TokenBudget:
             by_project[pid]["tasks"] += 1
         return sorted(by_project.values(), key=lambda x: x["tokens"], reverse=True)
 
+    def per_model_usage(self) -> list[dict]:
+        """按**模型**汇总今日 token 用量。
+
+        这才是能拿来做决策的维度：切哪个模型贵、哪个模型吃 token 最多、
+        预算要不要挪。原来的总量/按项目/按层级都回答不了"我该换谁"。
+
+        带三列：tokens（绝对量）、share（占比）、cost（估算费用）——
+        占比是关键，总量涨了到底是"活多了"还是"某个模型变贵了"只能靠它区分。
+        """
+        today = time.strftime("%Y-%m-%d")
+        by_model: dict[str, dict] = {}
+        for r in self._daily:
+            if time.strftime("%Y-%m-%d", time.localtime(r.ts)) != today:
+                continue
+            m = r.model or "_unknown"
+            if m not in by_model:
+                by_model[m] = {"model": m, "tokens": 0, "cost": 0.0, "tasks": 0}
+            by_model[m]["tokens"] += r.tokens
+            by_model[m]["cost"] += r.cost_est
+            by_model[m]["tasks"] += 1
+        total = sum(v["tokens"] for v in by_model.values()) or 1
+        rows = sorted(by_model.values(), key=lambda x: x["tokens"], reverse=True)
+        for v in rows:
+            v["cost"] = round(v["cost"], 6)
+            v["share"] = round(v["tokens"] / total, 4)
+        return rows
+
+    def per_model_by_level(self) -> list[dict]:
+        """按 (模型 × 层级) 汇总 —— 回答"这个模型只在架构阶段贵，还是全程都贵"。"""
+        today = time.strftime("%Y-%m-%d")
+        acc: dict[tuple[str, str], dict] = {}
+        for r in self._daily:
+            if time.strftime("%Y-%m-%d", time.localtime(r.ts)) != today:
+                continue
+            k = (r.model or "_unknown", r.level or "?")
+            if k not in acc:
+                acc[k] = {"model": k[0], "level": k[1], "tokens": 0, "tasks": 0}
+            acc[k]["tokens"] += r.tokens
+            acc[k]["tasks"] += 1
+        return sorted(acc.values(), key=lambda x: x["tokens"], reverse=True)
+
     def level_breakdown(self) -> dict[str, int]:
         """按层级汇总 token。"""
         today = time.strftime("%Y-%m-%d")
@@ -164,4 +205,8 @@ def get_usage_stats() -> dict:
         "warning": b.budget_warning,
         "by_project": b.per_project_usage(),
         "by_level": b.level_breakdown(),
+        # 按模型才是能拿来做决策的维度：总量只告诉你"花了多少"，
+        # 回答不了"该换谁 / 谁在吃预算"。
+        "by_model": b.per_model_usage(),
+        "by_model_level": b.per_model_by_level(),
     }
