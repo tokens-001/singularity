@@ -284,16 +284,41 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                               tracker.TaskStatus.DONE, tracker.TaskStatus.ROLLED_BACK,
                               tracker.TaskStatus.FAILED, tracker.TaskStatus.DECOMPOSED)]
                 if not pending and proj.task_ids:
-                    # D2: 推进到集成合并阶段, 异步跑 (不阻塞调度循环)
-                    proj.phase = proj_mod.Phase.INTEGRATING
-                    proj_mod.save(proj)
-                    _pending_sse_events.append({
-                        "kind": "system", "msg": f"项目 {proj.name}: 全部任务完成, 进入集成合并",
-                        "ts": time.time(), "project_id": proj.id,
-                    })
-                    if proj.id not in _merge_inflight:
-                        _merge_inflight.add(proj.id)
-                        _get_merge_executor().submit(_run_integration_merge_async, proj.id, agents)
+                    # FAILED 也在"终态"集合里，所以这里必须再分一次：**一个都没成功
+                    # 就没有可交付的东西**。以前不看这个 —— 7 个任务全失败的项目照样
+                    # 一路推到 DONE 并播报"交付完成!"，用户看到的和事实完全相反
+                    # （2026-09-11 探针实测：7 任务全 failed，项目 phase=done）。
+                    done_ids = [tid for tid in proj.task_ids
+                                if (t := tracker.read_task(tid))
+                                and t.status == tracker.TaskStatus.DONE]
+                    if not done_ids:
+                        # 记一条 issue 并**停在这里等人处理**，不再往交付推。
+                        # 已记过就不再重复（调度循环每 tick 都会走到这里，否则刷屏）。
+                        if not any(i.get("kind") == "all_tasks_failed" for i in proj.issues):
+                            proj.issues.append({
+                                "kind": "all_tasks_failed",
+                                "message": f"{len(proj.task_ids)} 个任务全部失败，无可交付内容",
+                                "ts": time.time(),
+                            })
+                            proj_mod.save(proj)
+                            witness.warn("orch", f"project_all_tasks_failed:"
+                                                 f"{proj.id[:8]}:{len(proj.task_ids)}"[:80])
+                    else:
+                        # D2: 推进到集成合并阶段, 异步跑 (不阻塞调度循环)
+                        n_failed = len(proj.task_ids) - len(done_ids)
+                        proj.phase = proj_mod.Phase.INTEGRATING
+                        proj_mod.save(proj)
+                        _pending_sse_events.append({
+                            "kind": "system",
+                            # 别再说"全部任务完成" —— 有失败时如实报数
+                            "msg": (f"项目 {proj.name}: {len(done_ids)} 个任务完成"
+                                    + (f"，{n_failed} 个失败" if n_failed else "")
+                                    + "，进入集成合并"),
+                            "ts": time.time(), "project_id": proj.id,
+                        })
+                        if proj.id not in _merge_inflight:
+                            _merge_inflight.add(proj.id)
+                            _get_merge_executor().submit(_run_integration_merge_async, proj.id, agents)
             elif proj.phase.value == "delivering":
                 # S1: 自动交付打包 (轻量, 同步即可)
                 ok, detail = _run_delivery(proj)
