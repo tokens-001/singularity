@@ -510,6 +510,35 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
         return plans[0][1] if plans else ""
     members = [m for m, _ in plans]
     extractor = extract_model or _v2_extractor_model()
+
+    def _usable(m: str) -> bool:
+        """这个模型背后的 provider 当前可用吗（欠费/限流/人工关闭 → 不可用）。
+
+        融合路径原来完全不查：默认提取员 `glm-5.3-flash` 和第一备选 `glm-5.2`
+        **都是智谱**的，而智谱被标 quota_exhausted 之后，每次融合都要先白撞两次
+        死 provider，再退到委员会成员身上（等于选手给自己出题）。
+        """
+        if not m:
+            return False
+        try:
+            from singularity.scheduler import api_store
+            prov = model_registry.provider_for_model(m)
+            return api_store.is_available(prov) if prov else True
+        except Exception:
+            return True      # 查不了就别拦，保持原行为
+
+    if not _usable(extractor):
+        alt = next((m for m in _V2_EXTRACT_FALLBACKS if m not in members and _usable(m)), "")
+        if alt:
+            witness.warn("execution_judge",
+                         f"extractor_unavailable:{extractor}->{alt}"[:80])
+            extractor = alt
+        else:
+            # 备选池里没有可用的（全欠费，或全在委员会里）。这时只能照撞，
+            # 但要让它在告警里可见 —— 否则"融合每次先白撞死 provider"这事
+            # 只表现为莫名多出两次失败调用。
+            witness.warn("execution_judge",
+                         f"extractor_unavailable_no_alt:{extractor}"[:80])
     if extractor in members:
         alt = next((m for m in _V2_EXTRACT_FALLBACKS if m not in members), "")
         if alt:
