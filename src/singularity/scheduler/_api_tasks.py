@@ -294,7 +294,7 @@ def task_cancel(task_id: str) -> tuple[dict, int]:
 
 
 def task_pause(task_id: str) -> tuple[dict, int]:
-    """POST /api/tasks/<id>/pause — GATE 人审时暂停任务。"""
+    """POST /api/tasks/<id>/pause — 手动暂停任务 (Tasks 页的暂停按钮)。"""
     task = tracker.read_task(task_id)
     if task is None:
         return {"error": "任务不存在"}, 404
@@ -307,7 +307,7 @@ def task_pause(task_id: str) -> tuple[dict, int]:
 
 
 def task_resume(task_id: str) -> tuple[dict, int]:
-    """POST /api/tasks/<id>/resume — GATE 人审通过后恢复任务。"""
+    """POST /api/tasks/<id>/resume — 恢复被暂停的任务。"""
     task = tracker.read_task(task_id)
     if task is None:
         return {"error": "任务不存在"}, 404

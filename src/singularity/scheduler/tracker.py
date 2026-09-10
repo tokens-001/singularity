@@ -33,7 +33,7 @@ class TaskStatus(Enum):
     DECOMPOSED = "decomposed"        # 子任务已入队, 等聚合
     BLOCKED = "blocked"              # 依赖未满足, 等前置 DONE
     CONFLICT_HELD = "conflict_held"  # merge 冲突, parking 等人
-    PAUSED = "paused"                # GATE 人审暂停, 可恢复
+    PAUSED = "paused"                # 暂停中 (逐步确认 / 手动暂停), 可恢复
 
 
 # PAUSED: 不进 _INFLIGHT (不是崩了要重跑), 不进 _TERMINAL (能流转回 RUNNING)

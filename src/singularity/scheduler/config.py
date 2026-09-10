@@ -28,7 +28,7 @@ PATCH_DIR = QIDIAN_DIR / "patches"  # E+ 智谱产出暂存, apply 前不落盘 
 TRACE_DIR = QIDIAN_DIR / "traces"
 HOLD_DIR = QIDIAN_DIR / "holds"      # 人工扣留标记
 CANCEL_DIR = QIDIAN_DIR / "cancels"  # 取消标记
-PAUSE_DIR = QIDIAN_DIR / "pauses"    # 暂停标记 (GATE 人审用)
+PAUSE_DIR = QIDIAN_DIR / "pauses"    # 暂停标记：逐步确认模式 / 手动暂停按钮 (GATE 不走这里)
 PARKED_DIR = QIDIAN_DIR / "parked"   # 合并冲突 parking 持久化
 AGENTS_TOML = SCHEDULER_DIR / "agents.toml"  # stdlib tomllib, 不依赖 pyyaml
 
