@@ -344,6 +344,22 @@ def record_tokens(project_id: str = "", project_name: str = "", task_id: str = "
                        elapsed_s=elapsed_s)
 
 
+def record_system_tokens(model: str, level: str, tokens: int,
+                         elapsed_s: float = 0.0) -> None:
+    """记录**不属于任何任务**的系统调用用量：观察者对话 / 任务分类 / 架构融合 /
+    记忆整合 / 目标循环。
+
+    这些调用一样花钱。之前只有"派任务去干活"那条路记账，于是统计只覆盖了
+    全部 LLM 调用的一小部分 —— 你在 Chat 里聊的、建任务时做分类花的、
+    多模型定稿花的，全都不进账。
+
+    `level` 用来区分用途（`by_level` 就能按用途拆开看）；
+    project_id/task_id 留空（这些调用本来就不属于某个项目）。
+    """
+    if tokens > 0:
+        _budget.record("", "", "", model, level, tokens, elapsed_s=elapsed_s)
+
+
 def get_usage_stats() -> dict:
     """供 API 查询的用量统计。"""
     b = _budget

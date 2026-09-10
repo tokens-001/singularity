@@ -67,8 +67,13 @@ def _stream_once(client, base_url: str, headers: dict, payload: dict) -> tuple[i
     reasoning 单收一路：执行器早就在认它（openai_agent.py:406），这里一直只收 content，
     于是思考模型（实测 glm-5.3 / deepseek-v4-flash）走融合路径全部静默返回空。
     """
+    # include_usage: 流式默认**不返回** usage，不申请就永远拿不到这条调用的用量。
+    # 先例见 openai_agent.py:730 —— 同一批 provider 已经在用这个参数。
+    usage: dict = {}
     with client.stream("POST", f"{base_url}/chat/completions",
-                       headers=headers, json={**payload, "stream": True}) as r:
+                       headers=headers,
+                       json={**payload, "stream": True,
+                             "stream_options": {"include_usage": True}}) as r:
         if r.status_code >= 400:
             r.read()                                  # 先取回 body 才能读 .text
             return r.status_code, "", "", (r.text or "")[:200], ""
@@ -80,6 +85,8 @@ def _stream_once(client, base_url: str, headers: dict, payload: dict) -> tuple[i
             if body == "[DONE]":
                 break
             chunk = json.loads(body)
+            if chunk.get("usage"):
+                usage = chunk["usage"]               # include_usage 时最后一个 chunk 带
             for ch in chunk.get("choices", []) or []:
                 delta = ch.get("delta") or {}
                 if delta.get("content"):
@@ -88,7 +95,16 @@ def _stream_once(client, base_url: str, headers: dict, payload: dict) -> tuple[i
                     reasons.append(delta["reasoning_content"])
                 if ch.get("finish_reason"):
                     finish = ch["finish_reason"]
-        return 200, "".join(parts), finish, "", "".join(reasons)
+    # 融合/合成是系统里**单次最贵**的调用（一次要吐两万字）。以前连用量都没申请，
+    # 这条路的开销完全不在统计里。
+    try:
+        from singularity.scheduler._token_budget import record_system_tokens
+        _tk = int(usage.get("total_tokens", 0) or 0)
+        if _tk > 0:
+            record_system_tokens(model=str(payload.get("model", "")), level="fusion", tokens=_tk)
+    except Exception:
+        pass          # 记账失败不能影响融合本身
+    return 200, "".join(parts), finish, "", "".join(reasons)
 
 
 def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:

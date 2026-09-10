@@ -18,6 +18,24 @@ from singularity.scheduler._observer_tools import OBSERVER_SYSTEM_PROMPT, OBSERV
 _log = logging.getLogger("observer")
 
 
+def _record_observer_usage(model: str, usage: dict | None) -> None:
+    """把观察者对话的用量记进 token 账。
+
+    以前这里只取回答内容，`usage` 字段直接丢掉 —— 于是在 Chat 里聊天的开销
+    完全不在统计里（统计数据只覆盖"派任务去干活"那条路）。
+
+    `level="observer"` 让 `by_level` 能把聊天和干活的用量分开看。
+    """
+    try:
+        from singularity.scheduler._token_budget import record_system_tokens
+        tokens = int((usage or {}).get("total_tokens", 0) or 0)
+        if tokens > 0:
+            record_system_tokens(model=model, level="observer", tokens=tokens)
+    except Exception as e:
+        # 记账失败不能影响聊天本身
+        _log.warning("observer usage record failed: %s", e)
+
+
 # ═══════════════════════════════════════════════════════════════
 # 只读查询工具（纯 Python 函数，直接读取现有数据）
 # ═══════════════════════════════════════════════════════════════
@@ -60,6 +78,8 @@ def _answer_question(question: str, project_id: str = "") -> str:
                 resp = client.post(f"{base_url}/chat/completions", headers=headers, json=body)
                 resp.raise_for_status()
                 data = resp.json()
+            # 接口返回的用量以前被直接丢掉 —— 你在 Chat 里聊的 token 一分都没进统计
+            _record_observer_usage(model, data.get("usage"))
             content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             return content.strip() if content else "（模型返回空内容）"
         except Exception as e:
@@ -167,6 +187,7 @@ def _answer_question(question: str, project_id: str = "") -> str:
             except Exception as e:
                 return f"调用 LLM 失败：{e}"
 
+            _record_observer_usage(model, data.get("usage"))   # 每一轮都要记，不是只记首轮
             choice = data.get("choices", [{}])[0]
             message = choice.get("message", {})
 

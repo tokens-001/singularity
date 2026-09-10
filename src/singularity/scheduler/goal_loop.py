@@ -121,6 +121,13 @@ class GoalLoop:
                                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
             resp.raise_for_status()
             data = resp.json()
+            try:
+                from singularity.scheduler._token_budget import record_system_tokens
+                _tk = int((data.get("usage") or {}).get("total_tokens", 0) or 0)
+                if _tk > 0:
+                    record_system_tokens(model=model, level="goal", tokens=_tk)
+            except Exception:
+                pass      # 记账失败不能影响目标判定
             content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
             # 提取 JSON
             import re

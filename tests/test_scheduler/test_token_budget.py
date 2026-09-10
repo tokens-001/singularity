@@ -11,6 +11,8 @@
 
 import json
 
+import pytest
+
 from singularity.scheduler import config, model_prices
 from singularity.scheduler._token_budget import TokenBudget
 
@@ -149,3 +151,51 @@ class TestBudgetWarning:
         w = b.budget_warning
         assert "日预算已用" in w
         assert "未配置价格" not in w
+
+
+class TestSystemCallsAreCounted:
+    """非任务路径的调用也要进账。
+
+    2026-09-11 之前只有"派任务去干活"那条路记账，于是统计只覆盖了全部 LLM 调用的
+    一小部分：Chat 里聊的、建任务时做分类的、多模型定稿的、记忆整合的、目标循环的，
+    全都不进账。用户看到的就是"钱花得比统计多"。
+    """
+
+    def test_system_call_records_with_its_level(self, monkeypatch):
+        # ⚠️ 必须 monkeypatch 单例：`_budget` 在 import 时就绑定了真实 .qidian/，
+        # 直接调它会把假记录写进生产数据（conftest 只改了 config.QIDIAN_DIR，改不到它）。
+        from singularity.scheduler import _token_budget as tb
+        b = _fresh()
+        monkeypatch.setattr(tb, "_budget", b)
+
+        tb.record_system_tokens(model="observer-model", level="observer", tokens=1000)
+
+        rows = b.per_model_usage()
+        assert any(r["model"] == "observer-model" for r in rows), "系统调用没进账"
+        assert b.level_breakdown().get("observer") == 1000
+
+    @pytest.mark.parametrize("level", ["observer", "router", "fusion", "memory", "goal"])
+    def test_every_system_path_has_a_level(self, level, monkeypatch):
+        from singularity.scheduler import _token_budget as tb
+        b = _fresh()
+        monkeypatch.setattr(tb, "_budget", b)
+        tb.record_system_tokens(model=f"m-{level}", level=level, tokens=500)
+        assert b.level_breakdown().get(level) == 500, f"{level} 这条路没记账"
+
+    def test_system_call_has_no_project_or_task(self, monkeypatch):
+        from singularity.scheduler import _token_budget as tb
+        b = _fresh()
+        monkeypatch.setattr(tb, "_budget", b)
+        tb.record_system_tokens(model="m", level="observer", tokens=500)
+        # 这些调用本来就不属于某个项目 —— 不该伪装成某个项目的开销
+        r = b._daily[0]
+        assert r.project_id == "" and r.task_id == ""
+        # 也不该污染按项目统计
+        assert all(p["project_id"] == "_unknown" for p in b.per_project_usage())
+
+    def test_zero_tokens_is_not_recorded(self, monkeypatch):
+        from singularity.scheduler import _token_budget as tb
+        b = _fresh()
+        monkeypatch.setattr(tb, "_budget", b)
+        tb.record_system_tokens(model="m", level="observer", tokens=0)
+        assert b._daily == []

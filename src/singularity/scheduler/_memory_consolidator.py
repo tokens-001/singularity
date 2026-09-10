@@ -106,7 +106,15 @@ If task A caused task B, is_causal=true. Otherwise false. When unsure, false."""
         resp = client.post(f"{base_url}/chat/completions", json=body,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
         resp.raise_for_status()
-        raw = resp.json()["choices"][0]["message"]["content"]
+        _data = resp.json()
+        try:
+            from singularity.scheduler._token_budget import record_system_tokens
+            _tk = int((_data.get("usage") or {}).get("total_tokens", 0) or 0)
+            if _tk > 0:
+                record_system_tokens(model=model, level="memory", tokens=_tk)
+        except Exception:
+            pass      # 记账失败不能影响记忆整合
+        raw = _data["choices"][0]["message"]["content"]
         m = re.search(r'\{[^}]+\}', raw)
         return json.loads(m.group()) if m else {"is_causal": False, "reason": "parse_error"}
     except Exception as e:

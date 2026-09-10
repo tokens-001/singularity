@@ -27,44 +27,6 @@ function fmtTokens(n: number): string {
   return String(n || 0)
 }
 
-/** 预算额度条 —— 抄 ZCode 侧边栏那个 "N% used / Remaining / Total"。
- *
- * **budget <= 0 时什么都不渲染**：没配预算就无所谓"百分之几"，
- * 退回 `0% used / 剩余 $0.00 / 总额 $0.00` 等于**编了一个用户从没设过的套餐**。
- *
- * 导出是为了能单独测这条规则 —— 它埋在 AppLayout 里时测不到（要 mock router + SSE + store）。
- */
-export function BudgetMeter({ used, budget, unpriced }: {
-  used: number; budget: number; unpriced: string[]
-}) {
-  if (!(budget > 0)) return null
-  const pct = (used / budget) * 100
-  const remain = budget - used            // 不夹到 0：超预算是真实状态
-  const lowerBound = unpriced.length > 0
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 2 }}
-      title={lowerBound ? `以下模型未配置单价，实际花费更高：${unpriced.join('、')}` : undefined}>
-      <div className="flex-between" style={{ fontSize: 10, color: '#6b6b68' }}>
-        <span>今日预算</span>
-        {/* 有模型没配单价时读数是**下限** —— 必须看起来就是下限 */}
-        <span style={{ color: lowerBound ? '#d97706' : undefined }}>
-          {lowerBound ? '≥' : ''}{pct.toFixed(0)}% used
-        </span>
-      </div>
-      <div style={{ height: 3, borderRadius: 2, background: '#f3f2ec' }}>
-        {/* 夹的是**条**，不是数字 —— 140% 就得显示 140% */}
-        <div style={{ height: 3, borderRadius: 2, width: `${Math.min(100, pct)}%`,
-          background: pct >= 100 ? 'var(--accent-red, #dc2626)' : 'var(--accent, #2563eb)' }} />
-      </div>
-      <div className="flex-between" style={{ fontSize: 10, color: '#b5b2a8' }}>
-        <span>剩余 ${remain.toFixed(2)}</span>
-        <span>总额 ${budget.toFixed(2)}</span>
-      </div>
-      <div style={{ fontSize: 10, color: '#b5b2a8' }}>每日 00:00 重置</div>
-    </div>
-  )
-}
-
 export default function AppLayout() {
   const { sidebarCollapsed, toggleSidebar } = useAppStore()
   const setActiveProject = useAppStore(s => s.setActiveProject)
@@ -77,9 +39,6 @@ export default function AppLayout() {
   const addToast = useToast()
   const sidebarWidth = sidebarCollapsed ? 0 : 260
   const [usage, setUsage] = useState<any>({})
-  // 按模型那几行**默认展开**。折叠着的时候侧边栏只有一行"今日 N tokens"，
-  // 看着跟"总量统计"没区别 —— 而用户要的正是按模型看谁在吃预算。
-  const [showModels, setShowModels] = useState(true)
   const [loopRunning, setLoopRunning] = useState(false)
   const [conflicts, setConflicts] = useState<any[]>([])
 
@@ -118,9 +77,8 @@ export default function AppLayout() {
   // 旧后端不返 by_model（字段缺失 → null）时整行不可点、不显示箭头，
   // 免得箭头承诺了却展开出空
   const models: any[] = Array.isArray(usage?.by_model) ? usage.by_model : []
-  // 今天用过但没配单价的模型 → 上面的总额只是下限，要标出来
+  // 今天用过但没配单价的模型 → 标出来，别让人以为总额就是全部
   const unpriced: string[] = Array.isArray(usage?.unpriced_models) ? usage.unpriced_models : []
-  const budget: number = usage?.budget_daily || 0
 
   const selectProject = (pid: string) => { setActiveProject(pid); navigate('/') }
 
@@ -187,27 +145,23 @@ export default function AppLayout() {
                 title={conflicts.map((c: any) => c.task_id || c.id || '').join(', ')}>⚠ {conflicts.length} 冲突</span>
             )}
           </div>
-          <BudgetMeter used={usage?.daily_cost || 0} budget={budget} unpriced={unpriced} />
-          {/* 总量只说明"花了多少"，回答不了"该换谁" —— 点开看按模型的占比。
-              数据一直在 /api/token-usage 里（by_model），之前只是没渲染。 */}
-          <div onClick={models.length ? () => setShowModels(v => !v) : undefined}
-            role={models.length ? 'button' : undefined} tabIndex={models.length ? 0 : undefined}
-            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setShowModels(v => !v) } }}
-            title={models.length ? '点开：今日各模型用量占比' : undefined}
-            style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, cursor: models.length ? 'pointer' : 'default' }}>
-            <span style={{ color: '#6b6b68' }}>今日 {fmtTokens(usage?.daily_tokens)} tokens{models.length ? (showModels ? ' ▾' : ' ▸') : ''}</span>
-            {/* 有模型没配单价时 daily_cost 只是下限 —— 加 "+" 并说明，别让人以为这就是全部 */}
-            <span style={{ color: unpriced.length ? '#d97706' : '#6b6b68' }}
-              title={unpriced.length ? `以下模型未配置单价，未计入：${unpriced.join('、')}` : undefined}>
-              {fmtCost(usage?.daily_cost)}{unpriced.length ? '+' : ''}
-            </span>
+          {/* 左下角只留"各模型的用量" —— 总额那行右边原来也放一份金额/未配置价格，
+              于是"未配置价格"连着出现两遍，看着像坏了。这里只留总量，钱放各行。 */}
+          <div style={{ fontSize: 11, color: '#6b6b68', display: 'flex', gap: 6 }}>
+            <span>今日 {fmtTokens(usage?.daily_tokens)} tokens</span>
+            {unpriced.length > 0 && (
+              <span style={{ color: '#d97706' }}
+                title={`以下模型未配置单价，未计入：${unpriced.join('、')}`}>· 有未配单价</span>
+            )}
           </div>
-          {showModels && models.slice(0, 8).map((m: any) => (
+          {/* 各模型用量。费用留在这一行 —— 那是这套统计存在的理由（单价不一样）。
+              截断就说出来，否则看着像"就这几个模型在用"。 */}
+          {models.slice(0, 8).map((m: any) => (
             <div key={m.model} style={{ display: 'flex', gap: 6, fontSize: 10, color: '#9a9993' }}>
               <span className="truncate" style={{ flex: 1 }} title={m.model}>{m.model}</span>
               <span style={{ color: '#6b6b68' }}>{((m.share || 0) * 100).toFixed(0)}%</span>
               <span className="truncate" style={{ minWidth: 54, textAlign: 'right', whiteSpace: 'nowrap' }}
-                title={m.cost === null || m.cost === undefined ? '未配置单价，无法计算费用' : undefined}
+                title={isUnpriced(m.cost) ? '未配置单价，无法计算费用' : undefined}
                 onClick={() => { if (isUnpriced(m.cost)) navigate('/config') }}
                 role={isUnpriced(m.cost) ? 'button' : undefined}>
                 {isUnpriced(m.cost)
@@ -216,8 +170,7 @@ export default function AppLayout() {
               </span>
             </div>
           ))}
-          {/* 截断了就说出来 —— 否则看着像"就这几个模型在用" */}
-          {showModels && models.length > 8 && (
+          {models.length > 8 && (
             <div style={{ fontSize: 10, color: '#b5b2a8' }}>…另有 {models.length - 8} 个模型</div>
           )}
           {usage?.warning && <div style={{ fontSize: 10, color: '#dc2626' }}>{usage.warning}</div>}
