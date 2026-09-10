@@ -141,13 +141,3 @@ class TestBenchmark:
         elapsed = time.perf_counter() - start
         assert len(order) == 50
         assert elapsed < 0.02, f"50 node topo {elapsed:.3f}s > 0.02s"
-
-    def test_cache_10k_ops(self):
-        from singularity.scheduler._cache import TTLStore
-        c = TTLStore(ttl_seconds=60)
-        start = time.perf_counter()
-        for i in range(10000):
-            c.set(str(i), {"v": i})
-            c.get(str(i))
-        elapsed = time.perf_counter() - start
-        assert elapsed < 0.1, f"10k cache ops {elapsed:.3f}s > 0.1s"

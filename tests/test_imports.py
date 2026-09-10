@@ -26,7 +26,6 @@ SAFE_IMPORTS = [
     "singularity.scheduler.log",
     "singularity.scheduler._types",
     "singularity.scheduler._auth",
-    "singularity.scheduler._cache",
     "singularity.scheduler._io",
     "singularity.scheduler._profiler",
     "singularity.scheduler._token_budget",

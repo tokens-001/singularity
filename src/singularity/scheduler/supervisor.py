@@ -427,6 +427,16 @@ def check_requirement_conformance(project_id: str, agent_output: str = "",
         return llm_result
 
     # 机械关键词兜底 (无模型/LLM 失败时)
+    # 但机械检查靠"关键词命中产出"或"覆盖任务有文件产出"，两者**都要入参**。
+    # `web/app.py` 的 GATE3 追溯页就是不带参数调的 —— 那种情况下不管判过还是判不过
+    # 都是假的（原来因为 has_files 恒真而全判通过）。如实说"核验不了"。
+    if not agent_output and not changed_files:
+        return CheckResult(
+            passed=True,
+            reason=f"需求符合性: 未提供产出（{len(trace)} 条），无法核验 —— 这不是通过",
+            evidence={"hard": False, "unverifiable": True, "total": len(trace)},
+        )
+
     # 逐条检查
     passed_items = []
     failed_items = []

@@ -182,7 +182,9 @@ _AUTH_ENABLED = os.environ.get("QIDIAN_AUTH") == "1"
 if _AUTH_ENABLED:
     from singularity.scheduler._auth import get_auth, require_auth, require_write
     _admin = get_auth().bootstrap()
-    _log_info("auth", f"认证已启用, admin token: {_admin.token[:8]}...")
+    # 别只打前缀: bootstrap 是唯一一次能看到完整 token 的机会，
+    # 打 [:8] 等于给一个没法用的 token（同一族问题见 _auth.bootstrap）。
+    _log_info("auth", f"认证已启用, admin token: {_admin.token}")
 
 # 无需认证的公开端点
 _PUBLIC_ENDPOINTS = {
@@ -754,10 +756,6 @@ def add_cors_headers(response):
 # 辅助函数
 # ═══════════════════════════════════════════════════════════
 
-def _invalidate_task_cache() -> None:
-    """任务写操作后调用，清缓存。"""
-    from singularity.scheduler._cache import task_cache
-    task_cache.invalidate()
 
 
 # ── API handler 层 ──
@@ -967,7 +965,6 @@ def api_task_approval(task_id):
 @app.route("/api/tasks/<task_id>", methods=["PUT"])
 def api_task_update(task_id):
     data = request.get_json(silent=True) or {}
-    _invalidate_task_cache()
     result, code = _api_handler.task_update(task_id, data)
     return jsonify(result), code
 
@@ -1019,7 +1016,6 @@ def api_task_submit():
         from singularity.scheduler import project as proj_mod
         if proj_mod.load(project_id) is None:
             return jsonify({"error": f"项目不存在: {project_id}"}), 400
-    _invalidate_task_cache()
     result, code = _api_handler.task_submit(desc, priority=priority, depends_on=depends_on,
                                              route_level=route_level, route_type=route_type,
                                              project_id=project_id, push_event=_push_event)

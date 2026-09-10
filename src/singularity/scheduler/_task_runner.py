@@ -309,9 +309,15 @@ class TaskRunner:
             qa_blocked = True
             # 修复 reap bug 根因#2: QA 中间态(retry/escalate/block)转 PENDING 重新入队,
             # 回写 RUNNING 会永久卡死。
+            # retry_count 必须在这里 +1：它是"这个任务被重排了几次"的计数，
+            # 而全仓原来只有 tracker.recover()（进程重启）会写它 ——
+            # 于是 _task_runner 里"重试耗尽 → 自动拆分再提交"那条分支**永远进不去**
+            # （正常一次调度里 retry_count 恒为 0），任务只会无限重排。
+            _rc = int(getattr(task, 'retry_count', 0) or 0) + 1
             tracker.transition(task.id, TaskStatus.PENDING,
-                             error=f"QA:{qa_verdict}: " + "; ".join(qa_issues[:2]))
-            reason += f"; QA:{qa_verdict}→PENDING"
+                             error=f"QA:{qa_verdict}: " + "; ".join(qa_issues[:2]),
+                             retry_count=_rc)
+            reason += f"; QA:{qa_verdict}→PENDING(第{_rc}次)"
 
         # QA 通过才标 DONE + 推进父任务。QA 拒绝的任务实际失败了, 不能推进父任务。
         # planner_decomposed 的父任务走 DECOMPOSED (等子任务聚合), 也不能标 DONE。
