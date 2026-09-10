@@ -279,6 +279,23 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                 # P2: 首次进入 → 拆解架构为任务
                 if not proj.task_ids:
                     _decompose_and_create_tasks(proj, agents)
+                    if not proj.task_ids:
+                        # 拆不出任务 = 架构产物不可用。实测链路：融合失败（模型欠费）
+                        # → 掉到通用合成 → 产物不是合法架构 JSON → parse_error
+                        # → decompose 得 0 个任务。
+                        # **必须在这里拦住**：下面的推进判据要求 `proj.task_ids` 非空，
+                        # 空的话两条分支都不进 —— 项目**无声地永久卡在 executing**：
+                        # 没任务可跑、推不动、没有终态、也没有任何告警（2026-09-11
+                        # 真流水线实测：卡了 13 分钟，日志一行都没有）。
+                        if not any(i.get("kind") == "no_decomposable_tasks" for i in proj.issues):
+                            proj.issues.append({
+                                "kind": "no_decomposable_tasks",
+                                "message": "架构产物拆不出任务，无可执行内容（架构解析失败？）",
+                                "ts": time.time(),
+                            })
+                            proj_mod.save(proj)
+                            witness.warn("orch", f"project_no_tasks:{proj.id[:8]}"[:80])
+                        continue
                 pending = [tid for tid in proj.task_ids
                           if tracker.read_task(tid) and tracker.read_task(tid).status not in (
                               tracker.TaskStatus.DONE, tracker.TaskStatus.ROLLED_BACK,

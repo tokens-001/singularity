@@ -74,3 +74,31 @@ def test_all_done_advances(tmp_path, monkeypatch):
     p = _setup(tmp_path, monkeypatch, [tracker.TaskStatus.DONE] * 2)
     orch._auto_trigger_test_fix({}, [])
     assert p.phase is proj_mod.Phase.INTEGRATING
+
+
+def test_no_decomposable_tasks_is_surfaced_not_silently_stuck(tmp_path, monkeypatch):
+    """架构拆不出任务 → 必须留痕，不能无声卡死。
+
+    实测（2026-09-11 真流水线）：融合失败（模型欠费）→ 通用合成 → 产物不是合法
+    架构 JSON（`{"parse_error": true}`）→ decompose 得 0 个任务 → 项目停在
+    executing：没任务可跑、推进判据要求 task_ids 非空所以两条分支都不进
+    —— **卡了 13 分钟，日志一行都没有**。
+    """
+    from singularity.scheduler import config
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+    monkeypatch.setattr(tracker.config, "QIDIAN_DIR", tmp_path)
+    p = proj_mod.ProjectState(
+        id="proj1", name="测试项目", raw_constraints=[], owner_confirm={},
+        constraints_checklist=[], task_ids=[], issues=[], supervision_log=[],
+        lineage=[], handoffs=[], agent_lineup={},
+    )
+    p.phase = proj_mod.Phase.EXECUTING           # 一个任务都没有
+    monkeypatch.setattr(proj_mod, "list_all", lambda: [p])
+    monkeypatch.setattr(proj_mod, "save", lambda _p: None)
+    monkeypatch.setattr(orch, "_decompose_and_create_tasks", lambda _p, _a: None)
+
+    for _ in range(3):
+        orch._auto_trigger_test_fix({}, [])
+
+    assert any(i.get("kind") == "no_decomposable_tasks" for i in p.issues)
+    assert len([i for i in p.issues if i.get("kind") == "no_decomposable_tasks"]) == 1
