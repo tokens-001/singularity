@@ -499,7 +499,12 @@ def _run_integration_merge(proj) -> tuple[bool, str]:
     """
     import subprocess
     from pathlib import Path as _Path
-    root = str(config.PROJECT_ROOT)
+    from singularity.scheduler.project import repo_dir as _repo_dir
+    # 修复: 原来取 config.PROJECT_ROOT = 奇点自己的仓库 —— 于是集成检查的是奇点的工作区
+    # (你正在改奇点时项目会被无理由打回), 跑的是奇点的 test_cases.json。
+    root = str(_repo_dir(proj.id))
+    if not (_Path(root) / ".git").exists():
+        return False, f"项目仓库不存在: {root}"
 
     # 1) 拓扑合并: 检查所有 worktree 已合并 (merge_queue drain 已处理)
     #    此处做最终一致性检查: git status 是否干净
@@ -555,7 +560,11 @@ def _run_delivery(proj) -> tuple[bool, str]:
     import json as _json
     from pathlib import Path as _Path
     from datetime import datetime as _dt
-    root = str(config.PROJECT_ROOT)
+    from singularity.scheduler.project import repo_dir as _repo_dir
+    # 修复: 原来是奇点自己的仓库 —— tag 打在奇点上, 产物探测读的是奇点的 pyproject.toml
+    root = str(_repo_dir(proj.id))
+    if not (_Path(root) / ".git").exists():
+        return False, f"项目仓库不存在: {root}"
 
     deliverables = {
         "code_ref": "", "artifacts": [], "docs": [], "reports": [],
@@ -576,7 +585,8 @@ def _run_delivery(proj) -> tuple[bool, str]:
         deliverables["code_ref"] = "unknown"
 
     # 2) 交付文档: 收集 README + 部署说明
-    docs_dir = _Path(root) / ".qidian" / "deliverables" / proj.id
+    # 应用数据留在奇点数据目录（原先 root=.qidian 恰好等于 QIDIAN_DIR，改成项目仓库后必须钉住）
+    docs_dir = config.QIDIAN_DIR / "deliverables" / proj.id
     docs_dir.mkdir(parents=True, exist_ok=True)
     for fname in ["README.md", "DEPLOY.md", "README"]:
         src = _Path(root) / fname

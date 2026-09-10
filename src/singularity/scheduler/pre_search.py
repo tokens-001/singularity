@@ -47,6 +47,7 @@ class PreSearchResult:
 
 def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True) -> PreSearchResult:
     """调 search.py 查 decision 域 + MAGMA 多图记忆查询。"""
+    from . import witness  # 原缺: 函数内 import 使名字整个作用域变局部, L104 早于它执行会 UnboundLocalError
     res = PreSearchResult()
 
     # ── Step 1: 知识库搜索 (decision 域) ──

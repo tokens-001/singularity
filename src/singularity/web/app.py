@@ -1254,12 +1254,9 @@ def api_project_traceability(project_id):
         },
     })
 
-@app.route("/api/projects/<project_id>/auto", methods=["POST"])
-def api_project_auto(project_id):
-    data, code = _api_handler.project_auto(project_id)
-    return jsonify(data), code
+# /api/projects/<id>/auto 已删（2026-09-11 审计）：处理函数调的 advance_phase 不存在、
+# 必 500，且无调用方。autopilot 本身早已移除，人控流程走 gate confirm API。
 
-# ponytail: autopilot 已移除，人控流程通过 gate confirm API
 
 # ═══════════════════════════════════════════════════════════
 # Observer 智能体聊天 API

@@ -1,4 +1,4 @@
-__all__ = ['_cmd_add', '_cmd_apply', '_cmd_loop', '_cmd_merge', '_cmd_rollback', '_cmd_run', '_cmd_status', '_drain_queue', '_is_merged_to_main', '_release_pending_ref']
+__all__ = ['_cmd_add', '_cmd_apply', '_cmd_loop', '_cmd_merge', '_cmd_rollback', '_cmd_run', '_cmd_status', '_drain_queue', '_is_merged_to_main', '_parse_concurrent', '_release_pending_ref']
 
 """CLI sub-commands."""
 import json, os, signal, sys, time
@@ -6,7 +6,30 @@ from pathlib import Path
 from singularity.scheduler import config, tracker
 from singularity.scheduler import dispatcher as disp_mod
 from singularity.scheduler import orchestrator
+from singularity.scheduler import snapshot as snap_mod
 from singularity.scheduler.tracker import TaskStatus
+
+
+def _parse_concurrent(args: list) -> tuple:
+    """从 argv 提取 --concurrent N (修复 #4)。返回 (剩余args, concurrent)。
+
+    从 __main__ 挪进来: _cli_memory 也要用, 原来只有 __main__ 有定义,
+    那边调它直接 NameError。
+    """
+    rest = []
+    concurrent = 1
+    i = 0
+    while i < len(args):
+        if args[i] == "--concurrent" and i + 1 < len(args):
+            try:
+                concurrent = int(args[i + 1])
+                i += 2
+                continue
+            except ValueError:
+                pass
+        rest.append(args[i])
+        i += 1
+    return rest, concurrent
 
 
 def _check_env() -> None:

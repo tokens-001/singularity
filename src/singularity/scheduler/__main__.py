@@ -68,24 +68,8 @@ def main(argv: list = None) -> int:
     return _cmd_run(task, max_concurrent=concurrent)
 
 
-def _parse_concurrent(args: list) -> tuple:
-    """从 argv 提取 --concurrent N (修复 #4)。返回 (剩余args, concurrent)。"""
-    rest = []
-    concurrent = 1
-    i = 0
-    while i < len(args):
-        if args[i] == "--concurrent" and i + 1 < len(args):
-            try:
-                concurrent = int(args[i + 1])
-                i += 2
-                continue
-            except ValueError:
-                pass
-        rest.append(args[i])
-        i += 1
-    return rest, concurrent
-
-
+# _parse_concurrent 已挪到 _cli_tasks.py —— _cli_memory 也要用它,
+# 原位置(这里)只有本模块能看见, 那边调它必 NameError。下面星号导入带回来。
 
 from singularity.scheduler._cli_tasks import *  # noqa: F401,F403
 from singularity.scheduler._cli_memory import *  # noqa: F401,F403

@@ -177,9 +177,18 @@ def run_post_exec_checks(*, validation, quality, exec_result,
         except Exception:
             pass
 
+    # 本次改动是否被判为"小改动"（单文件 + diff<50 行）。
+    # ⚠️ 2026-09-11 审计 P0-1 已知缺陷：worktree 里改动在 validate **之前**已被 commit_wt
+    # 提交，_is_trivial_change 里的裸 `git diff` 恒为 0 行 → **单文件改动恒判 trivial**。
+    # 本次只做披露、不改判据（多模型审查开销大，是否全开另行决定）。
+    _trivial = bool(changed) and _is_trivial_change(changed, cwd)
+    if validation.action == "pass" and changed and _trivial:
+        validation.unverified.append(
+            "审查已跳过: 改动被判为小改动(单文件, diff<50行) — 未跑项目测试/未多模型审查")
+
     # 1) run project tests (S2: 带超时包装)
     # 小改动(单文件<50行)跳过项目全量测试：独立小任务(如写 hello.py)跟项目测试套件无关，跑了会误判
-    if validation.action == "pass" and changed and not _is_trivial_change(changed, cwd):
+    if validation.action == "pass" and changed and not _trivial:
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
                 fut = ex.submit(val_mod.run_project_tests, cwd=cwd)
@@ -221,7 +230,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
 
     # 2) multi-model review: 2+ models independently review changed files
     # ponytail: 小改动跳过审查 — 单文件 + <50行diff 不值得额外90s开销
-    if validation.action == "pass" and changed and not _is_trivial_change(changed, cwd):
+    if validation.action == "pass" and changed and not _trivial:
         try:
             writer_model = agent_cfg.get("model", "")
             agents_all = disp_mod.load_agents()
@@ -275,6 +284,11 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                         return
                     rev_files.append(f)
                     rev_models = review.get("models_used", [])
+                    if not rev_models:
+                        # 审查输入为空（见 P0-1）时一个模型都不会被调 —— 这不是
+                        # "审过且没问题"，必须如实披露，别让报告写 delivered。
+                        validation.unverified.append(
+                            f"未经多模型审查: {f} (审查输入为空, 无模型实际参与)")
                     issues = review.get("issues", [])
                     if issues:
                         crit = [i for i in issues if _sev(i) == "critical"]

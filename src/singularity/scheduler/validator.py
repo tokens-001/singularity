@@ -61,7 +61,10 @@ def validate(candidate, gate_required, task_type, changed_files, snap, turn, max
     _annotate_unverified(report, task_type, changed_files)
     # ── 硬规则检查 (非 LLM) ──
     # cwd 必须是任务执行的 worktree 路径, 不是主仓库根——否则新建的 test_*.py 会被误判"已删除"
-    hard = _hard_diff_rules(changed_files, cwd=cwd or str(config.PROJECT_ROOT))
+    _base = _diff_base(snap)
+    if not _base:
+        report.unverified.append("审查基准不可用(快照非 git 型) → diff 类硬规则检查未执行")
+    hard = _hard_diff_rules(changed_files, cwd=cwd or str(config.PROJECT_ROOT), base=_base)
     if hard.get("issues"):
         report.hard_rule_issues = hard["issues"]
         for iss in hard["issues"]:
@@ -178,8 +181,27 @@ def run_project_tests(cwd=None):
     return result
 
 
-def _hard_diff_rules(changed_files: list[str], diff_text: str = "", cwd=None) -> dict:
+def _diff_base(snap) -> str:
+    """审查取 diff 的基准 ref（2026-09-11 审计 P0-1）。
+
+    worktree 路径下，改动在 validate **之前**就被 `_process_planner_or_merge` 里的
+    `commit_wt` 提交了，所以裸 `git diff` / `git diff HEAD` **恒为空** —— 审查看不到
+    任何改动。改用**执行前快照**的 ref 当基准。
+
+    `method="copy"` 的快照 ref 是目录路径不是 git ref → 返回 ""，表示取不到基准；
+    调用方必须如实记进 unverified，不能当成"检查通过"。
+    """
+    if snap is None:
+        return ""
+    ref = getattr(snap, "ref", "") or ""
+    return ref if ref and getattr(snap, "method", "") == "git" else ""
+
+
+def _hard_diff_rules(changed_files: list[str], diff_text: str = "", cwd=None, base: str = "") -> dict:
     """硬规则检查（非 LLM）：检测删除的测试、弱化的安全、裸 except。
+
+    base: diff 基准 ref（见 _diff_base）。空 = 取不到基准，diff 类检查**不做**，
+    由调用方披露 —— 不能静默当作通过。
 
     Returns: {"issues": [...], "passed": bool}
     """
@@ -218,7 +240,8 @@ def _hard_diff_rules(changed_files: list[str], diff_text: str = "", cwd=None) ->
             continue
 
     # 3. 检测安全边界弱化 (文件 diff 中移除的 auth/security 相关行)
-    if (root / ".git").exists():
+    #    基准必须是**执行前快照**：worktree 里改动已被 commit_wt 提交，`git diff HEAD` 恒空。
+    if base and (root / ".git").exists():
         for f in changed_files:
             if not f.endswith(".py"):
                 continue
@@ -226,7 +249,7 @@ def _hard_diff_rules(changed_files: list[str], diff_text: str = "", cwd=None) ->
             if not fp.exists():
                 continue
             try:
-                r = _sp.run(["git", "diff", "HEAD", "--", f], capture_output=True, text=True,
+                r = _sp.run(["git", "diff", base, "--", f], capture_output=True, text=True,
                             timeout=15, cwd=str(root))
                 if r.returncode == 0:
                     diff = r.stdout

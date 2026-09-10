@@ -115,6 +115,7 @@ def cleanup_task_artifacts(task_id: str, repo_root) -> int:
 _MAX_WORKTREES = 50
 
 def _maybe_create_worktree(task_id: str, level: str, agent_cfg: dict, snapshot_ref: str = "", repo_root=None):
+    from . import witness  # 函数内 import 会让名字整个作用域变局部, 必须在 try 之前
     if agent_cfg.get("sandbox") != "worktree":
         return None
     # worktree 数量上限检查
@@ -127,7 +128,6 @@ def _maybe_create_worktree(task_id: str, level: str, agent_cfg: dict, snapshot_r
             # 存成一个伪 level（status 还是 "running"），任务到终态时又被清理逻辑 unlink
             # —— 等于没记，还让状态面板的"运行中"虚高。
             # 而且这里是**真降级**：拿不到 worktree → 调用方直接用仓库根跑（_exec.py:317，无沙箱）。
-            from . import witness
             witness.warn("worktree",
                          f"worktree_limit_reached:{count}>={_MAX_WORKTREES},"
                          f"unsandboxed:{task_id[:8]}"[:200])
@@ -141,6 +141,7 @@ def _maybe_create_worktree(task_id: str, level: str, agent_cfg: dict, snapshot_r
 
 
 def _cleanup_wt(wt) -> None:
+    from . import witness  # 原缺: except 分支调 witness 会 NameError, 把"清理失败"变成任务崩溃
     if wt is None:
         return
     _unlock_wt(wt)

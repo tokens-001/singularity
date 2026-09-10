@@ -234,16 +234,9 @@ def project_snapshot(project_id: str) -> tuple[dict, int]:
     return {"ok": True, "snapshot_id": snap.id, "ref": snap.ref}, 200
 
 
-def project_auto(project_id: str) -> tuple[dict, int]:
-    """POST /api/projects/<id>/auto — 自动运行下一个阶段。"""
-    from . import project as proj_mod
-    proj = proj_mod.load(project_id)
-    if proj is None:
-        return {"error": "项目不存在"}, 404
-    next_phase = proj_mod.advance_phase(project_id)
-    if next_phase is None:
-        return {"error": "无下一阶段"}, 400
-    return {"ok": True, "phase": next_phase.value if hasattr(next_phase, 'value') else str(next_phase)}, 200
+# project_auto 已删（2026-09-11 审计）：它调的 project.advance_phase 在 09-09 死代码清理时
+# 就被删了，之后每次调用必 500；且全仓无调用方（前端也只有定义没用）。
+# autopilot 本身早已移除（见 web/app.py "autopilot 已移除"），人控流程走 gate-confirm。
 
 
 def project_lineup_get(project_id: str) -> tuple[dict, int]:

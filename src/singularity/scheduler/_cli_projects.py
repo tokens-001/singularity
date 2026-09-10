@@ -230,7 +230,3 @@ def _cmd_project_delete(project_id: str) -> int:
     delete_proj(project_id)
     print(f"[project] 已删除: {proj.id[:8]} {proj.name}")
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))

@@ -11,6 +11,7 @@ from singularity.scheduler.tracker import TaskStatus
 def _cmd_memory(argv: list) -> int:
     """scheduler memory stats|rebuild|query|latent|traverse [参数]"""
     from . import memory as mem_mod
+    from ._cli_tasks import _parse_concurrent  # 原缺: 定义在 __main__, 这里没有 → NameError
 
     if not argv:
         print("用法: scheduler memory stats|rebuild|query|latent|traverse [参数]",

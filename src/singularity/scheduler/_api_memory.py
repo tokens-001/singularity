@@ -60,7 +60,16 @@ def conflict_list():
 
 
 def conflict_resolve(task_id, resolution, push_event=None):
-    from .merge import resolve_conflict
-    result = resolve_conflict(task_id, resolution)
+    # 修复: 原来 import 的 resolve_conflict 全仓不存在 → 这个接口必 500。
+    # 真实现是 MergeQueue.resolve(strategy= manual|abort)；parked 状态由
+    # MergeQueue.__init__ 的 _recover_parked() 从磁盘恢复，所以新建实例就能解。
+    from .merge import MergeQueue
+    strategy = "manual"
+    if isinstance(resolution, dict):
+        strategy = resolution.get("strategy") or "manual"
+    elif isinstance(resolution, str) and resolution:
+        strategy = resolution
+    res = MergeQueue().resolve(task_id, strategy)
     if push_event: push_event("system", f"[{task_id[:8]}] conflict resolved")
-    return {"ok": True, "result": result}, 200
+    return {"ok": True, "result": {"task_id": res.task_id, "status": res.status,
+            "reason": res.reason, "conflict_files": list(res.conflict_files or [])}}, 200

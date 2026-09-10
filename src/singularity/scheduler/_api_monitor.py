@@ -55,7 +55,10 @@ def token_usage():
 
 
 def token_budget_set(budget):
-    from ._token_budget import set_budget; set_budget(budget); return {"ok": True, "budget": budget}, 200
+    # 修复: set_budget 是 TokenBudget 的**方法**, 不是模块级函数 → 原来这行必 ImportError。
+    from ._token_budget import _budget
+    _budget.set_budget(float(budget))
+    return {"ok": True, "budget": budget}, 200
 
 
 def perf_stats():
