@@ -54,7 +54,7 @@ def _row_cost(tokens: int, model: str, prices: dict[str, float]) -> float | None
 # 按天历史（usage_daily.json）— 热力图 / 趋势 / 连续天数靠它
 # ═══════════════════════════════════════════════════════════════
 
-_MAX_DAYS = 400          # 保留最近 400 天（count 上限，与 _save 的 [-500:] 同形态）
+_MAX_DAYS = 400          # 保留最近 400 天（count 上限，本仓唯一的保留惯例形态）
 _HOURS = 24
 
 
@@ -151,15 +151,15 @@ class TokenBudget:
         """把盘上的历史桶与内存里的记录折叠成完整历史。**纯函数，不碰 I/O。**
 
         为什么是"**按天各自归位** + **分量取 max**"，而不是"过去以盘为准、今天重算"：
-        `_daily` 是最近 500 条、**不按天过滤**。若只重算 `days[今天]`，那么每天 00:01
+        `_daily` 保存的是最近两天的原始行、**不按天过滤**。若只重算 `days[今天]`，那么每天 00:01
         的第一条记录会把**昨天那批行一起算进今天** —— 每过一次午夜就重复计一次。
         把每一行归到它自己那天就没这个问题。
 
         为什么 max 是对的：桶里每个字段对行集合都**单调不减**（非负 token/秒的求和、
         去重任务数、各模型/各小时计数）。盘上那格来自某个子集，现算的来自另一个子集，
-        两者都 ⊆ 真值 → max 仍 ≤ 真值。而历史快照的最大值就是真值：`_daily` 是滚动窗口，
-        某天的记录总有"全部都在窗口里"的那一刻（该天记录数 ≤ 500 时），那一刻的值被留住了。
-        **已知上限**：单日记录 > 500 条时会低算（窗口装不下），这里不假装没有。
+        两者都 ⊆ 真值 → max 仍 ≤ 真值。而历史快照的最大值就是真值：`_daily` 按天保留，
+        某天的记录在它还是"今天/昨天"时全都躺在 `_daily` 里，那一刻的值被 max 留住了。
+        （以前 `_daily` 是 `[-500:]` 的定长窗口，单日超 500 条会低算；改成按天保留后没这问题。）
 
         这么折还白拿三件事：① 零迁移 —— 老 `token_usage.json` 一条不动，
         现有记录首次保存/首次读取就自动进桶；② 自愈 —— 两次写之间崩了，下次折叠补回来；
@@ -179,9 +179,26 @@ class TokenBudget:
         atomic_write_json(self._history_path, {"v": 1, "days": rolled})
         self._days = rolled
 
+    def _prune_daily(self) -> None:
+        """`_daily` 只保留最近两天的原始行。
+
+        历史都在 `_days` 里；`_daily` 唯一的作用是给"今日"那几个实时聚合
+        （by_model / by_project / level_breakdown）提供原始行。
+
+        **以前是硬性 `[-500:]`** —— 单日超过 500 次分派时，当天更早的行会被挤掉，
+        当天的量随之少算。是**截断**不是编造，但确实少报。按天保留就没这个问题。
+
+        留两天而不是只留今天：跨午夜时，昨天那批行要**先**被折叠进 `_days`
+        才谈得上可以删；多留一天把这个顺序问题变成不可能出错。
+        """
+        if not self._daily:
+            return
+        keep_from = _day_key(time.time() - 86400)
+        self._daily = [r for r in self._daily if _day_key(r.ts) >= keep_from]
+
     def _save(self):
         data = {
-            "daily": [r.__dict__ for r in self._daily[-500:]],
+            "daily": [r.__dict__ for r in self._daily],
             "budget_daily": self._budget_daily,
             "budget_monthly": self._budget_monthly,
         }
@@ -202,11 +219,13 @@ class TokenBudget:
         )
         with _LOCK:
             self._daily.append(rec)
-            if len(self._daily) > 500:
-                self._daily = self._daily[-500:]
-            self._save()
-            # 折叠必须在锁内：_rollup 读 self._daily，而上一行刚改过它
+            # ⚠️ 三步的**顺序不能换**：
+            #   ① 先折叠 —— _rollup 要读 _daily（含刚追加的这条），把它归位进 _days
+            #   ② 再剪枝 —— 归位之后旧行才谈得上删；反过来会把还没折叠的行删掉
+            #   ③ 最后写盘 —— 写进文件的已经是剪过的列表
             self._save_history()
+            self._prune_daily()
+            self._save()
 
     def set_budget(self, daily: float = 0.0, monthly: float = 0.0):
         # 必须持锁: 本方法由 Flask 请求线程调用，而 record() 在调度线程 ——

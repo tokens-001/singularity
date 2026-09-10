@@ -1,7 +1,7 @@
 __all__ = ['_build_synthesis_prompt', '_dispatch_committee', '_run_executor', 'dispatch']
 
 from singularity.scheduler.dispatcher import (
-    load_agents, _ensure_agent_type, pick_agent, pick_agent_fallback_chain,
+    load_agents, _ensure_agent_type, pick_agent_fallback_chain,
     agent_api_available, _build_agent_from_registry, DispatchResult,
     _EXECUTOR_BY_TYPE,
 )

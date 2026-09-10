@@ -424,3 +424,35 @@ class TestTodayRange:
         assert len(h["days"]) == 1, "当天就该只有一格"
         assert h["days"][0]["date"] == _day_key(time.time())
         assert h["totals"]["tokens"] == 42, "不该把前几天的算进来"
+
+
+class TestNoTruncationOnBusyDays:
+    """单日记录多的时候不能少算。
+
+    以前 `_daily` 是 `[-500:]` 的定长窗口 —— 一天分派超过 500 次，
+    当天更早的行会被挤掉，当天的量随之少算（截断，不是编造，但确实少报）。
+    改成按天保留后没这个问题。
+    """
+
+    def test_busy_day_is_not_truncated(self, monkeypatch):
+        b = _fresh()
+        now = time.time()
+        n = 800
+        for i in range(n):
+            b.record("p", "", f"t{i}", "m", "any", 10, ts=now)
+        _bind(monkeypatch, b)
+
+        assert b.daily_total == n * 10, "当天的量被截断了"
+        h = history("today")
+        assert h["totals"]["tokens"] == n * 10
+        assert h["totals"]["tasks"] == n
+
+    def test_old_rows_are_pruned_but_history_kept(self, monkeypatch):
+        """两天前的原始行会被清掉（历史已在 _days 里），但统计不受影响。"""
+        b = _fresh()
+        b.record("p", "", "old", "m", "any", 777, ts=_ts(_days_ago(5), 12))
+        b.record("p", "", "new", "m", "any", 111, ts=time.time())
+        assert b.daily_total == 111, "过期的原始行不该算进今天"
+        _bind(monkeypatch, b)
+        # 但历史里那 777 还在
+        assert history("all")["totals"]["tokens"] == 777 + 111

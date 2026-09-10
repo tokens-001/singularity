@@ -239,86 +239,19 @@ def _find_agent_by_model(agents: dict, model_name: str) -> dict | None:
 _RR_COUNTER: dict[str, int] = {}  # level -> 下次轮询起点
 
 
-def _round_robin(level: str, agents_list: list) -> dict:
-    """轮询选 agent，同层多模型分摊负载。
+def _rotate(level: str, agents_list: list) -> list:
+    """轮换：把列表旋转一下，让**下一个**模型排在最前（其余保持原序当回退链）。
+
+    为什么需要它：选模型那条路（`pick_agent_fallback_chain`）永远取链首，
+    所以同层配了多个模型也只有第一个在干活 —— 用户配了 7 个却只见 1 个被调用。
 
     ponytail: 全局计数不加锁，低并发下偶发重复无害（只是分摊，非正确性）。
     """
-    idx = _RR_COUNTER.get(level, 0) % len(agents_list)
-    _RR_COUNTER[level] = idx + 1
-    return agents_list[idx]
-
-
-def pick_agent(agents: dict, level: str, role: str = None,
-               project_lineup: dict[str, list[str]] = None) -> dict:
-    """选 agent: project_lineup > role > default。
-
-    API 不可用的 agent 自动跳过。
-    level 为空时从全池选 (两档后不再强制 E/E+/D)。
-    """
-    candidates = agents.get(level, []) if level else _all_agents_list(agents)
-    if not candidates:
-        raise RuntimeError(f"无可用 agent (level={level or 'any'})")
-
-    # project_lineup 优先
-    lineup = (project_lineup or {}).get(level, [])
-    if lineup:
-        for model_name in lineup:
-            # 先在本层找
-            for a in candidates:
-                if a.get("model") == model_name and agent_api_available(a):
-                    return a
-            # 跨层找 (如 D 层 lineup 里配 glm-5.2，它在 E+ 配置里)
-            cross = _find_agent_by_model(agents, model_name)
-            if cross and agent_api_available(cross):
-                return cross
-            # 不在 agents.toml 中，从 model_registry 自动构造
-            built = _build_agent_from_registry(model_name)
-            if built and agent_api_available(built):
-                return built
-
-    # role 匹配
-    if role:
-        for a in candidates:
-            if role in (a.get("roles") or []) and agent_api_available(a):
-                return a
-
-    # 用户自定义排序
-    custom_order = (_load_custom_agents().get("_order", {}) or {}).get(level, [])
-    if custom_order:
-        rank = {m: i for i, m in enumerate(custom_order)}
-        available = [a for a in candidates if agent_api_available(a)]
-        available.sort(key=lambda a: rank.get(a.get("model", ""), 999))
-        if available:
-            return _round_robin(level, available)
-
-    # ── 路由学习者权重 ──
-    try:
-        from singularity.scheduler.route_learner import load_learner
-        learner = load_learner()
-        if learner and learner._stats:
-            available = [a for a in candidates if agent_api_available(a)]
-            if len(available) > 1:
-                weights = {model: learner.get_weight(model, "fix")
-                          for a in available
-                          for model in [a.get("model", "")]
-                          if model}
-                if any(w > 0 for w in weights.values()):
-                    available.sort(key=lambda a: weights.get(a.get("model", ""), 1.0), reverse=True)
-    except Exception as _e:
-        logging.getLogger(__name__).warning("agent change event failed: %s", _e)  # learner 挂了不阻塞
-
-    # default
-    for a in candidates:
-        if a.get("default") and agent_api_available(a):
-            return a
-
-    # 第一个可用的
-    for a in candidates:
-        if agent_api_available(a):
-            return a
-
-    raise RuntimeError(f"{level} 层所有 agent 的 API 均不可用")
+    if len(agents_list) <= 1:
+        return agents_list
+    i = _RR_COUNTER.get(level, 0) % len(agents_list)
+    _RR_COUNTER[level] = i + 1
+    return agents_list[i:] + agents_list[:i]
 
 
 def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
@@ -406,6 +339,24 @@ def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
                     )
         except Exception as _e:
             logging.getLogger(__name__).warning("route learner sort failed: %s", _e)  # learner 挂了不阻塞选择
+
+    # ── 轮换：让同层多个可用模型真的都用上 ──
+    # ⚠️ 必须放在**所有排序之后** —— 上面刚按学习者权重排过，先轮换会被它排回去。
+    #
+    # 为什么需要：调用方永远取链首，所以同层配了多个模型也只有第一个在干活。
+    # 用户实测：配了 7 个模型，token 账里只有 1 个被调用过。
+    # 以前只有 `pick_agent`（零调用的死函数）里有轮换，那条路根本没人走。
+    #
+    # 用户自定义排序 `_order` 在这里生效：它是用户显式给的优先级，排在轮换的基准位。
+    if len(deduped) > 1:
+        try:
+            order = (_load_custom_agents().get("_order", {}) or {}).get(level or "any", [])
+            if order:
+                rank = {m: i for i, m in enumerate(order)}
+                deduped.sort(key=lambda a: rank.get(a.get("model", ""), 999))
+        except Exception as _e:
+            logging.getLogger(__name__).warning("custom order sort failed: %s", _e)
+        deduped = _rotate(level or "any", deduped)
 
     # ── 熔断过滤：刚连挂的模型本轮跳过 ──
     # fail-open: 全池都熔断时原样返回，否则一个坏 key 能让整个调度停摆

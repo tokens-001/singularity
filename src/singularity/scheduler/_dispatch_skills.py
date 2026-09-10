@@ -1,7 +1,7 @@
 __all__ = ['_load_mcp_for_agent', '_load_skills_for_agent', '_make_permission_checker', '_ntilc_filter', 'invalidate_mcp_cache', 'invalidate_skill_cache']
 
 from singularity.scheduler.dispatcher import (
-    load_agents, _ensure_agent_type, pick_agent, _build_agent_from_registry,
+    load_agents, _ensure_agent_type, _build_agent_from_registry,
     DispatchResult, _CACHE_LOCK, _SKILL_CACHE, _MCP_CACHE,
 )
 from singularity.scheduler import config

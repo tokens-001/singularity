@@ -1,9 +1,9 @@
-"""test_cascade.py — cascade routing 决策 + dispatcher pick_agent 快速验证。"""
+"""test_cascade.py — cascade routing 决策 + dispatcher 选模型快速验证。"""
 import pytest
 import re
 from singularity.scheduler._exec import _decide_cascade
 from singularity.scheduler import validator as val_mod
-from singularity.scheduler.dispatcher import pick_agent, load_agents, agent_api_available
+from singularity.scheduler.dispatcher import pick_agent_fallback_chain, load_agents, agent_api_available
 
 
 class TestDecideCascade:
@@ -81,7 +81,8 @@ class TestDecideCascade:
 
 
 class TestPickAgent:
-    """dispatcher.pick_agent 选择模型 + fallback 链。"""
+    """dispatcher 选模型 + fallback 链。（原 pick_agent 是零调用的死函数，已删；
+    实际在用的一直是 pick_agent_fallback_chain。）"""
 
     def test_pick_returns_agent_for_level(self):
         agents = load_agents()
@@ -92,7 +93,8 @@ class TestPickAgent:
                 if available_agents:
                     # 如果有可用代理，则尝试获取一个
                     try:
-                        cfg = pick_agent(agents, level)
+                        chain = pick_agent_fallback_chain(agents, level)
+                        cfg = chain[0] if chain else None
                         if cfg:  # 可能所有 agent 都 disabled
                             assert "model" in cfg
                             assert "type" in cfg
@@ -105,8 +107,8 @@ class TestPickAgent:
                             raise  # 如果是其他异常，重新抛出
                 else:
                     # 如果没有可用代理，应该抛出异常
-                    with pytest.raises(RuntimeError, match=re.escape(f"{level} 层所有 agent 的 API 均不可用")):
-                        pick_agent(agents, level)
+                    assert pick_agent_fallback_chain(agents, level) == [], \
+                        "没有可用 agent 时应当返回空链" 
             else:
                 # 如果层级不存在代理配置，跳过测试
                 continue
@@ -154,4 +156,46 @@ if __name__ == "__main__":
     t2 = TestPickAgent()
     t2.test_pick_returns_agent_for_level()
     t2.test_fallback_chain_returns_list()
-    print("✅ pick_agent self-check passed")
+    print("✅ 选模型 self-check passed")
+
+class TestRotation:
+    """同层多个可用模型要**轮流**用，不能永远只取第一个。
+
+    用户实测：配了 7 个模型，token 账里只有 1 个被调用过 ——
+    因为调用方永远取链首，而轮换逻辑以前只写在一个零调用的死函数里。
+    """
+
+    def _setup(self, monkeypatch, models):
+        from singularity.scheduler import dispatcher as d
+        agents = {"any": [{"model": m, "type": "openai-agent"} for m in models]}
+        monkeypatch.setattr(d, "agent_api_available", lambda a: True)
+        monkeypatch.setattr(d, "_load_custom_agents", lambda: {})
+        d._RR_COUNTER.pop("any", None)          # 每次从干净计数开始
+        return d, agents
+
+    def test_chain_head_rotates(self, monkeypatch):
+        d, agents = self._setup(monkeypatch, ["m1", "m2"])
+        heads = [d.pick_agent_fallback_chain(agents, "any")[0]["model"] for _ in range(4)]
+        assert heads == ["m1", "m2", "m1", "m2"], f"没在轮换: {heads}"
+
+    def test_whole_chain_rotates_not_just_head(self, monkeypatch):
+        d, agents = self._setup(monkeypatch, ["m1", "m2", "m3"])
+        chain = d.pick_agent_fallback_chain(agents, "any")
+        assert chain[0]["model"] == "m1"
+        chain = d.pick_agent_fallback_chain(agents, "any")
+        # 换头之后，其余仍按原顺序当回退链，且不丢模型
+        assert chain[0]["model"] == "m2"
+        assert [a["model"] for a in chain] == ["m2", "m3", "m1"]
+
+    def test_single_agent_is_not_rotated(self, monkeypatch):
+        d, agents = self._setup(monkeypatch, ["only"])
+        for _ in range(3):
+            assert d.pick_agent_fallback_chain(agents, "any")[0]["model"] == "only"
+
+    def test_custom_order_wins_over_rotation_base(self, monkeypatch):
+        """`_order` 是用户显式给的优先级，作为轮换的基准顺序。"""
+        d, agents = self._setup(monkeypatch, ["a", "b", "c"])
+        monkeypatch.setattr(d, "_load_custom_agents",
+                            lambda: {"_order": {"any": ["c", "b", "a"]}})
+        chain = d.pick_agent_fallback_chain(agents, "any")
+        assert [a["model"] for a in chain] == ["c", "b", "a"], "没用用户给的顺序"
