@@ -490,12 +490,18 @@ def _demote_bare_accept(items: list) -> list:
 
 
 def _votes_into(store: dict, who: str, items: list, field: str) -> dict:
-    """把 [{id, <field>}] 收进 store[(who, id)]（只留最新一票），返回本轮结果。"""
+    """把 [{id, <field>}] 收进 store[(who, id)]（只留最新一票），返回本轮结果。
+
+    id **统一转成字符串**再入表：模型回显时 int/str 会飘（提取员出 `1`、
+    回应方回 `"1"`）。不归一的话查票时 `i == did` 匹配不上 → 该分歧点"没有票"
+    → 走默认裁决**判给发言方**，坚持方的 insist 被静默丢掉。
+    """
     cur = {}
     for it in items or []:
         if isinstance(it, dict) and "id" in it:
-            store[(who, it["id"])] = it.get(field, "")
-            cur[it["id"]] = it.get(field, "")
+            key = str(it["id"])
+            store[(who, key)] = it.get(field, "")
+            cur[key] = it.get(field, "")
     return cur
 
 
@@ -684,7 +690,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
     # 实际分歧点几乎都是两家对立（spec 按两方设计）。
     resolved = []
     for d in disagreements:
-        did = d.get("id")
+        did = str(d.get("id"))   # 与 _votes_into 的归一化对齐
         vs = [v for (m, i), v in resp_votes.items() if i == did]
         winner = writer
         conf = conf_votes.get((writer, did))
@@ -701,7 +707,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
     # 独有做法：全体 adopt 才采纳（保守 —— 长度就是膨胀的主因）
     adopted = []
     for g in gains:
-        stances = [v for (m, i), v in gain_votes.items() if i == g.get("id")]
+        stances = [v for (m, i), v in gain_votes.items() if i == str(g.get("id"))]
         if stances and all(s == "adopt" for s in stances):
             adopted.append(g)
     rejected = [g for g in gains if g not in adopted]
