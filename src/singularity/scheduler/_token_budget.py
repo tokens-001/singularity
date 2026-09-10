@@ -7,10 +7,16 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from singularity.scheduler import config, witness
+from singularity.scheduler._io import atomic_write_json
+
+# record() 是"读内存列表→append→整份写盘"，两个线程同时进来会互相盖掉。
+# _budget 是模块级单例（见文件尾），所以一把模块锁就够。
+_LOCK = threading.RLock()
 
 
 @dataclass
@@ -46,13 +52,14 @@ class TokenBudget:
                 witness.warn('_token_budget', f'{e}')
 
     def _save(self):
-        config.QIDIAN_DIR.mkdir(parents=True, exist_ok=True)
         data = {
             "daily": [r.__dict__ for r in self._daily[-500:]],
             "budget_daily": self._budget_daily,
             "budget_monthly": self._budget_monthly,
         }
-        self._path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+        # 原子写: 原来 write_text 直写，撕一次会让 _load 走 except 分支保持 self._daily=[]，
+        # 而 _budget 是模块级单例 —— 那份空列表会一直留到进程重启，累积用量整份消失。
+        atomic_write_json(self._path, data)
 
     def record(self, project_id: str, project_name: str, task_id: str,
                model: str, level: str, tokens: int):
@@ -62,10 +69,11 @@ class TokenBudget:
             task_id=task_id, model=model, level=level,
             tokens=tokens, cost_est=cost, ts=time.time(),
         )
-        self._daily.append(rec)
-        if len(self._daily) > 500:
-            self._daily = self._daily[-500:]
-        self._save()
+        with _LOCK:
+            self._daily.append(rec)
+            if len(self._daily) > 500:
+                self._daily = self._daily[-500:]
+            self._save()
 
     def _estimate_cost(self, model: str, tokens: int) -> float:
         """按模型估算费用 (USD)。"""

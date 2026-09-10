@@ -14,6 +14,7 @@ import os
 import select
 import shlex
 import subprocess
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -299,33 +300,56 @@ class MCPRegistry:
         self._clients: dict[str, MCPClient] = {}
         self._tools: list[MCPTool] = []
         self._tool_index: dict[str, MCPClient] = {}  # tool_name → client
+        self._lock = threading.RLock()
 
     def load_configs(self, configs: list[MCPServerConfig]):
-        """加载服务器配置, 连接并发现工具。"""
-        self.disconnect_all()
+        """加载服务器配置, 连接并发现工具。
+
+        原实现是"先 disconnect_all 清空、再逐个填回"，全在锁外 —— 执行中的任务
+        正好撞在中间就会读到半截注册表（`未知 MCP 工具`，或迭代到重建中的列表），
+        而并发连接还会被 disconnect_all 掐断。
+
+        改为：先建到**局部**结构（不在锁内做网络/子进程发现），再整体原子换入。
+        读方要么看到旧的完整集合、要么看到新的完整集合。
+        """
+        clients: dict[str, MCPClient] = {}
+        tools: list[MCPTool] = []
+        index: dict[str, MCPClient] = {}
         for cfg in configs:
             if not cfg.enabled:
                 continue
             client = MCPClient(cfg)
-            self._clients[cfg.name] = client
-            tools = client.discover_tools()
-            for t in tools:
-                self._tools.append(t)
-                self._tool_index[t.name] = client
-            if tools:
-                _log_info(_TAG, f"MCP[{cfg.name}]: 发现 {len(tools)} 个工具: "
-                          f"{', '.join(t.name for t in tools)}")
+            clients[cfg.name] = client
+            found = client.discover_tools()
+            for t in found:
+                tools.append(t)
+                index[t.name] = client
+            if found:
+                _log_info(_TAG, f"MCP[{cfg.name}]: 发现 {len(found)} 个工具: "
+                          f"{', '.join(t.name for t in found)}")
             else:
                 _log_warn(_TAG, f"MCP[{cfg.name}]: 未发现工具或连接失败")
 
+        with self._lock:
+            old = list(self._clients.values())
+            self._clients, self._tools, self._tool_index = clients, tools, index
+        for c in old:      # 锁外断开: disconnect 可能阻塞
+            try:
+                c.disconnect()
+            except Exception as e:  # noqa: BLE001
+                witness.warn("mcp", f"old_client_disconnect:{type(e).__name__}"[:80])
+
     def get_all_tools(self) -> list[MCPTool]:
         """获取所有已发现的工具。"""
-        return list(self._tools)
+        with self._lock:
+            return list(self._tools)
 
     def get_openai_tools(self) -> list[dict]:
         """将所有 MCP 工具转换为 OpenAI function calling 格式。"""
         result = []
-        for t in self._tools:
+        with self._lock:
+            tools = list(self._tools)   # 快照: 别在重建期间迭代半截列表
+        for t in tools:
             params = dict(t.inputSchema)
             # 确保 required 字段存在
             if "required" not in params:
@@ -345,9 +369,12 @@ class MCPRegistry:
 
     def execute_tool(self, full_name: str, arguments: dict) -> str:
         """执行 MCP 工具。full_name 格式: mcp__<server>__<tool>"""
-        if full_name not in self._tool_index:
+        with self._lock:
+            client = self._tool_index.get(full_name)
+        if client is None:
             return f"未知 MCP 工具: {full_name}"
-        client = self._tool_index[full_name]
+        # 注意: call_tool 在锁外调 —— 它可能阻塞很久，持锁会把刷新饿死。
+        # 代价是"调用进行中被并发刷新断开"仍可能发生（刷新是人工低频操作，可接受）。
         # 从 full_name 提取原始工具名
         # 格式: mcp__<server_name>__<tool_name>
         parts = full_name.split("__", 2)
@@ -358,15 +385,21 @@ class MCPRegistry:
 
     def disconnect_all(self):
         """断开所有服务器连接。"""
-        for client in self._clients.values():
-            client.disconnect()
-        self._clients.clear()
-        self._tools.clear()
-        self._tool_index.clear()
+        with self._lock:
+            clients = list(self._clients.values())
+            self._clients.clear()
+            self._tools.clear()
+            self._tool_index.clear()
+        for client in clients:
+            try:
+                client.disconnect()
+            except Exception as e:  # noqa: BLE001
+                witness.warn("mcp", f"disconnect:{type(e).__name__}"[:80])
 
     @property
     def server_count(self) -> int:
-        return len(self._clients)
+        with self._lock:
+            return len(self._clients)
 
     @property
     def tool_count(self) -> int:

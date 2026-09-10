@@ -47,12 +47,24 @@ def _ensure_dir() -> None:
 
 
 def _read_json(path: Path) -> dict | list:
+    empty = {} if ".json" in str(path) else []
     if not path.exists():
-        return {} if ".json" in str(path) else []
+        return empty
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {} if ".json" in str(path) else []
+    except (json.JSONDecodeError, OSError) as e:
+        # 损坏不能静默当空：调用方接下来会 index_task → _save_events，
+        # 把整个（本可人工抢救的）文件覆写成只剩新内容，且不留任何痕迹。
+        # 先改名留底再返回空 —— 有据可查、可恢复。
+        try:
+            bak = path.with_suffix(path.suffix + ".corrupt")
+            path.replace(bak)
+            from singularity.scheduler import witness
+            witness.warn("memory",
+                         f"corrupt_json_backed_up:{path.name}->{bak.name}:{type(e).__name__}"[:200])
+        except OSError:
+            pass
+        return empty
 
 
 def _write_json(path: Path, data: dict | list) -> None:

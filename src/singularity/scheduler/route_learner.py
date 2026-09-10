@@ -5,12 +5,14 @@ EWMA 指标追踪 + Hedge 权重 + 冷启动 + 候选集加权。
 """
 from __future__ import annotations
 import json
+import threading
 import time
 from pathlib import Path
 from dataclasses import dataclass, field
 from collections import defaultdict
 
 from singularity.scheduler import config
+from singularity.scheduler._io import atomic_write_json
 
 
 @dataclass
@@ -137,6 +139,13 @@ class RouteLearner:
 # ── 持久化 ──
 _LEARNER_PATH = config.QIDIAN_DIR / "route_learner.json"
 
+# 读-改-写全程互斥。两份风险叠在一起：
+#   ① 并发丢更新 —— 调度线程与 Flask 请求线程都会 load→改→save，后写者盖掉先写者；
+#   ② 撕裂写 —— 原来 write_text 直写，撕一次让 load 走 JSONDecodeError 分支返回空
+#      learner，**下一次 save 就把累积的路由学习历史整份覆写成一条**。
+# atomic_write_json 解决 ②，这把锁解决 ①。
+_LOCK = threading.RLock()
+
 
 def load_learner() -> RouteLearner:
     """加载持久化的学习器状态。"""
@@ -151,6 +160,18 @@ def load_learner() -> RouteLearner:
 
 def save_learner(learner: RouteLearner) -> None:
     """持久化学习器状态。"""
-    config.QIDIAN_DIR.mkdir(parents=True, exist_ok=True)
     data = {"stats": learner.to_dict(), "updated_at": time.time()}
-    _LEARNER_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    with _LOCK:
+        atomic_write_json(_LEARNER_PATH, data)
+
+
+def record_outcome(**kwargs) -> None:
+    """load → record → save 全程持锁。
+
+    调用方原来把这三步平铺开，锁只能盖住最后一步 —— 另一线程在这中间 save 的话，
+    先写者的记录会被后写者的整份快照盖掉（lost update）。
+    """
+    with _LOCK:
+        learner = load_learner()
+        learner.record(**kwargs)
+        save_learner(learner)

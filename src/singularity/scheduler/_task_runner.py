@@ -117,15 +117,15 @@ def _archive_task_outcome(task, route, disp_result, failure_mode: str = "") -> N
         witness.warn('orch', f'record_tokens:{e}'[:80])
 
     try:
-        learner = rl_mod.load_learner()
-        learner.record(
+        # 走 record_outcome: load→record→save 全程持锁。分三步平铺的话，
+        # 并发任务的整份快照会互相覆盖（lost update）。
+        rl_mod.record_outcome(
             task_type=getattr(route, 'task_type', 'default'), model=model,
             level=task.route_level,
             # 成功与否看最终状态, 不看 batch.ok (QA 拒绝的任务 batch.ok 仍可能为 True)
             success=(task.status == TaskStatus.DONE),
             elapsed_ms=elapsed, tokens=tokens,
         )
-        rl_mod.save_learner(learner)
     except Exception as e:
         witness.warn('orch', f'route_learner:{e}'[:80])
 
