@@ -88,6 +88,8 @@ export const api = {
   updateFusionConfig: (data: any) => request('/api/fusion/config',{method:'PUT',body:JSON.stringify(data)}),
 
   tokenUsage: () => request<any>('/api/token-usage'),
+  // 跨天历史。与 tokenUsage 分开：后者被侧边栏每 30s 轮询，不能让它开始背 30 天的序列。
+  usageHistory: (range: string) => request<any>(`/api/usage-history?range=${range}`),
   updateTokenBudget: (data: any) => request('/api/token-budget',{method:'PUT',body:JSON.stringify(data)}),
 
   startLoop: () => request('/api/loop/start',{method:'POST'}),

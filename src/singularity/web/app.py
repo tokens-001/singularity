@@ -195,7 +195,7 @@ _PUBLIC_ENDPOINTS = {
 
 # 只读端点（viewer 可访问的 GET 端点）
 _READONLY_ENDPOINTS = {
-    "api_token_usage", "api_token_budget",
+    "api_token_usage", "api_token_budget", "api_usage_history",
     "api_perf", "api_tasks", "api_task_detail",
     "api_task_trace", "api_task_timeline",
     "api_conflicts", "api_memory", "api_memory_chain",
@@ -838,6 +838,13 @@ def api_cleanup():
 @app.route("/api/token-usage")
 def api_token_usage():
     data, code = _api_handler.token_usage()
+    return jsonify(data), code
+
+@app.route("/api/usage-history")
+def api_usage_history():
+    """跨天的用量历史。单独一条路径 —— /api/token-usage 被侧边栏每 30s 轮询，
+    不能让它开始背 30 天的序列。"""
+    data, code = _api_handler.usage_history(request.args.get("range", "30d"))
     return jsonify(data), code
 
 @app.route("/api/token-budget", methods=["PUT"])

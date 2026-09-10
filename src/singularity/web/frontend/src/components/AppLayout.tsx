@@ -27,6 +27,44 @@ function fmtTokens(n: number): string {
   return String(n || 0)
 }
 
+/** 预算额度条 —— 抄 ZCode 侧边栏那个 "N% used / Remaining / Total"。
+ *
+ * **budget <= 0 时什么都不渲染**：没配预算就无所谓"百分之几"，
+ * 退回 `0% used / 剩余 $0.00 / 总额 $0.00` 等于**编了一个用户从没设过的套餐**。
+ *
+ * 导出是为了能单独测这条规则 —— 它埋在 AppLayout 里时测不到（要 mock router + SSE + store）。
+ */
+export function BudgetMeter({ used, budget, unpriced }: {
+  used: number; budget: number; unpriced: string[]
+}) {
+  if (!(budget > 0)) return null
+  const pct = (used / budget) * 100
+  const remain = budget - used            // 不夹到 0：超预算是真实状态
+  const lowerBound = unpriced.length > 0
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 2 }}
+      title={lowerBound ? `以下模型未配置单价，实际花费更高：${unpriced.join('、')}` : undefined}>
+      <div className="flex-between" style={{ fontSize: 10, color: '#6b6b68' }}>
+        <span>今日预算</span>
+        {/* 有模型没配单价时读数是**下限** —— 必须看起来就是下限 */}
+        <span style={{ color: lowerBound ? '#d97706' : undefined }}>
+          {lowerBound ? '≥' : ''}{pct.toFixed(0)}% used
+        </span>
+      </div>
+      <div style={{ height: 3, borderRadius: 2, background: '#f3f2ec' }}>
+        {/* 夹的是**条**，不是数字 —— 140% 就得显示 140% */}
+        <div style={{ height: 3, borderRadius: 2, width: `${Math.min(100, pct)}%`,
+          background: pct >= 100 ? 'var(--accent-red, #dc2626)' : 'var(--accent, #2563eb)' }} />
+      </div>
+      <div className="flex-between" style={{ fontSize: 10, color: '#b5b2a8' }}>
+        <span>剩余 ${remain.toFixed(2)}</span>
+        <span>总额 ${budget.toFixed(2)}</span>
+      </div>
+      <div style={{ fontSize: 10, color: '#b5b2a8' }}>每日 00:00 重置</div>
+    </div>
+  )
+}
+
 export default function AppLayout() {
   const { sidebarCollapsed, toggleSidebar } = useAppStore()
   const setActiveProject = useAppStore(s => s.setActiveProject)
@@ -82,6 +120,7 @@ export default function AppLayout() {
   const models: any[] = Array.isArray(usage?.by_model) ? usage.by_model : []
   // 今天用过但没配单价的模型 → 上面的总额只是下限，要标出来
   const unpriced: string[] = Array.isArray(usage?.unpriced_models) ? usage.unpriced_models : []
+  const budget: number = usage?.budget_daily || 0
 
   const selectProject = (pid: string) => { setActiveProject(pid); navigate('/') }
 
@@ -148,6 +187,7 @@ export default function AppLayout() {
                 title={conflicts.map((c: any) => c.task_id || c.id || '').join(', ')}>⚠ {conflicts.length} 冲突</span>
             )}
           </div>
+          <BudgetMeter used={usage?.daily_cost || 0} budget={budget} unpriced={unpriced} />
           {/* 总量只说明"花了多少"，回答不了"该换谁" —— 点开看按模型的占比。
               数据一直在 /api/token-usage 里（by_model），之前只是没渲染。 */}
           <div onClick={models.length ? () => setShowModels(v => !v) : undefined}

@@ -54,6 +54,19 @@ def token_usage():
     from ._token_budget import get_usage_stats; return get_usage_stats(), 200
 
 
+def usage_history(range="30d"):
+    """GET /api/usage-history?range=7d|30d|all — 跨天的用量历史。
+
+    函数内 import 是刻意的（照 token_usage 的写法）：这样测试能 monkeypatch
+    `_token_budget._budget`，而模块级 import 会把单例绑死。
+    """
+    from ._token_budget import history
+    try:
+        return history(range), 200
+    except ValueError as e:
+        return {"error": str(e)}, 400
+
+
 def token_budget_set(budget):
     # 修复: set_budget 是 TokenBudget 的**方法**, 不是模块级函数 → 原来这行必 ImportError。
     from ._token_budget import _budget

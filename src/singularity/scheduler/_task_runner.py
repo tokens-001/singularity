@@ -111,7 +111,8 @@ def _archive_task_outcome(task, route, disp_result, failure_mode: str = "") -> N
 
     try:
         record_tokens(project_id=getattr(task, 'project_id', ''), task_id=task.id,
-                      model=model, level=task.route_level, tokens=tokens)
+                      model=model, level=task.route_level, tokens=tokens,
+                      elapsed_s=elapsed)
     except Exception as e:
         # 静默吞掉 = token 账目悄悄丢失，成本统计对不上也查不出原因
         witness.warn('orch', f'record_tokens:{e}'[:80])
