@@ -404,8 +404,14 @@ def _v2_extractor_model() -> str:
 def _parallel(thunks: list) -> list:
     """跑一批无参函数，保序返回结果。"""
     import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(thunks), 4)) as ex:
+    if not thunks:
+        return []          # max_workers=0 会 ValueError
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=min(len(thunks), 4))
+    try:
         return [f.result() for f in [ex.submit(t) for t in thunks]]
+    finally:
+        # 不用 `with`: 退出时 shutdown(wait=True) 会 join，挂死的调用会把融合整段拖住
+        ex.shutdown(wait=False)
 
 
 def _plans_block(plans: list[tuple[str, str]]) -> str:

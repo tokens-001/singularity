@@ -483,13 +483,16 @@ JSON:"""
                                "detail": f"chunk review failed: {e}"}],
                    "verdict": "retry", "summary": f"chunk review failed: {e}"}
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(model_cfgs)) as executor:
+    # 不用 `with`: 退出时 shutdown(wait=True) 会 join，CLAUDE_CLI_TIMEOUT 就只是
+    # "延迟判定"而非时限 —— 挂死的调用会把审查整段拖住。显式 shutdown(wait=False)。
+    _executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(model_cfgs))
+    try:
         future_to_model = {
-            executor.submit(review_chunk, chunk_data, cfg): cfg.get("model", "unknown")
+            _executor.submit(review_chunk, chunk_data, cfg): cfg.get("model", "unknown")
             for chunk_data in chunks
             for cfg in model_cfgs
         }
-        
+
         done, not_done = concurrent.futures.wait(
             future_to_model, timeout=config.CLAUDE_CLI_TIMEOUT)
         for future in done:
@@ -497,6 +500,8 @@ JSON:"""
         for future in not_done:
             reviews.append({"model": future_to_model[future], "issues": [],
                             "verdict": "abort", "summary": "chunk review timeout"})
+    finally:
+        _executor.shutdown(wait=False)
 
     elapsed = _time.time() - start_time
     

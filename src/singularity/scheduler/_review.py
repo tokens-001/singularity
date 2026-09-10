@@ -190,8 +190,12 @@ def run_post_exec_checks(*, validation, quality, exec_result,
     # 小改动(单文件<50行)跳过项目全量测试：独立小任务(如写 hello.py)跟项目测试套件无关，跑了会误判
     if validation.action == "pass" and changed and not _trivial:
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(val_mod.run_project_tests, cwd=cwd)
+            # 不能用 `with ThreadPoolExecutor(...)`: 退出时会 shutdown(wait=True) 去 join，
+            # 底层调用挂死的话超时形同虚设 —— 整个任务跟着挂（实测 A/B 探针三次这样卡住）。
+            # 显式 shutdown(wait=False): 放弃等待，让流水线能继续/能收尾。
+            _ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            try:
+                fut = _ex.submit(val_mod.run_project_tests, cwd=cwd)
                 try:
                     test_result = fut.result(timeout=_REVIEW_TIMEOUT_SEC)
                 # 必须是 TimeoutError，**不是 TimeoutExpired** —— 后者在 concurrent.futures
@@ -206,27 +210,29 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                     validation.unverified.append("测试执行超时: 不默认通过, 需人工兜底")
                     _record_review_failure("test_timeout")
                     return
-            quality["test_result"] = test_result  # 供 supervisor._check_artifact 复用, 免重复跑
-            if not test_result.get("passed"):
-                quality["warnings"].append(
-                    f"tests failed ({test_result.get('runner','?')}): "
-                    f"{test_result.get('failures','?')} failures")
-                quality["failure_kind"] = "test_failure"
-                quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.3)
-                validation.unverified.append(
-                    f"tests failed: {test_result.get('output','')[:200]}")
-                validation.action = "retry"
-                _record_review_failure("test_failure")
-            elif test_result.get("runner") != "none":
-                quality["quality_signals"]["tests_passed"] = test_result.get("total", 0)
-                quality["confidence"] = min(1.0, quality.get("confidence", 0.5) + 0.1)
-            else:
-                # runner == "none" = pytest/unittest/npm 三个全不可用或全超时，
-                # 返回的 passed 仍是初值 True。这是**没跑**，不是**跑过了**。
-                # 不加分也不拦（test_validator.test_run_tests_no_tests 锁定了那个语义），
-                # 但必须披露 —— 否则交付报告把"没验证"和"验证通过"混为一谈。
-                validation.unverified.append(
-                    "项目测试未执行: 无可用 runner (pytest/unittest/npm 均不可用)")
+                quality["test_result"] = test_result  # 供 supervisor._check_artifact 复用, 免重复跑
+                if not test_result.get("passed"):
+                    quality["warnings"].append(
+                        f"tests failed ({test_result.get('runner','?')}): "
+                        f"{test_result.get('failures','?')} failures")
+                    quality["failure_kind"] = "test_failure"
+                    quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.3)
+                    validation.unverified.append(
+                        f"tests failed: {test_result.get('output','')[:200]}")
+                    validation.action = "retry"
+                    _record_review_failure("test_failure")
+                elif test_result.get("runner") != "none":
+                    quality["quality_signals"]["tests_passed"] = test_result.get("total", 0)
+                    quality["confidence"] = min(1.0, quality.get("confidence", 0.5) + 0.1)
+                else:
+                    # runner == "none" = pytest/unittest/npm 三个全不可用或全超时，
+                    # 返回的 passed 仍是初值 True。这是**没跑**，不是**跑过了**。
+                    # 不加分也不拦（test_validator.test_run_tests_no_tests 锁定了那个语义），
+                    # 但必须披露 —— 否则交付报告把"没验证"和"验证通过"混为一谈。
+                    validation.unverified.append(
+                        "项目测试未执行: 无可用 runner (pytest/unittest/npm 均不可用)")
+            finally:
+                _ex.shutdown(wait=False)   # 不 join：挂死的调用不能拖住整条流水线
         except Exception as e:
             quality["warnings"].append(f"test execution error: {e}")
             quality["failure_kind"] = "test_error"
@@ -276,11 +282,15 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                 for f in changed[:3]:
                     # S2: 多模型审查带超时
                     try:
-                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                            fut = ex.submit(val_mod.multi_model_review,
+                        # 同上面那条：不能 `with`（退出 join 会把挂死调用拖成永久阻塞）
+                        _ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                        try:
+                            fut = _ex.submit(val_mod.multi_model_review,
                                 filepath=f, models=reviewer_models, cwd=cwd, diff_only=True,
                                 requirements=_review_requirements(task))
                             review = fut.result(timeout=_REVIEW_TIMEOUT_SEC)
+                        finally:
+                            _ex.shutdown(wait=False)
                     except concurrent.futures.TimeoutError:   # 不是 TimeoutExpired，见上面注释
                         quality["warnings"].append("多模型审查超时 — 不默认通过")
                         quality["failure_kind"] = "review_timeout"

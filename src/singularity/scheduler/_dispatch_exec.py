@@ -20,9 +20,11 @@ import json, os, time, logging, threading
 # ── 委员会收集初稿的时间预算 ──
 # 单次模型调用本身有上限（claude-cli 300s / openai-agent 240s），所以一波的耗时
 # 取决于最慢的那个模型。把波超时调小只会让慢模型白跑——输出被丢弃、token 照花。
-# 这个 timeout 也不决定"何时返回"：调用点用 with ThreadPoolExecutor(...)，退出时
-# shutdown(wait=True) 会 join 所有线程（实测 timeout=0.3s 仍等了 3s），它只决定
-# "何时去读已完成的结果"。调小它救不了总耗时。
+# 它决定"何时去读已完成的结果"。**2026-09-11 修正**：原文说"调小它救不了总耗时，
+# 因为调用点用 with ThreadPoolExecutor(...) 退出时 shutdown(wait=True) 会 join"——
+# 现在调用点已改成显式 shutdown(wait=False)（见下方 _dispatch_committee），
+# 所以这个 timeout 现在**真的是时限**了：到点就带着已完成的那部分返回，
+# 没跑完的线程留在后台（不 join），不再拖住整条架构阶段。
 _WAVE_TIMEOUT = float(os.environ.get("QIDIAN_DEBATE_TIMEOUT", "300"))
 
 
@@ -200,7 +202,11 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
     outputs = []
     member_tokens = 0            # 委员会成员的实际用量，回填给 _FusionResult
     member_elapsed = 0.0
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(chain), 4)) as ex:
+    # 不能用 `with ThreadPoolExecutor(...)`: 退出时 shutdown(wait=True) 会去 join，
+    # `_WAVE_TIMEOUT` 就只是个"延迟判定"而不是时限 —— 某个模型调用挂死就把整条
+    # 架构阶段拖住（实测 A/B 探针三次这样卡住）。显式 shutdown(wait=False)。
+    _ex = concurrent.futures.ThreadPoolExecutor(max_workers=min(len(chain), 4))
+    try:
         futures = {}
         for i, a in enumerate(chain):
             full_task = task
@@ -209,10 +215,10 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
             perspective = _PERSPECTIVES[i % len(_PERSPECTIVES)]
             if perspective:
                 full_task = f"{full_task}\n\n[你的视角] {perspective}"
-            futures[ex.submit(_run_no_tools, a, full_task,
-                              f"{task_id}_{a.get('model','?')[:8]}",
-                              level, baseline_ref, cwd)] = a
-        # 等待最多 300s 收集任意数量的完成结果
+            futures[_ex.submit(_run_no_tools, a, full_task,
+                               f"{task_id}_{a.get('model','?')[:8]}",
+                               level, baseline_ref, cwd)] = a
+        # 等待最多 _WAVE_TIMEOUT 收集任意数量的完成结果
         done, _ = concurrent.futures.wait(futures, timeout=_WAVE_TIMEOUT, return_when='ALL_COMPLETED')
         for fut in done:
             agent_cfg = futures[fut]
@@ -225,6 +231,8 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
                     member_elapsed += _el
             except Exception:
                 pass  # 单个模型失败不阻断委员会
+    finally:
+        _ex.shutdown(wait=False)   # 不 join：挂死的调用不能拖住整条流水线
 
     # 部分模型没产出 → 告警。否则委员会"3 家碰撞"实际只有 1 家，外面完全看不出来
     if len(outputs) < len(chain):
