@@ -73,6 +73,64 @@ def _reorder_agents_by_rank(agents_list: list, ranked_models: list[str]) -> list
 
 
 # ═══════════════════════════════════════════════════════════════
+# 任务收尾的三件事（两条路径共用）
+# ═══════════════════════════════════════════════════════════════
+
+def _archive_task_outcome(task, route, disp_result, failure_mode: str = "") -> None:
+    """任务结束后归档：经验 / 用量 / 路由学习。三件都写盘。
+
+    **必须在两条收尾路径上都调**：
+      · `TaskRunner.finalize`      —— 单任务直接合并（v2 路径）
+      · `orchestrator._drain_pending` —— v3 并行，任务走合并队列，合并完才收尾
+
+    以前只有 finalize 调，`_drain_pending` 自己重写了一遍收尾（transition +
+    _save_trace），**这三件整个漏掉**。实测后果（2026-09-11 真机验证）：
+    跑完一个任务，`experiences.json` / `token_usage.json` **根本没被创建**，
+    `route_learner.json` 一动不动 —— 而 `_save_trace` 是两边都有的，所以
+    `events.json` 会正常长大，从外面看像是"归档跑了"，其实只跑了一半。
+
+    每件各自 try：一件炸不该连累另外两件（以前 archive_experience 一抛，
+    同一 try 里的用量统计和路由学习一起被跳过）。
+    """
+    exec_out = disp_result.executor_result if disp_result else None
+    model = getattr(disp_result, 'agent_cfg', {}).get("model", "") if disp_result else ""
+    tokens = getattr(exec_out, 'token_count', 0) if exec_out else 0
+    elapsed = getattr(exec_out, 'elapsed', 0) if exec_out else 0
+
+    try:
+        mem_mod.archive_experience(
+            task_id=task.id, description=task.description,
+            status="done" if task.status == TaskStatus.DONE else "failed",
+            route_level=task.route_level,
+            model=model, elapsed_ms=elapsed, tokens=tokens,
+            failure_mode=failure_mode,
+            files_changed=getattr(exec_out, 'changed_files', []) if exec_out else [],
+        )
+    except Exception as e:
+        witness.warn('orch', f'archive_experience:{e}'[:80])
+
+    try:
+        record_tokens(project_id=getattr(task, 'project_id', ''), task_id=task.id,
+                      model=model, level=task.route_level, tokens=tokens)
+    except Exception as e:
+        # 静默吞掉 = token 账目悄悄丢失，成本统计对不上也查不出原因
+        witness.warn('orch', f'record_tokens:{e}'[:80])
+
+    try:
+        learner = rl_mod.load_learner()
+        learner.record(
+            task_type=getattr(route, 'task_type', 'default'), model=model,
+            level=task.route_level,
+            # 成功与否看最终状态, 不看 batch.ok (QA 拒绝的任务 batch.ok 仍可能为 True)
+            success=(task.status == TaskStatus.DONE),
+            elapsed_ms=elapsed, tokens=tokens,
+        )
+        rl_mod.save_learner(learner)
+    except Exception as e:
+        witness.warn('orch', f'route_learner:{e}'[:80])
+
+
+# ═══════════════════════════════════════════════════════════════
 # TaskRunner
 # ═══════════════════════════════════════════════════════════════
 
@@ -272,59 +330,16 @@ class TaskRunner:
                     pre_search_reason=batch.pre_search_reason,
                     pre_search_top_decisions=batch.pre_search_top_decisions,
                     pre_search_memory=batch.pre_search_memory)
-        # T1 挂钩: 任务完成后归档经验
-        try:
-            exec_out = disp_result.executor_result if disp_result else None
-            mem_mod.archive_experience(
-                task_id=task.id, description=task.description,
-                status="done" if task.status == TaskStatus.DONE else "failed",
-                # route_level 来自 task：RouteResult 没有 level（两档制后已废弃）。
-                # 这里曾经读 route.level → 每任务必抛 AttributeError → **同一个 try 里的
-                # record_tokens 和 learner.record 一起被跳过**，三个子系统全静默失效。
-                route_level=task.route_level,
-                model=getattr(disp_result, 'agent_cfg', {}).get("model", "") if disp_result else "",
-                elapsed_ms=getattr(exec_out, 'elapsed', 0) if exec_out else 0,
-                tokens=getattr(exec_out, 'token_count', 0) if exec_out else 0,
-                # failure_mode 跟最终状态走: QA 拦下的任务 batch.ok 仍为 True, 不能记空
-                failure_mode=("" if task.status == TaskStatus.DONE
-                              else (f"QA:{qa_verdict}" if qa_blocked else validation.verdict)),
-                files_changed=getattr(exec_out, 'changed_files', []) if exec_out else [],
-            )
-            # 用量统计: 记录真实 token 消耗 (只统计, 不做预算拦截)
-            try:
-                record_tokens(
-                    project_id=getattr(task, 'project_id', ''),
-                    task_id=task.id,
-                    model=getattr(disp_result, 'agent_cfg', {}).get("model", "") if disp_result else "",
-                    level=task.route_level,
-                    tokens=getattr(exec_out, 'token_count', 0) if exec_out else 0,
-                )
-            except Exception as e:
-                # 静默吞掉 = token 账目悄悄丢失，成本统计对不上也查不出原因
-                witness.warn('orch', f'record_tokens:{e}'[:80])
-            # 同时记录到路由学习器
-            try:
-                learner = rl_mod.load_learner()
-                learner.record(
-                    task_type=route.task_type,
-                    model=getattr(disp_result, 'agent_cfg', {}).get("model", "") if disp_result else "",
-                    level=task.route_level,
-                    # 成功与否看最终状态, 不看 batch.ok (QA 拒绝的任务 batch.ok 仍可能为 True)
-                    success=(task.status == TaskStatus.DONE),
-                    elapsed_ms=getattr(exec_out, 'elapsed', 0) if exec_out else 0,
-                    tokens=getattr(exec_out, 'token_count', 0) if exec_out else 0,
-                )
-                rl_mod.save_learner(learner)
-            except Exception as e:
-                try:
-                    witness.warn('orch', f'route_learner:{e}')
-                except Exception:
-                    pass
-        except Exception as e:
-            try:
-                witness.warn('orch', f'archive_experience:{e}')
-            except Exception:
-                pass
+        # T1 挂钩: 任务完成后归档经验 / 用量 / 路由学习。
+        # 抽成共享函数是必须的 —— v3 的合并路径（orchestrator._drain_pending）以前
+        # **一次都没调过这三件**，只有 _save_trace 两边都有，于是走合并队列的任务
+        # 静默少做三件事（实测 experiences.json / token_usage.json 根本没被创建）。
+        _archive_task_outcome(
+            task, route, disp_result,
+            # failure_mode 跟最终状态走: QA 拦下的任务 batch.ok 仍为 True, 不能记空
+            failure_mode=("" if task.status == TaskStatus.DONE
+                          else (f"QA:{qa_verdict}" if qa_blocked else validation.verdict)),
+        )
         # 工具事件已由 openai_agent 实时上流(append 到 _pending_sse_events), 此处不再批量推, 避免重复
         turn = getattr(batch, 'turn_count', 0) or 0
         if turn > 0:

@@ -19,7 +19,7 @@ from singularity.scheduler._types import _pending_sse_events
 from singularity.scheduler._exec import _save_trace
 from singularity.scheduler._worktree import _release_ref, cleanup_task_artifacts
 from singularity.scheduler._planner import _maybe_complete_parents
-from singularity.scheduler._task_runner import TaskRunner
+from singularity.scheduler._task_runner import TaskRunner, _archive_task_outcome
 
 from singularity.scheduler import config
 from singularity.scheduler import tracker
@@ -208,6 +208,7 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
                             pre_search_top_decisions=batch.pre_search_top_decisions,
                             pre_search_memory=batch.pre_search_memory)
                 results.append((t.id, f"merged: {mr.new_head[:8]}", batch.validation))
+                failure_mode = ""
             elif mr.status == "conflict":
                 err = mr.conflict_files or mr.reason or "未知冲突"
                 tracker.transition(t.id, TaskStatus.CONFLICT_HELD,
@@ -219,6 +220,7 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
                             pre_search_top_decisions=batch.pre_search_top_decisions,
                             pre_search_memory=batch.pre_search_memory)
                 results.append((t.id, f"conflict: {mr.conflict_files}", batch.validation))
+                failure_mode = f"merge_conflict: {err}"
             else:
                 tracker.transition(t.id, TaskStatus.FAILED, error=f"merge {mr.status}")
                 _release_ref(t.id, repo_root=repo_root_for(t))
@@ -228,6 +230,15 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
                             pre_search_top_decisions=batch.pre_search_top_decisions,
                             pre_search_memory=batch.pre_search_memory)
                 results.append((t.id, f"merge_failed", batch.validation))
+                failure_mode = f"merge_{mr.status}"
+            # 经验归档 / 用量统计 / 路由学习 —— **这条路径以前完全不调**，
+            # 只有 _save_trace 上面调了，于是走合并队列的任务这三件静默少做。
+            # 实测（2026-09-11 真机验证）：跑完一个任务 experiences.json /
+            # token_usage.json 根本没被创建，route_learner.json 一动不动。
+            fresh = tracker.read_task(t.id)
+            if fresh is not None:
+                t.status = fresh.status      # transition 只改盘上对象，内存里还是旧状态
+            _archive_task_outcome(t, route, batch.dispatch_result, failure_mode=failure_mode)
             drained += 1
     return drained
 
