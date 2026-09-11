@@ -21,7 +21,8 @@ export function fmtCost(c: number | null | undefined): string {
 /** 单价（美元 / 百万 token）。null / undefined → "未配置价格"。 */
 export function fmtPrice(p: number | null | undefined): string {
   if (p === null || p === undefined || !Number.isFinite(p)) return UNPRICED
-  return '$' + p.toFixed(2) + '/M'
+  // 单位写全，不用 '/M' —— 那个缩写对不熟的人就是天书（实测被问过"m 是啥意思"）
+  return '$' + p.toFixed(2) + '/百万token'
 }
 
 /** 是否未配置（供调用方决定要不要加警示色）。 */

@@ -16,7 +16,7 @@ import { useNavigate } from 'react-router-dom'
 import { RefreshCw } from 'lucide-react'
 import { api } from '../lib/api'
 import { useToast } from '../lib/toast'
-import { fmtCost, isUnpriced } from '../lib/money'
+import { fmtCost, fmtPrice, isUnpriced } from '../lib/money'
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
@@ -137,7 +137,9 @@ export default function Usage() {
                 ) : <span className="text-muted">—</span>}
               </span>
               <span className="mono text-secondary" style={COL.num}>
-                {isUnpriced(m.price) ? <span className="text-muted">—</span> : `$${m.price.toFixed(2)}/M`}
+                {/* 走 fmtPrice，别在这儿自己拼 —— 这里原来手写 `$${...}/M`，
+                    绕过了 money.ts 那个「金额唯一出口」，于是单位改全了它也不跟着变。 */}
+                {isUnpriced(m.price) ? <span className="text-muted">—</span> : fmtPrice(m.price)}
               </span>
               <span className="mono" style={{ ...COST_COL,
                 color: isUnpriced(m.cost) && m.used ? 'var(--accent-yellow)' : 'var(--text-primary)' }}>

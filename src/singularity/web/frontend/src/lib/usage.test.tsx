@@ -96,9 +96,9 @@ describe('用量页', () => {
     const el = await render(<Usage />)
     const text = el.textContent || ''
 
-    // 1,000,000 tokens × $0.28/M = $0.28
+    // 1,000,000 tokens × $0.28/百万token = $0.28
     expect(text).toContain('$0.2800')
-    expect(text).toContain('$0.28/M')
+    expect(text).toContain('$0.28/百万token')
   })
 
   it('占比照实显示', async () => {
