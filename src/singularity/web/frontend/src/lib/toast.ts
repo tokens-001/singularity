@@ -36,11 +36,22 @@ export function useModal() {
  * 包一层写操作：失败时把后端返回的中文原因 toast 出来，返回是否成功。
  * 不包的话，request() 抛出的异常没人接，界面上会「点了没反应」。
  * 用法：if (!(await run(() => api.createProject(form)))) return
+ *
+ * 后端还会用「**成功 + warning**」表达第三种结果：操作做下去了，但没达到你要的效果。
+ * 典型是 `agent_add`（POST /api/agents）—— 启用一个不在模型库里的模型，它会照样
+ * 写进配置，同时回 warning「补不出 API 地址和 key → 这条 agent 是空壳，不会被调度」。
+ * 只接 catch 的话这句就丢了，用户看到的是"点了没反应"，然后怎么查都查不出原因。
  */
 export function useRun() {
   const toast = useToast()
   return async (fn: () => Promise<unknown>, okMsg?: string): Promise<boolean> => {
-    try { await fn(); if (okMsg) toast(okMsg, 'success'); return true }
+    try {
+      const r = await fn()
+      const warn = (r as { warning?: string } | null | undefined)?.warning
+      if (warn) toast(warn, 'info')            // 有 warning 就不报成功，免得两句话互相打架
+      else if (okMsg) toast(okMsg, 'success')
+      return true
+    }
     catch (e) { toast(e instanceof Error ? e.message : String(e), 'error'); return false }
   }
 }
