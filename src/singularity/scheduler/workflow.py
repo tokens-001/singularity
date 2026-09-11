@@ -100,7 +100,7 @@ _ARCHITECT_CONTEXT = """项目需求: {description}
     {{
       "type": "security/performance/reliability/maintainability (必填)",
       "rule": "具体约束 (必填)",
-      "check": "如何验证 (必填)"
+      "check": {{"argv": ["python3", "-m", "pytest", "-q"], "expect_exit": 0}}
     }}
   ]
 }}
@@ -113,7 +113,14 @@ Schema 规则:
 - layer 标注任务所属层: frontend/backend/data/devops
 - depends_on 填其他任务的 id, 可为空数组
 - 每个任务改不相交的文件 (并行 merge 的前提)
-- constraints 每条必须可机器检查 (type+rule+check)
+- constraints 每条必须可机器检查 (type+rule+check)。`check` 两种写法，二选一：
+  · **能机器跑**的 → `{{"argv": ["解释器或程序", "参数", ...], "expect_exit": 0}}`
+    必须是**数组**（平台按数组直接 exec，**不过 shell**）。argv[0] 只允许:
+    python3 / python / pytest / npm / node / git / ls / cat / wc / test。
+    `python3` 只允许紧跟 `-m pytest`（不许 `-c`：那等于任意代码执行）。
+  · **机器验不了**的（界面美观、命名风格之类）→ **如实写一段散文说明为什么验不了**。
+    ⚠️ **不许编一条反正跑不通的命令来凑格式** —— 那比写散文更坏：
+    平台会当真去跑，然后拿一个假的失败（或假的通过）当验收结论。
 
 输出时用 ```json ... ``` 包裹。"""
 
@@ -432,7 +439,39 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
         "\n".join(f"- {f}" for f in sorted(changed_files)[:30])
     )
 
-    # ── QA 验收 ──
+    # ── ① 机械检查：约束里**能机器跑**的那几条，先跑（机器证据优先）──
+    # 这是"信任上限 = 机械证据覆盖的验证面比例"的那个分子。
+    # 运行前提：人在 **GATE2 批架构时就看过这些命令**（面板上明写"批准后会实际执行"）。
+    # 安全护栏在 `_machine_checks`：argv 数组不过 shell / argv[0] 白名单 /
+    # 解释器只许 -m pytest / cwd 锁项目仓 / 超时 / 环境洗掉 key 与代理。
+    _MAX_MACHINE_CHECKS = 10      # 有上限就明说，别静默截断
+    try:
+        from singularity.scheduler import _machine_checks as mchk
+        runnable = [c for c in (project.constraints_checklist or [])
+                    if isinstance(c, dict) and mchk.validate_check(c.get("check"))[0]]
+        if runnable:
+            root = _phase_cwd(project)
+            picked, dropped = runnable[:_MAX_MACHINE_CHECKS], runnable[_MAX_MACHINE_CHECKS:]
+            results = []
+            for c in picked:
+                r = mchk.run_check(c.get("check"), root)
+                results.append({"rule": c.get("rule", c.get("text", "")), **r})
+            passed = sum(1 for r in results if r.get("passed"))
+            note = f"机械检查 {passed}/{len(results)} 条通过"
+            if dropped:
+                note += f"（另有 {len(dropped)} 条超出上限 {_MAX_MACHINE_CHECKS}，本轮未跑）"
+            project.issues = [i for i in project.issues if i.get("type") != "machine_checks"]
+            project.issues.append({"type": "machine_checks", "detail": note})
+            project.add_lineage({"action": "machine_checks", "ran": len(results),
+                                 "passed": passed, "skipped": len(dropped)})
+            _save_phase_output(project.id, "machine-checks.json",
+                               json.dumps(results, ensure_ascii=False, indent=2))
+            msgs.append(note)
+    except Exception as e:
+        from singularity.scheduler import witness
+        witness.warn("review", f"machine_checks:{type(e).__name__}:{e}"[:120])
+
+    # ── ② QA 验收（LLM，兜机械查不了的残余面）──
     qa_prompt = (
         f"你是 QA 工程师。做验收验证，不写代码，只出报告。\n\n{ctx}\n\n"
         "逐条检查约束是否满足，给出 evidence。输出 JSON。"

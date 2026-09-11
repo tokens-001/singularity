@@ -644,7 +644,14 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
         # raw_output = 这次实际产出的全文，一并存进记忆供 depth>=3 展开读。
         # 以前只存 task.description，于是"上次到底怎么做的"从来没进过记忆
         # （见 docs/经验分层-STAIR借鉴-20260912.md）。
-        _traj = (disp_result.executor_result.raw_output or "") if disp_result and disp_result.executor_result else ""
+        _er = disp_result.executor_result if disp_result else None
+        _traj = (_er.raw_output or "") if _er else ""
+        # 工具调用顺序 —— 只存事实（哪个工具、多久），"定位/改动/验证"三段
+        # 由 _memory_graph.split_stages 在读的时候现算（不落 derived 值，§34）。
+        # 只取 tool:done（带 elapsed），start 那条是重复的。
+        _seq = [{"tool": e.get("tool", ""), "elapsed": e.get("elapsed", 0.0)}
+                for e in ((getattr(_er, "tool_events", None) or []) if _er else [])
+                if e.get("kind") == "tool:done"]
         mem_mod.index_task(
             task_id=task.id,
             description=task.description,
@@ -652,6 +659,7 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
             depends_on=task.depends_on,
             created_at=task.created_at,
             trajectory=_traj,
+            tool_seq=_seq,
         )
         # 补充事件属性: 终态 + route info
         # route_level 取自 task 而非 route —— RouteResult 没有 level 字段（两档制后

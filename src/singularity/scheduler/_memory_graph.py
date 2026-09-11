@@ -235,6 +235,7 @@ def traverse(
                 "task_id": task_id,
                 "description": node.content[:120],
                 "trajectory": node.trajectory,
+                "tool_seq": (node.attrs or {}).get("tool_seq") or [],
                 "score": round(score, 4),
                 "path": [],
                 "graph_sources": ["anchor"] if is_anchor else [],
@@ -249,6 +250,7 @@ def traverse(
                 "task_id": task_id,
                 "description": node.content[:120],
                 "trajectory": node.trajectory,
+                "tool_seq": (node.attrs or {}).get("tool_seq") or [],
                 "score": round(score, 4),
                 "path": [(src[-8:] if len(src) >= 8 else src, et) for src, et in path],
                 "graph_sources": sources,
@@ -272,6 +274,58 @@ def traverse(
 # 全展开会把这个函数变成"每次查询塞几万字" —— 上面那个 600 字预算是故意的。
 EXPAND_TOP = 2
 EXPAND_CHARS = 3000
+
+# 「一个任务内部的三段」——论文切的是 localization / planning /
+# execution-and-verification（arXiv 2607.29658），这里用工具种类近似。
+# ⚠️ 是**近似**：run_command 既可能是"探路"（ls / git status）也可能是"验证"
+# （跑测试），只能按"第一次改动之前还是之后"来分。
+_READ_TOOLS = {"read_file", "list_dir", "search", "grep", "glob", "read", "codegraph"}
+_WRITE_TOOLS = {"write_file", "edit_file", "create_file", "apply_patch"}
+
+
+def split_stages(tool_seq: list[dict]) -> dict:
+    """把工具调用序列按**任务内部的三个阶段**切开：定位 → 改动 → 验证。
+
+    纯函数，**读的时候现算** —— 不落盘 derived 值（防御模式 §34：
+    "写盘时算 derived 值 → 历史被污染"）。返回 {stage: [工具名, ...]}。
+
+    论文的消融（125 题）显示"只存单层"比"完整分层"低 16~22 分；
+    "同一次修复内部的三个阶段"是它分层的一个轴。
+    """
+    out: dict[str, list[str]] = {"locate": [], "change": [], "verify": []}
+    seen_change = False
+    for e in tool_seq or []:
+        name = str((e or {}).get("tool", ""))
+        if not name:
+            continue
+        if name in _WRITE_TOOLS:
+            seen_change = True
+            out["change"].append(name)
+        elif name in _READ_TOOLS:
+            out["locate"].append(name)
+        elif name == "run_command":
+            # 改动之前的 run_command 多半是探路（ls / git status），之后是验证
+            out["verify" if seen_change else "locate"].append(name)
+        else:
+            out["locate"].append(name)   # 不认识的按只读算，宁可少报
+    return out
+
+
+def stage_summary(tool_seq: list[dict]) -> str:
+    """三段的一句话摘要，给 deep 展开时挂在全文前面。空序列 → 空串。"""
+    st = split_stages(tool_seq)
+    if not any(st.values()):
+        return ""
+    parts = []
+    for key, label in (("locate", "定位"), ("change", "改动"), ("verify", "验证")):
+        names = st[key]
+        if not names:
+            continue
+        from collections import Counter
+        c = Counter(names)
+        top = "、".join(f"{n}×{k}" if k > 1 else n for n, k in c.most_common(3))
+        parts.append(f"{label} {len(names)} 步（{top}）")
+    return "【这次的动作分段】" + "；".join(parts)
 
 
 def synthesize(results: list[dict], query: str, include_full: bool = False) -> dict:
@@ -333,14 +387,18 @@ def synthesize(results: list[dict], query: str, include_full: bool = False) -> d
         for i in range(min(EXPAND_TOP, len(narrative))):
             traj = narrative[i].get("trajectory") or ""
             if traj:
+                # 三段摘要现算（不落盘）：先给"这次的动作怎么分段的"，再给全文
+                head = stage_summary(narrative[i].get("tool_seq") or [])
+                body = traj[:EXPAND_CHARS]
                 narrative[i] = {
                     **narrative[i],
-                    "full_text": traj[:EXPAND_CHARS],
+                    "full_text": f"{head}\n{body}" if head else body,
                     "full_text_truncated": len(traj) > EXPAND_CHARS,
                 }
 
-    # trajectory 是"候选展开材料"，没被展开的别跟着往外传
-    narrative = [{k: v for k, v in it.items() if k != "trajectory"} for it in narrative]
+    # trajectory / tool_seq 是"候选展开材料"，没被展开的别跟着往外传
+    narrative = [{k: v for k, v in it.items() if k not in ("trajectory", "tool_seq")}
+                 for it in narrative]
 
     return {
         "narrative": narrative,
@@ -472,6 +530,7 @@ def find_similar(description: str, top_k: int = 5) -> list[dict]:
                 "task_id": tid,
                 "description": node.content[:120],
                 "trajectory": node.trajectory,
+                "tool_seq": (node.attrs or {}).get("tool_seq") or [],
                 "similarity": round(sim, 4),
                 "timestamp": node.timestamp,
             })

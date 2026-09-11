@@ -343,6 +343,7 @@ def index_task(
     trajectory: str = "",
     stage: str = "",
     force: bool = False,
+    tool_seq: list | None = None,
 ) -> None:
     """快通道摄入: 创建 EventNode + 更新四图边。
 
@@ -358,6 +359,9 @@ def index_task(
                 "按阶段切"用（见 docs/经验分层-STAIR借鉴-20260912.md）。
     force:      跳过去重。阶段条目必须用 —— 它们的描述是同一条项目描述，
                 互相的 Jaccard 极高，不去重的话会被上一阶段的条目挤掉。
+    tool_seq:   这次任务调过哪些工具（按顺序，紧凑形式 [{"tool","elapsed"}]）。
+                **只存事实，不存结论** —— "定位/改动/验证"那三段是读的时候
+                现算的（`_memory_graph.split_stages`），落盘 derived 值会污染历史（§34）。
     """
     changed_files = changed_files or []
     depends_on = depends_on or []
@@ -389,6 +393,8 @@ def index_task(
     prev = events.get(task_id)
     if not trajectory and prev is not None:
         trajectory = prev.trajectory
+    if not tool_seq and prev is not None:
+        tool_seq = (prev.attrs or {}).get("tool_seq") or []
 
     tokens = _embed(description)
     node = EventNode(
@@ -397,7 +403,7 @@ def index_task(
         timestamp=created_at,
         emb=tokens,
         attrs={"files": changed_files, "depends_on": depends_on, "mem_type": mem_type,
-               "stage": stage},
+               "stage": stage, "tool_seq": list(tool_seq or [])},
         trajectory=trajectory,
     )
     events[task_id] = node

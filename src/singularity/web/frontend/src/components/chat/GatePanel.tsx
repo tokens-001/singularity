@@ -149,7 +149,20 @@ export const ArchitectureDetails = memo(function ArchitectureDetails({ arch }: {
           {constraints.map((c: any, i: number) => (
             <div key={i} style={row}>
               <span style={{ color: '#b45309', fontWeight: 600 }}>[{c.type}]</span> {c.rule}
-              {c.check && <span style={{ color: '#6b6b68' }}> → 验证：{c.check}</span>}
+              {/* check 有两种：{argv, expect_exit}（机器能跑）或一段散文（验不了）。
+                  直接渲染对象会让 React 抛错，所以这里必须分开处理。
+                  机器能跑的标出来 —— 它是"信任上限"那个数的分子。 */}
+              {typeof c.check === 'object' && c.check?.argv ? (
+                <span style={{ color: '#166534' }}>
+                  {' '}→ <code>{c.check.argv.join(' ')}</code>
+                  <span style={{ color: '#6b6b68' }}>（期望退出码 {c.check.expect_exit ?? 0}）</span>
+                  {/* 这句必须写出来：批准架构 = 批准这些命令被实际执行。
+                      不写的话，"人批准过"就是句空话。 */}
+                  <span style={{ color: '#166534', fontWeight: 600 }}> ✓可机器验（批准后验收时会实际执行这条命令）</span>
+                </span>
+              ) : c.check ? (
+                <span style={{ color: '#6b6b68' }}> → 验证（人工）：{String(c.check)}</span>
+              ) : null}
             </div>
           ))}
         </div>

@@ -112,3 +112,56 @@ class TestStageTagAndDedup:
         ev = mc._load_events()
         assert "r1" in ev
         assert "r2" not in ev, "描述近乎相同且未 force → 应被去重跳过"
+
+
+def _seq(*names):
+    return [{"tool": n, "elapsed": 0.1} for n in names]
+
+
+class TestStageSplit:
+    """任务内部的三段 —— 论文切的是 localization / planning / execution-verification。
+
+    这里用工具种类近似，**读的时候现算**，不落盘（§34）。
+    """
+
+    def test_splits_by_tool_kind(self):
+        st = mg.split_stages(_seq("read_file", "write_file", "run_command"))
+        assert st["locate"] == ["read_file"]
+        assert st["change"] == ["write_file"]
+        assert st["verify"] == ["run_command"]
+
+    def test_run_command_before_first_write_is_locate_not_verify(self):
+        """改动**之前**的 run_command（ls / git status）是探路，不是验证。"""
+        st = mg.split_stages(_seq("run_command", "read_file", "write_file", "run_command"))
+        assert st["locate"] == ["run_command", "read_file"]
+        assert st["verify"] == ["run_command"], "只有改动之后那条才算验证"
+
+    def test_unknown_tool_counted_as_locate(self):
+        """不认识的工具按只读算 —— 宁可少报，别把探路算成改动。"""
+        assert mg.split_stages(_seq("mystery_tool"))["locate"] == ["mystery_tool"]
+
+    def test_summary_mentions_all_three(self):
+        s = mg.stage_summary(_seq("read_file", "read_file", "write_file", "run_command"))
+        assert "定位" in s and "改动" in s and "验证" in s
+
+    def test_empty_seq_gives_empty_summary(self):
+        assert mg.stage_summary([]) == ""
+        assert mg.stage_summary(None) == ""
+
+
+class TestStagesNotPersisted:
+    def test_only_facts_stored_no_derived_stages(self):
+        """事实（工具序列）落盘；**分段结论不落盘** —— 落 derived 值会污染历史（§34）。"""
+        mem.index_task(task_id="t1", description="任务甲",
+                       tool_seq=[{"tool": "read_file", "elapsed": 0.1}])
+        a = mc._load_events()["t1"].attrs
+        assert a.get("tool_seq"), "事实要存"
+        for derived in ("stages", "locate", "change", "verify"):
+            assert derived not in a, f"{derived} 是算出来的，不许落盘"
+
+    def test_tool_seq_survives_reindex_without_it(self):
+        """和 trajectory 一样：不传就别覆盖已有的。"""
+        mem.index_task(task_id="t1", description="任务甲",
+                       tool_seq=[{"tool": "read_file", "elapsed": 0.1}])
+        mem.index_task(task_id="t1", description="任务甲")
+        assert mc._load_events()["t1"].attrs["tool_seq"]

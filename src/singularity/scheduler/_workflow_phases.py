@@ -360,6 +360,24 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
                          "traceability_items": len(traceability),
                          "validation_issues": len(arch_issues),
                          "blockers": len(blockers)})
+    # ── 「信任上限」那个数：约束里几条是**真能机器跑**的（argv 结构），几条是散文 ──
+    # 分母是约束条数（架构师自己列的）→ 严格说这是"自洽率"，不是"对需求的覆盖率"；
+    # 后者要拿需求侧 scope_clarification.core 当分母（docs/信任上限-可测化-20260912.md §二）。
+    # 这一步先把**能测的那半**落下来：至少"架构师承诺了机器可查、实际一条跑不了"能被看见。
+    try:
+        from singularity.scheduler import _machine_checks as mchk
+        _runnable, _total = mchk.coverage(arch.get("constraints") or [])
+        project.add_lineage({"action": "check_coverage",
+                             "runnable": _runnable, "total": _total})
+        if _total and not _runnable:
+            project.issues.append({
+                "type": "check_not_machine_runnable",
+                "detail": (f"架构产出 {_total} 条约束，**没有一条**是机器可跑的"
+                           f"（全是散文）→ 信任上限这一轮等于 0，验收只能靠人读")})
+    except Exception as e:
+        from singularity.scheduler import witness
+        witness.warn("planning", f"check_coverage:{type(e).__name__}:{e}"[:120])
+
     _index_phase_memory(project, "architect", "planning", raw)
 
     # D4 拆解器: unified_architecture → 结构化可执行 task 列表
