@@ -12,7 +12,7 @@ import json
 from singularity.scheduler import config
 from singularity.scheduler import tracker
 from singularity.scheduler import dispatcher as disp_mod
-from singularity.scheduler.project import ProjectState, Phase, save, _projects_dir
+from singularity.scheduler.project import ProjectState, Phase, save, _projects_dir, resolve_flow
 from singularity.scheduler.tracker import TaskStatus
 
 from singularity.scheduler._io import try_parse_json
@@ -165,7 +165,8 @@ def _phase_cwd(project: ProjectState) -> str:
 def _safe_dispatch(prompt: str, level: str, task_id: str, agents: dict,
                    project: ProjectState, project_lineup=None,
                    restrict_to_lineup: bool = False, phase: str = "",
-                   no_tools: bool = False) -> tuple:
+                   no_tools: bool = False,
+                   allow_committee: bool | None = None) -> tuple:
     """调 disp_mod.dispatch 并记录错误到 project lineage。返回 (disp_result_or_None, error_str)。
 
     ``restrict_to_lineup`` 见 `dispatcher.pick_agent_fallback_chain`：「阶段 → 模型」
@@ -177,7 +178,14 @@ def _safe_dispatch(prompt: str, level: str, task_id: str, agents: dict,
 
     ``no_tools`` 见 `dispatch` 的同名参数：产出是 JSON 的阶段（调研/架构）必须给，
     否则模型会当实现任务干、把工具轮次烧光，报告一句不剩。
+
+    ``allow_committee`` 为 None 时**在这里**按项目重量推导（`resolve_flow`）。
+    刻意放在函数内部而不是调用点：`_run_planning` 的调用点签名不动，
+    `tests/test_scheduler/test_phase_dispatch_wiring.py` 的桩继续可用。
+    传 True/False = 显式覆盖。
     """
+    if allow_committee is None:
+        allow_committee = resolve_flow(project).committee
     try:
         disp_result = disp_mod.dispatch(
             prompt, level, task_id, agents,
@@ -187,6 +195,7 @@ def _safe_dispatch(prompt: str, level: str, task_id: str, agents: dict,
             phase=phase,
             no_tools=no_tools,
             project_id=project.id,
+            allow_committee=allow_committee,
         )
         _record_phase_usage(project, task_id, level, disp_result)
         return disp_result, ""
@@ -256,14 +265,12 @@ def _record_phase_usage(project: ProjectState, task_id: str, level: str,
         witness.warn("workflow", f"record_phase_usage:{type(e).__name__}:{e}"[:120])
 
 def _needs_research(project: ProjectState) -> bool:
-    if project.template == "bug_fix":
-        return False
-    # product_dev / agent_dev / refactor 默认需要调研
-    if project.template in ("product_dev", "agent_dev", "refactor"):
-        return True
-    desc = project.description.lower()
-    triggers = ["调研", "参考", "借鉴", "架构", "设计", "方案", "重构"]
-    return any(t in desc for t in triggers)
+    """**转发到唯一判据** `resolve_flow`（防御模式 §5）。这里不再有自己的关键词表。
+
+    保留这个名字是因为有两个调用点（`start_project_workflow` 的真决策、
+    `_api_projects.project_cost` 的显示），转发一下两边就自动一致了。
+    """
+    return resolve_flow(project).research
 
 
 def _should_skip(project, key: str) -> bool:
@@ -545,6 +552,27 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
 # GATE3 打回: 人工反馈 → 回规划重做
 # ═══════════════════════════════════════════════════════════
 
+def _read_observer_rollup(project_id: str) -> str | None:
+    """读观察者在 GATE3 产出的验收裁决（`fix_route_decision`）。
+
+    落盘方是 `_observer_answer._persist_gate3_rollup`（**同一条路径**：
+    `get_project_dir(id)/observer_rollup.json`）。没有 / 读不动 / 不合法 → None，
+    调用方就完全走原逻辑 —— **fail-closed，绝不猜**。这个返回值会让项目回退到某一层，
+    猜错的代价是清空架构重走 GATE2（那条转圈在下面注释里记着）。
+    """
+    try:
+        from singularity.scheduler.project import get_project_dir
+        from singularity.scheduler._observer_definition import VERDICT_FIX_ROUTES
+        path = get_project_dir(project_id) / "observer_rollup.json"
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        route = data.get("fix_route_decision")
+        return route if route in VERDICT_FIX_ROUTES else None
+    except Exception:
+        return None
+
+
 def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "") -> str:
     """GATE3 被人工打回: 按 fix_route 分级路由 (D3)。
 
@@ -588,6 +616,16 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
     else:
         no_qa_reason = ""
 
+    # 观察者的 GATE3 汇总**优先** —— 它是"汇总裁定"（schema 的 description 就这么写的），
+    # 比按 issue 逐条推断更接近设计意图。没有 / 不合法 → 上面那套原逻辑一个字不改。
+    _rollup_route = _read_observer_rollup(project.id)
+    if _rollup_route:
+        fix_route = _rollup_route
+        no_qa_reason = ""
+        route_source = "observer_rollup"
+    else:
+        route_source = "qa_report" if has_qa else "default_no_qa"
+
     if fix_route == "impl":
         # 回实现层: 重置 DONE task 为 PENDING, 让实现层重新执行
         # (否则打回后所有 task 仍 DONE, 队列无活任务 → 空转直达 GATE3, 缺陷从未修复)
@@ -600,19 +638,20 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
                 tracker.transition(tid, TaskStatus.PENDING, force=True)
                 reset_count += 1
         project.add_lineage({"action": "gate3_route", "route": "impl", "reset_tasks": reset_count,
+                             "source": route_source,
                              **({"no_qa": True} if no_qa_reason else {})})
         msg = f"GATE3 打回 → 回实现层修复 (重置 {reset_count} 任务, 反馈: {feedback[:80]})"
         if no_qa_reason:
             msg += f" ⚠ {no_qa_reason}"
     elif fix_route == "note":
         # 仅记录, 不阻断 (保持当前阶段, 等人再次确认)
-        project.add_lineage({"action": "gate3_route", "route": "note"})
+        project.add_lineage({"action": "gate3_route", "route": "note", "source": route_source})
         msg = f"GATE3 问题仅记录 (suggestion), 不阻断交付"
     else:
         # design: 回规划重做架构
         project.set_phase(Phase.PLANNING, f"GATE3 打回(design): {feedback[:60]}")
         project.architecture = None
-        project.add_lineage({"action": "gate3_route", "route": "design"})
+        project.add_lineage({"action": "gate3_route", "route": "design", "source": route_source})
         msg = f"GATE3 打回 → 回架构规划 (反馈: {feedback[:80]})"
 
     save(project)
@@ -631,10 +670,19 @@ def start_project_workflow(project: ProjectState, agents: dict) -> str:
     if not project.description:
         return "请先填写需求描述再启动工作流"
 
-    if _needs_research(project):
-        project.set_phase(Phase.RESEARCHING, "立项: 需要调研")
+    # 流程重量判据（唯一入口 resolve_flow）：调研走不走，架构开不开委员会。
+    # ⚠️ 记一条 lineage —— 防御模式 §44 要求"跳过"必须是**带理由的显式事实**，
+    # 不能是"没发生"。进 lineage 而不是 issues：issues 在 _run_execution 开头
+    # 会被整体清空（workflow.py 里那句 `project.issues = []`），放那儿活不到 GATE3。
+    d = resolve_flow(project)
+    if d.research:
+        project.set_phase(Phase.RESEARCHING, f"立项: 需调研 ({d.reason})")
     else:
-        project.set_phase(Phase.PLANNING, "立项: 无需调研, 直接进架构")
+        project.set_phase(Phase.PLANNING, f"立项: 免调研 ({d.reason})")
+    project.add_lineage({
+        "action": "flow_weight", "weight": d.weight, "source": d.source,
+        "research": d.research, "committee": d.committee, "reason": d.reason,
+    })
     save(project)
 
     return run_phase(project, agents)

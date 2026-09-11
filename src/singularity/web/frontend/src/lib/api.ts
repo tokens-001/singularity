@@ -39,6 +39,8 @@ export const api = {
   projects: async () => { const d = await request<any>('/api/projects'); return (d?.projects||d) as any[] },
   project: (id: string) => request<any>(`/api/projects/${id}`),
   createProject: (data: any) => request('/api/projects',{method:'POST',body:JSON.stringify(data)}),
+  setFlowWeight: (id: string, flow_weight: string) =>
+    request(`/api/projects/${id}/flow-weight`,{method:'PUT',body:JSON.stringify({flow_weight})}),
   runPhase: (id: string) => request(`/api/projects/${id}/run-phase`,{method:'POST'}),
   deleteProject: (id: string) => request(`/api/projects/${id}`,{method:'DELETE'}),
   projectsRoot: async () => { const d = await request<any>('/api/projects-root'); return d?.root || '' },

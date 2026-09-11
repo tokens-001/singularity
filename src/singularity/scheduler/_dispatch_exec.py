@@ -50,6 +50,25 @@ def _impl_role_veto(route_role: str) -> bool:
         return route_role == "implementer"
 
 
+def _committee_allowed(task: str, chain: list, route_role: str,
+                       allow_committee: bool) -> bool:
+    """委员会开不开 —— 四个条件全过才开。
+
+    抽成纯函数（而不是把 `allow_committee` 塞进原来那个 if）是为了能单测：
+    贵的那一半可以用**一个普通 list 当 chain** 验，不用造 agents dict、不用打桩。
+
+    ``allow_committee=False`` = 项目被判为轻量（见 `project.resolve_flow`）。
+    默认一路传 True —— **拿不准就开委员会**（防御模式 §47 fail-closed）。
+    """
+    from .execution_judge import _is_architecture_task   # 与 dispatch 内部同一个延迟导入
+    return bool(
+        allow_committee
+        and len(chain) >= 2
+        and _is_architecture_task(task)
+        and not _impl_role_veto(route_role)
+    )
+
+
 @timed(name="dispatcher")
 def dispatch(
     task: str,
@@ -65,6 +84,7 @@ def dispatch(
     phase: str = "",
     no_tools: bool = False,
     project_id: str = "",
+    allow_committee: bool = True,
 ) -> DispatchResult:
     """选 executor 并执行。架构任务: 委员会并行→合成; 其他: 单模型 fallback 链。
 
@@ -79,6 +99,9 @@ def dispatch(
     （wc_lite.py + 测试 + 真跑了一遍），5 个工具轮次耗尽后执行器只回一句
     "(达到最大工具轮次, 已产出文件)" —— 报告解析失败，GATE1 无物可审，这轮白烧。
     委员会那条路一直自带禁工具（`_run_no_tools`），这里补的是**单模型**那条。
+
+    ``allow_committee`` 默认 True = **拿不准就开委员会**（防御模式 §47 fail-closed）。
+    只有项目被判为轻量（`project.resolve_flow`）时才传 False，见 `_committee_allowed`。
     """
     chain = pick_agent_fallback_chain(agents, level, project_lineup=project_lineup,
                                       restrict_to_lineup=restrict_to_lineup)
@@ -101,8 +124,7 @@ def dispatch(
     #
     # 架构阶段自己不受影响：它走 `_safe_dispatch(...)`，**不带 route_role**（默认 ""）。
     # 用户手打的独立架构任务同理 —— 没有角色标，关键词判据照旧生效。
-    from .execution_judge import _is_architecture_task
-    if _is_architecture_task(task) and len(chain) >= 2 and not _impl_role_veto(route_role):
+    if _committee_allowed(task, chain, route_role, allow_committee):
         return _dispatch_committee(task, level, task_id, agents, chain, feedback,
                                    baseline_ref, cwd, project_id=project_id)
 

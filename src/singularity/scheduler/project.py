@@ -14,7 +14,7 @@ import dataclasses
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from singularity.scheduler import config
 
@@ -67,6 +67,10 @@ class ProjectState:
     description: str = ""
     scope: str = ""
     raw_constraints: list[str] = field(default_factory=list)
+
+    # 流程重量 (Owner 声明): auto | light | heavy。解析见 resolve_flow()。
+    # light = 免 6 维度调研 + 架构不开多模型委员会。默认 auto = 拿不准就跑重的。
+    flow_weight: str = "auto"
 
     # Gate 确认状态: {gate1: "approved"|"rejected"|"pending", ...}
     owner_confirm: dict = field(default_factory=dict)
@@ -146,6 +150,7 @@ class ProjectState:
         d.setdefault("description", "")
         d.setdefault("scope", "")
         d.setdefault("raw_constraints", [])
+        d.setdefault("flow_weight", "auto")
         d.setdefault("owner_confirm", {})
         d.setdefault("research_report", None)
         d.setdefault("architecture", None)
@@ -488,12 +493,28 @@ def load(project_id: str) -> Optional[ProjectState]:
         return None
 
 
+# 模板名别名 —— **规范化在 create() 里做一次**（单一入口，防御模式 §5）。
+#
+# 起因：前端下拉一直发 `bugfix`，而后端所有**逻辑判据**认的是 `bug_fix`
+# （`resolve_flow` / `TEMPLATES` / CLI）。名字对不上 → UI 建的"Bug修复"项目
+# 走不进模板分支，判据全落到描述关键词上，且 TEMPLATES 查不到它的表单定义。
+# 修法选别名而不是"让前端改"：前端产物是**打好的 bundle**，改完用户浏览器里
+# 还是旧的，直接拒收 `bugfix` 会让旧页面**建不了 Bug 修复项目**。
+_TEMPLATE_ALIASES = {"bugfix": "bug_fix"}
+
+
+def normalize_template(t: str) -> str:
+    """把别名收敛到规范名。未知值**原样返回**（拒收是 API 层的事，不在这假装）。"""
+    return _TEMPLATE_ALIASES.get((t or "").strip(), (t or "").strip())
+
+
 def create(
     name: str, template: str = "product_dev",
     description: str = "", scope: str = "",
     constraints: list[str] = None,
     budget: float = 5.0,
     auto_mode: bool = False,
+    flow_weight: str = "auto",
 ) -> ProjectState:
     now = time.time()
     # 重名校验：与已注册项目同名（sanitize 后）或目录已存在 → 拒绝
@@ -501,16 +522,92 @@ def create(
     if any(_sanitize_name(p.name) == key for p in list_all()) or (get_projects_root() / key).exists():
         raise ValueError(f"项目名 '{name}' 已被占用，请换一个")
     proj = ProjectState(
-        id=_next_id(), name=name, template=template,
+        id=_next_id(), name=name, template=normalize_template(template),
         description=description, scope=scope,
         raw_constraints=list(constraints or []),
         token_budget_total=budget,
         auto_mode=auto_mode,
+        flow_weight=flow_weight or "auto",
         phase=Phase.TEMPLATE,
         created_at=now, updated_at=now,
     )
     save(proj)
     return proj
+
+
+# ═══════════════════════════════════════════════════════════
+# 流程重量（轻 / 重）—— 判据的**唯一入口**
+# ═══════════════════════════════════════════════════════════
+#
+# 背景：重流程其实是**两个独立开关**，不是一个（docs/生产流现状.md 窟窿 #1）：
+#   ① 6 维度调研   —— 走不走 RESEARCHING + GATE1
+#   ② 多模型委员会 —— 架构阶段开不开 N 并行起草 + 融合（`_is_architecture_task` 管）
+# 架构 prompt 本身含「模块划分/数据模型/架构方案」→ ② 恒真，只改 ① 碰不到贵的那半。
+# 所以两个开关在这里汇合，别处一律转发（防御模式 §5）。
+
+# 描述里出现这些词 → 认为要调研。**只给 auto 用。**
+_RESEARCH_TRIGGERS = ("调研", "参考", "借鉴", "架构", "设计", "方案", "重构")
+
+# 这些模板一律走调研（旧行为，原样搬过来）
+_RESEARCH_TEMPLATES = ("product_dev", "agent_dev", "refactor")
+
+# 建议器阈值：描述短于这个长度且无触发词 → 提示"看着像小活"
+_SUGGEST_MAX_DESC = 100
+
+
+class FlowDecision(NamedTuple):
+    """一次重量判定。**派生值，永不落盘**（防御模式 §34 读时现算，免得放久了失真）。"""
+
+    research: bool      # 跑不跑 6 维度调研（含 GATE1）
+    committee: bool     # 架构放不放多模型委员会
+    source: str         # "user" | "auto"
+    reason: str         # 人能读的一句话，进 lineage
+
+    @property
+    def weight(self) -> str:
+        return "light" if not (self.research or self.committee) else "heavy"
+
+
+def resolve_flow(project: "ProjectState") -> FlowDecision:
+    """流程重量判据的**唯一入口**。其他入口一律转发到这里，不自行推导（§5）。
+
+    ⚠️ **刻意的非对称：auto 只决定调研，永不否决委员会。**
+    委员会是贵的那一半。凭中文子串猜"这活小"就砍掉它，正是这个仓库反复写复盘的
+    那类静默失败（§47）。拿不准 → 跑贵的。只有**人显式点了轻量**才两样都省。
+    """
+    declared = getattr(project, "flow_weight", "auto") or "auto"
+
+    if declared == "light":
+        return FlowDecision(False, False, "user", "用户指定轻量")
+    if declared == "heavy":
+        return FlowDecision(True, True, "user", "用户指定重量")
+
+    # ── auto：调研沿用旧启发式（与改动前逐字一致），委员会一律放行 ──
+    if project.template == "bug_fix":
+        return FlowDecision(False, True, "auto", "自动: bug_fix 模板")
+    if project.template in _RESEARCH_TEMPLATES:
+        return FlowDecision(True, True, "auto", f"自动: {project.template} 模板")
+    desc = (project.description or "").lower()
+    hit = next((t for t in _RESEARCH_TRIGGERS if t in desc), "")
+    if hit:
+        return FlowDecision(True, True, "auto", f"自动: 描述命中「{hit}」")
+    return FlowDecision(False, True, "auto", "自动: 描述无调研触发词")
+
+
+def suggest_flow(project: "ProjectState") -> FlowDecision | None:
+    """**只建议，不生效**（§47）。返回 None = 没什么可说的。
+
+    误判的代价 = 用户不点那一下 —— 因为这里**不写任何状态**，
+    真正的决定永远由 `resolve_flow` 按 `flow_weight` 字段做。
+    """
+    if (getattr(project, "flow_weight", "auto") or "auto") != "auto":
+        return None                      # 用户已经选过了，别多嘴
+    desc = (project.description or "").strip()
+    if not desc or len(desc) > _SUGGEST_MAX_DESC:
+        return None
+    if any(t in desc.lower() for t in _RESEARCH_TRIGGERS):
+        return None
+    return FlowDecision(False, False, "auto", "没提到调研/架构/方案，而且描述很短")
 
 
 def list_all() -> list[ProjectState]:
@@ -567,4 +664,33 @@ TEMPLATES = {
         "fields": ["Agent名称", "能力需求", "目标模型", "工具需求", "性能要求", "验收标准"],
         "research_domains": ["Agent框架参考", "工具调用优化", "同类Agent实现"],
     },
+    # ↓ 2026-09-12 补：这三个**前端下拉一直在提供**、API 也一直收，
+    # 但 `TEMPLATES` 里没有 —— 于是 CLI 建不了它们，表单定义也查不到。
+    # ⚠️ 三个的 fields / research_domains 是照上面四个的格式**现写的**（没有出处），
+    # 只是让它们别再缺定义；内容随你改。
+    "feature": {
+        "name": "新功能",
+        "fields": ["功能名称", "使用场景", "功能范围", "涉及模块", "验收标准"],
+        "research_domains": ["同类功能参考", "技术方案"],
+    },
+    "test": {
+        "name": "写测试",
+        "fields": ["被测对象", "测试范围", "现有覆盖情况", "验收标准"],
+        "research_domains": ["测试策略参考", "同类用例"],
+    },
+    "review": {
+        "name": "代码审查",
+        "fields": ["审查范围", "关注点", "已知风险", "期望产出"],
+        "research_domains": ["常见缺陷模式", "规范/最佳实践"],
+    },
 }
+
+
+def valid_templates() -> frozenset:
+    """API 层校验用的模板集合 —— **从 `TEMPLATES` 派生**，别再手抄一份。
+
+    手抄的那份漂移过：`TEMPLATES` 4 个 / API 收 8 个 / 前端给 5 个，三边对不上，
+    而前端发的 `bugfix` 跟后端逻辑认的 `bug_fix` 根本不是一个名字。
+    派生之后"加模板忘了补校验"结构上不可能（同 `to_dict` 派生于 `fields()` 的理由）。
+    """
+    return frozenset(TEMPLATES) | frozenset(_TEMPLATE_ALIASES)

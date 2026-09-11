@@ -43,15 +43,24 @@ def project_list() -> tuple[dict, int]:
 
 def project_create(name: str, template: str = "product_dev",
                    description: str = "", scope: str = "",
-                   constraints: list = None, budget: float = 5.0) -> tuple[dict, int]:
-    """POST /api/projects"""
+                   constraints: list = None, budget: float = 5.0,
+                   flow_weight: str = "auto") -> tuple[dict, int]:
+    """POST /api/projects
+
+    响应带 ``suggested_flow`` —— 系统**只建议**（`suggest_flow`），不生效。
+    人点了"采纳"才走 PUT /api/projects/<id>/flow-weight 落状态（防御模式 §47）。
+    """
     from . import project as proj_mod
     try:
         p = proj_mod.create(name=name, template=template, description=description,
-                            scope=scope, constraints=constraints or [], budget=budget)
+                            scope=scope, constraints=constraints or [], budget=budget,
+                            flow_weight=flow_weight or "auto")
     except ValueError as e:
         return {"error": str(e)}, 400
-    return {"ok": True, "project": {"id": p.id, "name": p.name}}, 200
+    sug = proj_mod.suggest_flow(p)
+    return {"ok": True,
+            "project": {"id": p.id, "name": p.name},
+            "suggested_flow": ({"weight": sug.weight, "reason": sug.reason} if sug else None)}, 200
 
 
 def project_detail(project_id: str) -> tuple[dict, int]:
@@ -62,7 +71,36 @@ def project_detail(project_id: str) -> tuple[dict, int]:
         return {"error": "项目不存在"}, 404
     d = proj.to_dict() if hasattr(proj, 'to_dict') else {"ok": True}
     d["repo_dir"] = str(proj_mod.repo_dir(project_id))  # 成品保存路径
+    # 重量判据**在服务端算完给前端**，前端不许在 TS 里重推（§5 过线同理）
+    fd = proj_mod.resolve_flow(proj)
+    d["flow_decision"] = {"weight": fd.weight, "research": fd.research,
+                          "committee": fd.committee, "source": fd.source,
+                          "reason": fd.reason}
     return d, 200
+
+
+def project_set_flow_weight(project_id: str, flow_weight: str = "") -> tuple[dict, int]:
+    """PUT /api/projects/<id>/flow-weight —— 定点 setter（仿 lineup 那个）。
+
+    非法值**直接 400，不静默改写成 auto**（防御模式 §47）。
+    """
+    from . import project as proj_mod
+    if flow_weight not in ("auto", "light", "heavy"):
+        return {"error": f"flow_weight 只能是 auto/light/heavy，收到 {flow_weight!r}"}, 400
+    proj = proj_mod.load(project_id)
+    if proj is None:
+        return {"error": "项目不存在"}, 404
+    before = proj_mod.resolve_flow(proj)
+    proj.flow_weight = flow_weight
+    proj.updated_at = time.time()
+    after = proj_mod.resolve_flow(proj)
+    proj.add_lineage({"action": "flow_weight_set", "from": before.weight, "to": after.weight,
+                      "weight": flow_weight, "reason": after.reason})
+    proj_mod.save(proj)
+    return {"ok": True, "flow_weight": flow_weight,
+            "flow_decision": {"weight": after.weight, "research": after.research,
+                              "committee": after.committee, "source": after.source,
+                              "reason": after.reason}}, 200
 
 
 def projects_root_get() -> tuple[dict, int]:
@@ -307,7 +345,9 @@ def project_cost(project_id: str) -> tuple[dict, int]:
     # 这里原来还带一个 `token_spent: p.token_spent` —— 那个字段全仓无人赋值、
     # 恒为 0，和上面算出来的真 `cost` 并排摆着，看着像"这个项目花了 0 元"。
     # 已删字段（前端本来也不读这个接口）。
+    fd = proj_mod.resolve_flow(p)
     return {"cost": round(cost, 6), "phase": phase.value, "level": level,
+            "flow_weight": p.flow_weight, "flow_reason": fd.reason,
             "unpriced_models": stats.get("unpriced_models", []),
             "token_budget_total": p.token_budget_total or 0}, 200
 

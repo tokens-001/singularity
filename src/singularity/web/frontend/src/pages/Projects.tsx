@@ -39,7 +39,9 @@ export default function Projects() {
   const detailSeq = useRef(0)   // toggle 的请求序号，用于丢弃过期详情
   const [detail, setDetail] = useState<any>(null)
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm] = useState({ name: '', description: '', template: 'feature' })
+  const [form, setForm] = useState({ name: '', description: '', template: 'feature', flow_weight: 'auto' })
+  // 创建后服务端给的"看着像小活"建议（**只是建议**，人不点就不生效）
+  const [flowHint, setFlowHint] = useState<{ id: string, name: string, reason: string } | null>(null)
   const [loading, setLoading] = useState(true)
   const [pinned, setPinned] = useState<string[]>(getPinned)
   const toast = useToast()
@@ -74,8 +76,22 @@ export default function Projects() {
 
   const create = async () => {
     if (!form.name) return
-    if (!(await run(() => api.createProject(form)))) return
-    setShowCreate(false); setForm({ name: '', description: '', template: 'feature' }); fetch()
+    const res: any = await run(() => api.createProject(form))
+    if (!res) return
+    setShowCreate(false); setForm({ name: '', description: '', template: 'feature', flow_weight: 'auto' })
+    // 服务端说"看着像小活" → 出个提示条，**等人点**（不点就还是走重流程）
+    if (res?.suggested_flow && res?.project) {
+      setFlowHint({ id: res.project.id, name: res.project.name, reason: res.suggested_flow.reason })
+    }
+    fetch()
+  }
+
+  const adoptLight = async () => {
+    if (!flowHint) return
+    const r: any = await run(() => api.setFlowWeight(flowHint.id, 'light'))
+    if (!r) return
+    toast('已改为轻量：免调研 + 架构不开委员会', 'success')
+    setFlowHint(null); fetch()
   }
 
   const del = (p: any) => modal.confirm({
@@ -107,9 +123,25 @@ export default function Projects() {
           <input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="项目名称" className="inp-sm" style={{ flex: 1 }}/>
           <input value={form.description} onChange={e=>setForm({...form,description:e.target.value})} placeholder="需求描述" className="inp-sm" style={{ flex: 2 }}/>
           <select value={form.template} onChange={e=>setForm({...form,template:e.target.value})} className="inp-sm" style={{ width: 'auto' }}>
-            <option value="feature">新功能</option><option value="bugfix">Bug修复</option><option value="refactor">重构</option><option value="test">写测试</option><option value="review">代码审查</option>
+            <option value="product_dev">产品开发</option><option value="agent_dev">Agent开发</option><option value="feature">新功能</option><option value="bug_fix">Bug修复</option><option value="refactor">重构</option><option value="test">写测试</option><option value="review">代码审查</option>
+          </select>
+          <select value={form.flow_weight} onChange={e=>setForm({...form,flow_weight:e.target.value})} className="inp-sm" style={{ width: 'auto' }}
+            title="轻量 = 免 6 维度调研 + 架构不开多模型委员会；选自动则由系统判（拿不准就跑重的）">
+            <option value="auto">流程：自动</option>
+            <option value="light">流程：轻量（小工具）</option>
+            <option value="heavy">流程：重量</option>
           </select>
           <button onClick={create} className="btn-green" style={{ padding: '6px 14px', fontSize: 12 }}>创建</button>
+        </div>
+      )}
+
+      {flowHint && (
+        <div className="flex-center gap-8 fs-11" style={{ marginBottom: 10, padding: '8px 12px',
+          background: 'var(--bg-secondary)', border: '1px solid var(--accent-yellow)', borderRadius: 'var(--radius)' }}>
+          <span>💡 「{flowHint.name}」{flowHint.reason} —— 走轻量？</span>
+          <span className="flex-1"/>
+          <button onClick={adoptLight} className="btn-sm">采纳</button>
+          <button onClick={()=>setFlowHint(null)} className="btn-sm">忽略</button>
         </div>
       )}
 
@@ -143,6 +175,14 @@ export default function Projects() {
                 {expanded === p.id && detail && (
                   <div style={{ marginLeft: 20, padding: '8px 14px', borderLeft: '1px solid var(--border)', fontSize: 12 }}>
                     <PhaseBar phase={detail.phase} />
+                    {detail.flow_decision && (
+                      <div className="fs-10 text-muted" style={{ marginBottom: 4 }}>
+                        流程：<b>{detail.flow_decision.weight === 'light' ? '轻量' : '重量'}</b>
+                        {' '}（{detail.flow_decision.reason}）
+                        {!detail.flow_decision.research && ' · 已免调研'}
+                        {!detail.flow_decision.committee && ' · 架构不开委员会'}
+                      </div>
+                    )}
                     <div className="text-secondary" style={{ marginBottom: 4 }}>{detail.description}</div>
                     {detail.repo_dir && <div className="fs-10 text-muted" style={{ marginBottom: 4 }}>📁 成品：{detail.repo_dir}</div>}
                     {detail.research_report && <ResearchReport report={detail.research_report} />}

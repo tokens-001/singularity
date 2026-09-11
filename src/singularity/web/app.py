@@ -105,7 +105,10 @@ _VALID_ROLES = frozenset({"admin", "operator", "viewer"})
 _VALID_SPEEDS = frozenset({"fast", "medium", "slow"})
 _VALID_COSTS = frozenset({"budget", "standard", "premium"})
 _VALID_TIERS = frozenset({"any", "定义", "架构", "实现", "审查", "验收", "交付"})
-_VALID_TEMPLATES = frozenset({"product_dev", "bug_fix", "refactor", "agent_dev", "feature", "bugfix", "test", "review"})
+# **从 TEMPLATES 派生**，别再手抄一份 —— 抄的那份恰恰漂移过（见 project.valid_templates 的注释）
+_VALID_TEMPLATES = proj_mod.valid_templates()
+# 流程重量：auto = 拿不准就跑重的（默认）；light = 免调研 + 架构不开委员会
+_VALID_FLOW_WEIGHTS = frozenset({"auto", "light", "heavy"})
 _VALID_DECISIONS = frozenset({"approved", "rejected"})
 
 import re as _re_valid
@@ -1114,9 +1117,13 @@ def api_projects():
             return jsonify({"error": "budget 不能是 NaN 或 Infinity"}), 400
         if budget < _MIN_BUDGET or budget > _MAX_BUDGET:
             return jsonify({"error": f"budget 必须在 {_MIN_BUDGET}-{_MAX_BUDGET} 之间"}), 400
+        flow_weight = data.get("flow_weight", "auto")
+        if flow_weight not in _VALID_FLOW_WEIGHTS:
+            return jsonify({"error": f"flow_weight 必须是 {', '.join(sorted(_VALID_FLOW_WEIGHTS))} 之一"}), 400
         result, code = _api_handler.project_create(
             name, template=template, description=data.get("description", ""),
-            scope=data.get("scope", ""), constraints=constraints, budget=budget)
+            scope=data.get("scope", ""), constraints=constraints, budget=budget,
+            flow_weight=flow_weight)
         if result.get("ok"):
             _push_event("project", json.dumps({
                 "project_id": result["project"]["id"],
@@ -1374,6 +1381,13 @@ def api_project_lineup(project_id):
 def api_project_lineup_update(project_id):
     body = request.get_json(silent=True) or {}
     data, code = _api_handler.project_lineup_set(project_id, body.get("lineup", {}))
+    return jsonify(data), code
+
+@app.route("/api/projects/<project_id>/flow-weight", methods=["PUT"])
+def api_project_flow_weight(project_id):
+    """定点 setter：人点了"采纳轻量建议"就走这里（§47 非法的直接 400，不改写）。"""
+    body = request.get_json(silent=True) or {}
+    data, code = _api_handler.project_set_flow_weight(project_id, body.get("flow_weight", ""))
     return jsonify(data), code
 
 # ═══════════════════════════════════════════════════════════
