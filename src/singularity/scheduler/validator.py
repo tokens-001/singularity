@@ -312,6 +312,20 @@ def _norm_verdict(v, default: str) -> str:
     return s or default
 
 
+def _defense_checklist(context: str) -> str:
+    """给审查员的**找茬清单**（分析 P5 的变体，见 `_defense_patterns` 模块头）。
+
+    ⚠️ 是"留意有没有长这样"，**不是**"你别这么干" —— 防御模式里绝大多数教训是写给
+    改平台代码的人的，模型读没用；只有「症状」那一行是它真能用的。
+    挑不中 → ""（宁可不给，别硬凑；prompt 膨胀是这条自带的险）。
+    """
+    try:
+        from singularity.scheduler import _defense_patterns as _dp
+        return _dp.checklist(context)
+    except Exception:
+        return ""
+
+
 def crossover_review(task_desc, raw_output, changed_files, writer_level, writer_model="", cwd=None,
                      base_ref=""):
     """Use a DIFFERENT model to review agent output. Returns {issues,verdict,summary}.
@@ -353,10 +367,13 @@ def crossover_review(task_desc, raw_output, changed_files, writer_level, writer_
     from .roles import get_role, get_phase_role
     review_role = get_role(get_phase_role("reviewing") or "reviewer")
     role_prompt = review_role.get_full_prompt() if review_role else "你是代码审查者。"
+    _cl = _defense_checklist(f"{task_desc[:400]} {files_list} {diff_text[:1200]}")
     prompt = f"""{role_prompt}
 
 Task: {task_desc[:500]}
 Files: {files_list}
+{_cl}
+
 Diff:
 {diff_text[:6000]}
 
@@ -484,7 +501,9 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
         model_name = cfg.get("model", "unknown")
         try:
             req_block = f"\nTask requirements:\n{requirements[:500]}\n" if requirements else ""
+            _cl = _defense_checklist(f"{filepath} {requirements[:300]} {chunk_content[:1200]}")
             chunk_prompt = f"""File review for {filepath} ({chunk_label}):{req_block}
+{_cl}
 
 Code:
 ```
