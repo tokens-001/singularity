@@ -16,7 +16,8 @@ import { useNavigate } from 'react-router-dom'
 import { RefreshCw } from 'lucide-react'
 import { api } from '../lib/api'
 import { useToast } from '../lib/toast'
-import { fmtCost, fmtPrice, isUnpriced } from '../lib/money'
+import { fmtCost, fmtPriceValue, isUnpriced, PRICE_UNIT } from '../lib/money'
+import { modelDisplay } from './Config'
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
@@ -33,12 +34,16 @@ const RANGES: { v: string; label: string }[] = [
   { v: 'today', label: '今日' },
 ]
 
+// 列宽必须是**固定值**，不能只给 minWidth —— 这套表格是 flex 行，
+// 只给 minWidth 时每列宽度由**内容**决定：`$0.48/百万token` 把后面挤走、
+// `—` 又缩回来，于是每行的列对不齐（实测"各显示各的"）。
+// flexShrink: 0 保证宁可整体横向滚动，也不让内容改列宽。
 const COL = {
   model: { flex: 1, minWidth: 0 } as const,
-  num: { minWidth: 68, textAlign: 'right' as const },
+  num: { width: 72, flexShrink: 0, textAlign: 'right' as const },
 }
 
-const COST_COL = { minWidth: 84, textAlign: 'right' as const }
+const COST_COL = { width: 84, flexShrink: 0, textAlign: 'right' as const }
 
 /** 供应商状态 → 中文。只显示非 active 的 —— 好端端的不用打扰。 */
 const STATUS_CN: Record<string, string> = {
@@ -130,14 +135,18 @@ export default function Usage() {
             <span className="fs-10 text-muted" style={COL.model}>模型</span>
             <span className="fs-10 text-muted" style={COL.num}>tokens</span>
             <span className="fs-10 text-muted" style={COL.num}>占比</span>
-            <span className="fs-10 text-muted" style={COL.num}>单价</span>
+            {/* 单位写在表头一次，别逐格重复 —— 那既撑宽列也是噪声 */}
+            <span className="fs-10 text-muted" style={COL.num}>单价{PRICE_UNIT}</span>
             <span className="fs-10 text-muted" style={COST_COL}>费用</span>
           </div>
 
           {models.map((m: any) => (
             <div key={m.model} className="card-row" style={COL as any}>
               <span className="flex-center gap-4" style={COL.model}>
-                <span className="truncate mono" title={m.model}>{m.model}</span>
+                {/* 模型名走统一出口 modelDisplay —— 这里原来是裸的 id（`deepseek-v4-flash`），
+                    而模型页显示 `DeepSeek V4 Flash`，同一个模型两页两个名字。
+                    原始 id 留在 title 里，要精确值的时候鼠标一悬就有。 */}
+                <span className="truncate" title={m.model}>{modelDisplay(m.model) || m.model}</span>
                 {/* 非 active 的供应商状态要露出来 —— 否则你只会看到"未使用"，
                     而不知道是没跑过、还是账号欠费了。 */}
                 {STATUS_CN[m.provider_status] && (
@@ -163,9 +172,10 @@ export default function Usage() {
                 ) : <span className="text-muted">—</span>}
               </span>
               <span className="mono text-secondary" style={COL.num}>
-                {/* 走 fmtPrice，别在这儿自己拼 —— 这里原来手写 `$${...}/M`，
-                    绕过了 money.ts 那个「金额唯一出口」，于是单位改全了它也不跟着变。 */}
-                {isUnpriced(m.price) ? <span className="text-muted">—</span> : fmtPrice(m.price)}
+                {/* 走 money.ts，别在这儿自己拼 —— 这里原来手写 `$${...}/M`，
+                    绕过了那个「金额唯一出口」，于是单位改全了它也不跟着变。
+                    数值不带单位：单位在表头。 */}
+                {isUnpriced(m.price) ? <span className="text-muted">—</span> : fmtPriceValue(m.price)}
               </span>
               <span className="mono" style={{ ...COST_COL,
                 color: isUnpriced(m.cost) && m.used ? 'var(--accent-yellow)' : 'var(--text-primary)' }}>

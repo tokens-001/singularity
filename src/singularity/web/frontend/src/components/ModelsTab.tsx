@@ -170,7 +170,10 @@ export default function ModelsTab() {
               {scanResults.models.map(m => (
                 <label key={m.id} className="flex-center gap-4 fs-11" style={{ padding: '3px 8px', background: selected.has(m.id)?'var(--bg-tertiary)':'transparent', borderRadius: 4, cursor: 'pointer' }}>
                   <input type="checkbox" checked={selected.has(m.id)} onChange={()=>{const n=new Set(selected);n.has(m.id)?n.delete(m.id):n.add(m.id);setSelected(n)}}/>
-                  {m.display||m.id} <span className="fs-10 text-muted">{m.rating}</span>
+                  {/* 走统一的 mcn —— 这里原来是 `m.display||m.id`，是第三种写法。
+                      原始 id 留 title，要复制的时候悬停就有。 */}
+                  <span title={m.id}>{mcn(m)}</span>
+                  <span className="fs-10 text-muted">{m.rating}</span>
                 </label>
               ))}
             </div>

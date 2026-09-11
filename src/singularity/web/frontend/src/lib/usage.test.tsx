@@ -110,7 +110,10 @@ describe('用量页', () => {
 
     // 1,000,000 tokens × $0.28/百万token = $0.28
     expect(text).toContain('$0.2800')
-    expect(text).toContain('$0.28/百万token')
+    // 单位写在**表头**一次（写全，不用 '/M'），单元格里只有数值 ——
+    // 逐格重复会把列撑宽，而且这套表格是 flex 行、宽度由内容决定 → 列对不齐
+    expect(text).toContain('单价/百万token')
+    expect(text).not.toContain('$0.28/百万token')
   })
 
   it('按天历史要真的显示出来 —— 后端算了不能白算', async () => {
@@ -189,7 +192,9 @@ describe('用量页 — 配了但没用过的模型', () => {
     current = HISTORY_WITH_UNUSED
     const el = await render(<Usage />)
     const text = el.textContent || ''
-    expect(text).toContain('glm-unused')
+    // 显示的是**美化名**（走统一出口 modelDisplay）—— 原始 id 在 title 里，
+    // 不在 textContent。`glm-unused` → `GLM Unused`。
+    expect(text).toContain('GLM Unused')
     expect(text).toContain('未使用')
   })
 
@@ -203,7 +208,7 @@ describe('用量页 — 配了但没用过的模型', () => {
     current = HISTORY_WITH_UNUSED
     const el = await render(<Usage />)
     const row = Array.from(el.querySelectorAll('.card-row'))
-      .find(r => r.textContent?.includes('glm-unused')) as HTMLElement
+      .find(r => r.textContent?.includes('GLM Unused')) as HTMLElement
     expect(row, '没找到未使用那一行').toBeTruthy()
     const t = row.textContent || ''
     expect(t).toContain('未使用')

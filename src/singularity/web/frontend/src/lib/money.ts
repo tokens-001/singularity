@@ -18,11 +18,18 @@ export function fmtCost(c: number | null | undefined): string {
   return '$' + c.toFixed(4)
 }
 
-/** 单价（美元 / 百万 token）。null / undefined → "未配置价格"。 */
-export function fmtPrice(p: number | null | undefined): string {
+/** 单价的单位。写全，不用 '/M' —— 那个缩写对不熟的人就是天书（实测被问过"m 是啥意思"）。 */
+export const PRICE_UNIT = '/百万token'
+
+/** 单价数值（**不含单位**）。表格里单位写在表头 —— 逐格重复既撑宽列、也是噪声。 */
+export function fmtPriceValue(p: number | null | undefined): string {
   if (p === null || p === undefined || !Number.isFinite(p)) return UNPRICED
-  // 单位写全，不用 '/M' —— 那个缩写对不熟的人就是天书（实测被问过"m 是啥意思"）
-  return '$' + p.toFixed(2) + '/百万token'
+  return '$' + p.toFixed(2)
+}
+
+/** 单价（数值 + 单位）。**没有表头的单值场景**用（如模型卡片上的单价入口）。 */
+export function fmtPrice(p: number | null | undefined): string {
+  return fmtPriceValue(p) === UNPRICED ? UNPRICED : fmtPriceValue(p) + PRICE_UNIT
 }
 
 /** 是否未配置（供调用方决定要不要加警示色）。 */
