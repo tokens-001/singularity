@@ -511,6 +511,10 @@ def status_overview():
 
 def cleanup():
     n_hb, n_tasks = witness.force_cleanup_heartbeats()
+    # `_cleanup_orphan_worktrees` 定义在 `_api_monitor.py`，**本模块看不见它** ——
+    # 两个模块虽然都被 `_api.py` 星号导入，但那只进了 `_api` 的命名空间，
+    # 不影响各自的 `__globals__`。原来直接裸调 → `/api/cleanup` 必 500。
+    from ._api_monitor import _cleanup_orphan_worktrees
     n_wt = _cleanup_orphan_worktrees()
     from . import snapshot as snap_mod; n_snap = snap_mod.purge_old_snapshot_meta()
     return {"ok": True, "cleaned": {"heartbeats": n_hb, "worktrees": n_wt, "snapshots": n_snap, "tasks": n_tasks}}, 200

@@ -9,6 +9,12 @@ from singularity.scheduler import orchestrator
 from singularity.scheduler import snapshot as snap_mod
 from singularity.scheduler.tracker import TaskStatus
 
+# 队列空时的轮询间隔。**必须定义在本模块** —— `_cmd_loop` 就在这里，而
+# `__main__.py` 是**单向** import 本模块的（`from _cli_tasks import *`），
+# 常量放那边这边看不见 → CLI loop 一空闲就 NameError。
+# 同一个坑 `_parse_concurrent` 已经踩过一次（见它的 docstring），这个是漏网的。
+_LOOP_POLL_SECS = 3
+
 
 def _parse_concurrent(args: list) -> tuple:
     """从 argv 提取 --concurrent N (修复 #4)。返回 (剩余args, concurrent)。

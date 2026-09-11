@@ -10,6 +10,10 @@ from singularity.scheduler._dispatch_skills import (
 )
 from singularity.scheduler import tracker, config
 from singularity.scheduler.tracker import TaskStatus
+# `BaseExecutor` 只用在下面那句局部变量注解上（`executor: BaseExecutor = …`）。
+# 局部注解**运行时不求值**，所以少这个 import 不会炸 —— 但 F821 会一直报，
+# 把"真有未定义名"的信号淹没掉。补上，让这条检查能当守卫用。
+from singularity.scheduler.executors.base import BaseExecutor
 from singularity.scheduler import witness
 from singularity.scheduler.log import timed
 from singularity.scheduler._io import apply_json_patch, _parse_patch_ops

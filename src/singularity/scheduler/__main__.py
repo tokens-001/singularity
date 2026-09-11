@@ -23,9 +23,11 @@ from singularity.scheduler import tracker
 from singularity.scheduler.tracker import TaskStatus
 from singularity.scheduler.project import Phase
 
-_LOOP_POLL_SECS = 3  # 队列空时的轮询间隔
+# `_LOOP_POLL_SECS` 已挪到 `_cli_tasks.py` —— `_cmd_loop` 在那个模块，而本模块是
+# **单向** import 它（`from _cli_tasks import *`），常量放这儿那边看不见 →
+# CLI loop 一空闲就 NameError。跟 `_parse_concurrent` 是同一个坑（见文件末尾注释）。
 
-_USAGE = ("用法: python3 -m scheduler add|run|loop|rollback|apply|status|merge|memory|project|auth [参数]\n"
+_USAGE =("用法: python3 -m scheduler add|run|loop|rollback|apply|status|merge|memory|project|auth [参数]\n"
           '      python3 -m scheduler "<任务文本>"    # 兼容旧用法: 建任务并立即执行')
 
 
