@@ -148,9 +148,17 @@ def _get_embed_model():
         _stderr = sys.stderr
         try:
             sys.stderr = io.StringIO()
+            # **这个 import 必须在 try 里、而且以前根本没有** —— 少了它，下面那行
+            # 每次都抛 NameError，被「下载失败」那句 except 一起吞掉，于是嵌入路径
+            # **一次都没生效过**，而表面上只是"降级跳过"，谁也看不出来。
+            # 代价：技能相关性过滤退化成"取绑定列表前 2 个"、记忆语义直查永远返回空。
+            from sentence_transformers import SentenceTransformer
             _EMBED_MODEL = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
-        except Exception:
-            # 下载失败/网络问题 → 降级跳过, 不阻塞
+        except Exception as e:
+            # 下载失败/网络问题 → 降级跳过, 不阻塞。但**必须留痕**：这条 except
+            # 之前把"名字没定义"这种低级错误也吞了，导致排查时看不到任何线索。
+            witness.warn("memory",
+                         f"embed_model_load_failed:{type(e).__name__}:{e}"[:120])
             _EMBED_MODEL = False
         finally:
             sys.stderr = _stderr

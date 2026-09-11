@@ -88,3 +88,52 @@ class TestPropertyRRF:
         result = _rrf_anchors(query_tokens=[0.1] * 128, query_text="test",
                               events=events, edges={}, k=5)
         assert len(result) <= 5
+
+
+class TestEmbedModelActuallyLoads:
+    """回归：`_get_embed_model` 里**真的 import 了** SentenceTransformer。
+
+    2026-09-11 发现的实际 bug：那个 import **从来就不存在**，于是每次调用都抛
+    NameError，被下面那句「下载失败 → 降级跳过」的 `except Exception` 一起吞掉。
+    嵌入路径**一次都没生效过**，而表面症状只是"降级"：
+
+      · 技能相关性过滤退化成"取绑定列表前 2 个"（绑 5 个只有 2 个生效，且是固定的）
+      · 记忆语义直查 `find_similar()` 永远返回空
+
+    这条测试不加载真模型（420MB / 17s），只钉住"名字解析得到" —— 正是坏掉的那一步。
+    """
+
+    def test_sentence_transformer_is_reachable(self, monkeypatch):
+        import singularity.scheduler._memory_core as mc
+        import sentence_transformers
+
+        sentinel = object()
+        monkeypatch.setattr(mc, "_EMBED_MODEL", None)          # 绕开懒加载缓存
+        monkeypatch.setattr(sentence_transformers, "SentenceTransformer",
+                            lambda name: sentinel)
+        assert mc._get_embed_model() is sentinel
+
+    def test_skip_env_still_short_circuits(self, monkeypatch):
+        """QIDIAN_SKIP_EMBED=1 时照旧跳过（CI 用）。"""
+        import singularity.scheduler._memory_core as mc
+        monkeypatch.setattr(mc, "_EMBED_MODEL", None)
+        monkeypatch.setenv("QIDIAN_SKIP_EMBED", "1")
+        assert mc._get_embed_model() is None
+
+    def test_load_failure_leaves_a_trail(self, monkeypatch):
+        """加载真失败时必须告警 —— 之前那条静默的 except 是整件事查不出来的原因。"""
+        import singularity.scheduler._memory_core as mc
+        import sentence_transformers
+
+        warns = []
+        monkeypatch.setattr("singularity.scheduler.witness.warn",
+                            lambda *a, **k: warns.append(a))
+        monkeypatch.setattr(mc, "_EMBED_MODEL", None)
+        monkeypatch.delenv("QIDIAN_SKIP_EMBED", raising=False)
+
+        def _boom(name):
+            raise RuntimeError("模拟下载失败")
+
+        monkeypatch.setattr(sentence_transformers, "SentenceTransformer", _boom)
+        assert mc._get_embed_model() is None
+        assert any("embed_model_load_failed" in str(w) for w in warns)
