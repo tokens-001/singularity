@@ -136,13 +136,51 @@ OBSERVER_VERDICT_SCHEMA = {
 }
 
 
+# 枚举值 —— **解析时按它校验**。
+# 以前这份 schema 只是贴进 prompt 的装饰：全仓没有代码读 `overall`/`fix_route_decision`
+# （2026-09-12 核过，连注入都只发生在"没有 project_id"的旧兼容路径上）。
+# 现在它真的驱动 GATE3 路由了，所以必须挡：模型吐个 `"IMPL"` 或 `"不通过"`，
+# 我们要认得出"这不是合法值"，而不是当成一个正常裁决去改项目阶段。
+VERDICT_FIX_ROUTES = frozenset({"impl", "design", "note"})
+VERDICT_OVERALLS = frozenset({"go", "no_go", "needs_human"})
+
+
+def verdict_schema_text() -> str:
+    """注入 prompt 的那段。两处注入共用，免得写两遍走样。"""
+    return ("\n\n## GATE3 验收汇总 schema\n你必须输出:\n```json\n"
+            + json.dumps(OBSERVER_VERDICT_SCHEMA["json_schema"]["schema"],
+                         ensure_ascii=False, indent=2)
+            + "\n```")
+
+
+def parse_verdict_rollup(content: str) -> dict | None:
+    """从 observer 的回复里抠出 verdict_rollup。**不合法一律返回 None**（fail-closed）。
+
+    拿到 None 就退回原行为，**绝不能猜一个值出来** —— 这个返回值决定项目回退到哪一层，
+    猜错的代价是清空架构 → 重走 GATE2 → 又被打回（这条转圈在 `handle_gate3_reject`
+    的注释里记着）。
+    """
+    import re
+    for m in re.finditer(r'\{[^{}]*\}', content or ""):
+        try:
+            obj = json.loads(m.group())
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        route, overall = obj.get("fix_route_decision"), obj.get("overall")
+        if route in VERDICT_FIX_ROUTES and overall in VERDICT_OVERALLS:
+            return {"fix_route_decision": route,
+                    "overall": overall,
+                    "qa_summary": str(obj.get("qa_summary", ""))[:500]}
+    return None
+
+
 def _get_definition_context(role_key: str = "", include_verdict_schema: bool = False) -> str:
     """构建定义层角色上下文。GATE3 时注入 verdict schema。"""
     prompt = DEFINITION_SYSTEM_PROMPT
     if include_verdict_schema:
-        prompt += "\n\n## GATE3 验收汇总 schema\n你必须输出:\n```json\n" + \
-            json.dumps(OBSERVER_VERDICT_SCHEMA["json_schema"]["schema"], ensure_ascii=False, indent=2) + \
-            "\n```"
+        prompt += verdict_schema_text()
     if role_key:
         role_prompt = _definition_role_prompt(role_key)
         if role_prompt:
@@ -155,6 +193,23 @@ def _any_project_at_gate3() -> bool:
     try:
         from singularity.scheduler.project import list_all, Phase
         return any(p.phase == Phase.GATE3 for p in list_all())
+    except Exception:
+        return False
+
+
+def project_at_gate3(project_id: str) -> bool:
+    """**这个**项目在不在 GATE3。
+
+    以前只有 `_any_project_at_gate3()`（全库扫），而且只在"没有 project_id"的旧路径用。
+    结果：主路径（带着 project_id 的那条）压根不注入 verdict schema ——
+    等于那份 schema 在真实用法里从来没被要求过。
+    """
+    if not project_id:
+        return False
+    try:
+        from singularity.scheduler.project import load, Phase
+        p = load(project_id)
+        return bool(p and p.phase == Phase.GATE3)
     except Exception:
         return False
 

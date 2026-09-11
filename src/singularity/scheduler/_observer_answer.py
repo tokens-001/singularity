@@ -12,6 +12,7 @@ from singularity.scheduler._observer_definition import (
     _get_observer_cfg, _build_status_context, DIRECT_SYSTEM_PROMPT,
     _detect_definition_intent, _any_project_at_gate3, _get_definition_context,
     _execute_observer_tool, _definition_role_prompt,
+    project_at_gate3, verdict_schema_text, parse_verdict_rollup,
 )
 from singularity.scheduler._observer_tools import OBSERVER_SYSTEM_PROMPT, OBSERVER_TOOLS
 
@@ -42,6 +43,38 @@ def _record_observer_usage(model: str, usage: dict | None) -> None:
 
 
 def _answer_question(question: str, project_id: str = "") -> str:
+    """对外入口。**只做一件事**：回答之后再试着把 GATE3 裁决存下来。
+
+    包一层而不是散在各个 `return` 里 —— 那些 return 有六七个，漏一个就是
+    "有时存有时不存"，而"有时"最难查。存不下也绝不能影响对话本身。
+    """
+    text = _answer_question_inner(question, project_id)
+    _persist_gate3_rollup(project_id, text)
+    return text
+
+
+def _persist_gate3_rollup(project_id: str, answer: str) -> None:
+    """项目在 GATE3 时，把观察者回复里的验收汇总落盘。**失败一律不影响对话。**
+
+    落盘位置跟 `.qa_report.json` 同族（`.observer_rollup.json`），
+    由 `workflow.handle_gate3_reject` 读 —— 它以前只读 qa_report。
+    """
+    if not project_id:
+        return
+    try:
+        if not project_at_gate3(project_id):
+            return
+        rollup = parse_verdict_rollup(answer)
+        if not rollup:
+            return          # 没产出 / 不合法 —— 什么都不写，调用方按"没有"处理
+        from singularity.scheduler.project import get_project_dir
+        path = get_project_dir(project_id) / "observer_rollup.json"
+        path.write_text(json.dumps(rollup, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        _log.warning("observer_rollup_persist_failed: %s", e)
+
+
+def _answer_question_inner(question: str, project_id: str = "") -> str:
     cfg = _get_observer_cfg()
     api_key = cfg.get("api_key", "")
     base_url = (cfg.get("base_url") or "").rstrip("/")
@@ -158,6 +191,14 @@ def _answer_question(question: str, project_id: str = "") -> str:
     else:
         system_prompt = OBSERVER_SYSTEM_PROMPT
         use_tools = True
+
+    # 项目在 GATE3 → 让它顺便产出验收汇总。**这份汇总现在真的驱动路由**
+    # （见 workflow.handle_gate3_reject）。以前只在"没有 project_id"的旧路径注入，
+    # 主路径压根不问 —— 那份 schema 在真实用法里等于白写。
+    _gate3_now = project_at_gate3(project_id) if project_id else _any_project_at_gate3()
+    if _gate3_now:
+        system_prompt += verdict_schema_text()
+
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": question},
