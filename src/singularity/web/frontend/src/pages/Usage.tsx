@@ -193,13 +193,12 @@ export default function Usage() {
           </div>
 
           {[
-            { title: '已使用', rows: models.filter((m: any) => m.used) },
-            { title: '未使用', rows: models.filter((m: any) => !m.used),
-              hint: '配了但一次没跑过' },
+            { title: '使用中', rows: models.filter((m: any) => m.used) },
+            { title: '未使用', rows: models.filter((m: any) => !m.used) },
           ].map(g => g.rows.length === 0 ? null : (
             <div key={g.title}>
               <div className="fs-10 text-muted" style={{ padding: '10px 10px 4px' }}>
-                {g.title}（{g.rows.length}）{g.hint ? ` —— ${g.hint}` : ''}
+                {g.title}（{g.rows.length}）
               </div>
               {g.rows.map(renderRow)}
             </div>

@@ -202,9 +202,8 @@ describe('用量页 — 配了但没用过的模型', () => {
     current = HISTORY_WITH_UNUSED            // 2 个用过 + 1 个没用过
     const el = await render(<Usage />)
     const text = el.textContent || ''
-    expect(text).toContain('已使用（2）')
+    expect(text).toContain('使用中（2）')
     expect(text).toContain('未使用（1）')
-    expect(text).toContain('配了但一次没跑过')
   })
 
   it('供应商欠费要露出来 —— 否则只知道"没用过"，不知道是欠费', async () => {
