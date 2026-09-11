@@ -61,8 +61,11 @@ class TestRouteLearnerNoLostUpdate:
 
 class TestTokenBudgetNoLostUpdate:
     def test_concurrent_record_keeps_every_entry(self, tmp_path, monkeypatch):
+        # 路径改成了**读时现算**的只读属性（防测试污染生产账本），不能再用
+        # `setattr(b, "_path", ...)` 硬塞 —— 改成换目录，构造完自然指向 tmp。
+        from singularity.scheduler import config
+        monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
         b = tb.TokenBudget()
-        monkeypatch.setattr(b, "_path", tmp_path / "token_usage.json")
 
         def work(i):
             b.record(project_id="p", project_name="P", task_id=f"t{i}",

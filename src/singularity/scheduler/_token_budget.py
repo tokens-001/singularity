@@ -120,13 +120,35 @@ class TokenBudget:
     """全局 token 预算管理器。"""
 
     def __init__(self):
-        self._path = config.QIDIAN_DIR / "token_usage.json"
-        self._history_path = config.QIDIAN_DIR / "usage_daily.json"
         self._daily: list[UsageRecord] = []
         self._days: dict[str, dict] = {}
         self._budget_daily: float = 0.0
         self._budget_monthly: float = 0.0
-        self._load()
+        self._dir: Path | None = None
+        self._sync_dir()
+
+    # 路径**读时现算**，不在 __init__ 里冻住。`_budget` 是模块级单例（见文件尾），
+    # 导入时就建好了 —— 冻住的话，测试进程里那个单例的路径早在 conftest 隔离
+    # `config.QIDIAN_DIR` **之前**就指向了**生产** `.qidian/`，于是测试造的数据会
+    # 写进真实账本（2026-09-11 实测：写进一条 model="test" / project="test-wf"）。
+    # 同族规矩见 docs/防御模式.md #34；内存模块与 route_learner 09-11 已改，
+    # 这里是漏掉的那一个。
+    @property
+    def _path(self) -> Path:
+        return config.QIDIAN_DIR / "token_usage.json"
+
+    @property
+    def _history_path(self) -> Path:
+        return config.QIDIAN_DIR / "usage_daily.json"
+
+    def _sync_dir(self) -> None:
+        """QIDIAN_DIR 变了就整个重新加载 —— 否则会把 A 目录的历史写进 B 目录。"""
+        d = config.QIDIAN_DIR
+        if self._dir != d:
+            self._dir = d
+            self._daily = []
+            self._days = {}
+            self._load()
 
     def _load(self):
         if self._path.exists():
@@ -217,6 +239,7 @@ class TokenBudget:
             tokens=tokens, ts=time.time() if ts is None else ts,
             elapsed_s=elapsed_s or 0.0,
         )
+        self._sync_dir()   # 目录被换过（测试隔离）就先切过去，别写错文件
         with _LOCK:
             self._daily.append(rec)
             # ⚠️ 三步的**顺序不能换**：
@@ -231,6 +254,7 @@ class TokenBudget:
         # 必须持锁: 本方法由 Flask 请求线程调用，而 record() 在调度线程 ——
         # 两者都在"读 _daily → 重写整份文件"，不加锁会互相盖掉（丢更新）。
         # 加上日存之后 _days 也归这把锁管，更不能裸奔。
+        self._sync_dir()
         with _LOCK:
             self._budget_daily = daily
             self._budget_monthly = monthly
