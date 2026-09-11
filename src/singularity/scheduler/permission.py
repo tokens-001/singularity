@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -209,3 +211,160 @@ def check_command(level: str, model: str, command: str) -> tuple[bool, str]:
         if blocked.lower() in cmd_lower:
             return False, f"命令被 profile {profile.name} 拦截: {blocked}"
     return True, ""
+
+
+# ── 工具级审批通道（2026-09-11）─────────────────────────────
+#
+# 在这之前 `require_approval` 是个**只播报不拦**的半成品：`_dispatch_skills`
+# 命中后只往 SSE 推一条"标记为需审批（当前不阻断，仅通知）"，然后照样放行；
+# `_api_tasks.task_approval` 也只是推条消息，**没有任何执行器读得到**。
+# 全仓没有"工具级审批"的落地通道，所以真拦下去就是死锁 —— 注释当时如实写了这点，
+# 现在把通道补上。
+#
+# 通道复用本仓库既有的**文件信号 + 轮询**范式（`_exec._check_paused` 用 PAUSE_DIR
+# 就是这么做的）：执行器写请求 → 轮询等决策 → 取走并清理。
+#
+# ⚠️ **绝不能死锁**：等待有上限，超时**按拒绝**处理（fail-closed）。
+# 上限必须小于 orchestrator 的任务超时阈值（900s），否则任务先被调度循环砍掉，
+# 而审批文件留在磁盘上没人清。
+
+# 审批等待上限（秒），可用 QIDIAN_APPROVAL_TIMEOUT 覆盖。
+APPROVAL_TIMEOUT_SEC = int(os.environ.get("QIDIAN_APPROVAL_TIMEOUT", "300"))
+
+# 决策值 → 是否放行
+_APPROVE = "approve"
+
+
+def _hold_path(task_id: str) -> Path:
+    """一个任务同一时刻只有一条待审请求（顺序执行，不需要队列）。
+
+    读和写都走这里，所以下面那层净化两边一致 —— 不会出现"写在 a、去 b 找"。
+    正常来源是 tracker 生成的纯数字 id（HTTP 侧另有 `^\\d{13,20}$` 校验），
+    但这是**把外部字符串拼进文件名**的地方，加一道底线不亏。
+    """
+    safe = str(task_id).replace("/", "").replace("\\", "").replace("..", "")
+    return config.HOLD_DIR / f"{safe}.json"
+
+
+def list_pending_approvals(now: float = None) -> list[dict]:
+    """所有**还没有人应答**的审批请求（供界面显示）。
+
+    **顺手收尸**：超过等待上限还没人清的条目，等待方早就已经超时返回了 ——
+    正常路径由 `request_approval` 的 finally 删掉，但**进程被 kill**（不是正常
+    收回线程）时 finally 不会执行，文件就留在盘上。不处理的话界面会永远挂着一条
+    幽灵审批：点它没反应、也不会自己消失。这个不是单测能发现的（单测里线程都正常
+    收尾），是真机探测时踩出来的。
+
+    宽限 30 秒是避免和"正在倒计时的那条"抢 —— 它可能刚好到点还没走到 finally。
+    """
+    out: list[dict] = []
+    d = config.HOLD_DIR
+    if not d.exists():
+        return out
+    now = time.time() if now is None else now
+    stale_before = now - (APPROVAL_TIMEOUT_SEC + 30)
+    for p in sorted(d.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue                      # 坏文件跳过，别让整个列表挂掉
+        if data.get("decision"):
+            continue                      # 已答，等待方马上取走
+        req_at = data.get("requested_at") or 0
+        # **只在能确凿判定过期时才收**：没有 requested_at 就无从判断，宁可多显示一条
+        # 也不能误删活着的请求 —— 删了会让等待方看到"文件消失"而按拒绝处理，
+        # 那比界面上挂个幽灵横幅严重得多。
+        if req_at and req_at < stale_before:
+            try:
+                p.unlink(missing_ok=True)
+            except Exception:
+                pass
+            continue
+        out.append(data)
+    return out
+
+
+def decide_approval(task_id: str, decision: str) -> bool:
+    """人工决策落盘。返回**是否真的找到**一条待审请求。
+
+    返回 False 很重要：界面据此告诉用户"这条已经不在了"，
+    而不是默默显示成功（那会让人以为自己拦住了什么）。
+    """
+    p = _hold_path(task_id)
+    if not p.exists():
+        return False
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if data.get("decision"):
+        return False                      # 已经答过了
+    data["decision"] = _APPROVE if decision == _APPROVE else "reject"
+    data["decided_at"] = time.time()
+    try:
+        from ._io import atomic_write_json
+        atomic_write_json(p, data)
+    except Exception as e:
+        witness.warn("permission", f"decide_approval:{type(e).__name__}:{e}"[:120])
+        return False
+    return True
+
+
+def _preview(args) -> str:
+    """参数摘要，别把整个文件内容塞进待审列表。"""
+    try:
+        s = json.dumps(args, ensure_ascii=False)
+    except Exception:
+        s = str(args)
+    return s[:200]
+
+
+def request_approval(task_id: str, level: str, model: str, tool_name: str,
+                     args=None, on_event=None, timeout: int = None) -> tuple[bool, str]:
+    """工具级审批：写请求 → 轮询等人工决策 → 超时按拒绝。返回 (allowed, reason)。
+
+    **阻塞**（调用方是执行器 worker 线程，和 `_check_paused` 一样占着这个 worker）。
+    **任何异常都按拒绝返回** —— 这是个门禁，失败方向必须是"不放行"，
+    但原因要说清，否则用户只看到工具被拒却不知道为什么。
+    """
+    limit = APPROVAL_TIMEOUT_SEC if timeout is None else timeout
+    path = _hold_path(task_id)
+    try:
+        config.ensure_dirs()
+        try:
+            from ._io import atomic_write_json
+            atomic_write_json(path, {
+                "task_id": task_id, "level": level, "model": model,
+                "tool": tool_name, "args_preview": _preview(args),
+                "requested_at": time.time(), "decision": None,
+            })
+        except Exception as e:
+            return False, f"审批请求写盘失败({type(e).__name__}) → 按拒绝处理"
+        if on_event:
+            try:
+                on_event(tool_name, task_id)
+            except Exception:
+                pass                      # 通知失败不影响审批本身
+        deadline = time.time() + max(1, limit)
+        while time.time() < deadline:
+            time.sleep(1)
+            if not path.exists():
+                # 被删了（任务删除 / 人工清理）→ 明确拒绝，别傻等到超时
+                return False, "审批请求已被移除（任务可能已删除）→ 按拒绝处理"
+            try:
+                cur = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue                  # 正在原子写，下一轮再读
+            if cur.get("decision"):
+                if cur["decision"] == _APPROVE:
+                    return True, ""
+                return False, f"人工拒绝: {tool_name}"
+        return False, f"审批超时（{limit}s 无人应答）→ 按拒绝处理"
+    except Exception as e:
+        witness.warn("permission", f"approval_channel:{type(e).__name__}:{e}"[:120])
+        return False, f"审批通道异常({type(e).__name__}) → 按拒绝处理"
+    finally:
+        try:
+            path.unlink(missing_ok=True)   # 答完/超时都清掉，别留垃圾
+        except Exception:
+            pass

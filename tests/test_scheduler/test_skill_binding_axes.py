@@ -5,8 +5,11 @@
   · fallback 链更糟：主力挂了退到链上第 2 个，技能跟着换人 —— 同一个任务
     这次有工具、下次没有，**能力取决于运行时故障模式**。
 
-**顺序是「模型级优先、阶段级兜底」，刻意的向后兼容**：没配阶段级时逐字节
-等于旧行为。反过来的话，用户现有绑在模型上的技能会当场失效。
+**顺序是「阶段级优先、模型级兜底」**（2026-09-11 看真实数据后定的）：本机六个模型
+绑的是**完全相同**的 5 个技能 —— 那不是"每个模型会什么"，是在用"按模型的界面"表达
+"大家都该会这些"。若模型级优先，每个模型都有自己的绑定 ⇒ **阶段配置一个都不生效**，
+得先手工清六条才有用；阶段级优先则能**渐进采用**（只配 executing，其余阶段照旧）。
+代价：阶段配了之后模型级插不上话，所以前端要标出被覆盖的条目，避免静默失效。
 
 另外这个文件钉住一个路径隔离 bug：`skill_loader` 曾经把 `_QIDIAN_DIR` 算在
 **模块级**（导入时定死），而 `config.QIDIAN_DIR` 是运行时可改的 ——
@@ -33,13 +36,24 @@ def _read(path):
 
 
 class TestTwoAxes:
-    def test_model_axis_wins_when_present(self, custom_file):
+    def test_phase_axis_wins_when_present(self, custom_file):
+        """阶段配了就用阶段 —— 否则"按阶段区分技能"这个新能力根本不生效。
+
+        本机六个模型绑的是完全相同的一组技能，所以模型级优先等于每个模型都
+        "有自己的意见"，阶段配置一个都落不了地。
+        """
         sl.set_agent_skills("any", "modelA", ["model-skill"])
         sl.set_agent_skills("any", "", ["phase-skill"], phase="executing")
-        assert sl.get_agent_skills("any", "modelA", "executing") == ["model-skill"]
+        assert sl.get_agent_skills("any", "modelA", "executing") == ["phase-skill"]
 
-    def test_phase_axis_used_when_model_has_no_binding(self, custom_file):
-        """换模型不丢技能 —— 这正是加阶段轴要解决的问题。"""
+    def test_model_axis_used_when_phase_not_configured(self, custom_file):
+        """该阶段没配 → 回落到模型级（渐进采用：只配 executing，其余照旧）。"""
+        sl.set_agent_skills("any", "modelA", ["model-skill"])
+        sl.set_agent_skills("any", "", ["phase-skill"], phase="executing")
+        assert sl.get_agent_skills("any", "modelA", "planning") == ["model-skill"]
+
+    def test_phase_covers_models_without_own_binding(self, custom_file):
+        """换模型不丢技能 —— 这是加阶段轴要解决的问题。"""
         sl.set_agent_skills("any", "", ["phase-skill"], phase="executing")
         assert sl.get_agent_skills("any", "modelB", "executing") == ["phase-skill"]
 
@@ -47,16 +61,28 @@ class TestTwoAxes:
         assert sl.get_agent_skills("any", "modelB", "executing") == []
 
     def test_no_phase_arg_is_old_behaviour(self, custom_file):
-        """不传 phase（老调用点）时，行为与改之前逐字节一致。"""
+        """不传 phase（老调用点）时，行为与加阶段轴之前逐字节一致。"""
         sl.set_agent_skills("any", "modelA", ["s1"])
         assert sl.get_agent_skills("any", "modelA") == ["s1"]
         assert sl.get_agent_skills("any", "modelB") == []
 
     def test_writing_phase_does_not_clobber_model(self, custom_file):
+        """两条轴在文件里各存各的 —— 切换优先序是读时的事，不该动数据。
+
+        这点很重要：模型级被覆盖后**条目还在**，改回来（清掉那个阶段）就恢复。
+        """
         sl.set_agent_skills("any", "modelA", ["model-skill"])
         sl.set_agent_skills("any", "", ["phase-skill"], phase="planning")
         data = _read(custom_file)["_skills"]["any"]
         assert data["modelA"] == ["model-skill"] and data["planning"] == ["phase-skill"]
+
+    def test_clearing_phase_restores_model_binding(self, custom_file):
+        """清掉阶段 → 模型级立刻重新生效（可逆，不需要动模型那条）。"""
+        sl.set_agent_skills("any", "modelA", ["model-skill"])
+        sl.set_agent_skills("any", "", ["phase-skill"], phase="executing")
+        assert sl.get_agent_skills("any", "modelA", "executing") == ["phase-skill"]
+        sl.set_agent_skills("any", "", [], phase="executing")
+        assert sl.get_agent_skills("any", "modelA", "executing") == ["model-skill"]
 
     def test_empty_list_deletes_key(self, custom_file):
         """空列表 = 删键 —— 留 `[]` 会让"清空后回落到另一条轴"回不去。"""

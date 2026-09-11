@@ -402,11 +402,24 @@ def task_retry(task_id: str) -> tuple[dict, int]:
     return {"ok": True, "new_status": "pending"}, 200
 
 
-def task_approval(task_id: str, decision: str = "reject", action: str = "", push_event=None) -> tuple[dict, int]:
-    """POST /api/tasks/<id>/approval"""
+def task_approval(task_id: str, decision: str = "reject", action: str = "",
+                  push_event=None) -> tuple[dict, int]:
+    """POST /api/tasks/<id>/approval —— 人对**工具级审批请求**的答复。
+
+    以前这里只推一条 SSE 就返回，**没有任何执行器读得到它** ——
+    `require_approval` 因此是个只播报不拦的半成品（见 permission.py 的通道说明）。
+    现在真正落盘，卡在 `permission.request_approval` 里轮询的那个 worker 会取走。
+
+    返回里的 `found` 是**真的找到一条待审请求**没有。界面上点一个已经失效的
+    审批（超时了 / 任务被删了）要说清"没找到"，不能一律回 ok 让人以为拦住了。
+    """
+    from .permission import decide_approval
+    found = decide_approval(task_id, decision)
     if push_event:
-        push_event("system", f"[{task_id[:8]}] 用户{decision}了 {action}")
-    return {"ok": True, "decision": decision}, 200
+        push_event("system",
+                   f"[{task_id[:8]}] 用户{decision}了 {action}"
+                   + ("" if found else "（没有待审的请求，未生效）"))
+    return {"ok": found, "found": found, "decision": decision}, 200
 
 
 def task_apply(task_id: str, push_event=None) -> tuple[dict, int]:

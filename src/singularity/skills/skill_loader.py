@@ -268,18 +268,27 @@ def delete_user_skill(name: str) -> bool:
 
 
 def get_agent_skills(agent_level: str, agent_model: str, phase: str = "") -> list[str]:
-    """从 agents_custom.json 读取 agent 绑定的 skill 列表。**两条轴，模型级优先。**
+    """从 agents_custom.json 读取 agent 绑定的 skill 列表。**两条轴，阶段级优先。**
 
-        _skills[level][model]   ← 优先级高：模型专属例外（某工具只有个别模型支持）
-        _skills[level][phase]   ← 兜底：跟岗位走
+        _skills[level][phase]   ← 优先级高：技能跟着**岗位**走（常规）
+        _skills[level][model]   ← 兜底：该阶段没配时才用（兼容旧数据 / 按模型绑）
 
     为什么要有阶段轴：技能原来只绑 `(level, model)`，于是
       · 换 `phase_models.json` 的模型 → 技能**静默消失**；
       · fallback 链更糟：主力挂了退到链上第 2 个，技能跟着换人 ——
         **同一个任务这次有工具、下次没有**，能力取决于运行时故障模式。
 
-    模型级优先是刻意的**向后兼容**：没配阶段级时，逐字节等于旧行为。
-    想用阶段级，把模型级那条清掉即可（或一开始就不配模型级）。
+    **为什么阶段级优先而不是模型级**（2026-09-11 定的，看真实数据后改的口）：
+    本机六个模型绑的是**完全相同**的 5 个技能 —— 那不是"每个模型会什么"的表达，
+    是在用"按模型的界面"表达"大家都该会这些"。若模型级优先，则每个模型都有自己的
+    绑定 ⇒ **阶段配置一个都不生效**，得先手工清六条才有用；而阶段级优先能**渐进
+    采用**：只配 `executing`，其余阶段照旧走模型绑定。
+
+    代价如实说：阶段配了之后，模型级就插不上话 —— "某个模型跟别人不一样"这条路
+    在当前公式下走不通（要它就先别配那个阶段）。前端把被覆盖的模型条目标出来，
+    免得变成新的静默失效。
+
+    传 `phase=""`（老调用点）时行为与加阶段轴之前逐字节一致。
     """
     custom_file = _qidian_dir() / "agents_custom.json"
     if not custom_file.exists():
@@ -288,9 +297,9 @@ def get_agent_skills(agent_level: str, agent_model: str, phase: str = "") -> lis
         import json
         data = json.loads(custom_file.read_text(encoding="utf-8"))
         level_skills = (data.get("_skills", {}) or {}).get(agent_level, {}) or {}
-        if agent_model and agent_model in level_skills:
-            return level_skills.get(agent_model) or []
-        return level_skills.get(phase, []) if phase else []
+        if phase and phase in level_skills:
+            return level_skills.get(phase) or []
+        return (level_skills.get(agent_model) or []) if agent_model else []
     except Exception:
         return []
 
@@ -299,7 +308,7 @@ def set_agent_skills(agent_level: str, agent_model: str, skill_names: list[str],
                      phase: str = "") -> None:
     """设置 agent 绑定的 skill 列表，写入 agents_custom.json。
 
-    给 `agent_model` 就写模型轴（模型级例外）；给 `phase` 就写阶段轴（跟岗位走）。
+    给 `agent_model` 就写模型轴；给 `phase` 就写阶段轴（**优先**，见 get_agent_skills）。
     两个都空 → 什么都不写（别造出一个没有键名的条目）。
     传空列表 = 删键，别留 `[]` —— 留空数组会让"恢复默认（回落到另一条轴）"回不去。
     """

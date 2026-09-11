@@ -94,6 +94,14 @@ export const api = {
   updatePhaseSkills: (phase: string, skills: string[]) =>
     request('/api/agent-skills/any',{method:'PUT',body:JSON.stringify({phase, skill_names: skills})}),
 
+  // 工具级审批：还等着人应答的请求 / 答复某一条。
+  // 答复返回的 `ok` 是**真找到一条待审请求**没有 —— 超时了或任务被删了都会 false，
+  // 界面要说清"没找到"，不能一律当成功（那会让人以为自己拦住了什么）。
+  approvals: () => request<any>('/api/approvals'),
+  decideApproval: (taskId: string, decision: 'approve' | 'reject') =>
+    request<any>(`/api/tasks/${taskId}/approval`,{method:'POST',
+      body:JSON.stringify({decision, action:'审批请求'})}),
+
   fusionConfig: () => request<any>('/api/fusion/config'),
   updateFusionConfig: (data: any) => request('/api/fusion/config',{method:'PUT',body:JSON.stringify(data)}),
 

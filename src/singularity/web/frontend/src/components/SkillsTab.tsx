@@ -85,7 +85,8 @@ export default function SkillsTab() {
       <div className="fs-10 text-muted" style={{ marginBottom: 8 }}>
         技能 = <b>会什么</b>（能力）；角色 = 这个阶段<b>该干什么</b>（职责，见「角色」页）。
         提示词类约束请做成角色，技能只用来加真工具。<br/>
-        <b>阶段默认</b>跟岗位走（换模型不丢）；下面按模型的绑定是<b>例外</b>，会覆盖阶段默认。
+        <b>阶段默认优先</b>：某阶段配了就用它，没配才回落到下面按模型的那份。
+        清空某个阶段即可让它恢复走模型绑定。
       </div>
       {showForm && (
         <div className="flex-center gap-6 flex-wrap" style={{ marginBottom: 8, padding: 8, background: 'var(--bg-secondary)', borderRadius: 'var(--radius)' }}>
@@ -126,6 +127,12 @@ export default function SkillsTab() {
           </div>
           {agents.map(a => {
             const bound = matrix[a.model]||[]
+            // 阶段默认优先：配了非空名单的阶段，这份模型绑定在那几个阶段**不生效**。
+            // 不标出来就是新的静默失效 —— 界面看着绑了，跑起来用的是阶段那份。
+            const shadowed = PHASES.filter(([k]) => (phaseMatrix[k]||[]).length > 0)
+            const shadowText = shadowed.length === 0 ? ''
+              : shadowed.length === PHASES.length ? '已全部被阶段默认覆盖 —— 这份只在阶段留空时才用'
+              : `在「${shadowed.map(([,l])=>l).join('、')}」被阶段默认覆盖`
             return (
               <div key={a.model} style={{ marginBottom: 10, padding: '10px 12px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius)' }}>
                 <div className="flex-center" style={{ marginBottom: 8 }}>
@@ -133,6 +140,11 @@ export default function SkillsTab() {
                   <span className="fs-10 text-secondary">{bound.length}/{skills.length} 技能</span>
                   <button onClick={() => assignAll(a.model)} className="btn-sm" style={{ marginLeft: 8 }}>全选</button>
                 </div>
+                {shadowText && (
+                  <div className="fs-10" style={{ marginBottom: 6, color: 'var(--warning, #d48806)' }}>
+                    ⚠ {shadowText}
+                  </div>
+                )}
                 <div className="flex-center gap-6 flex-wrap">
                   {skills.map(s => {
                     const has = bound.includes(s.name)

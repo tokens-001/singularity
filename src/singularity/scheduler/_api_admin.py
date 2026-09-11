@@ -343,6 +343,13 @@ def agent_skill_update(level, model="", skill_names=None, phase=""):
     return {"ok": True}, 200
 
 
+def approvals_list():
+    """GET /api/approvals —— 还等着人应答的工具级审批请求。"""
+    from .permission import list_pending_approvals, APPROVAL_TIMEOUT_SEC
+    return {"approvals": list_pending_approvals(),
+            "timeout_sec": APPROVAL_TIMEOUT_SEC}, 200
+
+
 def perm_profiles():
     from .permission import get_store; return {"profiles": get_store().list_profiles()}, 200
 

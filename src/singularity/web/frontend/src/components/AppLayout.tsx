@@ -33,6 +33,8 @@ export default function AppLayout() {
   const sidebarWidth = sidebarCollapsed ? 0 : 260
   const [loopRunning, setLoopRunning] = useState(false)
   const [conflicts, setConflicts] = useState<any[]>([])
+  const [approvals, setApprovals] = useState<any[]>([])
+  const [approvalTimeout, setApprovalTimeout] = useState(300)
 
   const sseAlive = useSSEConnected()
 
@@ -63,6 +65,31 @@ export default function AppLayout() {
     }
     f(); const t = setInterval(f, 30000); return () => clearInterval(t)
   }, [])
+
+  // 工具级审批：执行器**卡在**等这条答复上（超时按拒绝），所以这里要快。
+  // SSE 有 approval 事件就走事件；断了退回 5s 轮询 —— 30s 那种间隔对审批太慢，
+  // 用户会以为任务死了。
+  const loadApprovals = async () => {
+    try {
+      const d: any = await api.approvals()
+      setApprovals(d?.approvals || [])
+      if (d?.timeout_sec) setApprovalTimeout(d.timeout_sec)
+    } catch { /* 拉不到就保持原样，别把横幅闪没 */ }
+  }
+  useEffect(() => {
+    loadApprovals()
+    if (sseAlive) return
+    const t = setInterval(loadApprovals, 5000); return () => clearInterval(t)
+  }, [sseAlive])
+  useSSE(loadApprovals, { kinds: ['approval', 'system', 'task'], debounceMs: 300 })
+
+  const decide = async (tid: string, decision: 'approve' | 'reject') => {
+    try {
+      const r: any = await api.decideApproval(tid, decision)
+      if (!r?.ok) addToast('该审批请求已失效（超时或任务已删）', 'error')
+    } catch { addToast('审批提交失败', 'error') }
+    loadApprovals()
+  }
 
   const selectProject = (pid: string) => { setActiveProject(pid); navigate('/') }
 
@@ -141,6 +168,24 @@ export default function AppLayout() {
       )}
 
       <main className="main-area">
+        {/* 工具级审批横幅：执行器**正卡在**这里等人答复，不点就一直等到超时（按拒绝）。
+            放在 layout 而不是某个页面 —— 审批不该取决于用户当时在哪个 Tab。 */}
+        {approvals.length > 0 && (
+          <div style={{ padding: '8px 14px', background: '#fffbeb', borderBottom: '1px solid #fde68a' }}>
+            {approvals.map((a: any) => (
+              <div key={a.task_id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '2px 0' }}>
+                <span style={{ color: '#b45309', fontWeight: 600 }}>⚠ 等待审批</span>
+                <span className="truncate" style={{ flex: 1, color: '#6b6b68' }}
+                  title={a.args_preview || ''}>
+                  <b>{a.tool}</b> · {a.model} · 任务 {String(a.task_id).slice(0, 8)}
+                  {' '}（{approvalTimeout}s 内不答复按拒绝）
+                </span>
+                <button className="btn-sm" onClick={() => decide(a.task_id, 'approve')}>批准</button>
+                <button className="btn-sm" onClick={() => decide(a.task_id, 'reject')}>拒绝</button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="main-scroll"><Outlet /></div>
       </main>
     </div>

@@ -154,16 +154,23 @@ def _make_permission_checker() -> callable:
                 if not ok:
                     return False, reason
             if needs_approval(agent_level, agent_model, tool_name):
-                # `require_approval` 目前**只播报不拦**（下面照样 return True）。
-                # 真正生效的只有 blocked_tools/paths/commands。这不是遗漏不遗漏的问题 ——
-                # 全仓没有任何"工具级审批"的落地通道（api_task_approval 是空壳），
-                # 真拦下去就是死锁。所以这里如实说清"没拦"，别让人看审计流时误以为拦住了。
-                try:
-                    _pending_sse_events.append({"kind": "approval",
-                        "msg": f"[{task_id[:8]}] {tool_name} 标记为需审批（当前不阻断，仅通知）",
-                        "ts": time.time(), "task_id": task_id})
-                except Exception as e:
-                    witness.warn('dispatcher', f'{e}')
+                # 工具级审批：真挂起，等人应答（2026-09-11 接上的通道）。
+                # 以前这里只推一条 SSE 就照样 return True —— 界面看着"拦住了"，
+                # 实际什么都没拦，而全仓也没有任何地方能让人答复。
+                from .permission import request_approval
+
+                def _notify(_tool, _tid):
+                    _pending_sse_events.append({
+                        "kind": "approval",
+                        "msg": f"[{_tid[:8]}] {_tool} 等待人工审批",
+                        "ts": time.time(), "task_id": _tid,
+                    })
+
+                ok, why = request_approval(
+                    task_id=task_id, level=agent_level, model=agent_model,
+                    tool_name=tool_name, args=args, on_event=_notify)
+                if not ok:
+                    return False, why
             return True, ""
         return _check
     except Exception:

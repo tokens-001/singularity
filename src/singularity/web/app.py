@@ -1859,6 +1859,12 @@ def api_agent_skills_by_phase(level):
 # 权限管理
 # ═══════════════════════════════════════════════════════════
 
+@app.route("/api/approvals")
+def api_approvals():
+    """还等着人应答的工具级审批请求（配合 POST /api/tasks/<id>/approval 使用）。"""
+    data, code = _api_handler.approvals_list()
+    return jsonify(data), code
+
 @app.route("/api/permissions/profiles")
 def api_perm_profiles():
     data, code = _api_handler.perm_profiles()
