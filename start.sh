@@ -21,14 +21,22 @@ EOF
 fi
 
 # 检查 Python
-PYTHON=$(which python3 || which python)
+# ⚠️ 优先用 .venv，别用裸 python3。
+# homebrew 的 python3 装了 flask 但**没装 singularity**，而下面的自检只查 `import flask`
+# → 通过 → 跳过 pip install → 最后 `exec python3 -m singularity.web.app` 必崩
+# （2026-09-12 实测：ModuleNotFoundError: No module named 'singularity'）。
+if [ -x "$(pwd)/.venv/bin/python" ]; then
+  PYTHON="$(pwd)/.venv/bin/python"
+else
+  PYTHON=$(which python3 || which python)
+fi
 if [ -z "$PYTHON" ]; then
   echo "❌ 未找到 Python 3"
   exit 1
 fi
 
-# 检查依赖
-if ! $PYTHON -c "import flask" 2>/dev/null; then
+# 检查依赖 —— 两个都查：只查 flask 会漏掉"解释器里没有本包"这种崩法
+if ! $PYTHON -c "import flask, singularity" 2>/dev/null; then
   echo "安装依赖..."
   $PYTHON -m pip install -e . --break-system-packages
 fi

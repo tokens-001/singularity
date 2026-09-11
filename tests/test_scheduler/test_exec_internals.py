@@ -12,8 +12,88 @@ from singularity.scheduler._exec import (
     _build_effective_task,
     _check_cancelled,
     _decide_cascade,
+    _premium_first,
 )
 from singularity.scheduler._types import RunContext, BatchOutput
+
+
+# ═══════════════════════════════════════════════════════════════
+# force_premium 重排（2026-09-12 补）
+#
+# 三个"重排点"里唯一**既没测试也没 docs** 的一个（另两个有 test_phase_models_wiring
+# / test_router 钉着）。这里钉的是**两道闸门**，不是"哪个模型更贵"：
+#   ① 重试次数不到阈值 → 不动
+#   ② 用户点名了名单 → 不动
+# ═══════════════════════════════════════════════════════════════
+
+def _chain(*models):
+    return [{"model": m} for m in models]
+
+
+# 价目表打桩：测试**不该依赖用户那份会改的 `model_prices.json`**
+# （它读 config.QIDIAN_DIR，测试环境里本来是空的）。
+_FAKE_PRICES = {"贵-2.0": 2.0, "中-0.92": 0.92, "便宜-0.48": 0.48}
+
+
+@pytest.fixture
+def fake_prices(monkeypatch):
+    import singularity.scheduler.model_prices as mp
+    monkeypatch.setattr(mp, "load_prices", lambda: dict(_FAKE_PRICES))
+    return _FAKE_PRICES
+
+
+class TestPremiumFirst:
+    def test_重试到阈值才重排(self, fake_prices):
+        c = _chain("便宜-0.48", "中-0.92")
+        assert [a["model"] for a in _premium_first(c, True, False)] == ["中-0.92", "便宜-0.48"]
+        assert [a["model"] for a in _premium_first(c, False, False)] == ["便宜-0.48", "中-0.92"]
+
+    def test_受限时不重排(self, fake_prices):
+        """用户点名了主力 —— 不该因为"重试过两次"被悄悄换掉。"""
+        c = _chain("便宜-0.48", "中-0.92")
+        assert [a["model"] for a in _premium_first(c, True, True)] == ["便宜-0.48", "中-0.92"]
+
+    def test_空链不炸(self, fake_prices):
+        assert _premium_first([], True, False) == []
+
+    def test_只改顺序不改成员(self, fake_prices):
+        c = _chain("便宜-0.48", "贵-2.0", "中-0.92")
+        out = _premium_first(c, True, False)
+        assert sorted(a["model"] for a in out) == sorted(a["model"] for a in c)
+        assert [a["model"] for a in out] == ["贵-2.0", "中-0.92", "便宜-0.48"]
+
+    def test_按价格排_不是按名字排(self, monkeypatch):
+        """**回归**：这条是当初那个缺陷的反证。
+
+        以前按**模型名子串**判 premium（含 "glm"/"opus" 就算）。价目表里最便宜的
+        `glm-5.3-flash`(0.25) 名字带 "glm"，重试时会被提到 `deepseek-v4-pro`(1.848) 前面。
+        现在读实价 —— 名字里带什么都不影响。
+        """
+        import singularity.scheduler.model_prices as mp
+        monkeypatch.setattr(mp, "load_prices",
+                            lambda: {"glm-5.3-flash": 0.25, "deepseek-v4-pro": 1.848})
+        out = _premium_first(_chain("glm-5.3-flash", "deepseek-v4-pro"), True, False)
+        assert [a["model"] for a in out] == ["deepseek-v4-pro", "glm-5.3-flash"]
+
+    def test_没配价的排最后(self, fake_prices):
+        """不知道贵不贵 → 不优先（但也不丢掉）。"""
+        out = _premium_first(_chain("没配过价的模型", "中-0.92"), True, False)
+        assert [a["model"] for a in out] == ["中-0.92", "没配过价的模型"]
+
+    def test_同价保持原顺序(self, monkeypatch):
+        import singularity.scheduler.model_prices as mp
+        monkeypatch.setattr(mp, "load_prices", lambda: {"a": 1.0, "b": 1.0, "c": 1.0})
+        c = _chain("a", "b", "c")
+        assert [x["model"] for x in _premium_first(c, True, False)] == ["a", "b", "c"]
+
+    def test_读不到价目表就保持原样(self, monkeypatch):
+        """读价失败不能把执行拖挂 —— 原顺序返回，什么都不动。"""
+        import singularity.scheduler.model_prices as mp
+        def _boom():
+            raise OSError("价目表读不到")
+        monkeypatch.setattr(mp, "load_prices", _boom)
+        c = _chain("a", "b", "c")
+        assert [x["model"] for x in _premium_first(c, True, False)] == ["a", "b", "c"]
 
 
 # ═══════════════════════════════════════════════════════════════

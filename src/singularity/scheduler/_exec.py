@@ -250,6 +250,33 @@ def _decide_cascade(task, level, turn, validation, disp_result, all_tool_events,
     ))
 
 
+def _premium_first(chain: list, force: bool, restricted: bool) -> list:
+    """重试多次时按**价格从高到低**重排 —— 恢复时先试贵的。
+
+    ``restricted`` = 用户点名了主力名单 —— 那就不动：主力不该因为"重试过两次"
+    被悄悄换掉（同 `restrict_to_lineup` 的其余用法）。
+
+    2026-09-12 改：以前是**按模型名子串**判 premium（含 `glm`/`opus` 就算）。那是个坏代理，
+    而且坏得很具体 —— 价目表里**最便宜的** `glm-5.3-flash`(0.25 $/M) 名字带 "glm"
+    会在重试时被提到最前，而 `deepseek-v4-pro`(1.848) 提不上来。现在读 `model_prices.json`
+    的实价（那本来就是单价唯一真相源，见 [[qidian-model-pricing]]）。
+    """
+    if not (force and chain and not restricted):
+        return chain
+    try:
+        from . import model_prices
+        prices = model_prices.load_prices()
+    except Exception:
+        return chain        # 读不到价 → 保持原顺序，别瞎排
+
+    def _key(a):
+        p = prices.get(str(a.get("model", "")))
+        # 没配价的排**最后**（不知道贵不贵 → 不优先）；同价保持原顺序（sorted 稳定）
+        return -(p if isinstance(p, (int, float)) else float("-inf"))
+
+    return sorted(chain, key=_key)
+
+
 @timed(name="executor")
 def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     """纯执行: dispatch + validate, 返回 BatchOutput。
@@ -313,12 +340,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     fallback_chain = disp_mod.pick_agent_fallback_chain(
         agents, level, fallback_levels=["any"],
         project_lineup=exec_lineup, restrict_to_lineup=exec_restrict)
-    if force_premium and fallback_chain and not exec_restrict:
-        # 受限时跳过：用户点名的主力不该因为"重试过两次"被换成别的
-        # 把 premium 模型移到最前面 (model 名含 glm 或 opus)
-        premium = [a for a in fallback_chain if any(p in a.get('model','').lower() for p in ('glm','opus'))]
-        cheap = [a for a in fallback_chain if a not in premium]
-        fallback_chain = premium + cheap
+    fallback_chain = _premium_first(fallback_chain, force_premium, exec_restrict)
     tried_models: set[str] = set()
 
     # 修复 #1: 项目任务写进项目独立 repo, 独立任务写奇点仓库

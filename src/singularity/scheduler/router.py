@@ -43,6 +43,49 @@ core.py, tokenizer.py, graph.py, search.py, config.py
 只输出JSON,别说话:
 {"type": "bugfix|feature|refactor|docs|default", "gate": true|false, "signals": ["命中关键词1"]}"""
 
+# 分类器**只该**吐这五个值（上面 prompt 里写死的）。**必须校验**：
+# 以前是 `parsed.get("type", "default")` —— 模型吐个别的写法（"bugFix"、"修复"）
+# 会被**原样存下**，下游 `validator._annotate_unverified` 按字面比 `== "bugfix"` 就全不命中，
+# 那三条"未验证"标注**静默消失且不报错**。这就是本仓最典型的那种坏法
+# （防御模式 §44：承诺类字段的"没发生"必须能被查出来，不能是悄悄少做一件事）。
+_VALID_TASK_TYPES = frozenset({"bugfix", "feature", "refactor", "docs", "default"})
+
+
+def _parse_classify_reply(content: str) -> RouteResult:
+    """把分类器的回复解析成 RouteResult。
+
+    抽成纯函数是为了**能直接测**：这段以前一行测试都没有，而它的坏法是静默的
+    （错值原样存下 → 下游按字面比不中 → 少做几件事，不报错）。
+    """
+    import re
+    m = re.search(r'\{[^}]+\}', content or "")
+    if not m:
+        return RouteResult(task_type="default")
+    parsed = json.loads(m.group())
+    if not isinstance(parsed, dict):
+        return RouteResult(task_type="default")
+
+    raw_type = parsed.get("type", "default")
+    # 先判 str 再判成员 —— `in frozenset` 遇到 list/dict 会抛 TypeError
+    # （模型偶尔会吐 `"type": ["bugfix"]` 这种）。这里必须自己挡住：
+    # 靠外层 `except Exception` 兜底的话，整条分类结果都会被丢成 RouteResult()，
+    # 连模型明确给的 gate/signals 一起没了。
+    if not isinstance(raw_type, str) or raw_type not in _VALID_TASK_TYPES:
+        # 落一条告警再回退 —— 回退本身是对的，但"悄悄回退"会让
+        # "分类器老吐怪值"这件事永远没人知道。可查 > 干净。
+        try:
+            from singularity.scheduler import witness
+            witness.warn("router", f"invalid_task_type:{raw_type!r} → default"[:200])
+        except Exception:
+            pass
+        raw_type = "default"
+
+    return RouteResult(
+        task_type=raw_type,
+        gate_required=parsed.get("gate", False),
+        matched_signals=parsed.get("signals", []),
+    )
+
 
 def _llm_classify(task: str) -> RouteResult:
     """用 LLM 分类任务类型。失败时回退 default。"""
@@ -112,19 +155,7 @@ def _llm_classify(task: str) -> RouteResult:
         except Exception:
             pass          # 记账失败不能影响分类
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
-
-        # 提取 JSON
-        import re
-        m = re.search(r'\{[^}]+\}', content)
-        if m:
-            parsed = json.loads(m.group())
-            result = RouteResult(
-                task_type=parsed.get("type", "default"),
-                gate_required=parsed.get("gate", False),
-                matched_signals=parsed.get("signals", []),
-            )
-        else:
-            result = RouteResult(task_type="default")
+        result = _parse_classify_reply(content)
     except Exception:
         result = RouteResult()
 

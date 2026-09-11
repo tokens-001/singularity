@@ -1,6 +1,45 @@
 """Router tests — 两档后只测 task_type 检测, 不测层级。"""
-from singularity.scheduler.router import route
+from singularity.scheduler.router import route, _parse_classify_reply, _VALID_TASK_TYPES
 from singularity.scheduler import dispatcher
+
+
+class TestClassifyReplyValidation:
+    """分类器回复的**类型校验**（2026-09-12 补）。
+
+    以前是 `parsed.get("type", "default")` —— 模型吐个别的写法会被**原样存下**，
+    下游 `validator._annotate_unverified` 按字面比 `== "bugfix"` 就全不命中，
+    那三条"未验证"标注静默消失。这是本仓最典型的那种坏法。
+    """
+
+    def test_合法值原样通过(self):
+        for t in _VALID_TASK_TYPES:
+            assert _parse_classify_reply(f'{{"type": "{t}"}}').task_type == t
+
+    def test_大小写错要回退(self):
+        assert _parse_classify_reply('{"type": "bugFix"}').task_type == "default"
+
+    def test_中文值要回退(self):
+        assert _parse_classify_reply('{"type": "修复"}').task_type == "default"
+
+    def test_缺type走默认(self):
+        assert _parse_classify_reply('{"gate": true}').task_type == "default"
+
+    def test_没有JSON走默认(self):
+        assert _parse_classify_reply("模型今天不想输出 JSON").task_type == "default"
+
+    def test_空输入不炸(self):
+        assert _parse_classify_reply("").task_type == "default"
+
+    def test_回退后类型一定合法(self):
+        """**契约**：解析出来的 task_type 永远落在合法集合里。"""
+        for raw in ('{"type":"BUGFIX"}', '{"type":null}', '{"type":123}',
+                    '{"type":["bugfix"]}', '[]', '{}', "乱码"):
+            assert _parse_classify_reply(raw).task_type in _VALID_TASK_TYPES, raw
+
+    def test_signals和gate照旧透传(self):
+        r = _parse_classify_reply('{"type":"feature","gate":true,"signals":["x","y"]}')
+        assert r.task_type == "feature" and r.gate_required is True
+        assert r.matched_signals == ["x", "y"]
 
 
 class TestRouter:
