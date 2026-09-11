@@ -238,16 +238,28 @@ def _find_agent_by_model(agents: dict, model_name: str) -> dict | None:
 
 
 
-def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
+def pick_agent_fallback_chain(agents: dict, level: str,
                                exclude: set = None,
                                project_lineup: dict[str, list[str]] = None,
-                               fallback_levels: list[str] = None) -> list[dict]:
-    """返回该层可用 agent 列表。project_lineup > role > default > 其他。
+                               fallback_levels: list[str] = None,
+                               restrict_to_lineup: bool = False) -> list[dict]:
+    """返回该层可用 agent 列表。project_lineup > 阵容顺序。
 
     API 不可用的自动跳过。
     若目标层无可用 agent，尝试 fallback_levels 列表。
+
+    ``restrict_to_lineup=True`` 时 lineup **就是全部候选**：不再追加同层其余模型，
+    也不做路由学习器重排。给「阶段 → 模型」用 —— 委员会席位和审查员名单靠它才
+    限制得住。默认 False = 旧语义（lineup 只是"优先"，其余仍作兜底），别改。
+
+    这里原来还有个 `role` 参数（"按角色挑模型"，读 agent 的 `roles` 字段）。
+    2026-09-11 删掉：全仓**没有任何调用方传它**，那条分支从写下那天起就没跑过。
+    「谁来做」现在是 `phase_models`（阶段 → 模型）管的，不再走角色。
     """
+    restricted = False          # 本次是否真的按"只留 lineup"返回了
+
     def _collect(tier: str):
+        nonlocal restricted
         cands = agents.get(tier, [])
         if not cands:
             return []
@@ -266,11 +278,15 @@ def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
                     if cross and agent_api_available(cross): found = cross
                 if found:
                     res.append(found); s.add(found.get("model",""))
-        if role:
-            for a in cands:
-                k = a.get("model","")
-                if role in (a.get("roles") or []) and k not in s and k not in excl and agent_api_available(a):
-                    res.append(a); s.add(k)
+            if restrict_to_lineup:
+                if res:
+                    restricted = True
+                    return res          # 只留指定席位，其余一律不追加
+                # 指定的一个都解析不出来（被禁用 / 欠费 / 名字过期）→ fail-open 回全池。
+                # 否则配错一个名字就让整个阶段没模型可跑，比"多跑几个"严重得多。
+                # 但必须留痕，不然界面上配了东西却完全没生效，查都没处查。
+                witness.warn("dispatcher",
+                             f"lineup_all_unavailable:{tier}:{','.join(lineup)}"[:120])
         # 同层 agent 平等, 不区分 default 优先级
         for a in cands:
             k = a.get("model","")
@@ -306,7 +322,10 @@ def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
     # ── 路由学习者权重排序 ──
     # 按模型在所有任务类型下的平均 Hedge 权重降序,
     # 权重>1=近期成功多, <1=近期失败多, 1=冷启动
-    if len(deduped) > 1:
+    # **受限时跳过**：用户点名"第 1 个当主力"之后，再按历史权重重排就是语义撒谎 ——
+    # 界面上点的是 A，实际调的是学习器挑的 B（deepseek-v4-flash 的历史权重 2.12，
+    # 只要它在链上就会被顶到最前）。
+    if len(deduped) > 1 and not restricted:
         try:
             from singularity.scheduler.route_learner import load_learner
             learner = load_learner()

@@ -112,4 +112,9 @@ export const api = {
   phaseRoles: () => request<any>('/api/phase-roles'),
   updatePhaseRoles: (map: Record<string, string>) =>
     request<any>('/api/phase-roles', { method: 'PUT', body: JSON.stringify({ map }) }),
+  phaseModels: () => request<any>('/api/phase-models'),
+  // 响应可能带 { warning }（提取员撞委员会 / 委员会退化）—— useRun 会把它 toast 出来，
+  // 所以这里别把返回值丢掉。
+  updatePhaseModels: (map: Record<string, string[]>) =>
+    request<any>('/api/phase-models', { method: 'PUT', body: JSON.stringify({ map }) }),
 }

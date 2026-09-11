@@ -1,19 +1,23 @@
-"""Agent 角色 & 注册表 & 角色定义
+"""角色 & 人格面具
 
-三个维度:
-  1. Agent — 具体模型 + API 绑定 (可新增/切换)
-  2. Role  — 工作流中的职能位置 (architect/implementer/...)
-  3. Persona — 角色的工作风格与行为边界
+两个维度:
+  1. Role  — 工作流中的职能位置 (architect/implementer/...)，绑定研发阶段
+  2. Persona — 角色的工作风格与行为边界
 
 静态数据 (PERSONAS, ROLES) 从 TOML 配置文件加载:
   - personas.toml: 人格面具定义
   - roles.toml: 角色定义 + 系统提示词
+
+**角色不决定用哪个模型** —— 模型由 `phase_models`（阶段 → 模型）管。
+这里以前的 Agent / AgentRegistry / RoleAssignment（"角色 → 可用 agent 列表"）
+是 2026-09-11 删掉的：整块无消费方，方向也被「阶段 → 模型」取代了。
+当时那三个 Agent 定义还留着硬编码的绝对路径和代理端口，是更早期的化石。
 """
 
 from __future__ import annotations
 import json
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from typing import Optional
 from pathlib import Path
 
@@ -55,38 +59,6 @@ def _load_personas() -> dict[str, Persona]:
 
 
 PERSONAS: dict[str, Persona] = {}  # 模块加载时填充
-
-
-# ═══════════════════════════════════════════════════════════
-# Agent — 具体模型 + API 绑定
-# ═══════════════════════════════════════════════════════════
-
-@dataclass
-class Agent:
-    name: str
-    level: str
-    model: str
-    api_type: str
-    entry: str = ""
-    api_key_env: str = ""
-    max_turns: int = 2
-    env: dict = field(default_factory=dict)
-    env_unset: list[str] = field(default_factory=list)
-    default: bool = False
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "Agent":
-        d = dict(d)
-        d.setdefault("entry", "")
-        d.setdefault("api_key_env", "")
-        d.setdefault("max_turns", 2)
-        d.setdefault("env", {})
-        d.setdefault("env_unset", [])
-        d.setdefault("default", False)
-        return cls(**d)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -134,83 +106,6 @@ def _load_roles() -> dict[str, Role]:
 
 
 ROLES: dict[str, Role] = {}  # 模块加载时填充
-
-
-# ═══════════════════════════════════════════════════════════
-# Registry — Agent 注册表
-# ═══════════════════════════════════════════════════════════
-
-@dataclass
-class RoleAssignment:
-    role_key: str
-    agents: list[str]
-    active: str = ""
-
-    def add_agent(self, agent_name: str):
-        if agent_name not in self.agents:
-            self.agents.append(agent_name)
-        if not self.active:
-            self.active = agent_name
-
-
-_DEFAULT_AGENTS: dict[str, Agent] = {
-    "DeepSeek-E": Agent(
-        name="DeepSeek-E", level="", model="deepseek-v4-pro",
-        api_type="claude-cli",
-        entry="/Users/jingzhe/.claude/local/claude --exclude-dynamic-system-prompt-sections -p {prompt}",
-        max_turns=2, default=True,
-    ),
-    "Opus-D": Agent(
-        name="Opus-D", level="", model="claude-opus-4-8",
-        api_type="claude-cli",
-        entry="/opt/homebrew/bin/claude --model claude-opus-4-8 -p {prompt}",
-        max_turns=2, default=True,
-        env={"ANTHROPIC_API_KEY": "{ANTHROPIC_API_KEY_OPS}",
-             "HTTPS_PROXY": "http://127.0.0.1:7892"},
-        env_unset=["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"],
-    ),
-    "GLM-E+": Agent(
-        name="GLM-E+", level="", model="glm-5.2",
-        api_type="zhipu-api",
-        entry="https://open.bigmodel.cn/api/paas/v4/chat/completions",
-        api_key_env="ZHIPU_API_KEY",
-        max_turns=3, default=True,
-    ),
-}
-
-_DEFAULT_ASSIGNMENTS: dict[str, RoleAssignment] = {
-    "implementer":      RoleAssignment(role_key="implementer", agents=["DeepSeek-E"], active="DeepSeek-E"),
-    "qa_engineer":      RoleAssignment(role_key="qa_engineer", agents=["gpt-5.5","kimi-k2.7-code","glm-5.2"], active="gpt-5.5"),
-    "security_auditor": RoleAssignment(role_key="security_auditor", agents=["gpt-5.5","kimi-k2.7-code","glm-5.2"], active="gpt-5.5"),
-}
-
-
-class AgentRegistry:
-    """全局 Agent 注册表。运行时可变，支持新增/切换。"""
-
-    def __init__(self):
-        self._agents: dict[str, Agent] = dict(_DEFAULT_AGENTS)
-        self._assignments: dict[str, RoleAssignment] = {
-            k: RoleAssignment(role_key=v.role_key, agents=list(v.agents), active=v.active)
-            for k, v in _DEFAULT_ASSIGNMENTS.items()
-        }
-
-    def add_agent(self, agent: Agent) -> Agent:
-        self._agents[agent.name] = agent
-        return agent
-
-    def remove_agent(self, name: str) -> bool:
-        if name in self._agents:
-            for ra in self._assignments.values():
-                if name in ra.agents:
-                    ra.agents.remove(name)
-                if ra.active == name:
-                    ra.active = ra.agents[0] if ra.agents else ""
-            del self._agents[name]
-            return True
-        return False
-
-registry = AgentRegistry()
 
 
 # ═══════════════════════════════════════════════════════════

@@ -15,7 +15,7 @@ export interface ApiStoreItem {
 
 export interface AgentItem {
   model: string; type?: string; entry?: string; api_key_env?: string
-  max_turns?: number; default?: boolean; roles?: string[]; sandbox?: string
+  max_turns?: number; default?: boolean; sandbox?: string
   request_template?: { reasoning_effort?: string; [k: string]: any }
 }
 
@@ -23,6 +23,13 @@ export interface AgentsData {
   any?: AgentItem[]; D?: AgentItem[]
   _disabled?: { any?: string[]; D?: string[] }
   _order?: { any?: string[] }
+}
+
+/** 阶段 → 模型。`custom` 里没出现的阶段 = 用整个激活池（旧行为）。
+ *  GET /api/phase-models 两个键**总是**返回，所以这里不标可选 —— 标了调用方到处要判空。 */
+export interface PhaseModelsData {
+  phases: { key: string; label: string; hint?: string }[]
+  custom: Record<string, string[]>
 }
 
 export interface ProjectInfo {

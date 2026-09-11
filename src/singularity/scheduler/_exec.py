@@ -291,11 +291,28 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
         for w in pre_warnings:
             witness.warn("exec", f"pre_hook: {w[:80]}"[:200])
 
+    # 「阶段 → 模型」里实现阶段配的那份名单。**这里和下面 :350 的 dispatch 要各传一次** ——
+    # 本处这次只决定"用哪个 agent 建 worktree / 熔断后切谁"，真正调模型的是 dispatch()，
+    # 而它在 _dispatch_exec 里会**自己重新选一遍链**。只传一处 → 指定的主力只生效一半
+    # （外层按 A 建 worktree，内层实际调 B）。
+    from . import phase_models as pm_mod
+    _proj = None
+    if getattr(task, "project_id", ""):
+        try:
+            from . import project as proj_mod
+            _proj = proj_mod.load(task.project_id)
+        except Exception:
+            _proj = None                     # 项目读不到就当没配，别把执行拖挂
+    exec_lineup, exec_restrict = pm_mod.selection("executing", _proj)
+
     # 容灾: 获取 fallback 链, 当前 agent 失败自动切下一个
     # 如果任务已重试多次，强制优先用 premium 模型
     force_premium = getattr(ctx, 'retry_count', 0) >= 2
-    fallback_chain = disp_mod.pick_agent_fallback_chain(agents, level, fallback_levels=["any"])
-    if force_premium and fallback_chain:
+    fallback_chain = disp_mod.pick_agent_fallback_chain(
+        agents, level, fallback_levels=["any"],
+        project_lineup=exec_lineup, restrict_to_lineup=exec_restrict)
+    if force_premium and fallback_chain and not exec_restrict:
+        # 受限时跳过：用户点名的主力不该因为"重试过两次"被换成别的
         # 把 premium 模型移到最前面 (model 名含 glm 或 opus)
         premium = [a for a in fallback_chain if any(p in a.get('model','').lower() for p in ('glm','opus'))]
         cheap = [a for a in fallback_chain if a not in premium]
@@ -350,6 +367,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 disp_result = disp_mod.dispatch(
                     effective_task, level, task.id, agents,
                     feedback=feedback, baseline_ref=ctx.snapshot_ref, cwd=cwd,
+                    project_lineup=exec_lineup, restrict_to_lineup=exec_restrict,
                 )
                 exec_result = disp_result.executor_result
 

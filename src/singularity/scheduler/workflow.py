@@ -125,12 +125,18 @@ Schema 规则:
 # ═══════════════════════════════════════════════════════════
 
 def _safe_dispatch(prompt: str, level: str, task_id: str, agents: dict,
-                   project: ProjectState, project_lineup=None) -> tuple:
-    """调 disp_mod.dispatch 并记录错误到 project lineage。返回 (disp_result_or_None, error_str)。"""
+                   project: ProjectState, project_lineup=None,
+                   restrict_to_lineup: bool = False) -> tuple:
+    """调 disp_mod.dispatch 并记录错误到 project lineage。返回 (disp_result_or_None, error_str)。
+
+    ``restrict_to_lineup`` 见 `dispatcher.pick_agent_fallback_chain`：「阶段 → 模型」
+    配了名单时为 True，委员会席位才限制得住。
+    """
     try:
         disp_result = disp_mod.dispatch(
             prompt, level, task_id, agents,
             project_lineup=project_lineup,
+            restrict_to_lineup=restrict_to_lineup,
         )
         return disp_result, ""
     except Exception as e:

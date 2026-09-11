@@ -70,6 +70,8 @@ class Scenario:
         self.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 3}]
         self.escalate_to = None    # escalate(level) 返回值
         self.task = None
+        self.last_chain_kw = None  # 最近一次 pick_agent_fallback_chain 收到的 kwargs
+        self.last_dispatch_kw = None  # 最近一次 dispatch 收到的 kwargs
 S = Scenario()
 
 # ── 安装桩 (打到 _exec 命名空间) ───────────────────────────
@@ -99,9 +101,12 @@ def install_stubs():
 
     # dispatcher
     class FakeDispMod:
-        def pick_agent_fallback_chain(self, agents, level, **k): return list(S.chain)
+        def pick_agent_fallback_chain(self, agents, level, **k):
+            S.last_chain_kw = k
+            return list(S.chain)
         def escalate(self, level): return S.escalate_to
         def dispatch(self, *a, **k):
+            S.last_dispatch_kw = k
             kind, *rest = S.dispatch_queue.pop(0)
             if kind == "raise":
                 raise RuntimeError("模拟: pick_agent 无可用 agent")
@@ -269,6 +274,46 @@ if __name__ == "__main__":
           f"实际 {b_qa_esc.merge_request!r}")
     check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
     S.qa_verdict = "pass"   # 复位
+
+    # ── 11/12: 「阶段 → 模型」的接线 ──
+    # **必须把 QIDIAN_DIR 指到临时目录**：这个脚本是独立跑的、没有 tests/conftest.py
+    # 那个 _isolate_qidian_dir，不指的话会读到**用户真实的** .qidian/phase_models.json
+    # —— 结果就随用户配没配而变（2026-09-11 真踩了：用户配完，这两条立刻红）。
+    from singularity.scheduler import phase_models
+    _old_qdir = _exec.config.QIDIAN_DIR
+
+    def _run_with_phase_config(cfg: dict):
+        """在隔离目录里写 cfg 跑一遍，返回 (建链处 kwargs, dispatch 处 kwargs)，跑完还原。"""
+        _exec.config.QIDIAN_DIR = Path(tempfile.mkdtemp())
+        try:
+            if cfg:
+                phase_models.save(cfg)
+            reset_wt()
+            S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2}]
+            S.last_chain_kw = S.last_dispatch_kw = None
+            S.dispatch_queue = [("ok", FakeExec(success=True))]
+            S.validate_queue = [FakeVal(action="pass")]
+            run_case()
+            return S.last_chain_kw, S.last_dispatch_kw
+        finally:
+            _exec.config.QIDIAN_DIR = _old_qdir
+
+    print("── 路径11: 实现阶段没配 → 两处都收到 (None, False) ──")
+    # 「阶段 → 模型」没配置时必须与配置前逐字节一致。
+    chain_kw, disp_kw = _run_with_phase_config({})
+    check("建链处 lineup=None", chain_kw.get("project_lineup") is None, str(chain_kw))
+    check("建链处 restrict=False", chain_kw.get("restrict_to_lineup") is False, str(chain_kw))
+    check("dispatch 处 lineup=None", disp_kw.get("project_lineup") is None, str(disp_kw))
+    check("dispatch 处 restrict=False", disp_kw.get("restrict_to_lineup") is False, str(disp_kw))
+
+    print("── 路径12: 实现阶段配了名单 → **两处都**收到 ──")
+    # 这是本仓库最容易只改一半的地方：建链处和 dispatch 处是两次独立选链，
+    # 只传一处 = 外层按 A 建 worktree、内层实际调 B。
+    chain_kw, disp_kw = _run_with_phase_config({"executing": ["m1"]})
+    check("建链处 restrict=True", chain_kw.get("restrict_to_lineup") is True, str(chain_kw))
+    check("建链处 lineup 是那份名单", chain_kw.get("project_lineup") == {"any": ["m1"]}, str(chain_kw))
+    check("dispatch 处 restrict=True", disp_kw.get("restrict_to_lineup") is True, str(disp_kw))
+    check("dispatch 处 lineup 是那份名单", disp_kw.get("project_lineup") == {"any": ["m1"]}, str(disp_kw))
 
     print("\n" + "=" * 48)
     total = PASS + FAIL

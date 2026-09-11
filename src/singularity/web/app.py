@@ -1428,7 +1428,7 @@ def api_agents_add():
     if entry_url and agent_type != "claude-cli" and not _is_safe_api_url(entry_url):
         return jsonify({"error": "不允许的 entry URL（仅支持已知 API 厂商域名）"}), 400
     result, code = _api_handler.agent_add(level, model, agent_type, entry_url,
-        data.get("api_key_env", ""), max_turns, data.get("roles", []), sandbox,
+        data.get("api_key_env", ""), max_turns, sandbox,
         data.get("mode", ""), data.get("request_template"))
     _push_event("agent_change", f"{level}:+{model}")
     return jsonify(result), code
@@ -1749,6 +1749,52 @@ def api_phase_roles_update():
     from singularity.scheduler._io import atomic_write_json
     atomic_write_json(sched_config.QIDIAN_DIR / "phases.json", mapping)
     return jsonify({"ok": True}), 200
+
+
+# 阶段 → 模型。比「阶段 → 角色」多一项「融合提取」—— 它不是 Phase 枚举值，
+# 而是架构融合里那个把 N 份方案抽出共识/分歧的模型。
+_PHASE_MODEL_LABELS = _PHASE_LABELS + [("extract", "融合提取")]
+
+
+def _phase_models_warning() -> str:
+    """配完给一句提醒 —— 这两种情况功能不坏，但达不到字面意思。
+
+    用**单数键 `warning`**：前端 `useRun`（lib/toast.ts）读的就是 `r.warning`。
+    不返回 400：planning 和 extract 是两次独立编辑，硬挡会让另一次无关保存突然失败。
+    """
+    from singularity.scheduler import phase_models
+    cfg = phase_models.load()
+    planning = cfg.get("planning") or []
+    extract = cfg.get("extract") or []
+    if extract and extract[0] in planning:
+        return (f"提取员 {extract[0]} 也在架构委员里 → 融合时会自动换成兜底模型"
+                f"（选手不能给自己出题）")
+    if len(planning) == 1:
+        return f"架构只配了 1 个模型（{planning[0]}）→ 委员会关闭，退化为单模型出方案"
+    return ""
+
+
+@app.route("/api/phase-models", methods=["GET"])
+def api_phase_models():
+    """阶段 → 模型。没配的阶段返回空列表 = 用整个激活池（与加这个配置之前一致）。"""
+    from singularity.scheduler import phase_models
+    return jsonify({
+        "phases": [{"key": k, "label": lbl, "hint": phase_models.PHASE_HINTS.get(k, "")}
+                   for k, lbl in _PHASE_MODEL_LABELS],
+        "custom": phase_models.load(),
+    }), 200
+
+
+@app.route("/api/phase-models", methods=["PUT"])
+def api_phase_models_update():
+    data = request.get_json(silent=True) or {}
+    mapping = data.get("map")
+    if not isinstance(mapping, dict):
+        return jsonify({"error": "map 必须是对象"}), 400
+    from singularity.scheduler import phase_models
+    phase_models.save(mapping)
+    warning = _phase_models_warning()
+    return jsonify({"ok": True, **({"warning": warning} if warning else {})}), 200
 
 
 @app.route("/api/roles/<key>", methods=["DELETE"])

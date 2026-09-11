@@ -54,10 +54,10 @@ def agent_list() -> tuple[dict, int]:
     return result, 200
 
 
-def agent_add(level, model, agent_type="openai-agent", entry_url="", api_key_env="", max_turns=5, roles=None, sandbox="worktree", mode="", request_template=None):
+def agent_add(level, model, agent_type="openai-agent", entry_url="", api_key_env="", max_turns=5, sandbox="worktree", mode="", request_template=None):
     from . import dispatcher as disp_mod
     cfg = disp_mod.add_agent(level=level, model=model, agent_type=agent_type, entry=entry_url,
-        api_key_env=api_key_env, max_turns=max_turns, roles=roles or [], sandbox=sandbox, mode=mode, request_template=request_template)
+        api_key_env=api_key_env, max_turns=max_turns, sandbox=sandbox, mode=mode, request_template=request_template)
 
     # 加完立刻自检"它到底能不能被调度"。`_ensure_agent_type` 是靠**模型注册表**
     # 自动补 entry/api_key_env 的 —— 模型不在注册表里(只扫描过、没导入), 就补不出来,
@@ -212,6 +212,17 @@ def model_remove(model_id):
     ok = model_registry.remove_model(model_id)
     # 两档后: 从全池移除, 不按层级
     dispatcher.remove_agent("", model_id)
+    # remove_agent 的语义是**停用**，它会顺手把 model_id 写进 _disabled。模型都已经
+    # 从模型库删掉了，这个标记只会变成前端「已禁用」区里的幽灵条目 —— 界面上出现一个
+    # 模型库里根本没有的名字，点它还会得到"空壳 agent"的警告。这里把它清掉。
+    dispatcher.purge_disabled(model_id)
+    # 「阶段 → 模型」里的引用同理：删掉的模型留在阶段名单里，既调不动（没有 agent）
+    # 又看着像配过了，排查时是纯噪声。
+    try:
+        from . import phase_models
+        phase_models.purge_model(model_id)
+    except Exception:
+        pass          # 阶段配置坏了不该让删模型失败
     return {"ok": ok, "synced": True}, 200
 
 

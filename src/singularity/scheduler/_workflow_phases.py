@@ -16,6 +16,16 @@ from singularity.scheduler.workflow import (
     _ARCHITECT_CONTEXT, _RESEARCHER_CONTEXT,
 )
 
+def _phase_selection(phase: str, project: ProjectState):
+    """某阶段该用哪些模型 → ``(lineup, restrict_to_lineup)``。
+
+    统一从这里取。项目级 lineup 和全局阶段配置的优先级在 `phase_models.selection`
+    里，各阶段别自己判 —— 有一处漏掉限制开关，那处的"指定"就只生效一半。
+    """
+    from singularity.scheduler import phase_models
+    return phase_models.selection(phase, project)
+
+
 def _run_research(project: ProjectState, agents: dict) -> str:
     """调 Researcher(廉价层) 搜集可借鉴方案 → GATE1。"""
     if _should_skip(project, "gate1"):
@@ -51,8 +61,9 @@ def _run_research(project: ProjectState, agents: dict) -> str:
         pass
 
     task_id = f"research_{project.id}"
+    lineup, restrict = _phase_selection("researching", project)
     disp_result, err = _safe_dispatch(prompt, "any", task_id, agents, project,
-                                       project.agent_lineup)
+                                       lineup, restrict)
     raw = disp_result.executor_result.raw_output if disp_result else ""
     if err:
         raw = f'{{"parse_error": true, "error": "{err}"}}'
@@ -101,8 +112,11 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     )
 
     task_id = f"architect_{project.id}"
+    # 架构这一项 = 委员会席位。restrict 才限制得住：不限制的话 chain 还是全池，
+    # 界面上配的"三家"会变成"池里所有模型各出一份初稿"。
+    lineup, restrict = _phase_selection("planning", project)
     disp_result, err = _safe_dispatch(prompt, "any", task_id, agents, project,
-                                       project.agent_lineup)
+                                       lineup, restrict)
     raw = disp_result.executor_result.raw_output if disp_result else ""
     if err:
         raw = f'{{"parse_error": true, "error": "{err}"}}'
@@ -111,7 +125,7 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     if arch.get("parse_error"):
         retry_prompt = prompt + "\n\n[格式错误] 上一次输出不是合法JSON。请用 ```json ... ``` 包裹输出。"
         disp_result2, err2 = _safe_dispatch(retry_prompt, "any", task_id + "_r", agents,
-                                             project, project.agent_lineup)
+                                             project, lineup, restrict)
         raw2 = disp_result2.executor_result.raw_output if disp_result2 else ""
         if err2:
             raw2 += f'\n[LLM错误: {err2}]'

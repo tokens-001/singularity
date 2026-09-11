@@ -38,13 +38,20 @@ def dispatch(
     baseline_ref: str = "",
     cwd: str = "",
     project_lineup: dict[str, list[str]] = None,
+    restrict_to_lineup: bool = False,
 ) -> DispatchResult:
-    """选 executor 并执行。架构任务: 委员会并行→合成; 其他: 单模型 fallback 链。"""
-    chain = pick_agent_fallback_chain(agents, level, project_lineup=project_lineup)
+    """选 executor 并执行。架构任务: 委员会并行→合成; 其他: 单模型 fallback 链。
+
+    ``restrict_to_lineup=True`` 时 lineup 就是全部候选（委员会席位靠它才限制得住）。
+    """
+    chain = pick_agent_fallback_chain(agents, level, project_lineup=project_lineup,
+                                      restrict_to_lineup=restrict_to_lineup)
     if not chain:
         raise RuntimeError(f"无可用 {level} 层 agent")
-    # 冷启动先验: 任务关键词匹配模型 strengths, 擅长的模型排到链首
-    chain = _prefer_by_strengths(task, chain)
+    # 冷启动先验: 任务关键词匹配模型 strengths, 擅长的模型排到链首。
+    # 受限时跳过 —— 用户点名了席位，再按关键词重排同样是"界面点 A、实际调 B"。
+    if not restrict_to_lineup:
+        chain = _prefer_by_strengths(task, chain)
 
     # ── 架构任务: 委员会模式 (多模型并行 → fuse_architecture_v2 合成) ──
     # 仅架构/系统设计类任务走 3 模型碰撞, research/QA/安全/实现 单模型即可

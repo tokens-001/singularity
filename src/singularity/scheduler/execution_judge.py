@@ -412,7 +412,15 @@ _V2_EXTRACT_FALLBACKS = ("glm-5.2", "deepseek-v4-pro")
 
 
 def _v2_extractor_model() -> str:
-    """v2 ② 提取用哪个模型：fusion.toml [custom].extract_model > 默认。"""
+    """v2 ② 提取用哪个模型。
+
+    优先级：「阶段 → 模型」的 `extract` > fusion.toml `[custom].extract_model` > 默认。
+    `fusion.toml` 保留为兜底来源 —— 它是 UI 之外的配置路径（CLI/手改），别断掉。
+    """
+    from singularity.scheduler import phase_models
+    designated = phase_models.for_phase("extract")
+    if designated:
+        return designated[0]                # 第 1 个 = 提取员，其余留给重试池
     cfg = _load_fusion_config().get("custom", {}) or {}
     return cfg.get("extract_model") or _V2_EXTRACT_DEFAULT
 

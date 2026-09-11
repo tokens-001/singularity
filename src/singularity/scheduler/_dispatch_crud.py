@@ -1,6 +1,6 @@
 from singularity.scheduler.dispatcher import load_agents, _ESCALATION
 
-__all__ = ['_custom_agents_path', '_load_custom_agents', '_notify_agent_change', '_save_custom_agents', 'add_agent', 'escalate', 'remove_agent', 'update_agent']
+__all__ = ['_custom_agents_path', '_load_custom_agents', '_notify_agent_change', '_save_custom_agents', 'add_agent', 'escalate', 'remove_agent', 'purge_disabled', 'update_agent']
 # ── Agent CRUD (写入自定义 JSON overlay) ──
 
 import json as _json
@@ -25,7 +25,7 @@ def _save_custom_agents(data: dict) -> None:
 
 def add_agent(level: str = "", model: str = "", agent_type: str = "openai-agent",
               entry: str = "", api_key_env: str = "", max_turns: int = 5,
-              roles: list = None, sandbox: str = "worktree", mode: str = "",
+              sandbox: str = "worktree", mode: str = "",
               request_template: dict = None) -> dict:
     # 两档后 level 可选, 空=全池
     key = level or "any"
@@ -50,11 +50,13 @@ def add_agent(level: str = "", model: str = "", agent_type: str = "openai-agent"
     # 避免重复
     if any(a.get("model") == model for a in custom[key]):
         return next(a for a in custom[key] if a.get("model") == model)
+    # 不再写 "roles" 字段：它是"按角色挑模型"那条链路的输入，而那条链路已删
+    # （全仓无人读它，见 pick_agent_fallback_chain 的注释）。老数据里留着这个键无害。
     cfg = {
         "model": model, "type": agent_type,
         "entry": entry, "api_key_env": api_key_env,
         "max_turns": max_turns, "default": False,
-        "roles": roles or ["generic"], "sandbox": sandbox,
+        "sandbox": sandbox,
     }
     if mode:
         cfg["mode"] = mode
@@ -66,7 +68,16 @@ def add_agent(level: str = "", model: str = "", agent_type: str = "openai-agent"
     return cfg
 
 def remove_agent(level: str = "", model: str = "") -> bool:
-    """禁用 agent: 从 custom 删 + 加入 _disabled。两档后 level 可选。"""
+    """禁用 agent: 从 custom 删（+ 需要时加入 _disabled）。两档后 level 可选。
+
+    `_disabled` 是给**模型库里真有的**模型留的标记 —— 它记录"这个模型被有意停用了"，
+    前端靠它把模型显示在「已禁用」区（点一下能回来）。
+
+    库里没有的名字**不该记**：从阵容删掉就已经彻底调不动了（`agents.toml` 是空占位，
+    名单只剩 custom 这一份来源），留个标记既挡不住任何东西，又会在前端冒出一个
+    查无此物的名字 —— 就是之前修过一轮的那种幽灵。触发路径很具体：用户启用了
+    一个模型库里没有的"空壳 agent"（后端会回 warning 提醒），再点移除。
+    """
     key = level or "any"
     disabled_key = level or "any"
     custom = _load_custom_agents()
@@ -76,15 +87,49 @@ def remove_agent(level: str = "", model: str = "") -> bool:
     new_cfgs = [a for a in cfgs if a.get("model") != model]
     custom[key] = new_cfgs
 
-    # 2. 加入禁用列表 (幂等, 无论来源是 toml 还是 custom)
-    custom.setdefault("_disabled", {})
-    custom["_disabled"].setdefault(disabled_key, [])
-    if model not in custom["_disabled"][disabled_key]:
-        custom["_disabled"][disabled_key].append(model)
+    # 2. 加入禁用列表 (幂等) —— 但只记模型库里真有的
+    if _in_model_library(model):
+        custom.setdefault("_disabled", {})
+        custom["_disabled"].setdefault(disabled_key, [])
+        if model not in custom["_disabled"][disabled_key]:
+            custom["_disabled"][disabled_key].append(model)
 
     _save_custom_agents(custom)
     _notify_agent_change()
     return True
+
+
+def _in_model_library(model: str) -> bool:
+    """模型库里有没有这个模型。查不了时**当作有** —— 宁可多留一个标记，
+    也不要因为注册表读挂了就把用户"我停用过它"这件事丢掉。"""
+    try:
+        from . import model_registry
+        return model_registry.get(model) is not None
+    except Exception:
+        return True
+
+
+def purge_disabled(model: str) -> bool:
+    """把 model 从**所有**层的 _disabled 列表里摘掉，返回是否真的摘到了。
+
+    专给「模型已从模型库删除」这条路径用：`remove_agent` 的语义是**停用**，
+    它会主动把 model 写进 _disabled。但模型都不在库了，这个标记没有任何意义 ——
+    留着就成了前端「已禁用」区里一个模型库里根本不存在的名字，点它还会
+    得到一个"空壳 agent"的警告（后端 add_agent 的 warning，见 _api_admin.py）。
+    """
+    custom = _load_custom_agents()
+    disabled = custom.get("_disabled")
+    if not isinstance(disabled, dict):
+        return False
+    hit = False
+    for lst in disabled.values():
+        if isinstance(lst, list) and model in lst:
+            lst.remove(model)
+            hit = True
+    if hit:
+        _save_custom_agents(custom)
+        _notify_agent_change()
+    return hit
 
 
 def _notify_agent_change():

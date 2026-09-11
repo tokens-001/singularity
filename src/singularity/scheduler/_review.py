@@ -74,6 +74,40 @@ def _expand_review_pool(disp_mod, writer_model: str, chosen: list[str],
         return []
 
 
+def _pick_reviewers(disp_mod, agents_all: dict, all_pool: list,
+                    writer_model: str) -> tuple[list, list[str]]:
+    """挑审查员。返回 ``(designated, reviewer_models)``。
+
+    `designated` 非空 = 用户配的名单生效了，调用方据此**跳过 `_expand_review_pool`**
+    （那条路会调**未启用**的模型，是真花钱；点了名就该按他点的来，不能偷偷加人）。
+
+    没配 / 配了但一个都不剩 → `designated` 为空列表，调用方走原来的"全池排除写手取前 2"。
+    """
+    from singularity.scheduler import phase_models
+    designated = phase_models.for_phase("reviewing")
+    if not designated:
+        return [], [a['model'] for a in all_pool
+                    if a['model'] != writer_model and disp_mod.agent_api_available(a)][:2]
+
+    if writer_model in designated:
+        # 自己审自己 = 没有审查。剔掉，但要说一声，别让名单静默缩水。
+        witness.warn("review", f"designated_reviewer_is_writer:{writer_model}"[:80])
+    picked: list[str] = []
+    for m in designated:
+        if m == writer_model or m in picked:
+            continue
+        # 名单可能是旧的 / 模型已被禁用，照旧要过一遍可用性
+        cfg = disp_mod._find_agent_by_model(agents_all, m) or {"model": m}
+        if disp_mod.agent_api_available(dict(cfg)):
+            picked.append(m)
+    if not picked:
+        # 一个都不剩 → 退回旧逻辑，别把"配错了"变成"没人审"
+        witness.warn("review", "designated_reviewers_all_unavailable"[:80])
+        return [], [a['model'] for a in all_pool
+                    if a['model'] != writer_model and disp_mod.agent_api_available(a)][:2]
+    return designated, picked
+
+
 def _diff_cmd(base_ref: str, *paths) -> list[str]:
     """取 diff 的命令。`base_ref` 非空就带上它当基准。
 
@@ -264,11 +298,11 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             agents_all = disp_mod.load_agents()
             # S3: 用 _all_agents_list 一次取全池, 去重复分支
             all_pool = disp_mod._all_agents_list(agents_all)
-            reviewer_models = [
-                a['model'] for a in all_pool
-                if a['model'] != writer_model and disp_mod.agent_api_available(a)][:2]
 
-            if len(reviewer_models) < 2:
+            designated, reviewer_models = _pick_reviewers(
+                disp_mod, agents_all, all_pool, writer_model)
+
+            if not designated and len(reviewer_models) < 2:
                 # 只有 2 个启用的 agent 时，排除 writer 就只剩 1 个 —— "多模型审查"
                 # 名不副实，而"多视角碰撞"正是核心价值主张。先从注册表补人；
                 # 补不到才退化成单 reviewer（并留痕）。

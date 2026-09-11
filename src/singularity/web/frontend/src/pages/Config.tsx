@@ -1,20 +1,20 @@
 import { useState } from 'react'
 import { Tabs } from 'antd'
-import { Cpu, Bot, Wrench, Plug, GitMerge, UserCog } from 'lucide-react'
+import { Cpu, Bot, Wrench, Plug, UserCog } from 'lucide-react'
 import ModelsTab from '../components/ModelsTab'
 import AgentsTab from '../components/AgentsTab'
 import SkillsTab from '../components/SkillsTab'
 import McpTab from '../components/McpTab'
-import FusionTab from '../components/FusionTab'
 import RolesTab from '../components/RolesTab'
 
+// 「融合」Tab 已并入智能体页 —— 它整页只有一个"提取员"选择器，
+// 现在那是「阶段 → 模型」里的一行。
 const TABS = [
   { key: 'models', icon: Cpu, label: '模型目录' },
   { key: 'agents', icon: Bot, label: '智能体' },
   { key: 'roles', icon: UserCog, label: '角色' },
   { key: 'skills', icon: Wrench, label: '技能' },
   { key: 'mcp', icon: Plug, label: 'MCP' },
-  { key: 'fusion', icon: GitMerge, label: '融合' },
 ]
 const VENDOR_DISPLAY: Record<string,string> = {
   deepseek: 'DeepSeek', kimi: 'Kimi', claude: 'Claude', moonshot: 'Moonshot',
@@ -50,7 +50,6 @@ export default function Config() {
       {tab === 'roles' && <RolesTab />}
       {tab === 'skills' && <SkillsTab />}
       {tab === 'mcp' && <McpTab />}
-      {tab === 'fusion' && <FusionTab />}
     </div>
   )
 }
