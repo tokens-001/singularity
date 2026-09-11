@@ -174,6 +174,7 @@ def _safe_dispatch(prompt: str, level: str, task_id: str, agents: dict,
             restrict_to_lineup=restrict_to_lineup,
             phase=phase,
             no_tools=no_tools,
+            project_id=project.id,
         )
         _record_phase_usage(project, task_id, level, disp_result)
         return disp_result, ""
@@ -181,6 +182,13 @@ def _safe_dispatch(prompt: str, level: str, task_id: str, agents: dict,
         err = f"{type(e).__name__}: {e}"[:200]
         project.add_lineage({"action": "llm_error", "level": level, "task_id": task_id, "error": err})
         return None, err
+
+
+def _is_composite_model_name(name) -> bool:
+    """是不是"聚合体合成名"（`fusion(a,b)` / `committee(a,b)`）—— 这类名字在计价表里
+    查不到，记进账本只会让这一行永远算不出钱。"""
+    s = str(name or "")
+    return "(" in s and ")" in s and not s.startswith("http")
 
 
 def _record_phase_usage(project: ProjectState, task_id: str, level: str,
@@ -204,12 +212,31 @@ def _record_phase_usage(project: ProjectState, task_id: str, level: str,
         from singularity.scheduler import witness
         from singularity.scheduler._token_budget import record_tokens
         er = getattr(disp_result, "executor_result", None)
+
+        # 委员会：**按成员逐个记**。记成一条、模型名用合成串 `fusion(a,b)` 的话，
+        # 计价表里当然没有这个名字 → 费用按 None 跳过 → 最贵的架构阶段
+        # 记了账却算不出钱（2026-09-11 探路轮实测：项目 cost 恒 $0.0000）。
+        # per-member 的 token 本来就在手上（_dispatch_committee 里），以前直接扔了。
+        usage = getattr(er, "member_usage", None)
+        if isinstance(usage, list) and usage:
+            for u in usage:
+                record_tokens(project_id=project.id, project_name=project.name,
+                              task_id=task_id, level=level,
+                              model=str(u.get("model", "")),
+                              tokens=int(u.get("tokens", 0) or 0),
+                              elapsed_s=float(u.get("elapsed", 0.0) or 0.0))
+            return
+
         tokens = int(getattr(er, "token_count", 0) or 0)
         if tokens <= 0:
             return
+        model_name = (getattr(disp_result, "agent_cfg", None) or {}).get("model", "")
+        if _is_composite_model_name(model_name):
+            # 聚合体的合成名（`fusion(a,b)` / `committee(a,b)`）在计价表里查不到，
+            # 记了也是白记（费用按 None 跳过）。成员那几行上面已经记过了，这条跳过。
+            return
         record_tokens(project_id=project.id, project_name=project.name,
-                      task_id=task_id, level=level,
-                      model=(getattr(disp_result, "agent_cfg", None) or {}).get("model", ""),
+                      task_id=task_id, level=level, model=model_name,
                       tokens=tokens,
                       elapsed_s=float(getattr(er, "elapsed", 0.0) or 0.0))
     except Exception as e:

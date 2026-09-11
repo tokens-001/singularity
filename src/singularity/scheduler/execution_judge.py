@@ -61,7 +61,8 @@ def _resolve_api(model: str) -> tuple[str, str]:
 _STALL_TIMEOUT = float(os.environ.get("QIDIAN_STALL_TIMEOUT", "90"))
 
 
-def _stream_once(client, base_url: str, headers: dict, payload: dict) -> tuple[int, str, str, str, str]:
+def _stream_once(client, base_url: str, headers: dict, payload: dict,
+                 project_id: str = "") -> tuple[int, str, str, str, str]:
     """一次流式 POST。返回 (status, content, finish_reason, err_text, reasoning)。
 
     reasoning 单收一路：执行器早就在认它（openai_agent.py:406），这里一直只收 content，
@@ -98,16 +99,27 @@ def _stream_once(client, base_url: str, headers: dict, payload: dict) -> tuple[i
     # 融合/合成是系统里**单次最贵**的调用（一次要吐两万字）。以前连用量都没申请，
     # 这条路的开销完全不在统计里。
     try:
-        from singularity.scheduler._token_budget import record_system_tokens
         _tk = int(usage.get("total_tokens", 0) or 0)
         if _tk > 0:
-            record_system_tokens(model=str(payload.get("model", "")), level="fusion", tokens=_tk)
+            _model = str(payload.get("model", ""))
+            if project_id:
+                # 从项目阶段调进来的融合：记到**项目账**上。
+                # 一律记 _unknown 的话，项目花费永远看不到融合那一段 —— 而融合是
+                # 整条流水线**单次最贵**的调用。2026-09-11 探路轮实测：融合子步骤
+                # 86,344 tokens，是两席初稿（35,690）的 2.4 倍，一条都没进项目账。
+                from singularity.scheduler._token_budget import record_tokens
+                record_tokens(project_id=project_id, level="fusion",
+                              model=_model, tokens=_tk)
+            else:
+                from singularity.scheduler._token_budget import record_system_tokens
+                record_system_tokens(model=_model, level="fusion", tokens=_tk)
     except Exception:
         pass          # 记账失败不能影响融合本身
     return 200, "".join(parts), finish, "", "".join(reasons)
 
 
-def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:
+def _call_model(prompt: str, model: str, max_tokens: int = 2000,
+                project_id: str = "") -> str:
     """调用单个模型（用于合成/盲评）。未知模型 / 缺 key → 返回 ""。
 
     流式（QIDIAN_STREAM=0 可退回非流式）：停滞超过 QIDIAN_STALL_TIMEOUT 秒就断开。
@@ -123,11 +135,13 @@ def _call_model(prompt: str, model: str, max_tokens: int = 2000) -> str:
         payload = {"model": model, "messages": [{"role": "user", "content": prompt}],
                    "max_tokens": max_tokens, "temperature": 0.3}
         with httpx.Client(timeout=httpx.Timeout(240.0, connect=15.0, read=_STALL_TIMEOUT)) as client:
-            status, content, finish, err, reasoning = _stream_once(client, base_url, headers, payload)
+            status, content, finish, err, reasoning = _stream_once(
+                client, base_url, headers, payload, project_id=project_id)
             if status == 400 and "temperature" in err:
                 # 部分模型只接受 temperature=1（实测 kimi-k3：'only 1 is allowed for this model'）
                 payload.pop("temperature", None)
-                status, content, finish, err, reasoning = _stream_once(client, base_url, headers, payload)
+                status, content, finish, err, reasoning = _stream_once(
+                    client, base_url, headers, payload, project_id=project_id)
             if status == 200:
                 if not content and reasoning and finish != "length":
                     # 模型正常收尾、但把答案落在 reasoning_content 里（执行器同样这么兜）
@@ -535,7 +549,8 @@ def _votes_into(store: dict, who: str, items: list, field: str) -> dict:
 
 
 def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
-                         extract_model: str = "", rulings: dict = None) -> str:
+                         extract_model: str = "", rulings: dict = None,
+                         project_id: str = "") -> str:
     """新融合机制。plans: [(模型名, 方案全文)]。任一步失败返回 ""。
 
     参数叫 extract_model 不叫 judge_model —— v2 **没有裁判这个角色**，v1 才有。
@@ -550,6 +565,16 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
         return plans[0][1] if plans else ""
     members = [m for m, _ in plans]
     extractor = extract_model or _v2_extractor_model()
+
+    def _cm(prompt: str, model: str, max_tokens: int = 2000) -> str:
+        """本函数内的模型调用统一走这里，把 project_id 带下去记账。
+
+        不带的话这几步（提取/辩论/定稿）的用量一律进 `_unknown` 桶，
+        项目花费里永远看不到融合那一段 —— 而它是整条流水线**单次最贵**的调用。
+        实测（2026-09-11 探路轮）：融合 86,344 tokens，是两席初稿（35,690）的 2.4 倍。
+        """
+        return _call_model(prompt, model, max_tokens=max_tokens,
+                           project_id=project_id)
 
     def _usable(m: str) -> bool:
         """这个模型现在**真的能调**吗 —— 两个条件都要满足：
@@ -630,7 +655,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
     #   - try_parse_json 失败返回 {"parse_error": True}（仍是 dict）
     #   - 三样全空 = 没提取到，不是"两家没分歧"
     def _extract_once(model: str):
-        raw = _call_model(_V2_EXTRACT.format(n=len(plans), task=task, outputs=plans_text),
+        raw = _cm(_V2_EXTRACT.format(n=len(plans), task=task, outputs=plans_text),
                           model, max_tokens=_V2_EXTRACT_MAX_TOKENS)
         d = try_parse_json(raw) if raw else {}
         if not raw or not isinstance(d, dict) or d.get("parse_error"):
@@ -699,7 +724,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
 
     if (disagreements or gains) and not _skip_debate:
         d_json, g_json = _j(disagreements), _j(gains)
-        a1 = try_parse_json(_call_model(
+        a1 = try_parse_json(_cm(
             _V2_ROUND1.format(speaker=writer, task=task, outputs=plans_text,
                               disagreements=d_json, unique_gains=g_json),
             writer, max_tokens=_FUSION_MAX_TOKENS) or "") or {}
@@ -712,7 +737,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
 
         while rounds < max_rounds:
             def _respond(m):
-                r = _call_model(_V2_ROUND2.format(
+                r = _cm(_V2_ROUND2.format(
                     speaker=m, task=task, outputs=plans_text, disagreements=d_json,
                     transcript="\n\n".join(transcript), unique_gains=g_json),
                     m, max_tokens=_FUSION_MAX_TOKENS)
@@ -741,7 +766,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
             if rounds >= max_rounds:
                 break
 
-            c = try_parse_json(_call_model(
+            c = try_parse_json(_cm(
                 _V2_ROUND3.format(speaker=writer, task=task, disagreements=d_json,
                                   transcript="\n\n".join(transcript)),
                 writer, max_tokens=_FUSION_MAX_TOKENS) or "") or {}
@@ -810,13 +835,13 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
         # tasks/risks 就是这么整段丢过（提取员没提，它就真不写）。转述丢的
         # 东西定稿人补不回来，因为它根本没看到原稿。
         plans=_plans_block(plans))
-    draft = _call_model(final_prompt, writer, max_tokens=_FUSION_MAX_TOKENS)
+    draft = _cm(final_prompt, writer, max_tokens=_FUSION_MAX_TOKENS)
     if not draft:
         return ""
 
     for attempt in range(2):
         def _check(m):
-            c = _call_model(_V2_CONFIRM.format(checker=m, writer=writer, task=task, draft=draft),
+            c = _cm(_V2_CONFIRM.format(checker=m, writer=writer, task=task, draft=draft),
                             m, max_tokens=_FUSION_MAX_TOKENS)
             if not c:
                 witness.warn("execution_judge", f"fusion_confirm_empty:{m}"[:80])
@@ -840,7 +865,7 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
             witness.warn("execution_judge",
                          f"fusion_confirm_unresolved:{len(issues)}"[:80])
             break
-        draft = _call_model(
+        draft = _cm(
             final_prompt + "\n\n【上一稿被指出的问题，请修正】\n" + "\n".join(issues),
             writer, max_tokens=_FUSION_MAX_TOKENS) or draft
     return draft

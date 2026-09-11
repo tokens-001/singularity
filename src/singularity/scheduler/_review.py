@@ -488,19 +488,35 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                 if _norm(qa.get("verdict")) == "needs_fix":
                     fails = [v for v in qa.get("verifications", [])
                              if _norm(v.get("status")) in ("fail", "warning")]
-                    quality["warnings"].append(
-                        f"QA 约束验收 {len(fails)} 条未满足: " +
-                        "; ".join(v.get("constraint", "")[:40] for v in fails[:3]))
-                    # 同 multi-review critical：quality 只活在内存里，交付报告看不到，
-                    # 必须同时进 unverified（否则用户拿到的仍是 "delivered"）。
-                    validation.unverified.append(
-                        f"QA 约束验收 {len(fails)} 条未满足: " +
-                        "; ".join(v.get("constraint", "")[:60] for v in fails[:3]))
-                    quality["failure_kind"] = "constraint_fail"
-                    quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.25)
-                    validation.action = "retry"
-                    _record_review_failure("constraint_fail")
-                quality["quality_signals"]["qa_acceptance"] = qa.get("verdict", "unknown")
+                    if fails:
+                        quality["warnings"].append(
+                            f"QA 约束验收 {len(fails)} 条未满足: " +
+                            "; ".join(v.get("constraint", "")[:40] for v in fails[:3]))
+                        # 同 multi-review critical：quality 只活在内存里，交付报告看不到，
+                        # 必须同时进 unverified（否则用户拿到的仍是 "delivered"）。
+                        validation.unverified.append(
+                            f"QA 约束验收 {len(fails)} 条未满足: " +
+                            "; ".join(v.get("constraint", "")[:60] for v in fails[:3]))
+                        quality["failure_kind"] = "constraint_fail"
+                        quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.25)
+                        validation.action = "retry"
+                        _record_review_failure("constraint_fail")
+                    else:
+                        # needs_fix 却一条具体项都给不出来 —— 这个结论**不可执行**。
+                        # 2026-09-11 探路轮实测：消息成了 "QA 约束验收 0 条未满足: "（冒号后空的），
+                        # 同时 action=retry → 重试方只知道"要修"却不知道修什么，
+                        # 下一轮必然同样结果，**循环收敛不了直到任务超时失败**。
+                        # 拦了不说是比不拦更坏的状态：它烧钱、耗时，还不给任何可动手的信息。
+                        # 处理：如实披露，**不据此重试**（"结论不可用" ≠ "验收通过"）。
+                        quality["warnings"].append(
+                            "QA 约束验收结论不可用: 判了 needs_fix 但未给出任何具体未满足项")
+                        validation.unverified.append(
+                            "QA 约束验收结论不可用: 判了 needs_fix 但未给出具体未满足项，"
+                            "已按不可采信处理（不据此重试）")
+                        quality["quality_signals"]["qa_acceptance"] = "needs_fix_unspecified"
+                # setdefault：上面判出 "needs_fix_unspecified" 时别被 verdict 覆盖回去
+                quality["quality_signals"].setdefault(
+                    "qa_acceptance", qa.get("verdict", "unknown"))
         except Exception as e:
             quality["warnings"].append(f"QA 约束验收 error: {e}")
             quality["failure_kind"] = "constraint_error"

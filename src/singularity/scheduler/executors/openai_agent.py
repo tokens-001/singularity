@@ -145,6 +145,18 @@ SYSTEM_PROMPT_NO_TOOLS = """你是Singularity Dispatch的 AI Agent。
 - 不要以 [HANDOFF] 块结尾（那是执行类任务的格式）"""
 
 
+def force_output_at(max_turns: int, max_tool_turns: int) -> int:
+    """第几轮该撤掉工具、逼模型直接出终答。**必须早于最后一轮**。
+
+    注入完那条"必须直接输出最终答案"的系统消息就 `continue` —— 若它正好是最后一轮，
+    循环当场结束，**那次模型调用从未发生**，raw_output 只剩占位串
+    `"(达到最大工具轮次, 已产出文件)"`。实测（2026-09-11 探路轮）：max_turns=5 /
+    max_tool_turns=3 → 原判据 `3+2=5` 恰好等于 max_turns，于是文件全写出来了，
+    交付报告里却一个字总结都没有。
+    """
+    return max(2, min(max_tool_turns + 2, max_turns - 1))
+
+
 # 思考相关参数白名单。各家键名/取值都不同（DeepSeek/Kimi/智谱用 thinking，
 # GLM-5.3 与 DeepSeek 用 reasoning_effort，Qwen/Kimi 兼容写法用 enable_thinking），
 # 且支持面会变（GLM-5.2 能关、5.3 强制开；k2.6 能关、k2.7 强制开）。
@@ -250,6 +262,7 @@ class OpenAIAgentExecutor(BaseExecutor):
         tool_turns = 0          # 连续工具调用轮数
         last_tool_calls = ""     # 上一轮工具调用指纹 (去重)
         max_tool_turns = self.cfg.get("max_tool_turns", 3)
+        _force_at = force_output_at(self._max_turns, max_tool_turns)
 
         for turn in range(1, self._max_turns + 1):
             # 从 request_template 读取参数，只传模型支持的
@@ -433,7 +446,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                 call_fingerprint = str([(tc.get("function", {}).get("name", ""),
                                         tc.get("function", {}).get("arguments", "")[:80])
                                         for tc in tool_calls])
-                if tool_turns >= max_tool_turns + 2:
+                if tool_turns >= _force_at:
                     # 强制输出: 撤掉工具，注入系统消息要求模型直接回答
                     tools = []
                     messages.append({

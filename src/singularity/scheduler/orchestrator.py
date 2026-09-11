@@ -111,6 +111,56 @@ def _dispatch_ready(dispatched: set, pool, agents, runner: TaskRunner,
     return dispatched_any
 
 
+def _salvage_timed_out(task, elapsed_s: float):
+    """超时被杀时把**已知事实**留下来：改了哪些文件、实际跑了多久。
+
+    原来这里给 `_save_trace` 传 `None` → trace 里 `changed_files=[]` /
+    `elapsed=0` / `tokens=0`，看上去"这个任务什么都没干"。而 worktree 里
+    文件其实是写全的。2026-09-11 探路轮实测：3 个任务各撞 900s 被杀，
+    事后**完全查不出它们做过什么**，用量也一条没进账 —— 最需要排查的场景
+    恰恰什么都没留下。
+
+    用量（token）**取不到**（executor 没返回），所以如实留 None，不填 0。
+    """
+    try:
+        import subprocess
+        from singularity.scheduler.project import repo_root_for
+        from singularity.scheduler._git_worktree import _worktrees_dir
+        repo_root = repo_root_for(task)
+        files: list[str] = []
+        for wt in _worktrees_dir(repo_root).glob(f"{task.id}_*"):
+            r = subprocess.run(["git", "status", "--porcelain"], cwd=str(wt),
+                               capture_output=True, text=True, timeout=10)
+            for ln in (r.stdout or "").split("\n"):
+                if ln.strip():
+                    files.append(ln[3:].strip())
+
+        class _TimedOutResult:
+            """只填**能确定的**字段；token 未知就 None（不是 0）。"""
+            changed_files = files
+            raw_output = f"(执行超时(>{int(elapsed_s)}s) 被杀，未及输出总结)"
+            token_count = None          # 不可知 —— 不是"没花钱"
+            elapsed = float(elapsed_s)  # 这个是真的：确实跑了这么久
+            success = False
+            error = "timeout"
+            error_kind = "timeout"
+            patch_path = ""
+            tool_events: list = []
+
+        class _TimedOutDisp:
+            executor_result = _TimedOutResult()
+            agent_cfg = {"model": ""}
+
+        return _TimedOutDisp()
+    except Exception as e:
+        try:
+            from singularity.scheduler import witness
+            witness.warn("orchestrator", f"salvage_timeout:{type(e).__name__}:{e}"[:120])
+        except Exception:
+            pass
+        return None
+
+
 def _reap_futures(running_futures: dict, pending_batches: dict,
                   mq, runner: TaskRunner, results: list) -> bool:
     """_run_queue_v3 步骤④: 回收已完成 future → finalize 或入 pending。返回是否有回收。"""
@@ -177,7 +227,9 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
             except Exception:
                 pass
             results.append((t.id, "timeout", None))
-            _save_trace(t, route, snap, None, None, False)
+            # 抢救已知事实再落 trace —— 传 None 会让 trace 变成一份"什么都没干"的假象
+            _save_trace(t, route, snap, _salvage_timed_out(t, now - submitted_at),
+                        None, False)
             try:
                 from singularity.scheduler.project import repo_root_for
                 _release_ref(t.id, repo_root=repo_root_for(t))

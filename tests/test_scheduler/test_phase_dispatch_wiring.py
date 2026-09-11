@@ -154,6 +154,37 @@ def test_phase_usage_recorded_under_project(tmp_path, monkeypatch):
     assert rows[0]["model"] == "fake-model"
 
 
+def test_committee_usage_recorded_per_member(tmp_path, monkeypatch):
+    """委员会要**按成员逐个记**，不能用合成名记一条。
+
+    合成名 `fusion(glm-5.3-flash,deepseek-flash)` 在计价表里查不到 →
+    费用按 None 跳过 → 项目 cost 恒 $0.0000（2026-09-11 探路轮实测）。
+    per-member 的 token 本来就有（_dispatch_committee 里以前直接扔了）。
+    """
+    p = _mk_project(tmp_path, monkeypatch)
+    from singularity.scheduler import _token_budget as tb
+
+    rows = []
+    monkeypatch.setattr(tb, "record_tokens", lambda **kw: rows.append(kw))
+
+    class _ER:
+        token_count = 300
+        elapsed = 9.0
+        member_usage = [{"model": "m-a", "tokens": 120, "elapsed": 4.0},
+                        {"model": "m-b", "tokens": 180, "elapsed": 5.0}]
+
+    class _D:
+        executor_result = _ER()
+        agent_cfg = {"model": "fusion(m-a,m-b)"}
+
+    monkeypatch.setattr(disp_mod, "dispatch", lambda *a, **kw: _D())
+    workflow._safe_dispatch("prompt", "any", "architect_1", {}, p)
+
+    assert [r["model"] for r in rows] == ["m-a", "m-b"], "必须按成员记，不能记合成名"
+    assert [r["tokens"] for r in rows] == [120, 180], "每个成员的用量要各归各"
+    assert all(r["project_id"] == p.id for r in rows)
+
+
 def test_phase_usage_zero_tokens_not_recorded(tmp_path, monkeypatch):
     """0 token 不记 —— 免得用量表被一堆空行撑满。"""
     p = _mk_project(tmp_path, monkeypatch)

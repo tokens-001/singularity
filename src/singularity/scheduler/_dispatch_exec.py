@@ -64,6 +64,7 @@ def dispatch(
     route_role: str = "",
     phase: str = "",
     no_tools: bool = False,
+    project_id: str = "",
 ) -> DispatchResult:
     """选 executor 并执行。架构任务: 委员会并行→合成; 其他: 单模型 fallback 链。
 
@@ -103,7 +104,7 @@ def dispatch(
     from .execution_judge import _is_architecture_task
     if _is_architecture_task(task) and len(chain) >= 2 and not _impl_role_veto(route_role):
         return _dispatch_committee(task, level, task_id, agents, chain, feedback,
-                                   baseline_ref, cwd)
+                                   baseline_ref, cwd, project_id=project_id)
 
     # ── 单模型 fallback 链 ──
     last_error = ""
@@ -239,7 +240,8 @@ def _prefer_by_strengths(task: str, chain: list[dict]) -> list[dict]:
 
 def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
                         chain: list[dict], feedback: str = "",
-                        baseline_ref: str = "", cwd: str = "") -> DispatchResult:
+                        baseline_ref: str = "", cwd: str = "",
+                        project_id: str = "") -> DispatchResult:
     """多模型委员会: 所有可用D模型并行产出→合成。"""
     import concurrent.futures
 
@@ -261,6 +263,11 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
     outputs = []
     member_tokens = 0            # 委员会成员的实际用量，回填给 _FusionResult
     member_elapsed = 0.0
+    # 按**成员**留一份用量。合成一个总数再配一个 "fusion(a,b)" 的合成名字的话，
+    # 计价表里查不到这个名字 → 最贵的架构阶段记了账却算不出钱
+    # （2026-09-11 探路轮实测：项目 cost 恒 $0.0000）。
+    # per-member 的 token 本来就在手上（_run_no_tools 会回传），以前直接扔了。
+    member_usage: list[dict] = []
     # 不能用 `with ThreadPoolExecutor(...)`: 退出时 shutdown(wait=True) 会去 join，
     # `_WAVE_TIMEOUT` 就只是个"延迟判定"而不是时限 —— 某个模型调用挂死就把整条
     # 架构阶段拖住（实测 A/B 探针三次这样卡住）。显式 shutdown(wait=False)。
@@ -288,6 +295,11 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
                     outputs.append((agent_cfg.get("model", "?"), raw))
                     member_tokens += _tk
                     member_elapsed += _el
+                    member_usage.append({
+                        "model": agent_cfg.get("model", "?"),
+                        "tokens": int(_tk or 0),
+                        "elapsed": float(_el or 0.0),
+                    })
             except Exception:
                 pass  # 单个模型失败不阻断委员会
     finally:
@@ -326,7 +338,8 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
         # 「提取失败换模型重试」，那条比它强得多。QIDIAN_FUSION_V2 开关随之一并删除
         # （它的语义本来就是"回退旧流程"，没有旧流程了）。
         _rulings: dict = {}          # v2 把裁决记录写进来（见其 docstring 的 rulings 参数）
-        fused = fuse_architecture_v2(task, list(outputs), rulings=_rulings)
+        fused = fuse_architecture_v2(task, list(outputs), rulings=_rulings,
+                                     project_id=project_id)
         if not fused:
             # 落到下面的通用合成：每条产出截断到 3000 字。架构方案 20k+ 字，
             # 这是**降级**不是等价替换，必须留痕。
@@ -372,6 +385,9 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
             # （提取/辩论/定稿）仍没回传，是已知的剩余缺口。
             _FusionResult.token_count = member_tokens
             _FusionResult.elapsed = member_elapsed
+            # 按成员记账用。消费方（workflow._record_phase_usage）拿不到这个属性时
+            # 退回"一条记录 + agent_cfg 里的模型名"的老行为（非委员会路径）。
+            _FusionResult.member_usage = member_usage
             return DispatchResult(
                 level=level,
                 agent_cfg={"model": f"fusion({','.join(m for m,_ in outputs)})"},
@@ -397,6 +413,14 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
                 baseline_ref=baseline_ref, cwd=cwd,
             )
             if synth_result and synth_result.raw_output:
+                # 成员初稿 + 这次合成调用，都按**真实模型名**留一份用量。
+                # 不带的话调用方只有 "committee(a,b)" 这个合成名 —— 计价表查不到，
+                # 这一段就整段算不出钱（同 fusion(...) 那个坑）。
+                synth_result.member_usage = list(member_usage) + [{
+                    "model": synthesizer.get("model", ""),
+                    "tokens": int(getattr(synth_result, "token_count", 0) or 0),
+                    "elapsed": float(getattr(synth_result, "elapsed", 0.0) or 0.0),
+                }]
                 return DispatchResult(
                     level=level,
                     agent_cfg={"model": f"committee({','.join(m for m,_ in outputs)})"},

@@ -39,7 +39,7 @@ R2_INSIST_ACCEPT = {
 
 def _stub(monkeypatch, calls=None, **over):
     """给 _call_model 打桩。over 可覆盖各步返回值。"""
-    def fake(prompt, model, max_tokens=2000):
+    def fake(prompt, model, max_tokens=2000, project_id=""):
         if calls is not None:
             calls.append((model, prompt))
         if "架构委员会秘书" in prompt:
@@ -151,7 +151,7 @@ def test_gain_rejected_if_any_side_rejects(monkeypatch):
 # ── 失败与回退 ────────────────────────────────────────────
 
 def test_parse_error_returns_empty(monkeypatch):
-    monkeypatch.setattr(ej, "_call_model", lambda p, m, max_tokens=2000: "不是 JSON")
+    monkeypatch.setattr(ej, "_call_model", lambda p, m, max_tokens=2000, project_id="": "不是 JSON")
     assert ej.fuse_architecture_v2("需求", PLANS) == ""
 
 
@@ -166,7 +166,7 @@ def test_empty_extract_retries_then_gives_up(monkeypatch):
     """
     calls = []
 
-    def fake(prompt, model, max_tokens=2000):
+    def fake(prompt, model, max_tokens=2000, project_id=""):
         calls.append((model, prompt))
         return "" if "架构委员会秘书" in prompt else "最终稿"
 
@@ -186,7 +186,7 @@ def test_extract_retry_recovers(monkeypatch):
     """
     calls = []
 
-    def fake(prompt, model, max_tokens=2000):
+    def fake(prompt, model, max_tokens=2000, project_id=""):
         calls.append((model, prompt))
         if "架构委员会秘书" in prompt:
             if model != "deepseek-v4-pro":
@@ -210,7 +210,7 @@ def test_extract_retries_with_member_when_pool_exhausted(monkeypatch):
     """
     calls = []
 
-    def fake(prompt, model, max_tokens=2000):
+    def fake(prompt, model, max_tokens=2000, project_id=""):
         calls.append((model, prompt))
         if "架构委员会秘书" in prompt:
             return "" if model != "deepseek-v4-pro" else json.dumps(
@@ -249,7 +249,7 @@ def test_plans_total_cap_splits_evenly(monkeypatch):
 
 
 def test_single_plan_passthrough(monkeypatch):
-    monkeypatch.setattr(ej, "_call_model", lambda p, m, max_tokens=2000: "不该被调用")
+    monkeypatch.setattr(ej, "_call_model", lambda p, m, max_tokens=2000, project_id="": "不该被调用")
     assert ej.fuse_architecture_v2("需求", [("A", "唯一方案")]) == "唯一方案"
 
 
@@ -259,7 +259,7 @@ def test_confirm_issues_triggers_one_rewrite(monkeypatch):
     calls = []
     state = {"n": 0}
 
-    def fake(prompt, model, max_tokens=2000):
+    def fake(prompt, model, max_tokens=2000, project_id=""):
         calls.append((model, prompt))
         if "架构委员会秘书" in prompt:
             return _j(EXTRACT)
@@ -314,7 +314,7 @@ def test_confirm_empty_is_warned(monkeypatch):
     warns = []
     monkeypatch.setattr(ej.witness, "warn", lambda *a, **k: warns.append(a))
 
-    def fake(prompt, model, max_tokens=2000):
+    def fake(prompt, model, max_tokens=2000, project_id=""):
         if "架构委员会秘书" in prompt:
             return _j(EXTRACT)
         if "陈述己方理由" in prompt:
@@ -457,7 +457,7 @@ class TestExtractorRespectsActivePool:
         monkeypatch.setattr(disp, "load_agents",
                             lambda: {"any": [{"model": m} for m in pool]})
         calls = []
-        def fake(prompt, model, max_tokens=2000):
+        def fake(prompt, model, max_tokens=2000, project_id=""):
             calls.append((model, "架构委员会秘书" in prompt))
             if "架构委员会秘书" in prompt:
                 return _j({"consensus": ["都同意"], "disagreements": [], "unique_gains": []})

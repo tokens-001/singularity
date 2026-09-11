@@ -128,8 +128,15 @@ class DeliveryReport:
             "snapshot_method": self.snapshot.method,
             "snapshot_ref": self.snapshot.ref,
             "agent_output": self.executor_result.raw_output if self.executor_result else "",
-            "token_count": self.executor_result.token_count if self.executor_result else 0,
-            "elapsed": self.executor_result.elapsed if self.executor_result else 0.0,
+            # **"不可知"和"0"必须分得开**（§44 承诺类字段三态可分）。
+            # 超时被杀的任务拿不到 executor 的用量 —— 以前一律写 0，
+            # 于是 trace 里看着像"这个任务一分钱没花、一个文件没改"，
+            # 而事实是它烧了 900 秒、worktree 里文件写全了（2026-09-11 探路轮实测）。
+            # 调用方传 None 就如实记 None；没传这个属性的（正常路径）行为不变。
+            "token_count": getattr(self.executor_result, "token_count", 0)
+                             if self.executor_result else None,
+            "elapsed": getattr(self.executor_result, "elapsed", 0.0)
+                       if self.executor_result else None,
         }
 
 

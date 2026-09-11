@@ -197,6 +197,36 @@ def test_qa_constraint_fail_retries(monkeypatch, tmp_path):
     assert v.action == "retry" and q["failure_kind"] == "constraint_fail"
 
 
+def test_qa_needs_fix_without_specifics_does_not_retry(monkeypatch, tmp_path):
+    """needs_fix 却列不出任何具体项 → **结论不可用**，不据此重试。
+
+    2026-09-11 探路轮实测：T1 卡在这上面 —— `action=retry` 但所有条目都不是
+    fail/warning，消息成了 "QA 约束验收 0 条未满足: "（冒号后面空的）。
+    重试方只知道"要修"却不知道修什么，下一轮必然同样结果，**循环收敛不了**
+    直到撞 900s 超时失败。
+
+    拦住不说 = 比不拦更坏：烧钱、耗时，还不给任何可动手的信息。
+    所以这里既不 retry，也不假装"验收通过"—— 如实进 unverified。
+    """
+    v, q = _run(monkeypatch, tmp_path, project_id="p1",
+                constraints=[{"text": "必须用 PostgreSQL"}],
+                qa={"verdict": "needs_fix", "verifications": []})
+    assert v.action == "pass", "拿不到具体项的 needs_fix 不该驱动重试"
+    assert any("结论不可用" in u for u in v.unverified), "必须如实披露，不能静默"
+    assert q["quality_signals"]["qa_acceptance"] == "needs_fix_unspecified"
+    assert "constraint_fail" != q.get("failure_kind"), "不可执行的结论不算 constraint_fail"
+
+
+def test_qa_needs_fix_all_pass_entries_also_unusable(monkeypatch, tmp_path):
+    """模型自相矛盾（summary 判 needs_fix、条目全标 pass）也归"不可用"。"""
+    v, q = _run(monkeypatch, tmp_path, project_id="p1",
+                constraints=[{"text": "必须用 PostgreSQL"}],
+                qa={"verdict": "needs_fix",
+                    "verifications": [{"status": "pass", "constraint": "必须用 PostgreSQL"}]})
+    assert v.action == "pass"
+    assert any("结论不可用" in u for u in v.unverified)
+
+
 def test_test_timeout_retries_and_returns(monkeypatch, tmp_path):
     """测试跑超时不能默认通过，且**不再往下走**（后面每一步都要花钱）。"""
     import time

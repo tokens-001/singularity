@@ -676,7 +676,11 @@ def qa_acceptance_review(constraints, diff_text, cwd, requirements=""):
 {diff_text[:6000] if diff_text else '(无 diff)'}
 
 只输出 JSON：
-{{"verification":[{{"constraint":"约束","status":"pass|fail|warning|uncertain","evidence":"证据","detail":"说明"}}],"summary":{{"verdict":"accepted|needs_fix","critical":0,"major":0,"minor":0,"recommendation":"一句话"}}}}"""
+{{"verification":[{{"constraint":"约束","status":"pass|fail|warning|uncertain","evidence":"证据","detail":"说明"}}],"summary":{{"verdict":"accepted|needs_fix","critical":0,"major":0,"minor":0,"recommendation":"一句话"}}}}
+
+**一致性要求**：verdict 判 needs_fix 时，verification 里**必须至少有一条** status 为 fail
+或 warning，并写清是哪条约束、差在哪。判了 needs_fix 却给不出具体条目，这个结论对下游
+不可执行 —— 重试方只知道"要修"却不知道修什么，只会原样再来一遍。"""
 
     # 单模型验收（QA 验收不需多模型碰撞）
     agents = _disp.load_agents()
