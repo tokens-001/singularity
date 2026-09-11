@@ -334,7 +334,8 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                     else:
                         # D2: 推进到集成合并阶段, 异步跑 (不阻塞调度循环)
                         n_failed = len(proj.task_ids) - len(done_ids)
-                        proj.phase = proj_mod.Phase.INTEGRATING
+                        proj.set_phase(proj_mod.Phase.INTEGRATING,
+                                        f"任务全部到终态(失败 {n_failed})→集成合并")
                         proj_mod.save(proj)
                         _pending_sse_events.append({
                             "kind": "system",
@@ -351,7 +352,7 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                 # S1: 自动交付打包 (轻量, 同步即可)
                 ok, detail = _run_delivery(proj)
                 if ok:
-                    proj.phase = proj_mod.Phase.DONE
+                    proj.set_phase(proj_mod.Phase.DONE, f"交付完成: {detail[:60]}")
                     proj_mod.save(proj)
                     _pending_sse_events.append({
                         "kind": "system", "msg": f"项目 {proj.name}: 交付完成! {detail[:100]}",
@@ -459,14 +460,14 @@ def _run_integration_merge_async(project_id: str, agents: dict) -> None:
             fail_check = check_review_fail_limit(proj.id,
                 getattr(proj, 'review_failures', 0))
             if fail_check["blocked"]:
-                proj.phase = proj_mod.Phase.GATE2
+                proj.set_phase(proj_mod.Phase.GATE2, fail_check["reason"])
                 proj_mod.save(proj)
                 _pending_sse_events.append({
                     "kind": "system", "msg": fail_check["reason"],
                     "ts": time.time(), "task_id": proj.id,
                 })
             else:
-                proj.phase = proj_mod.Phase.REVIEWING
+                proj.set_phase(proj_mod.Phase.REVIEWING, "集成合并通过")
                 proj_mod.save(proj)
                 from singularity.scheduler.workflow import run_test_fix_loop
                 msg = run_test_fix_loop(proj, agents)
@@ -480,7 +481,7 @@ def _run_integration_merge_async(project_id: str, agents: dict) -> None:
             proj.integrate_failures = integrate_fails
             if integrate_fails >= proj_mod._INTEGRATE_MAX_RETRIES:
                 # 触顶 → 打回架构 (GATE2)
-                proj.phase = proj_mod.Phase.GATE2
+                proj.set_phase(proj_mod.Phase.GATE2, f"集成合并{integrate_fails}次失败(上限{proj_mod._INTEGRATE_MAX_RETRIES})")
                 proj_mod.save(proj)
                 _pending_sse_events.append({
                     "kind": "system", "msg": f"集成合并{integrate_fails}次失败→升GATE2: {detail[:120]}",
@@ -488,7 +489,7 @@ def _run_integration_merge_async(project_id: str, agents: dict) -> None:
                 })
             else:
                 # 回实现层重试
-                proj.phase = proj_mod.Phase.EXECUTING
+                proj.set_phase(proj_mod.Phase.EXECUTING, f"集成合并失败第{integrate_fails}次→回实现层重试")
                 proj_mod.save(proj)
                 _pending_sse_events.append({
                     "kind": "system", "msg": f"集成合并失败({integrate_fails}/{proj_mod._INTEGRATE_MAX_RETRIES})→回实现层: {detail[:120]}",

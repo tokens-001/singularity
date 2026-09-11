@@ -146,7 +146,7 @@ class ProjectState:
         if decision == "approved":
             next_p = _GATE_NEXT.get(gate)
             if next_p:
-                self.phase = next_p
+                self.set_phase(next_p, f"人工批准 {gate.value}")
             # 人工批 GATE2 = 人到场兜底了, 自动重试的配额必须跟着恢复。
             # review_failures / integrate_failures 是**单向棘轮**(全仓无一处清零):
             # 审查失败触顶 → 集成合并成功后又被 escalate 回 GATE2 → 你再点通过 → 又触顶,
@@ -158,14 +158,14 @@ class ProjectState:
         elif decision == "rejected":
             fallback = _REJECT_FALLBACK.get(gate)
             if fallback:
-                self.phase = fallback
+                self.set_phase(fallback, f"人工打回 {gate.value}")
             return fallback
         return None
 
     def architecture_redo(self) -> bool:
         """架构级返工: 从 executing/reviewing 回 planning。"""
         if self.phase in _ARCHITECTURE_REDO:
-            self.phase = Phase.PLANNING
+            self.set_phase(Phase.PLANNING, "architecture_redo")
             self.architecture = None
             self.constraints_checklist = []
             self.updated_at = time.time()
@@ -179,6 +179,24 @@ class ProjectState:
         # 硬上限 1000 条
         if len(self.lineage) > 1000:
             self.lineage = self.lineage[-1000:]
+
+    def set_phase(self, phase: "Phase", reason: str = "") -> None:
+        """**阶段流转的唯一入口** —— 顺带自动留痕。
+
+        以前是 21 处 `proj.phase = X` 散在 4 个文件里，两套驱动各写各的：
+        自动那套（orchestrator）会跑 INTEGRATING / DELIVERING，而人手那套
+        （`run_phase`）压根不认识这两个阶段，走到就报"未知 phase"。
+        出问题时**没有任何轨迹可查** —— 比如"点通过永远弹回 GATE2"那个死锁，
+        用户只能看到界面在重复，翻遍项目文件也看不出是谁、第几次把它推回去的。
+
+        不落盘：`add_lineage` 是纯内存追加（上限 1000 条），落盘由调用方在
+        合适的时机 `save()`。所以加这一层**不增加任何写盘次数**。
+        """
+        if phase == self.phase:
+            return                      # 没变就不记，免得轨迹被空转刷满
+        self.add_lineage({"action": "phase", "from": self.phase.value,
+                          "to": phase.value, "reason": str(reason)[:120]})
+        self.phase = phase
 
 # ═══════════════════════════════════════════════════════════
 # 持久化

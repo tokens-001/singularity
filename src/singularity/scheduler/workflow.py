@@ -205,14 +205,14 @@ def run_phase(project: ProjectState, agents: dict) -> str:
 
         elif phase == Phase.REVIEWING:
             # ponytail: AI内审已移除，直接交GATE3等人审
-            project.phase = Phase.GATE3
+            project.set_phase(Phase.GATE3, "AI内审已移除 → 直接交人工")
             save(project)
             msgs.append("AI内审已移除 → GATE3 等人工审核")
             continue
 
         elif phase == Phase.FIXING:
             # ponytail: AI修复已移除，交GATE3等人审
-            project.phase = Phase.GATE3
+            project.set_phase(Phase.GATE3, "AI自动修复已移除 → 直接交人工")
             save(project)
             msgs.append("AI自动修复已移除 → GATE3 等人工审核")
             continue
@@ -274,7 +274,7 @@ def run_test_fix_loop(project: ProjectState, agents: dict) -> str:
     if verify_msgs:
         msgs.extend(verify_msgs)
 
-    project.phase = Phase.GATE3
+    project.set_phase(Phase.GATE3, "执行完成 → 验收报告完毕, 等人工审")
     save(project)
     return "\n".join(msgs) + "\n→ GATE3 等待人工审核"
 
@@ -414,7 +414,7 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
     if fix_route == "impl":
         # 回实现层: 重置 DONE task 为 PENDING, 让实现层重新执行
         # (否则打回后所有 task 仍 DONE, 队列无活任务 → 空转直达 GATE3, 缺陷从未修复)
-        project.phase = Phase.EXECUTING
+        project.set_phase(Phase.EXECUTING, f"GATE3 打回(impl): {feedback[:60]}")
         reset_count = 0
         for tid in list(project.task_ids):
             t = tracker.read_task(tid)
@@ -433,7 +433,7 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
         msg = f"GATE3 问题仅记录 (suggestion), 不阻断交付"
     else:
         # design: 回规划重做架构
-        project.phase = Phase.PLANNING
+        project.set_phase(Phase.PLANNING, f"GATE3 打回(design): {feedback[:60]}")
         project.architecture = None
         project.add_lineage({"action": "gate3_route", "route": "design"})
         msg = f"GATE3 打回 → 回架构规划 (反馈: {feedback[:80]})"
@@ -455,9 +455,9 @@ def start_project_workflow(project: ProjectState, agents: dict) -> str:
         return "请先填写需求描述再启动工作流"
 
     if _needs_research(project):
-        project.phase = Phase.RESEARCHING
+        project.set_phase(Phase.RESEARCHING, "立项: 需要调研")
     else:
-        project.phase = Phase.PLANNING
+        project.set_phase(Phase.PLANNING, "立项: 无需调研, 直接进架构")
     save(project)
 
     return run_phase(project, agents)

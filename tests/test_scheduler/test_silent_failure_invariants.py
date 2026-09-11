@@ -187,3 +187,58 @@ class TestConfigKeysAreAlive:
         assert not dead, (
             f"fusion.toml 里的 {dead} 没有任何地方读 —— 你以为配上了，"
             f"实际走的是代码里的硬编码默认值，而且没有任何提示。")
+
+
+class TestPhaseTrajectory:
+    """⑦ 阶段流转必须有轨迹 —— 出事时要能一眼看出来。
+
+    以前 21 处 `phase = X` 散在 4 个文件、两套驱动各写各的：出问题时落盘里
+    只有**最终** phase，没有任何轨迹。"点通过永远弹回 GATE2"那个死锁，
+    用户只能看到界面在重复，翻遍项目文件也看不出是谁、第几次把它推回去的。
+    """
+
+    def test_set_phase_records_trajectory(self):
+        p = P.ProjectState(id="x", name="y")
+        p.set_phase(Phase.PLANNING, "测试")
+        p.set_phase(Phase.GATE2, "架构完成")
+        traj = [(e["from"], e["to"]) for e in p.lineage if e.get("action") == "phase"]
+        assert traj == [("template", "planning"), ("planning", "gate2")]
+
+    def test_reason_is_kept(self):
+        p = P.ProjectState(id="x", name="y")
+        p.set_phase(Phase.GATE2, "审查自动修已达上限(2轮)")
+        assert p.lineage[-1]["reason"] == "审查自动修已达上限(2轮)"
+
+    def test_noop_transition_not_recorded(self):
+        """同阶段重复设置不记 —— 否则轨迹会被空转刷满、真信号被淹。"""
+        p = P.ProjectState(id="x", name="y")
+        p.set_phase(Phase.PLANNING)
+        p.set_phase(Phase.PLANNING)
+        assert len([e for e in p.lineage if e.get("action") == "phase"]) == 1
+
+    def test_loop_is_visible(self):
+        """今天那个死锁的场景：反复回到 GATE2 必须在轨迹里看得见。"""
+        p = P.ProjectState(id="x", name="y", phase=Phase.GATE2)
+        for _ in range(3):
+            p.set_phase(Phase.EXECUTING, "人工批准")
+            p.set_phase(Phase.INTEGRATING, "任务全部到终态")
+            p.set_phase(Phase.GATE2, "审查自动修已达上限")
+        tos = [e["to"] for e in p.lineage if e.get("action") == "phase"]
+        assert tos.count("gate2") == 3
+
+    def test_no_raw_phase_assignment_anywhere(self):
+        """全仓不该再有裸的 `.phase = X` —— 绕过 set_phase 就没有轨迹。
+
+        这条是防回潮：新加的流转点如果图省事直接赋值，留痕就悄悄缺一块，
+        而且缺得没有任何提示（这正是本文件在防的那一类）。
+        """
+        import re
+        from singularity.scheduler import config
+        bad = []
+        for f in sorted(config.SCHEDULER_DIR.glob("*.py")):
+            for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+                if "`" in line:
+                    continue          # 反引号里的是文档/代码引用，不是真赋值
+                if re.search(r"\.phase = ", line) and "self.phase = phase" not in line:
+                    bad.append(f"{f.name}:{i}")
+        assert not bad, f"有绕过 set_phase 的裸赋值（那样不留痕）：{bad}"

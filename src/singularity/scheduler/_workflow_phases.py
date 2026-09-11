@@ -19,7 +19,7 @@ from singularity.scheduler.workflow import (
 def _run_research(project: ProjectState, agents: dict) -> str:
     """调 Researcher(廉价层) 搜集可借鉴方案 → GATE1。"""
     if _should_skip(project, "gate1"):
-        project.phase = Phase.GATE1
+        project.set_phase(Phase.GATE1, "调研已跳过 → GATE1")
         save(project)
         return "调研已跳过"
 
@@ -63,7 +63,7 @@ def _run_research(project: ProjectState, agents: dict) -> str:
     _save_phase_output(project.id, "research.md", raw)
     project.add_lineage({"action": "research_complete",
                          "agent": disp_result.agent_cfg.get("model","?") if disp_result else "?"})
-    project.phase = Phase.GATE1
+    project.set_phase(Phase.GATE1, "调研完成 → GATE1 等人工")
     save(project)
     return f"调研完成: {len(report.get('competitive_analysis', {}).get('products', []))} 竞品, {len(report.get('frontier_theory', {}).get('papers', []))} 论文引用"
 
@@ -75,7 +75,7 @@ def _run_research(project: ProjectState, agents: dict) -> str:
 def _run_planning(project: ProjectState, agents: dict) -> str:
     """调 Architect(强力层) 出方案+任务清单 → GATE2。"""
     if _should_skip(project, "gate2"):
-        project.phase = Phase.GATE2
+        project.set_phase(Phase.GATE2, "规划已跳过 → GATE2")
         save(project)
         return "规划已跳过"
 
@@ -176,7 +176,7 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     except Exception:
         pass
 
-    project.phase = Phase.GATE2
+    project.set_phase(Phase.GATE2, "架构完成 → GATE2 等人工")
     save(project)
     block_warn = f" (⚠阻塞: {'; '.join(blockers[:2])})" if blockers else ""
     return f"架构完成: {len(arch.get('tasks', []))} 个任务, {len(arch.get('constraints', []))} 条约束, {len(traceability)} 条追溯{block_warn}"
@@ -305,7 +305,7 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
 
     project.fix_round = 0
     project.constraints_checklist = constraints
-    project.phase = Phase.EXECUTING
+    project.set_phase(Phase.EXECUTING, "架构确认 → 建任务进执行")
     save(project)
     return f"已分发 {created} 个子任务 (按 layer 路由到对应工程师, 全池选模型)"
 
