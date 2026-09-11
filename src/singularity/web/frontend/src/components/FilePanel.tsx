@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useAppStore } from '../stores/app'
 import { api } from '../lib/api'
-import { useToast } from '../lib/toast'
+import { useToast, errText } from '../lib/toast'
 import { FileText, Folder, FolderOpen, X, PanelRightClose, GitBranch, Download } from 'lucide-react'
 
 interface FileNode {
@@ -34,7 +34,7 @@ export default function FilePanel({ onClose }: { onClose: () => void }) {
       const nodes = buildTree(d.files || [])
       setTree(nodes)
       setExpanded(new Set(nodes.map(n => n.path)))
-    }).catch(() => { toast('加载文件列表失败', 'error') })
+    }).catch((e) => { toast(errText(e, '加载文件列表失败'), 'error') })
     fetch(`/api/projects/${activePid}/diff`).then(r => r.json()).then(d => {
       if (d.error) {
         setDiffData({ stat: '', diff: '' })
@@ -42,7 +42,7 @@ export default function FilePanel({ onClose }: { onClose: () => void }) {
         return
       }
       setDiffData({ stat: d.stat || '', diff: d.diff || '' })
-    }).catch(() => { toast('加载diff失败', 'error') })
+    }).catch((e) => { toast(errText(e, '加载diff失败'), 'error') })
   }, [activePid])
 
   const buildTree = (files: string[]): FileNode[] => {

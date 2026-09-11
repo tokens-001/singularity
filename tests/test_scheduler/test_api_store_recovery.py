@@ -15,6 +15,7 @@
 **在旧代码上会红、且红得对**（断言失败）：`test_recovers_after_cooldown` 会因
 永远返回 False 而失败。
 """
+import json
 import os
 import sys
 import time
@@ -72,3 +73,53 @@ class TestProviderRecovery:
 
     def test_unknown_id(self, store):
         assert store.is_available("nope") is False
+
+
+class TestModelLevelAvailability:
+    """provider 欠费**不该连坐**同厂商还能用的模型。
+
+    实测线上：智谱 8 个付费模型欠费 → 整个 provider 被标死 → `glm-4.7`
+    （同账号、明明能调）也一起从候选链消失，而且**没有任何提示** ——
+    表现就是"怎么又少了几个模型"。
+
+    provider 级熔断对"账号级配额"（DeepSeek 那种）是对的；对"同一账号混着
+    免费和付费模型"的厂商就是一刀切错杀。所以调度改看模型级。
+    """
+
+    def _mark_provider(self, store, monkeypatch, provider="p_just_marked"):
+        from singularity.scheduler import model_registry as mr
+        monkeypatch.setattr(mr, "provider_for_model", lambda m: provider)
+
+    def test_sibling_survives_when_only_one_model_is_out_of_quota(self, store, monkeypatch):
+        self._mark_provider(store, monkeypatch)
+        store.note_api_error("paid-model", 400, '{"code":"1113","message":"余额不足"}')
+
+        assert store.is_model_available("paid-model") is False, "欠费的那个该被跳过"
+        assert store.is_model_available("free-model") is True, \
+            "同一个 provider 下没欠费的模型被连坐踢掉 —— 正是这条修掉的"
+        # provider 状态仍然标记：界面要显示"这个厂商欠费了"，只是调度不再据它连坐
+        assert store.is_available("p_just_marked") is False
+
+    def test_model_recovers_after_cooldown(self, store, monkeypatch):
+        self._mark_provider(store, monkeypatch)
+        store.note_api_error("paid-model", 400, "余额不足")
+        assert store.is_model_available("paid-model") is False
+
+        data = store._load_raw()
+        data[store._QUOTA_DEAD_KEY]["paid-model"] = time.time() - (store._RECOVERY_COOLDOWN + 60)
+        store._store_path().write_text(json.dumps(data))
+
+        assert store.is_model_available("paid-model") is True, "充值后不该还要等重启"
+
+    def test_no_key_blocks_every_model_of_that_provider(self, store, monkeypatch):
+        """没有 key 是厂商级事实 —— 这种时候仍然要挡，别浪费调用。"""
+        self._mark_provider(store, monkeypatch, provider="p_nokey")
+        ents = store._load()
+        ents["p_nokey"].api_key_env = "DEFINITELY_NOT_SET_XYZ"
+        store._save(ents)
+        assert store.is_model_available("any-model-of-it") is False
+
+    def test_disabled_provider_blocks(self, store, monkeypatch):
+        """人工显式关闭的 provider，其下所有模型都挡。"""
+        self._mark_provider(store, monkeypatch, provider="p_disabled")
+        assert store.is_model_available("any-model-of-it") is False

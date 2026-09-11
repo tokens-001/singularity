@@ -58,7 +58,31 @@ def agent_add(level, model, agent_type="openai-agent", entry_url="", api_key_env
     from . import dispatcher as disp_mod
     cfg = disp_mod.add_agent(level=level, model=model, agent_type=agent_type, entry=entry_url,
         api_key_env=api_key_env, max_turns=max_turns, roles=roles or [], sandbox=sandbox, mode=mode, request_template=request_template)
-    return {"ok": True, "agent": cfg}, 200
+
+    # 加完立刻自检"它到底能不能被调度"。`_ensure_agent_type` 是靠**模型注册表**
+    # 自动补 entry/api_key_env 的 —— 模型不在注册表里(只扫描过、没导入), 就补不出来,
+    # 这条 agent 成了空壳: `agent_api_available` 恒 False, 永远不进候选链。
+    # 而接口照样回 ok —— 用户只会觉得"加了怎么还是没这个模型", 查不出为什么。
+    # 两种情况都会导致"加了但不进候选链", 但原因和处置完全不同, 别混成一句:
+    #   ① 模型不在模型库 → 补不出 entry/api_key_env → 永久空壳, 要先去扫描导入
+    #   ② provider 当前不可用(欠费熔断/没 key) → 配置是对的, 等它恢复就会进链
+    warning = ""
+    if not entry_url and not api_key_env and agent_type in ("openai-agent", "zhipu-api"):
+        try:
+            from . import model_registry as mr
+            if mr.get(model) is None:
+                warning = (f"模型 {model} 不在模型库里, 补不出 API 地址和 key 变量 → "
+                           f"这条 agent 是空壳, 不会被调度。先到「模型」页扫描并导入它, 再回来加。")
+            else:
+                merged = disp_mod.load_agents().get(level, [])
+                cur = next((a for a in merged if a.get("model") == model), None)
+                # 传副本: _ensure_agent_type 会就地改字典, 别污染 load_agents() 的结果
+                if cur is not None and not disp_mod.agent_api_available(dict(cur)):
+                    warning = (f"模型 {model} 配置没问题, 但它的 provider 当前不可用"
+                               f"（欠费熔断或没配 key, 见「API」页状态）→ 暂时不会进候选链。")
+        except Exception:
+            pass
+    return {"ok": True, "agent": cfg, **({"warning": warning} if warning else {})}, 200
 
 
 def agent_update(level, model, data):

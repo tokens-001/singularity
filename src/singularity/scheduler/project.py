@@ -10,6 +10,7 @@ import os
 import re
 import threading
 import time
+import dataclasses
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -94,27 +95,18 @@ class ProjectState:
     updated_at: float = 0.0
 
     def to_dict(self) -> dict:
-        d = {
-            "id": self.id, "name": self.name, "template": self.template,
-            "phase": self.phase.value, "description": self.description,
-            "scope": self.scope, "raw_constraints": self.raw_constraints,
-            "owner_confirm": self.owner_confirm,
-            "research_report": self.research_report,
-            "architecture": self.architecture,
-            "committee_fusion": self.committee_fusion,
-            "constraints_checklist": self.constraints_checklist,
-            "task_ids": self.task_ids, "issues": self.issues,
-            "supervision_log": self.supervision_log, "lineage": self.lineage,
-            "handoffs": self.handoffs,
-            "auto_mode": self.auto_mode,
-            "token_budget_total": self.token_budget_total,
-            "token_spent": self.token_spent,
-            "fix_round": self.fix_round,
-            "review_failures": self.review_failures,
-            "integrate_failures": self.integrate_failures,
-            "agent_lineup": self.agent_lineup,
-            "created_at": self.created_at, "updated_at": self.updated_at,
-        }
+        """字段表**派生于 dataclass**，不是手抄。
+
+        原来这里手写字段清单 —— 加字段忘了补，序列化就少一个键，前端拿到 undefined
+        当成"没有"，全程不报错。GATE3 的 qa_report 就是这么丢的（后端花钱生成了报告、
+        打回逻辑还读它，界面上一个字都没有）。派生化之后这种漏抄结构上不可能。
+
+        注意：`fields()` 与旧清单曾逐项核对一致（26/26），所以这个改动不改变序列化内容。
+        """
+        d = {}
+        for f in dataclasses.fields(self):
+            v = getattr(self, f.name)
+            d[f.name] = v.value if isinstance(v, Enum) else v
         return d
 
     @classmethod
@@ -390,7 +382,14 @@ def load(project_id: str) -> Optional[ProjectState]:
         return ProjectState.from_dict(
             json.loads(p.read_text(encoding="utf-8"))
         )
-    except (json.JSONDecodeError, KeyError, TypeError):
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        # 原来这里静默 return None —— 调用方只会当成"项目不存在"，
+        # 表现就是"项目从界面消失了"，查不出为什么。文件还在，只是读不出来。
+        try:
+            from singularity.scheduler import witness
+            witness.warn("project", f"load_failed:{project_id}:{type(e).__name__}:{e}"[:200])
+        except Exception:
+            pass
         return None
 
 
@@ -431,7 +430,14 @@ def list_all() -> list[ProjectState]:
             if not isinstance(data, dict) or "phase" not in data:
                 continue  # 非项目文件
             projects.append(ProjectState.from_dict(data))
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            # 不能静默 continue: 磁盘上有个不认的项目文件，界面上就是"凭空少一个"，
+            # 用户不会知道是文件坏了还是自己删了。alerts.jsonl 里留一条，能查。
+            try:
+                from singularity.scheduler import witness
+                witness.warn("project", f"unlistable:{p.name}:{type(e).__name__}:{e}"[:200])
+            except Exception:
+                pass
             continue
     return projects
 

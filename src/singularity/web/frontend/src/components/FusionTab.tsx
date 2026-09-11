@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { api } from '../lib/api'
-import { useRun, useToast } from '../lib/toast'
+import { useRun, useToast, errText } from '../lib/toast'
 import { Save } from 'lucide-react'
 
 const TIERS: [string, string][] = [
@@ -26,9 +26,9 @@ export default function FusionTab() {
   const toast = useToast()
 
   const load = () => {
-    api.fusionConfig().then(setCfg).catch(() => toast('加载 Fusion 配置失败', 'error'))
+    api.fusionConfig().then(setCfg).catch((e) => toast(errText(e, '加载 Fusion 配置失败'), 'error'))
     api.models().then((ms: any[]) => setModels(ms.filter(m => m.api_available)))
-      .catch(() => toast('加载模型列表失败', 'error'))
+      .catch((e) => toast(errText(e, '加载模型列表失败'), 'error'))
   }
   useEffect(() => { load() }, [])
 

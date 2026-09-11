@@ -171,7 +171,9 @@ def agent_api_available(agent_cfg: dict) -> bool:
             provider = mr.provider_for_model(model)
             if provider:
                 from . import api_store
-                if not api_store.is_available(provider):
+                # 模型级判据，不是 provider 级：provider 被标欠费时，同厂商下
+                # 还能调的模型不该被连坐踢出（智谱付费模型欠费 → 免费/低价模型一起消失）。
+                if not api_store.is_model_available(model):
                     return False
         except Exception as e:
             from . import witness; witness.warn("dispatch", f"api_check:{e}")

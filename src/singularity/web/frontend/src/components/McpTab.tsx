@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { api } from '../lib/api'
-import { useRun, useToast } from '../lib/toast'
+import { useRun, useToast, errText } from '../lib/toast'
 import { RefreshCw } from 'lucide-react'
 
 /** MCP 服务器（只读列表 + 重新加载配置）。
@@ -20,7 +20,7 @@ export default function McpTab() {
     try {
       const [s, t] = await Promise.all([api.mcpServers(), api.mcpTools()])
       setServers(s); setTools(t)
-    } catch { toast('加载 MCP 服务器失败', 'error') }
+    } catch (e) { toast(errText(e, '加载 MCP 服务器失败'), 'error') }
     setLoading(false)
   }
   useEffect(() => { fetch() }, [])

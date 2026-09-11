@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { api, Task } from '../lib/api'
 import { useSSE, useSSEConnected } from '../lib/useSSE'
 import { useVirtualRows } from '../lib/useVirtualRows'
-import { useToast, useModal, useRun } from '../lib/toast'
+import { useToast, useModal, useRun, errText } from '../lib/toast'
 import { useAppStore } from '../stores/app'
 import { Plus, RefreshCw, RotateCcw, XCircle, Trash2, Search, Pause, Play, X } from 'lucide-react'
 
@@ -30,7 +30,7 @@ export default function Tasks() {
   // 再换回来，根本没法稳定读或点。
   const fetch = useCallback((initial = false) => {
     if (initial) setLoading(true)
-    api.tasks().then(setTasks).catch(() => toast('加载任务失败', 'error'))
+    api.tasks().then(setTasks).catch((e) => toast(errText(e, '加载任务失败'), 'error'))
       .finally(() => { if (initial) setLoading(false) })
     api.projects().then((ps: any[]) => {
       const m: Record<string,string> = {}

@@ -3,7 +3,7 @@ import { Bubble, Sender } from '@ant-design/x'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
 import { useAppStore, type ChatMsg } from '../stores/app'
-import { useToast } from '../lib/toast'
+import { useToast, errText } from '../lib/toast'
 import { Loader2, CheckCircle2, FolderOpen } from 'lucide-react'
 import FilePanel from '../components/FilePanel'
 import { MessageBubble } from '../components/chat/MessageBubble'
@@ -79,7 +79,7 @@ export default function Chat() {
     } catch (e) { toast(String(e), 'error') }
   }
   const fetchProjects = async () => {
-    try { const d: any = await api.projects(); const list = Array.isArray(d)?d:(d?.projects||[]); setProjects(list); projectsRef.current = list } catch { toast('加载项目失败', 'error') }
+    try { const d: any = await api.projects(); const list = Array.isArray(d)?d:(d?.projects||[]); setProjects(list); projectsRef.current = list } catch (e) { toast(errText(e, '加载项目失败'), 'error') }
   }
   const fetchTasks = async () => {
     // 请求序号：只认最后一次发出的请求的结果。
@@ -113,11 +113,11 @@ export default function Chat() {
           }
         })
       }
-    } catch { toast('加载任务失败', 'error') }
+    } catch (e) { toast(errText(e, '加载任务失败'), 'error') }
   }
-  const retryFailed = async (tid: string) => { try { await api.retryTask(tid); fetchTasks() } catch { toast('重试失败', 'error') } }
+  const retryFailed = async (tid: string) => { try { await api.retryTask(tid); fetchTasks() } catch (e) { toast(errText(e, '重试失败'), 'error') } }
   // 带上 activePid：项目产出的文件在成品仓库里，不带项目 id 会拿奇点自己的根去找 → 必 404
-  const revealFile = (f: string) => { api.revealFile(f, activePid).catch((e: any) => toast(`定位失败：${e?.message || e}`, 'error')) }
+  const revealFile = (f: string) => { api.revealFile(f, activePid).catch((e: any) => toast(errText(e, '定位失败'), 'error')) }
 
   useSSE((e: any) => {
     if (e.kind === 'task') {
@@ -174,7 +174,7 @@ export default function Chat() {
       try {
         const r: any = await api.createProject({name: q.slice(0, 30), description: q, template: 'product_dev'})
         if (r?.project?.id) { pid = r.project.id; setActiveProject(pid); await fetchProjects() }
-      } catch { toast('创建项目失败', 'error') }
+      } catch (e) { toast(errText(e, '创建项目失败'), 'error') }
     }
     addChatMsg({role:'user',content:q,ts:Date.now()})
 
@@ -192,7 +192,7 @@ export default function Chat() {
     const info = projects.find(p => p.id === activePid)
     if (!info) return
     try { await api.gateConfirm(info.id, info.phase, decision); fetchProjects(); fetchTasks() }
-    catch { toast('操作失败', 'error') }
+    catch (e) { toast(errText(e, '操作失败'), 'error') }
   }
 
   const { completed, failed, active } = useMemo(() => {

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
-import { useToast, useModal, useRun } from '../lib/toast'
+import { useToast, useModal, useRun, errText } from '../lib/toast'
 import { getPinned, togglePin } from '../lib/pinned'
 import { useAppStore } from '../stores/app'
 import { ResearchReport, ArchitectureDetails } from '../components/chat/GatePanel'
@@ -51,7 +51,7 @@ export default function Projects() {
 
   const fetch = async () => {
     setLoading(true)
-    try { const d: any = await api.projects(); setProjects(Array.isArray(d)?d:(d?.projects||[])) } catch { toast('加载项目失败', 'error') }
+    try { const d: any = await api.projects(); setProjects(Array.isArray(d)?d:(d?.projects||[])) } catch (e) { toast(errText(e, '加载项目失败'), 'error') }
     setLoading(false)
   }
   useEffect(() => { fetch() }, [])
@@ -69,7 +69,7 @@ export default function Projects() {
       const d = await api.project(id)
       if (seq !== detailSeq.current) return   // 已经切到别的项目了，丢弃
       setDetail(d)
-    } catch { toast('加载项目详情失败', 'error') }
+    } catch (e) { toast(errText(e, '加载项目详情失败'), 'error') }
   }
 
   const create = async () => {

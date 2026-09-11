@@ -12,6 +12,21 @@ export function useToast() {
   return (msg: string, kind: Kind = 'info') => message[kind](msg)
 }
 
+/**
+ * 把 `request()` 抛出的**后端中文原因**格式化进提示文案。
+ *
+ * `request()`（lib/api.ts）已经把后端错误体里的 `error` 提出来了 —— 直接写
+ * `catch { toast('加载失败') }` 等于把它扔掉，界面上只剩"失败"两个字，
+ * 用户和排查的人都无从下手。实例：点文件「在文件夹中显示」只弹「定位失败」，
+ * 而后端明明说了「文件不存在」—— 少这一句，问题多花了一轮才查出来。
+ *
+ * `useRun()` 是整段流程包这个纪律；这里给"只想包一句 toast"的场景用。
+ */
+export function errText(e: unknown, fallback: string): string {
+  const m = e instanceof Error ? e.message : String(e ?? '')
+  return m ? `${fallback}：${m}` : fallback
+}
+
 /** antd 的 Modal 实例（同样必须来自 App.useApp() 才吃 theme）。 */
 export function useModal() {
   return AntApp.useApp().modal

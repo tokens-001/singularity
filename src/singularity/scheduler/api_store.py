@@ -265,6 +265,40 @@ _QUOTA_HINTS = ("insufficient balance", "insufficient_quota", "exceeded_current_
                 "quota exceeded", "余额不足", "欠费", "arrears", "please recharge")
 
 
+_QUOTA_DEAD_KEY = "_quota_dead"   # {model_id: 标记时间戳}
+
+
+def _quota_dead() -> dict:
+    return _load_raw().get(_QUOTA_DEAD_KEY, {}) or {}
+
+
+def is_model_available(model: str) -> bool:
+    """**模型级**可用性 —— 比 `is_available(provider)` 精确。
+
+    provider 级熔断在"同一账号既有免费模型又有付费模型"时会误伤：一个付费模型欠费，
+    把同厂商下还能用的模型一起踢出候选链（智谱就是这样 —— glm-5.3 欠费，
+    glm-4.7/4-flash 明明能调，也一起消失）。而且踢掉是**静默的**：模型从链上没了，
+    没有任何提示，表现就是"怎么又少了"。
+
+    判据：① 这个模型自己欠费过吗 ② provider 还开着吗（没禁用、配了 key）
+    —— 刻意**不看** provider 的 status，那正是会连坐的那一项。
+    """
+    ts = _quota_dead().get(model, 0)
+    if ts and (time.time() - ts) < _RECOVERY_COOLDOWN:
+        return False
+    try:
+        from singularity.scheduler import model_registry as mr
+        provider = mr.provider_for_model(model)
+    except Exception:
+        provider = ""
+    if not provider:
+        return True
+    entry = get(provider)
+    if entry is None or entry.status == "disabled":
+        return False
+    return bool(os.environ.get(entry.api_key_env, ""))
+
+
 def note_api_error(model: str, status_code: int, body: str = "") -> str:
     """模型调用失败时调一次。命中余额特征 → 标记 provider 为 quota_exhausted + 告警。
 
@@ -281,6 +315,15 @@ def note_api_error(model: str, status_code: int, body: str = "") -> str:
         api_id = ""
     witness.warn("api_store",
                  f"quota_exhausted:{api_id or model}:http{status_code}:{(body or '')[:80]}"[:200])
+    # 欠费记到**具体模型**上 —— 调度用它决定跳不跳（见 is_model_available）。
+    # provider 状态仍然更新，但那只给界面看，不再作为调度的连坐依据。
+    if model:
+        try:
+            data = _load_raw()
+            data.setdefault(_QUOTA_DEAD_KEY, {})[model] = time.time()
+            _store_path().write_text(json.dumps(data, ensure_ascii=False, indent=2))
+        except Exception as e:
+            witness.warn("api_store", f"mark_quota_dead_failed:{model}:{e}"[:200])
     if api_id:
         cur = get(api_id)
         if cur and cur.status != "quota_exhausted":
@@ -385,6 +428,7 @@ def scan_models(api_id: str, include_capabilities: bool = True) -> list[dict]:
             if not items and isinstance(data, list):
                 items = data
             models = []
+            dropped: list[tuple[str, str]] = []   # (模型 id, 为什么滤掉)
             for item in items:
                 mid = item.get("id", "")
                 # Filter: only keep text generation models suitable for agent use
@@ -398,11 +442,14 @@ def scan_models(api_id: str, include_capabilities: bool = True) -> list[dict]:
                                 "-longcontext", "-long", "-flash-character", "-s2s-",
                                 "-realtime", "-deep-research", "-deep-search", "-1201", "-0107", "-0919", "-latest")
                 skip = any(mid.startswith(p) for p in skip_prefixes) or any(k in mid.lower() for k in skip_keywords)
+                if mid and skip:
+                    dropped.append((mid, "skip"))
                 if mid and not skip:
                     # 从已知模型库查能力数据
                     cap = known.get(mid) if isinstance(known, dict) else None
                     # Only show: known models OR major/current-generation models
                     if not cap and not _is_major_model(mid):
+                        dropped.append((mid, "not_major"))
                         continue
                     # 推断真实 provider（处理模型网关情况, 如 DashScope 代理多家模型）
                     provider = _infer_model_provider(mid, entry.provider)
@@ -439,6 +486,23 @@ def scan_models(api_id: str, include_capabilities: bool = True) -> list[dict]:
                     if short in model_ids and short != mid:
                         continue
                 filtered.append(m)
+            # 落选账: 白名单对"厂商的命名"是开放集合, 永远补不全 ——
+            # deepseek-flash 就是这么凭空少掉的, 用户只能自己发现"怎么只有一个"。
+            # 聚合一条写进 alerts.jsonl, 下次漏了先看这儿, 不用再猜。
+            if dropped:
+                try:
+                    from singularity.scheduler import witness
+                    not_major = [m for m, r in dropped if r == "not_major"]
+                    skip_n = len(dropped) - len(not_major)
+                    preview = ", ".join(f"{m}({r})" for m, r in dropped[:6])
+                    witness.warn("model_scan",
+                                 f"{api_id}: 滤掉 {len(dropped)} 个 (skip {skip_n} / not_major {len(not_major)}): {preview}"[:200])
+                    # not_major 才是要看的那一类: 它们像正经对话模型, 但白名单不认
+                    if not_major:
+                        witness.warn("model_scan",
+                                     f"{api_id}: not_major 逐个 = {', '.join(not_major[:10])}"[:200])
+                except Exception:
+                    pass
             return filtered
     except Exception:
         # 网络/解析失败不再静默返回空, 抛给上层报出真实原因 (api_store_scan 会捕获返回 500)
