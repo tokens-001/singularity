@@ -1,6 +1,6 @@
 # 奇点 Singularity
 
-AI-native 软件开发流水线。用自然语言描述需求，自动走完六阶段：定义→架构→实现→集成→审查→验收→交付。
+AI-native 软件开发流水线。用自然语言描述需求，自动走完：调研 → 架构 → 实现 → 集成 → 审查 → 交付（三个 GATE 人工确认门）。
 
 ## 快速开始
 
@@ -35,32 +35,37 @@ export DASHSCOPE_API_KEY=sk-xxx
 
 ```
 用户 → Observer 对话
-     → 六阶段流水线
-        定义(GATE1) → 架构(GATE2) → 实现 → 集成合并 → 审查(GATE3) → 验收 → 交付
-     → 16 个角色专家团队
+     → 流水线
+        调研(GATE1) → 架构(GATE2) → 实现 → 集成合并 → 审查(GATE3) → 交付
+     → 10 个角色
      → 模型能力推荐制（rating 评级 + recommended_for 推荐）
+     → 架构阶段多模型委员会（任务文本命中强短语时触发）
 ```
 
-详见 `docs/专家团队架构.md`。
+> ⚠️ 这段**曾经写"六阶段 / 16 角色专家团队"**，是 2026-06 的旧描述（2026-09-11 更正）。
+> 现状权威说明见 `docs/生产流现状.md`；逐节带源码行号的详解见 `docs/工作流详解-外派评审.md`。
 
 ## 项目结构
 
 ```
 src/singularity/
-├── scheduler/       # 核心调度引擎（76 文件，~19K 行）
-│   ├── orchestrator.py   # 六阶段流水线主控
-│   ├── workflow.py       # 阶段执行器
+├── scheduler/       # 核心调度引擎（72 文件，~20K 行）
+│   ├── orchestrator.py   # 调度循环 + 阶段自动流转
+│   ├── workflow.py       # 人手触发的阶段推进
 │   ├── dispatcher.py     # Agent 调度 + 模型选择
-│   ├── _review.py        # 审查循环（D1-D3 防线）
-│   ├── project.py        # 项目状态机
+│   ├── _review.py        # 审查层
+│   ├── project.py        # 项目状态机（set_phase 单一入口）
 │   ├── observer_agent.py # Observer 对话代理
 │   └── ...
 ├── web/             # Flask + React SPA
-│   ├── app.py              # Flask API（~1600 行）
-│   └── frontend/src/       # React（10 文件，~800 行）
-├── skills/          # 6 个方法型技能
-└── tests/           # 36 个测试文件
+│   ├── app.py              # Flask API（2115 行）
+│   └── frontend/src/       # React（35 文件，3836 行）
+├── skills/          # 5 个方法型技能
+└── tests/           # 90 个测试文件
 ```
+
+> 上面这些数字是 **2026-09-11 实测**，会漂。要最新的：
+> `find src/singularity -name '*.py' -not -path '*/node_modules/*' | wc -l` 等（见 `docs/现状速写.md` 文末）。
 
 ## 常用命令
 
@@ -99,7 +104,8 @@ git status
 
 ## 当前状态
 
-- 276 测试全绿（`pytest tests/test_scheduler/ -q`）
+- **814 测试全绿**（`pytest tests/test_scheduler/ -q`；全量 `pytest tests/` 是 823）
+  > 原写 276（2026-09-11 更正）。数字会漂，自己测：`.venv/bin/python -m pytest tests/ --collect-only -q | tail -1`
 - 模型能力快照 + 推荐制（rating 评级 SSS+~A + recommended_for 推荐用途），已替代旧 E/E+/D 三层与 cheap/strong 两档
 - 出厂零模型：用户自选厂家、输 key、扫描导入
 - 端到端已验证（hello.py 任务 5s 交付、3 模型委员会碰撞、Observer 对话→执行）
