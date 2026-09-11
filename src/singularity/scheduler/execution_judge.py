@@ -552,20 +552,41 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
     extractor = extract_model or _v2_extractor_model()
 
     def _usable(m: str) -> bool:
-        """这个模型背后的 provider 当前可用吗（欠费/限流/人工关闭 → 不可用）。
+        """这个模型现在**真的能调**吗 —— 两个条件都要满足：
 
-        融合路径原来完全不查：默认提取员 `glm-5.3-flash` 和第一备选 `glm-5.2`
-        **都是智谱**的，而智谱被标 quota_exhausted 之后，每次融合都要先白撞两次
-        死 provider，再退到委员会成员身上（等于选手给自己出题）。
+        ① provider 没欠费/限流（`api_store.is_available`）
+        ② 模型**在激活池里**（没被用户停用）
+
+        融合路径原来两条都不查：默认提取员 `glm-5.3-flash` 和第一备选 `glm-5.2`
+        **都是智谱**的，智谱被标 quota_exhausted 后，每次融合先白撞两次死 provider，
+        再退到委员会成员身上（等于选手给自己出题）。
+
+        **条件 ② 是 2026-09-11 补的**：只查 provider 认不出"用户主动停用" ——
+        智谱额度正常时 `_usable("glm-5.2")` 照样 True。而 `_call_model` 走的
+        `_resolve_api` 只看 provider + api_store，**完全不看激活池**
+        （本模块 `_disabled` 出现 0 次），于是停用的模型照样被真调。
+        实测：池里只剩两个便宜模型、planning 用满两个 ⇒ 提取员必是委员 ⇒
+        每次融合都换到 `glm-5.2` 并**真的发起调用** —— 用户为省钱停掉的模型一直在烧。
         """
         if not m:
             return False
         try:
-            from singularity.scheduler import api_store
+            # ⚠️ `model_registry` 必须一起 import —— 原来这里**只 import 了 api_store**，
+            # 下一行却用 `model_registry` → 每次调用抛 NameError → 被 `except` 吞掉 →
+            # 恒返回"可用"。**这个函数从上线起就没生效过**（同一个形状的坑：今早那个
+            # 嵌入路径 `SentenceTransformer` 没 import，也是被 except 吞掉）。
+            # 它"看起来在工作"是因为 fail-open 的默认值恰好等于旧行为。
+            from singularity.scheduler import api_store, dispatcher, model_registry
             prov = model_registry.provider_for_model(m)
-            return api_store.is_available(prov) if prov else True
+            if prov and not api_store.is_available(prov):
+                return False
+            return any(a.get("model") == m
+                       for a in dispatcher._all_agents_list(dispatcher.load_agents()))
         except Exception:
-            return True      # 查不了就别拦，保持原行为
+            # 查不了 → **判不可用**（不换兜底，留在委员里）。
+            # 方向是刻意的：换兜底的收益只是"选手别给自己出题"（**质量**问题），
+            # 而换错的代价是调一个用户停用的模型（**花钱** + 功能可能挂）。
+            return False
 
     if not _usable(extractor):
         alt = next((m for m in _V2_EXTRACT_FALLBACKS if m not in members and _usable(m)), "")
@@ -580,11 +601,24 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
             witness.warn("execution_judge",
                          f"extractor_unavailable_no_alt:{extractor}"[:80])
     if extractor in members:
-        alt = next((m for m in _V2_EXTRACT_FALLBACKS if m not in members), "")
+        # 换兜底**必须同时查可用性**（上面 :571 那条分支查了，这条原来没查）。
+        # 不查的后果：换到一个被用户停用 / 欠费的模型上，而 `_call_model` 走的
+        # `_resolve_api` **不看激活池**（`execution_judge` 里 `_disabled` 出现 0 次）
+        # → 真去调它。实测：池里只剩两个便宜模型时（planning 用满两个 ⇒ 提取员必是
+        # 委员），每次融合都换到 `glm-5.2` 并**真的发起调用** ——
+        # 用户为省钱停掉的模型，架构阶段一直在偷偷烧。
+        alt = next((m for m in _V2_EXTRACT_FALLBACKS
+                    if m not in members and _usable(m)), "")
         if alt:
             witness.warn("execution_judge",
                          f"extractor_swapped:{extractor}->{alt}"[:80])
             extractor = alt
+        else:
+            # 换不动：兜底表里没有既不是委员、又真的可用的模型。这时宁可让提取员
+            # 留在委员里（`_warn_same_model` 会告警"选手给自己出题"——那是**质量**
+            # 问题），也不换到一个不可用的模型上（那是**功能**问题 + 白花钱）。
+            witness.warn("execution_judge",
+                         f"extractor_stays_member:{extractor}"[:80])
     _warn_same_model(extractor, members, role="extractor")
 
     task = task_desc[:_FUSION_TASK_CHARS]

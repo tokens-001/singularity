@@ -357,13 +357,23 @@ def test_bare_accept_does_not_converge(monkeypatch):
     assert any("对你的论证给出了回应" in p for _, p in calls)
 
 
-def test_extractor_swapped_when_it_is_a_member(monkeypatch):
+def test_extractor_stays_member_when_no_usable_alternative(monkeypatch):
+    """提取员是委员、而备选表里**没有可用又非委员**的模型 → 不换，就地自己出题。
+
+    **这条原来断言"必须换成 `_V2_EXTRACT_FALLBACKS` 里的某个"**（前提是"备选表
+    总是可用"）。2026-09-11 那个前提被证伪了：`_usable` 因为漏 import 抛 NameError
+    被 except 吞掉、**从上线起恒返回 True**，所以"换兜底"实际是换到一个用户可能
+    已经停用的模型上；而 `_call_model` 的 `_resolve_api` 又不看激活池 → 真去调它。
+    现在 `_usable` 同时要求"provider 可用 + **在激活池里**"，换不动就留在委员里
+    （`_warn_same_model` 会告警"选手给自己出题"——那是质量问题，比偷偷烧钱轻）。
+    换得动的情况见 `TestExtractorRespectsActivePool`。
+    """
     calls = []
     _stub(monkeypatch, calls=calls)
     monkeypatch.setattr(ej, "_v2_extractor_model", lambda: "A")   # A 是委员
     ej.fuse_architecture_v2("需求", PLANS)
     used = next(m for m, p in calls if "架构委员会秘书" in p)
-    assert used in ej._V2_EXTRACT_FALLBACKS and used not in ("A", "B")
+    assert used == "A", f"没有可用兜底时不该换走（实际换成 {used}）"
 
 
 # ── 2026-09-11 外派评审后的三处修补 ──────────────────────
@@ -426,3 +436,50 @@ def test_second_confirm_issues_are_warned(monkeypatch):
     _stub(monkeypatch, confirm={"approved": False, "issues": ["tasks 段缺字段"]})
     ej.fuse_architecture_v2("需求", PLANS)
     assert any("fusion_confirm_unresolved" in str(w) for w in warns)
+
+
+class TestExtractorRespectsActivePool:
+    """提取员换兜底时必须认**激活池** —— 被用户停用的模型不能调。
+
+    **两个坑叠在一起**（2026-09-11 实测）：
+      ① `_usable` 里**只 import 了 `api_store` 却用了 `model_registry`** → 每次抛
+         NameError → 被 `except` 吞掉 → 恒返回"可用"。**这个函数从上线起就没生效过**
+         （同一个形状：嵌入路径 `SentenceTransformer` 没 import，也是被 except 吞掉）。
+      ② `_call_model` 走的 `_resolve_api` **只看 provider + api_store，
+         完全不看激活池**（本模块 `_disabled` 出现 0 次）。
+
+    叠加后果：池里只剩两个便宜模型时（planning 用满两个 ⇒ 提取员必是委员），
+    每次融合都换到 `glm-5.2` 并**真的发起调用** —— 用户为省钱停掉的模型一直在烧。
+    """
+
+    def _run(self, monkeypatch, pool, members, extract_model):
+        import singularity.scheduler.dispatcher as disp
+        monkeypatch.setattr(disp, "load_agents",
+                            lambda: {"any": [{"model": m} for m in pool]})
+        calls = []
+        def fake(prompt, model, max_tokens=2000):
+            calls.append((model, "架构委员会秘书" in prompt))
+            if "架构委员会秘书" in prompt:
+                return _j({"consensus": ["都同意"], "disagreements": [], "unique_gains": []})
+            if "架构定稿人" in prompt:
+                return "最终稿"
+            return _j({})
+        monkeypatch.setattr(ej, "_call_model", fake)
+        monkeypatch.setattr(ej.witness, "warn", lambda *a, **k: None)
+        ej.fuse_architecture_v2("需求", members, extract_model=extract_model)
+        return calls
+
+    def test_no_swap_to_model_outside_pool(self, monkeypatch):
+        """兜底表里的模型不在激活池 → **不能**换过去，提取员留在委员里。"""
+        calls = self._run(monkeypatch, pool=["m-a", "m-b"],
+                          members=[("m-a", "A"), ("m-b", "B")], extract_model="m-a")
+        used = {m for m, _ in calls}
+        assert used <= {"m-a", "m-b"}, f"调了池外的模型: {used}"
+
+    def test_swap_still_works_when_fallback_is_in_pool(self, monkeypatch):
+        """兜底表里有个**真在池里**的非委员 → 该换还得换（别把功能关死）。"""
+        monkeypatch.setattr(ej, "_V2_EXTRACT_FALLBACKS", ("m-c",))
+        calls = self._run(monkeypatch, pool=["m-a", "m-b", "m-c"],
+                          members=[("m-a", "A"), ("m-b", "B")], extract_model="m-a")
+        extractor_calls = {m for m, is_ex in calls if is_ex}
+        assert extractor_calls == {"m-c"}, f"该换成 m-c，实际 {extractor_calls}"
