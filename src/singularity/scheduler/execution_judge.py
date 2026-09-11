@@ -481,7 +481,11 @@ def _first_speaker(disagreements: list, members: list[str]) -> str:
 def _model_discipline() -> dict:
     """读模型范围纪律表：{model: {"violations": n, "audits": n}}。
 
-    由 tests/integration/coverage_audit.py 累积写入。实测定稿人是「乘法器」还是
+    ⚠️ 写入方（2026-09-12 起）：`_model_discipline.record_scope()` —— **执行收尾时
+    自动累积**，不再只靠人手动跑 `tests/integration/coverage_audit.py`（那是个离线
+    实验脚本，结果是表常年停在旧数据上，且缺当前主力模型）。
+
+    实测定稿人是「乘法器」还是
     「过滤器」直接决定产物的范围纪律 —— 同一批稿子同一需求，glm 当定稿人时把两家
     的超范围内容都收进来（ledger 23 + RabbitMQ 7），deepseek 当定稿人时连自己的
     RabbitMQ 都砍了（ledger 1 + RabbitMQ 1）。

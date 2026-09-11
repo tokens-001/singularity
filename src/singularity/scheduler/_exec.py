@@ -674,6 +674,45 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
     except Exception as e:
         witness.warn('exec', f'{e}')
 
+    # ── 模型范围纪律：改了"声明范围外"的文件就记一笔 ──
+    # 这张表决定融合时**选谁定稿**（`execution_judge._pick_writer`），而实测定稿人
+    # 是"乘法器"还是"过滤器"直接决定产物的范围纪律。原来只有人手动跑的离线脚本
+    # （`tests/integration/coverage_audit.py`）会写它 → 表常年是旧的（2026-09-12 实测
+    # 停在 9/10，且缺了当前主力模型 deepseek-flash）。
+    # ⚠️ 拿不到"声明范围"就**不记** —— 记 0 等于编造"这次很干净"（见该模块头）。
+    try:
+        from singularity.scheduler import _model_discipline as _md
+        _model = (disp_result.agent_cfg or {}).get("model", "") if disp_result else ""
+        if _model:
+            _md.record_scope(_model, changed_files, _declared_files_for(task))
+    except Exception as _e:
+        witness.warn('exec', f'discipline:{type(_e).__name__}'[:80])
+
+
+def _declared_files_for(task) -> list[str]:
+    """任务在架构里声明的 `estimated_files`；取不到返回 []（= **没有尺子**）。
+
+    匹配方式跟 `supervisor.qa_context` 一致：按 title / id 出现在任务描述里认领。
+    实测探路2 的架构任务**全都没给这个字段** → 这条路的覆盖率取决于架构师给不给，
+    所以"为什么没记"要能查得到，而不是默默记成 0 违例。
+    """
+    pid = getattr(task, "project_id", "") or ""
+    if not pid:
+        return []
+    try:
+        from . import project as proj_mod
+        proj = proj_mod.load(pid)
+        desc = getattr(task, "description", "") or ""
+        for tdef in ((getattr(proj, "architecture", None) or {}).get("tasks") or []):
+            if not isinstance(tdef, dict):
+                continue
+            if (str(tdef.get("title", "")) in desc or str(tdef.get("id", "")) in desc):
+                f = tdef.get("estimated_files")
+                return [str(x) for x in f] if isinstance(f, list) else []
+    except Exception:
+        pass
+    return []
+
 
 def _safe_dep_list(v):
     """depends_on_local_id: int or list[int] → list[int]."""
