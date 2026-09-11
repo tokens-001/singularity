@@ -32,6 +32,68 @@ _RETRY_INITIAL = float(os.environ.get("QIDIAN_RETRY_INITIAL", "1"))        # 首
 _RETRY_COEFF = float(os.environ.get("QIDIAN_RETRY_COEFF", "2.0"))          # 退避系数
 _RETRY_MAX_INTERVAL = float(os.environ.get("QIDIAN_RETRY_MAX_INTERVAL", "60"))
 _RETRY_MAX_ATTEMPTS = int(os.environ.get("QIDIAN_RETRY_MAX_ATTEMPTS", "3"))
+
+# ── XML 形式的工具调用 ─────────────────────────────────────────
+# 有些模型不按 OpenAI 的 `tool_calls` 回，而是吐：
+#   <tool_calls><invoke name="write_file"><parameter name="path">x.py</parameter>…
+# 平台原来只认前者 → 这一整段被当成"模型的普通回答" → **文件一个字节都没落盘**，
+# 而模型以为自己写成功了。2026-09-12 探路2 的 T3 就是这么"无文件改动"失败掉的
+# （输出 9599 字，全是一块 <tool_calls><invoke>，changed_files 为空）。
+# 讽刺的是 prompt 里早就写着"不要输出 <invoke> 块" —— **知道这个格式，却只有禁令、
+# 没有解析器**。禁令挡不住换了模型/换了心情的那一次，所以这里把它接住。
+_XML_INVOKE_RE = re.compile(r'<invoke\s+name=["\']([^"\']+)["\']\s*>(.*?)</invoke>', re.S)
+_XML_PARAM_RE = re.compile(r'<parameter\s+name=["\']([^"\']+)["\']\s*>(.*?)</parameter>', re.S)
+
+# ── DeepSeek 的 DSML ───────────────────────────────────────────
+# **这不是"模型不听话"，是模型换了厂商的协议。** DeepSeek 系不回 OpenAI 的
+# `tool_calls`，而是吐它自家的 DSML。分隔符是**两个全角竖线 U+FF5C**（不是 ASCII
+# 的 `|`，肉眼几乎分不出来 —— 我先按 ASCII 写正则，拿真实输出一跑才发现对不上）。
+# 探路2 的执行阵容里就有 deepseek-flash，所以只要轮到它，工具调用就可能整批蒸发。
+_BAR = r"[|｜]{1,2}"          # 半角或全角、一根或两根，都认
+_DSML_OPEN = "<" + _BAR + "DSML" + _BAR
+_DSML_CLOSE = "</" + _BAR + "DSML" + _BAR
+_DSML_HINT_RE = re.compile("<" + _BAR + "DSML", re.I)
+_DSML_INVOKE_RE = re.compile(
+    _DSML_OPEN + r"\s*invoke\s+name=\"([^\"]+)\"\s*>(.*?)"
+    + _DSML_CLOSE + r"\s*invoke>", re.S)
+_DSML_PARAM_RE = re.compile(
+    _DSML_OPEN + r"\s*parameter\s+name=\"([^\"]+)\"[^>]*>(.*?)"
+    + _DSML_CLOSE + r"\s*parameter>", re.S)
+
+
+def _looks_like_tool_markup(content: str) -> bool:
+    """有没有"模型试图调工具"的痕迹（两种格式任一）。
+
+    判据要**窄**：只认尖括号开头的标记。写成"文本里出现 invoke 这个词"的话，
+    模型正常解释一句"I will invoke the tool"都会触发告警，把真信号淹了。
+    """
+    c = content or ""
+    return ("<" + "invoke") in c or bool(_DSML_HINT_RE.search(c))
+
+
+def _parse_xml_tool_calls(content: str) -> list[dict] | None:
+    """从 content 里捞出 XML 形式的工具调用 → OpenAI 那套结构。
+
+    返回 None = 压根没这格式；返回 [] = **有**这格式但一条都没解析出来
+    （调用方据此告警 —— "认出来了但没解析出来"和"没这格式"是两回事）。
+    """
+    if not _looks_like_tool_markup(content):
+        return None
+    out: list[dict] = []
+    for regex, param_re in ((_DSML_INVOKE_RE, _DSML_PARAM_RE),
+                            (_XML_INVOKE_RE, _XML_PARAM_RE)):
+        for m in regex.finditer(content):
+            name = (m.group(1) or "").strip()
+            if not name:
+                continue
+            args = {k.strip(): v for k, v in param_re.findall(m.group(2) or "")}
+            out.append({
+                "id": f"xml_{len(out)}",
+                "type": "function",
+                "function": {"name": name,
+                             "arguments": json.dumps(args, ensure_ascii=False)},
+            })
+    return out
 # 整轮预算（schedule-to-close）：重试总耗时上限，防止 3×240s 撞穿 orchestrator 的 900s deadline
 _RETRY_TOTAL_BUDGET = float(os.environ.get("QIDIAN_RETRY_TOTAL_BUDGET", "600"))
 # 流式 + 停滞检测。read timeout = 多久没新 token 就断开（真中断，不用杀进程）。
@@ -376,6 +438,26 @@ class OpenAIAgentExecutor(BaseExecutor):
                 choice = resp_data.get("choices", [{}])[0]
                 msg = choice.get("message", {})
             total_tokens += resp_data.get("usage", {}).get("total_tokens", 0)
+
+            # ── 没有 tool_calls 时，看看是不是吐了 XML 形式（见 _parse_xml_tool_calls）──
+            # **必须在 messages.append 之前**：否则回给模型的历史里没有这次调用，
+            # 下一轮 tool 结果就对不上 id 了。接住了要告警 —— 这是"模型没按协议来"，
+            # 不是正常路径，得能查得到。
+            if not msg.get("tool_calls"):
+                _xml_calls = _parse_xml_tool_calls(msg.get("content", ""))
+                _scope = "recovered" if _xml_calls else "unparsed"
+                if _xml_calls:
+                    msg["tool_calls"] = _xml_calls
+                if _xml_calls is not None:
+                    try:
+                        from singularity.scheduler import witness
+                        witness.warn("oa_exec", (f"xml_tool_calls_{_scope}:"
+                                                 f"{len(_xml_calls)}:"
+                                                 f"{(_xml_calls[0]['function']['name'] if _xml_calls else '-')}"
+                                                 )[:120])
+                    except Exception:
+                        pass
+
             # 推理模型(如Kimi/GLM)返回reasoning_content, API输入不接受此字段
             msg_clean = {k: v for k, v in msg.items() if k != "reasoning_content"}
             messages.append(msg_clean)
