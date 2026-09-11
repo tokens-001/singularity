@@ -4,11 +4,24 @@ import { api } from '../lib/api'
 import { useToast, useModal, useRun } from '../lib/toast'
 import { Plus, Trash2, Search, Download, X } from 'lucide-react'
 import { mcn } from '../pages/Config'
-import { fmtPrice, isUnpriced } from '../lib/money'
+import { fmtPriceValue, isUnpriced, PRICE_UNIT } from '../lib/money'
 import type { ModelInfo, ApiStoreItem } from '../lib/types'
 
 const COST_CN: Record<string,string> = { budget:'省', standard:'标准', premium:'贵' }
 const SPEED_CN: Record<string,string> = { fast:'快', medium:'中', slow:'慢' }
+
+// 列宽契约。这张表以前**没有表头、也没有一处固定宽度** —— 9 个单元格里
+// 8 处是自由宽度，还夹着 4 个条件列（未配key / 推荐阶段 / 能力标签 / 跑基准按钮），
+// 于是每行的单元格数量都不一样，列自然对不齐。
+// 现在：名字 flex 吸收剩余，其余全部定宽 + flexShrink:0（宁可横向滚动）。
+const MC = {
+  dot:   { width: 14,  flexShrink: 0 } as const,
+  name:  { flex: 1, minWidth: 0 } as const,
+  cost:  { width: 92,  flexShrink: 0 } as const,
+  price: { width: 88,  flexShrink: 0, textAlign: 'right' as const },
+  tags:  { width: 200, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden' } as const,
+  act:   { width: 128, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 } as const,
+}
 
 const PROVIDERS = [
   { id: 'deepseek', provider: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', api_key_env: 'DEEPSEEK_API_KEY' },
@@ -190,42 +203,58 @@ export default function ModelsTab() {
             onChange={(v) => { api.setObserverModel(v); setObserverModelId(v) }}
             options={[{ value: '', label: '未设置' }, ...models.map(m => ({ value: m.id, label: mcn(m) }))]}/>
         </div>
+        {/* 表头 —— 以前没有。没有表头就没有列宽契约，条件列一多就各显示各的 */}
+        <div className="card-row" style={{ ...MC, fontSize: 10, color: 'var(--text-muted)' } as any}>
+          <span style={MC.dot} />
+          <span style={MC.name}>模型</span>
+          <span style={MC.cost}>成本·速度</span>
+          <span style={MC.price}>单价{PRICE_UNIT}</span>
+          <span style={MC.tags}>状态 / 推荐阶段 / 能力</span>
+          <span style={MC.act} />
+        </div>
+
         {models.map(m => {
           const rf = m.recommended_for||[]
           const disabled = disabledSet.has(m.id)
           const active = activeModels.has(m.id)
           const dotColor = active ? 'var(--accent-green)' : 'var(--text-muted)'
           return (
-            <div key={m.id} className="card-row" style={{ opacity: disabled?0.5:1 }}>
-              <span style={{ color: dotColor, fontSize: 8 }}>{disabled?'○':'●'}</span>
-              <span className="fw-500 flex-1">{mcn(m)}{m.rating && m.rating !== '?' ? <span className="fs-10 text-muted" style={{marginLeft:6}}>{m.rating}</span> : <span className="card-tag" style={{marginLeft:6,opacity:.55}}>未评测</span>}</span>
-              <span className="fs-10 text-muted">{COST_CN[m.cost||'']||m.cost} · {SPEED_CN[m.speed||'']||m.speed}</span>
-              {/* 单价入口。未配置时用警示色 —— 没配单价的模型在用量页算不出费用。 */}
-              <span className="fs-10" role="button" tabIndex={0}
+            <div key={m.id} className="card-row" style={{ ...MC, opacity: disabled?0.5:1 } as any}>
+              <span style={{ ...MC.dot, color: dotColor, fontSize: 8 }}
+                title={active ? '在调度阵容里' : '不在阵容里'}>{disabled?'○':'●'}</span>
+              <span className="fw-500 truncate" style={MC.name}>{mcn(m)}{m.rating && m.rating !== '?' ? <span className="fs-10 text-muted" style={{marginLeft:6}}>{m.rating}</span> : <span className="card-tag" style={{marginLeft:6,opacity:.55}}>未评测</span>}</span>
+              <span className="fs-10 text-muted" style={MC.cost}>{COST_CN[m.cost||'']||m.cost} · {SPEED_CN[m.speed||'']||m.speed}</span>
+              {/* 单价入口。未配置时用警示色 —— 没配单价的模型在用量页算不出费用。
+                  数值不带单位：单位在表头（和用量页一致）。 */}
+              <span className="fs-10 mono" role="button" tabIndex={0}
                 title="点击设置单价（USD / 百万 token，混合价）"
                 onClick={() => editPrice(m)}
                 onKeyDown={e => { if (e.key === 'Enter') editPrice(m) }}
-                style={{ cursor: 'pointer',
+                style={{ ...MC.price, cursor: 'pointer',
                   color: isUnpriced(m.price_per_m) ? '#d97706' : 'var(--text-secondary)' }}>
-                {fmtPrice(m.price_per_m)}
+                {isUnpriced(m.price_per_m) ? '—' : fmtPriceValue(m.price_per_m)}
               </span>
-              {!m.api_available && <span className="fs-10" style={{color:'#d97706'}}>未配key</span>}
-              {rf.length > 0 && !(rf.length === 1 && rf[0] === 'any') && (
-                <span className="flex-center gap-4">{rf.slice(0,3).map(p=><span key={p} className="card-tag">{p}</span>)}</span>
-              )}
-              {(m.strengths||[]).length > 0 && (
-                <span className="flex-center gap-4">{(m.strengths||[]).slice(0,2).map(s=><span key={s} className="card-tag">{s}</span>)}</span>
-              )}
-              {m.api_available && (
-                <button onClick={()=>runBenchmark(m.id)} disabled={benchmarking===m.id} className="btn-sm">
-                  {benchmarking===m.id?'评测中…':'跑基准'}
-                </button>
-              )}
-              <button onClick={()=>modal.confirm({
-                title: `删除模型「${mcn(m)}」？`,
-                okText: '删除', okButtonProps: { danger: true }, cancelText: '取消',
-                onOk: async () => { if (await run(() => api.deleteModel(m.id))) fetch() },
-              })} className="btn-ghost-danger" aria-label={`删除模型 ${m.id}`}><Trash2 size={10}/></button>
+              <span style={MC.tags}>
+                {!m.api_available && <span className="fs-10" style={{color:'#d97706', flexShrink:0}}>未配key</span>}
+                {rf.length > 0 && !(rf.length === 1 && rf[0] === 'any') && (
+                  <>{rf.slice(0,3).map(p=><span key={p} className="card-tag">{p}</span>)}</>
+                )}
+                {(m.strengths||[]).length > 0 && (
+                  <>{(m.strengths||[]).slice(0,2).map(s=><span key={s} className="card-tag">{s}</span>)}</>
+                )}
+              </span>
+              <span style={MC.act}>
+                {m.api_available && (
+                  <button onClick={()=>runBenchmark(m.id)} disabled={benchmarking===m.id} className="btn-sm">
+                    {benchmarking===m.id?'评测中…':'跑基准'}
+                  </button>
+                )}
+                <button onClick={()=>modal.confirm({
+                  title: `删除模型「${mcn(m)}」？`,
+                  okText: '删除', okButtonProps: { danger: true }, cancelText: '取消',
+                  onOk: async () => { if (await run(() => api.deleteModel(m.id))) fetch() },
+                })} className="btn-ghost-danger" aria-label={`删除模型 ${m.id}`}><Trash2 size={10}/></button>
+              </span>
             </div>
           )
         })}
