@@ -170,6 +170,32 @@ TOOLS = [
 ]
 
 # 系统提示：告诉模型怎么用工具
+# ── 「一次多动作」实验开关（2026-09-12）─────────────────────────
+#
+# 背景：执行器**本来就**把一轮响应里的所有 function_call 全部执行
+# （`:469 for tc in tool_calls`）。所以"一次多动作"卡的不是代码，是**模型不这么吐** ——
+# 上面那份 SYSTEM_PROMPT 描述的是"读→写→测→修"的**串行**走法，等于在暗示一轮一个动作。
+#
+# ⚠️ 这**不是**稳赚的改动。SPACE 那篇（arXiv 2609.02042）的消融显示：
+# 光允许一次多动作会掉分（多动作 GRPO 轮数砍到 5.5，成功率从 83.6 掉到 65.6），
+# 得学会"在哪切"才好。我们这边的收益/代价**一点数据都没有**。
+# 所以做成**环境变量开关、默认关**，A/B 就是翻这个变量跑两次，不用改代码。
+#
+# 打开：QIDIAN_BATCH_TOOLS=1
+_BATCH_TOOLS_HINT = """
+
+批量调用（重要）:
+- 一轮回复里**可以同时发起多个工具调用**，它们会一起执行完再回到你这。
+- 互不依赖的动作请**一次发完**：要写 3 个文件就一轮发 3 个 write_file；要查几处代码就一轮发多个 search_code。
+- 有依赖的（写完要跑测试才知道对不对）**不要**硬凑一轮。
+- 判断标准只有一条：**后一个调用用不上前一个的结果** → 就该同一轮发。"""
+
+
+def batch_tools_enabled() -> bool:
+    """环境变量开关。默认关 = 行为跟改动前逐字一致。"""
+    return os.environ.get("QIDIAN_BATCH_TOOLS", "") == "1"
+
+
 SYSTEM_PROMPT = """你是Singularity Dispatch的 AI Agent。你的唯一任务是产出可运行的代码。不要输出方案、计划或分析，直接写代码。
 
 你有工具可以用：读文件、写代码、跑命令、搜代码。
@@ -306,6 +332,9 @@ class OpenAIAgentExecutor(BaseExecutor):
             tools.extend(self._skill_tools)
             tools.extend(self._mcp_tools)
             system_prompt = SYSTEM_PROMPT
+            # 实验开关：默认关（行为与改动前逐字一致）。见 _BATCH_TOOLS_HINT 的说明。
+            if batch_tools_enabled():
+                system_prompt += _BATCH_TOOLS_HINT
         if self._skill_prompt:
             system_prompt += "\n" + self._skill_prompt
             if no_tools:
@@ -486,6 +515,12 @@ class OpenAIAgentExecutor(BaseExecutor):
                         "tool": name,
                         "task_id": self.task_id,
                         "ts": t_start,
+                        # ── 「一次多动作」实验的埋点（2026-09-12）──
+                        # 光有"调了哪些工具"算不出"省不省轮" —— 得知道**第几轮、那轮几个**。
+                        # 修 trace 之前这些数据拿不到（trace 只存最终产物），
+                        # 所以量不了就加埋点，别靠印象。
+                        "turn": turn,
+                        "batch": len(tool_calls),
                         "msg": f"🔧 {name}",
                     }
                     self._tool_events.append(evt_start)
@@ -502,6 +537,8 @@ class OpenAIAgentExecutor(BaseExecutor):
                         "tool": name,
                         "task_id": self.task_id,
                         "ts": t_done,
+                        "turn": turn,
+                        "batch": len(tool_calls),
                         "elapsed": round(t_done - t_start, 3),
                         "result_preview": result_preview,
                         "result_len": len(result),

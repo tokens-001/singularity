@@ -28,6 +28,33 @@ from singularity.scheduler.validator import ValidationReport
 from .executors.base import ExecutorResult
 
 
+def batch_summary(tool_events: list) -> dict:
+    """每轮调了几个工具 —— 「一次多动作」实验的**度量口径**。
+
+    ⚠️ 为什么得单独存这个：`tool_events` 只在内存和 SSE 里过一遍，**从来不落盘**
+    （核于 2026-09-12：整个 `.qidian/` grep 不到 `tool:start`）。于是"改提示词让模型
+    一次多吐几步**省不省轮**"这件事，之前**根本没有数据可算** —— 只能靠印象说。
+    这里把每轮调用数摘进 trace，跑完就能算。
+
+    纯函数，不认识 `turn` 字段的旧事件直接跳过（**不猜**）。
+    """
+    per_turn: dict = {}
+    for e in tool_events or []:
+        if e.get("kind") != "tool:start":
+            continue
+        t = e.get("turn")
+        if t is None:
+            continue
+        per_turn[t] = per_turn.get(t, 0) + 1
+    counts = [per_turn[k] for k in sorted(per_turn)]
+    return {
+        "turns": len(counts),                            # 有工具调用的轮数
+        "per_turn": counts,                              # 每轮几个（顺序）
+        "total_calls": sum(counts),
+        "batched_turns": sum(1 for c in counts if c > 1),  # 真"多动作"的轮数
+    }
+
+
 @dataclass
 class DeliveryReport:
     task: str
@@ -98,6 +125,9 @@ class DeliveryReport:
         return {
             "task": self.task,
             "final_status": self.final_status,
+            # 每轮调用数摘要（派生值，见 batch_summary 的注释）。从 tool_events 现算 ——
+            # 那玩意儿不落盘，不在这儿留一份就永远算不了。
+            "tool_batches": batch_summary(getattr(self.executor_result, "tool_events", [])),
             "route": {
                 "gate_required": self.route.gate_required,
                 "task_type": self.route.task_type,
