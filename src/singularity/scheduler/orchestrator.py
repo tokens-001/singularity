@@ -302,6 +302,81 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
     return reaped
 
 
+def _record_ledger(proj, extra: dict) -> None:
+    """把这次交付的结局追加进流程账本（P6）。**失败也要记** —— 见调用点注释。"""
+    try:
+        from singularity.scheduler import _process_ledger
+        _process_ledger.record(proj, extra)
+    except Exception as e:
+        try:
+            from singularity.scheduler import witness
+            witness.warn("ledger", f"record:{type(e).__name__}:{e}"[:120])
+        except Exception:
+            pass
+
+
+def reconcile_projects() -> list[dict]:
+    """周期对账：把「状态说的」和「磁盘上真有的」比一遍，漂移就报出来。
+
+    分析里 P4 的"检出时延收尾"：**状态漂移要能早发现**，别等项目卡死了才回头查。
+    比三样：
+
+      ① `project.task_ids` 里有多少任务**磁盘上真的还在**
+      ② 项目 `phase` 和它 `lineage` 里最后一条 phase 流转**对不对得上**
+         （流转断了 = 有地方绕过 `set_phase` 直接改了状态）
+      ③ **预算**：花了多少 vs 预算多少
+
+    ⚠️ **只报不改。** 自动"纠正"状态比不报更危险 —— 它会把真的问题抹平成假的
+    一致，而这正是本项目反复踩的那类坑（静默兜底 = 编造）。
+    """
+    from singularity.scheduler import project as proj_mod
+    from singularity.scheduler import tracker as tracker_mod
+    drifts: list[dict] = []
+    try:
+        projects = proj_mod.recover_all()
+    except Exception as e:
+        return [{"project_id": "-", "kind": "reconcile_error",
+                 "detail": f"recover_all 失败: {type(e).__name__}: {e}"[:100]}]
+
+    for proj in projects or []:
+        pid = getattr(proj, "id", "") or "-"
+        try:
+            ids = list(getattr(proj, "task_ids", []) or [])
+            missing = [tid for tid in ids if tracker_mod.read_task(tid) is None]
+
+            lin = [e for e in (getattr(proj, "lineage", []) or [])
+                   if isinstance(e, dict) and e.get("action") == "phase"]
+            last_to = lin[-1].get("to") if lin else None
+            phase = getattr(getattr(proj, "phase", None), "value", None)
+
+            from singularity.scheduler._token_budget import project_budget_state
+            level, spent, bmsg = project_budget_state(
+                pid, getattr(proj, "token_budget_total", 0) or 0)
+        except Exception as e:
+            drifts.append({"project_id": pid, "kind": "reconcile_error",
+                           "detail": f"{type(e).__name__}: {e}"[:100]})
+            continue
+
+        if missing:
+            drifts.append({"project_id": pid, "kind": "task_ids_missing",
+                           "detail": (f"{len(missing)}/{len(ids)} 个 task_id 磁盘上已不存在: "
+                                      f"{[m[-8:] for m in missing[:5]]}")})
+        if last_to and phase and last_to != phase:
+            drifts.append({"project_id": pid, "kind": "phase_drift",
+                           "detail": (f"phase={phase}，但 lineage 最后一条流转到 {last_to}"
+                                      f"（有地方绕过 set_phase 改了状态）")})
+        if level == "stop":
+            drifts.append({"project_id": pid, "kind": "budget", "detail": bmsg})
+
+    for d in drifts:
+        try:
+            from singularity.scheduler import witness
+            witness.warn("reconcile", f"{d['kind']}:{d['project_id'][-8:]}:{d['detail'][:90]}"[:170])
+        except Exception:
+            pass
+    return drifts
+
+
 def _drain_pending(pending_batches: dict, mq, results: list) -> int:
     """_run_queue_v3 步骤⑥: drain merge queue → 合成功的标 DONE。返回 drain 数。"""
     if not pending_batches:
@@ -468,11 +543,15 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                 if ok:
                     proj.set_phase(proj_mod.Phase.DONE, f"交付完成: {detail[:60]}")
                     proj_mod.save(proj)
+                    _record_ledger(proj, {"delivery": "ok", "detail": detail[:120]})
                     _pending_sse_events.append({
                         "kind": "system", "msg": f"项目 {proj.name}: 交付完成! {detail[:100]}",
                         "ts": time.time(), "project_id": proj.id,
                     })
                 else:
+                    # 失败也记 —— **账本要的是结局，不是成功集**（只记成功的话，
+                    # digest 里永远一片大好，下一轮照着做还是撞同一堵墙）
+                    _record_ledger(proj, {"delivery": "failed", "detail": detail[:120]})
                     _pending_sse_events.append({
                         "kind": "system", "msg": f"项目 {proj.name}: 交付失败, 需人工处理 - {detail[:100]}",
                         "ts": time.time(), "project_id": proj.id,

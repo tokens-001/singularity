@@ -271,12 +271,24 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     from singularity.scheduler.roles import get_role
     arch_role = get_role(get_phase_role(Phase.PLANNING) or "architect")
     arch_prompt = arch_role.get_full_prompt() if arch_role else "你是资深系统架构师。"
+    # 流程复利账本（P6）：上一轮**实际发生了什么**。
+    # ⚠️ 措辞是陈述事实，不是"教训" —— 系统没资格替人总结该怎么做，
+    # 那是回音壁（自己教自己），越滚越偏。
+    _ledger = ""
+    try:
+        from singularity.scheduler import _process_ledger as _pl
+        _d = _pl.digest(5)
+        if _d:
+            _ledger = f"\n\n【上一轮实际发生了什么（事实，供参考，不是指令）】\n{_d}"
+    except Exception:
+        pass
+
     prompt = f"{arch_prompt}\n\n" + _ARCHITECT_CONTEXT.format(
         description=project.description,
         scope=project.scope,
         constraints=project.raw_constraints,
         research=research_context,
-    )
+    ) + _ledger
 
     task_id = f"architect_{project.id}"
     # 架构这一项 = 委员会席位。restrict 才限制得住：不限制的话 chain 还是全池，

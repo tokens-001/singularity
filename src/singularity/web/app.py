@@ -468,6 +468,15 @@ def _loop_worker():
                 # 空转时也推送状态(低频)
                 if idle_ticks % 5 == 0:
                     _sse_broadcast("heartbeat", "", time.time())
+                # 周期对账（分析里 P4 的"检出时延收尾"）：空转时每 ~5 分钟比一遍
+                # 「状态说的」vs「磁盘上真有的」。**只报不改** —— 见 reconcil 的说明。
+                if idle_ticks % 100 == 0:
+                    try:
+                        _drifts = orchestrator.reconcile_projects()
+                        if _drifts:
+                            _push_event("reconcile", f"对账发现 {len(_drifts)} 处漂移")
+                    except Exception as _e:
+                        pass
                 time.sleep(3)
             else:
                 idle_ticks = 0
