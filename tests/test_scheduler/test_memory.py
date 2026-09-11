@@ -109,6 +109,11 @@ class TestEmbedModelActuallyLoads:
 
         sentinel = object()
         monkeypatch.setattr(mc, "_EMBED_MODEL", None)          # 绕开懒加载缓存
+        # **必须清环境变量**：`tests/test_imports.py` / `smoke_test.py` /
+        # `test_exec_run.py` 在**模块导入时**就 `os.environ["QIDIAN_SKIP_EMBED"]="1"`
+        # （它们是独立脚本，pytest 也会收集），于是这个开关会泄漏到别的用例 ——
+        # 单跑本文件绿、全量跑红，红得莫名其妙。这条用例不该依赖环境。
+        monkeypatch.delenv("QIDIAN_SKIP_EMBED", raising=False)
         monkeypatch.setattr(sentence_transformers, "SentenceTransformer",
                             lambda name: sentinel)
         assert mc._get_embed_model() is sentinel

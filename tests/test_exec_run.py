@@ -216,8 +216,12 @@ if __name__ == "__main__":
     check("retry 不重建 wt (只建1个)", len(CREATED) == 1, f"建了{len(CREATED)}个")
     check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
 
-    print("── 路径7: 低置信 cascade_skip → 升级 (escalate=None 则 exhausted) ──")
-    # 真实行为: cascade_skip break 后走 escalate; escalate=None → escalation_exhausted。
+    print("── 路径7: 低置信 cascade_skip → 升级 (escalate=None 则无路可升) ──")
+    # 真实行为: cascade_skip break 后走 escalate; escalate=None → 终态如实报
+    # `no_escalation_path`。**这条断言 2026-09-11 才改对**：原来断言的是
+    # `escalation_exhausted`，而 `_exec.py` 早就不写那个词了 —— 它故意说
+    # "没有升级路径"而不是"升级用尽"（两档制合并成单档后根本没有下一档，
+    # 假装"用尽"是撒谎）。字符串对不上，于是这条一直红着，谁也没注意。
     # m2 不在同层被启用 (代码用升级换 agent, 非同层 fallback)。建1清1。
     reset_wt()
     S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2},
@@ -226,7 +230,7 @@ if __name__ == "__main__":
     S.dispatch_queue = [("ok", FakeExec(success=True))]
     S.validate_queue = [FakeVal(action="retry", confidence=0.2)]
     b = run_case()
-    check("term_reason 含 escalation_exhausted", "escalation_exhausted" in b.term_reason, b.term_reason)
+    check("term_reason 含 no_escalation_path", "no_escalation_path" in b.term_reason, b.term_reason)
     check("cascade_skip 后只建1个 wt (升级换 agent 非同层)", len(CREATED) == 1, f"建了{len(CREATED)}个")
     check("worktree 对称", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
 

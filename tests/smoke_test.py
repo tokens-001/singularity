@@ -9,13 +9,14 @@ os.environ["QIDIAN_SKIP_EMBED"] = "1"
 BASE = "http://127.0.0.1:5050"
 PASS = FAIL = 0
 
-def api(path, method="GET", body=None):
-    args = ["curl", "-s", "-m", "10"]
+def api(path, method="GET", body=None, timeout=10):
+    """`timeout` 默认 10 秒。**记忆查询那类要单独放宽** —— 见下面调用点的说明。"""
+    args = ["curl", "-s", "-m", str(timeout)]
     if method != "GET": args += ["-X", method, "-H", "X-Requested-With: XMLHttpRequest"]
     if body: args += ["-H", "Content-Type: application/json", "-d", json.dumps(body)]
     args.append(f"{BASE}{path}")
     try:
-        r = subprocess.run(args, capture_output=True, text=True, timeout=15)
+        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout + 5)
         if r.returncode == 0 and r.stdout.strip():
             return json.loads(r.stdout)
         return {"error": f"curl {r.returncode}"}
@@ -126,7 +127,11 @@ def main():
     print("\n── 边界情况 ──")
     check("删除不存在任务", "error" in api("/api/tasks/nonexistent/delete", method="POST"))
     check("空名称拒绝", api("/api/projects", method="POST", body={"name":""}).get("error") is not None)
-    check("记忆查询", "traversal" in api("/api/memory?action=query&q=test"))
+    # 这条要放宽超时：**它是唯一会加载 420MB 嵌入模型的一步**。进程刚起来时
+    # 首次查询要十几秒（模型在本地缓存里，不是下载慢，是加载慢）；第二次只要 0.07s。
+    # 2026-09-11 修好嵌入路径之前，那个调用抛 NameError 被静默吞掉、瞬间降级返回，
+    # 所以这条一直是"绿的" —— 绿的原因是功能坏的，不是它快。
+    check("记忆查询", "traversal" in api("/api/memory?action=query&q=test", timeout=60))
 
     # 压力: 10 tasks
     tids = []
