@@ -21,7 +21,7 @@ export const api = {
   tasks: async (p?: string) => { const d = await request<any>(`/api/tasks${p||''}`); return (d?.tasks||d) as any[] },
   task: (id: string) => request<any>(`/api/tasks/${id}`),
   taskTrace: (id: string, section?: string) => request<any>(`/api/tasks/${id}/trace${section ? `?section=${section}` : ''}`),
-  revealFile: (path: string) => request('/api/files/reveal', { method: 'POST', body: JSON.stringify({ path }) }),
+  revealFile: (path: string, projectId?: string) => request('/api/files/reveal', { method: 'POST', body: JSON.stringify({ path, project_id: projectId || '' }) }),
   createTask: (desc: string, project_id = '') => request('/api/tasks',{method:'POST',body:JSON.stringify({description:desc, project_id})}),
   cancelTask: (id: string) => request(`/api/tasks/${id}/cancel`,{method:'POST'}),
   pauseTask: (id: string) => request(`/api/tasks/${id}/pause`,{method:'POST'}),
@@ -48,6 +48,7 @@ export const api = {
   fsPick: () => request('/api/fs/pick',{method:'POST'}),
   gateConfirm: (id: string, gate: string, decision: string) =>
     request(`/api/projects/${id}/gate-confirm`,{method:'POST',body:JSON.stringify({gate,decision})}),
+  traceability: (id: string) => request<any>(`/api/projects/${id}/traceability`),
 
   observerChat: (q: string, mode?: string, pid?: string) => request<any>('/api/observer/chat',{method:'POST',body:JSON.stringify({question:q,execution_mode:mode||'auto_edit',project_id:pid||''})}),
 

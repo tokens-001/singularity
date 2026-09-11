@@ -169,15 +169,85 @@ export const ArchitectureDetails = memo(function ArchitectureDetails({ arch }: {
   )
 })
 
+const secTitle = { fontSize: 11, color: '#6b6b68', fontWeight: 600, marginBottom: 4 } as const
+
+/** GATE3 验收摘要。以前这道门只显示几周前的调研/架构，QA 报告生成完没人看得见。
+ *  摘要行刻意放在折叠框外：不展开也能判断该不该过。 */
+export const AcceptancePanel = memo(function AcceptancePanel({ acceptance, projectIssues }: { acceptance: any; projectIssues?: any[] }) {
+  const qa = acceptance?.qa_report
+  const conf = acceptance?.conformance
+  const sum = qa?.summary || {}
+  const issues: any[] = qa?.issues || []
+  const failed = sum.failed ?? issues.length
+  const qaOk = !!qa && failed === 0 && sum.verdict !== 'no_go'
+  // 无参调用时后端如实返回"无法核验——这不是通过"，不能当绿灯显示
+  const unverifiable = conf?.evidence?.unverifiable === true
+  const confColor = !conf ? '#6b6b68' : unverifiable ? '#b45309' : conf.passed ? '#16a34a' : '#dc2626'
+  const confLabel = !conf ? '—' : unverifiable ? '无法核验' : conf.passed ? '通过' : '不通过'
+
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', background: '#ffffff', border: '1px solid #e5e2d8', borderRadius: 10, padding: '10px 14px', fontSize: 12 }}>
+        <span style={{ fontWeight: 700, color: qa ? (qaOk ? '#16a34a' : '#dc2626') : '#6b6b68' }}>
+          QA：{!qa ? '无报告' : qaOk ? '通过' : `${failed} 个问题`}
+        </span>
+        <span style={{ fontWeight: 700, color: confColor }}>需求符合性：{confLabel}</span>
+        {!qa && <span style={{ color: '#6b6b68', fontSize: 11 }}>（本次没生成 QA 报告，只按下面的明细判）</span>}
+      </div>
+      {/* 项目 issues 放在折叠框外：验收被跳过这类事必须一眼看见，不能再是静默的 */}
+      {(projectIssues || []).length > 0 && (
+        <div style={{ marginTop: 8, background: '#fffdf5', border: '1px solid #e8dcc0', borderRadius: 10, padding: '10px 14px' }}>
+          {(projectIssues as any[]).map((it: any, i: number) => (
+            <div key={i} style={{ fontSize: 11, color: '#b45309', lineHeight: 1.6 }}>
+              ⚠ {it.detail || it.reason || it.message || JSON.stringify(it)}
+            </div>
+          ))}
+        </div>
+      )}
+      {(issues.length > 0 || conf?.reason) && (
+        <details style={{ background: '#ffffff', border: '1px solid #e5e2d8', borderRadius: 10, marginTop: 8, overflow: 'hidden' }}>
+          <summary style={{ cursor: 'pointer', padding: '12px 14px', fontSize: 13, fontWeight: 700, color: '#0f766e', listStyle: 'none', display: 'flex', alignItems: 'center', gap: 8, userSelect: 'none' }}>
+            <span>🔍 验收明细</span>
+            <span style={{ marginLeft: 'auto', color: '#6b6b68', fontSize: 11, fontWeight: 400 }}>点击展开 ▾</span>
+          </summary>
+          <div style={{ padding: '0 14px 14px' }}>
+            {issues.length > 0 && (
+              <div style={{ marginBottom: 10 }}>
+                <div style={secTitle}>问题（{issues.length}）</div>
+                {issues.map((it: any, i: number) => (
+                  <div key={i} style={{ fontSize: 11, color: '#141413', padding: '4px 0', borderBottom: '1px solid #f3f2ec' }}>
+                    <span style={{ fontWeight: 600, color: it.severity === 'critical' ? '#dc2626' : it.severity === 'warning' ? '#b45309' : '#6b6b68' }}>[{it.severity || 'info'}]</span>
+                    {it.fix_route && <span style={{ color: '#6b6b68', marginLeft: 6 }}>→ 回{it.fix_route === 'design' ? '架构' : it.fix_route === 'impl' ? '实现' : it.fix_route}</span>}
+                    <div style={{ lineHeight: 1.5, marginTop: 2 }}>{it.description}</div>
+                    {it.file && <div style={{ color: '#6b6b68', fontFamily: 'monospace' }}>{it.file}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {conf?.reason && (
+              <div>
+                <div style={secTitle}>需求符合性</div>
+                <div style={{ fontSize: 12, color: confColor, lineHeight: 1.6 }}>{conf.reason}</div>
+              </div>
+            )}
+          </div>
+        </details>
+      )}
+    </div>
+  )
+})
+
 interface Props {
   info: any
   gateNum: string
   gatePhase: string
+  acceptance?: any
   onGate: (decision: 'approved' | 'rejected') => void
 }
 
 /** GATE 审核面板（含调研报告 / 架构方案）。memo：任务日志高频更新时不该重渲染这棵大树。 */
-export const GatePanel = memo(function GatePanel({ info, gateNum, gatePhase, onGate }: Props) {
+export const GatePanel = memo(function GatePanel({ info, gateNum, gatePhase, acceptance, onGate }: Props) {
+  const isGate3 = gateNum === '3'
   return (
     <div style={{ padding: '8px 0', textAlign: 'center' }}>
       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: '#eaf6ec', border: '1px solid #16a34a', borderRadius: 8, padding: '8px 16px' }}>
@@ -189,6 +259,8 @@ export const GatePanel = memo(function GatePanel({ info, gateNum, gatePhase, onG
           style={{ background: '#b5b2a8', color: '#dc2626', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: 11, cursor: 'pointer' }}>↩ 打回</button>
       </div>
       <div style={{ maxWidth: 760, margin: '12px auto 0', textAlign: 'left' }}>
+        {/* GATE3 要审的是交付物，先给验收结论；下面那两坨是项目历史，排后面 */}
+        {isGate3 && <AcceptancePanel acceptance={acceptance} projectIssues={info.issues} />}
         {info.research_report && <ResearchReport report={info.research_report} />}
         {info.architecture && <ArchitectureDetails arch={info.architecture} />}
       </div>

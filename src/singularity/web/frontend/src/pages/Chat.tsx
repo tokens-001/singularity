@@ -27,6 +27,7 @@ export default function Chat() {
   const [tasks, setTasks] = useState<ProgressItem[]>([])
   const [projects, setProjects] = useState<any[]>([])
   const [status, setStatus] = useState<any>(null)
+  const [acceptance, setAcceptance] = useState<any>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickBottom = useRef(true)   // 用户手动往上翻时不再自动追底
   const pendingCid = useRef<string>('')
@@ -54,6 +55,19 @@ export default function Chat() {
     const el = scrollRef.current
     if (el) stickBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
   }
+
+  // GATE3 的验收依据（QA 报告 / 需求符合性）走单独接口拉 —— 否则这道门只显示几周的旧文档。
+  // 依赖用 phase 字符串而不是 projects 数组：fetchProjects 每次 SSE 事件都会换新数组，
+  // 而 /traceability 内部可能调 LLM，不能跟着刷新反复打。
+  const activePhase = projects.find(p => p.id === activePid)?.phase || ''
+  useEffect(() => {
+    if (activePhase !== 'gate3') { setAcceptance(null); return }
+    let cancelled = false
+    api.traceability(activePid)
+      .then((d: any) => { if (!cancelled) setAcceptance(d) })
+      .catch(() => { if (!cancelled) setAcceptance(null) })
+    return () => { cancelled = true }
+  }, [activePid, activePhase])
 
   const fetchStatus = async () => {
     try { setStatus(await api.status()) } catch { /* 状态轮询失败不打扰用户 */ }
@@ -102,7 +116,8 @@ export default function Chat() {
     } catch { toast('加载任务失败', 'error') }
   }
   const retryFailed = async (tid: string) => { try { await api.retryTask(tid); fetchTasks() } catch { toast('重试失败', 'error') } }
-  const revealFile = (f: string) => { api.revealFile(f).catch(() => toast('定位失败', 'error')) }
+  // 带上 activePid：项目产出的文件在成品仓库里，不带项目 id 会拿奇点自己的根去找 → 必 404
+  const revealFile = (f: string) => { api.revealFile(f, activePid).catch((e: any) => toast(`定位失败：${e?.message || e}`, 'error')) }
 
   useSSE((e: any) => {
     if (e.kind === 'task') {
@@ -234,7 +249,8 @@ export default function Chat() {
             )}
 
             {isGate && info && (
-              <GatePanel info={info} gateNum={gateNum} gatePhase={gatePhase} onGate={gateConfirm} />
+              <GatePanel info={info} gateNum={gateNum} gatePhase={gatePhase}
+                acceptance={acceptance} onGate={gateConfirm} />
             )}
 
             {loading && (

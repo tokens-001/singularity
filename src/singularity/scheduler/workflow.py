@@ -264,13 +264,17 @@ def run_test_fix_loop(project: ProjectState, agents: dict) -> str:
     file_count = len(changed)
     msgs = [f"执行完成 ({file_count} 个文件改动)"]
 
+    # 清空上一轮 issues 必须在验收**之前**。原来放在验收之后, 会把 _run_verification
+    # 刚记进去的"验收跳过"一并擦掉 —— 于是 GATE3 面板永远看到 issues: []，
+    # 那句"跳过"只活在一条一闪而过的聊天消息里。
+    project.issues = []
+
     # Step 5: 验收层 (QA + 安全审计师并行)
     verify_msgs = _run_verification(project, agents)
     if verify_msgs:
         msgs.extend(verify_msgs)
 
     project.phase = Phase.GATE3
-    project.issues = []
     save(project)
     return "\n".join(msgs) + "\n→ GATE3 等待人工审核"
 
@@ -281,7 +285,11 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     不调 LLM 写代码，只出验证报告供人工 GATE3 判断。
     """
     if not project.constraints_checklist:
-        return ["验收跳过 (无约束清单)"]
+        # 记进 issues: 只返回字符串的话，这句话不落盘, GATE3 只能看到一个空 issues
+        # 和一份不存在的 QA 报告, 谁也说不清验收为什么没跑。
+        reason = "验收跳过: 架构没产出约束清单, QA/安全审计师都没跑"
+        project.issues.append({"type": "verification_skipped", "detail": reason})
+        return [reason]
 
     msgs = []
     constraints = project.constraints_checklist
@@ -371,11 +379,13 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
     project.add_lineage({"action": "gate3_rejected", "feedback": feedback[:500]})
 
     # 读 QA 报告的 fix_route 决定路由
-    fix_route = "design"  # 默认保守
+    fix_route = "design"  # 有报告但没标路由 → 保守回架构
+    has_qa = False
     qa_report_path = _projects_dir() / f"{project.id}.qa_report.json"
     if qa_report_path.exists():
         try:
             qa_report = json.loads(qa_report_path.read_text(encoding="utf-8"))
+            has_qa = True
             # 优先用 summary.verdict_reason 里的 route, 否则按 issues 推断
             issues = qa_report.get("issues", [])
             if issues:
@@ -389,7 +399,17 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
                     else:
                         fix_route = "note"
         except Exception:
-            pass
+            has_qa = False
+
+    # 没有报告 ≠ 问题在架构。报告缺失恰恰是「架构没产出 constraints → 验收被整个跳过」
+    # (见 workflow.py _run_verification 的空清单早退) 的症状 —— 这时猜 design 会: 清空架构
+    # → 重做架构 → GATE2 又请你审架构 → 打回 → 转圈, 而架构其实什么都没改。
+    # 无依据时回实现层: 代价最小, 且不动架构。
+    if not has_qa:
+        fix_route = "impl"
+        no_qa_reason = "无 QA 报告(验收可能被跳过), 无法判断退回哪层 → 默认回实现层, 不动架构"
+    else:
+        no_qa_reason = ""
 
     if fix_route == "impl":
         # 回实现层: 重置 DONE task 为 PENDING, 让实现层重新执行
@@ -402,8 +422,11 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
                 # force=True: DONE 是终态, GATE3 打回是唯一合法的 DONE→PENDING 重置
                 tracker.transition(tid, TaskStatus.PENDING, force=True)
                 reset_count += 1
-        project.add_lineage({"action": "gate3_route", "route": "impl", "reset_tasks": reset_count})
+        project.add_lineage({"action": "gate3_route", "route": "impl", "reset_tasks": reset_count,
+                             **({"no_qa": True} if no_qa_reason else {})})
         msg = f"GATE3 打回 → 回实现层修复 (重置 {reset_count} 任务, 反馈: {feedback[:80]})"
+        if no_qa_reason:
+            msg += f" ⚠ {no_qa_reason}"
     elif fix_route == "note":
         # 仅记录, 不阻断 (保持当前阶段, 等人再次确认)
         project.add_lineage({"action": "gate3_route", "route": "note"})

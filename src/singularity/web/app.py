@@ -856,13 +856,23 @@ def api_token_budget():
 
 @app.route("/api/files/reveal", methods=["POST"])
 def api_files_reveal():
-    """在访达/文件管理器中定位文件 (macOS open -R)。路径限制在项目根目录内。"""
+    """在访达/文件管理器中定位文件 (macOS open -R)。路径限制在根目录内。
+
+    根目录按来源选: 带 project_id → 该项目的成品仓库 (repo_dir);
+    否则 → 奇点自己的仓库。项目任务写出来的文件在成品仓库里,
+    一律拿奇点的根去找必然 404 —— 这就是「定位失败」。
+    """
     import subprocess
     body = request.get_json(silent=True) or {}
     rel = (body.get("path") or "").strip()
     if not rel:
         return jsonify({"ok": False, "error": "路径为空"}), 400
-    root = Path(sched_config.PROJECT_ROOT).resolve()
+    pid = (body.get("project_id") or "").strip()
+    if pid and pid != "_default":
+        from singularity.scheduler import project as _proj_mod
+        root = Path(_proj_mod.repo_dir(pid)).resolve()
+    else:
+        root = Path(sched_config.PROJECT_ROOT).resolve()
     target = (root / rel).resolve()
     if not str(target).startswith(str(root) + os.sep):
         return jsonify({"ok": False, "error": "路径越界"}), 403
@@ -1298,12 +1308,21 @@ def api_project_traceability(project_id):
             test_plan = testp.read_text(encoding="utf-8")
         except Exception:
             pass
+    # 读 QA 报告 —— GATE3 判断"这份交付物该不该过"的主要依据
+    qap = _projects_dir() / f"{project_id}.qa_report.json"
+    qa_report = None
+    if qap.exists():
+        try:
+            qa_report = _json.loads(qap.read_text(encoding="utf-8"))
+        except Exception:
+            pass
     # 需求符合性
     req_check = check_requirement_conformance(project_id)
     return jsonify({
         "ok": True,
         "traceability": traceability,
         "test_plan": test_plan,
+        "qa_report": qa_report,
         "conformance": {
             "passed": req_check.passed,
             "reason": req_check.reason,

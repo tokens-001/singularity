@@ -6,6 +6,7 @@ ProjectState 是整个工作流的单一真相源。存盘到 .qidian/projects/{
 
 from __future__ import annotations
 import json
+import os
 import re
 import threading
 import time
@@ -154,6 +155,13 @@ class ProjectState:
             next_p = _GATE_NEXT.get(gate)
             if next_p:
                 self.phase = next_p
+            # 人工批 GATE2 = 人到场兜底了, 自动重试的配额必须跟着恢复。
+            # review_failures / integrate_failures 是**单向棘轮**(全仓无一处清零):
+            # 审查失败触顶 → 集成合并成功后又被 escalate 回 GATE2 → 你再点通过 → 又触顶,
+            # 用户看到的就是"点了通过还让我审核", 且永远出不去。
+            if gate == Phase.GATE2:
+                self.review_failures = 0
+                self.integrate_failures = 0
             return next_p
         elif decision == "rejected":
             fallback = _REJECT_FALLBACK.get(gate)
@@ -335,10 +343,14 @@ def delete(project_id: str) -> bool:
 def save(project: ProjectState) -> None:
     project.updated_at = time.time()
     p = _path(project.id)
-    tmp = p.with_suffix(".tmp")
-    # 必须持锁: tmp 是**确定性路径**(<id>.tmp)，两个线程同时 save 同一项目会
-    # 共用同一 tmp → 写入交错/后写覆盖前写(lost update)。调用方跨三类线程:
-    # 调度循环、_merge_executor、Flask 请求线程。tracker.py 同类保存已加锁，这里漏了。
+    # tmp 路径带 pid: _LOCK 是 threading 锁, 只挡得住同进程的线程 —— 而后端调度循环
+    # 和 tests/integration/role_probe.py 这类**独立进程**会同时 save 同一个项目。
+    # 共用一个确定性 <id>.tmp 时: A replace 成功后 tmp 就没了, B 的 replace 撞 ENOENT
+    # (alerts.jsonl 里实见过), 或者两边写入交错 → 项目 JSON 多出一个 `}` → 解析失败
+    # → list_all() 静默跳过 → 项目从界面上凭空消失。
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
+    # 锁仍需要: 同进程内多线程(A 调度循环 / B _merge_executor / C Flask 请求线程)
+    # 会共用同一个 pid 的 tmp。tracker.py 同类保存已加锁, 这里当初漏了。
     with _LOCK:
         tmp.write_text(
             json.dumps(project.to_dict(), ensure_ascii=False, indent=2),
