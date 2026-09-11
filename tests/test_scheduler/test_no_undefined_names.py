@@ -30,13 +30,16 @@ SRC = ROOT / "src" / "singularity"
 
 # 显式豁免：命中 F821 但**不会**造成运行时报错的地方。
 # 每一条都要写清"为什么无害"—— 这个列表长一寸，守卫就钝一分。
-ALLOWED = {
-    # 半成品死模块：`Dispatcher` / `TaskTracker` 这两个类**全仓根本没写过**，
-    # 只出现在它的类型注解里。文件顶部有 `from __future__ import annotations`
-    # → 注解不求值，所以不炸。生产代码无人 import 它（只有测试引用）。
-    # ponytail: 要么补完要么删，别让豁免长期挂着 —— 见 docs/防御模式.md 的判据。
-    "observer/state_sampler.py",
-}
+#
+# 现在是**空的**，这是好事：唯一那条（`observer/state_sampler.py`）已于 2026-09-12
+# 删除。它当时是半成品死模块 —— 数据源 `Dispatcher`/`TaskTracker` 全仓根本没写过，
+# 采样全靠 `getattr(obj, x, 0)` 兜底，产出恒为全 0 的结构体；任务/队列那部分也已被
+# `/api/status` + witness 的真实数据替代。判据见记忆里的「死代码处理标准」：
+# 重复/被替代 → 删。
+#
+# **别让它再长回来**：新增豁免必须写清"为什么无害"，并确认它不会烂在这儿
+# —— `test_allowlist_has_no_stale_entries` 会揪出修好的旧条目。
+ALLOWED: set[str] = set()
 
 
 def _ruff_f821() -> list[str]:

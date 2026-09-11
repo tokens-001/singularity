@@ -106,7 +106,7 @@ def missing_deps() -> list:
     """环境自检: 返回核心依赖中无法 import 的包名 (跑任务/测试必需)。"""
     import importlib
     missing = []
-    for m in ("pytest", "psutil", "httpx", "flask"):
+    for m in ("pytest", "httpx", "flask"):
         try:
             importlib.import_module(m)
         except ImportError:

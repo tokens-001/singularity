@@ -62,7 +62,6 @@ SAFE_IMPORTS = [
     "singularity.scheduler.memory",
     # observer
     "singularity.observer.config",
-    "singularity.observer.state_sampler",
     # skills
     "singularity.skills.skill_loader",
     # web
