@@ -236,6 +236,7 @@ def traverse(
                 "description": node.content[:120],
                 "trajectory": node.trajectory,
                 "tool_seq": (node.attrs or {}).get("tool_seq") or [],
+                "abstraction": (node.attrs or {}).get("abstraction"),
                 "score": round(score, 4),
                 "path": [],
                 "graph_sources": ["anchor"] if is_anchor else [],
@@ -251,6 +252,7 @@ def traverse(
                 "description": node.content[:120],
                 "trajectory": node.trajectory,
                 "tool_seq": (node.attrs or {}).get("tool_seq") or [],
+                "abstraction": (node.attrs or {}).get("abstraction"),
                 "score": round(score, 4),
                 "path": [(src[-8:] if len(src) >= 8 else src, et) for src, et in path],
                 "graph_sources": sources,
@@ -386,9 +388,24 @@ def synthesize(results: list[dict], query: str, include_full: bool = False) -> d
     if include_full:
         for i in range(min(EXPAND_TOP, len(narrative))):
             traj = narrative[i].get("trajectory") or ""
-            if traj:
-                # 三段摘要现算（不落盘）：先给"这次的动作怎么分段的"，再给全文
-                head = stage_summary(narrative[i].get("tool_seq") or [])
+            ab = narrative[i].get("abstraction")
+            head = stage_summary(narrative[i].get("tool_seq") or [])
+            if isinstance(ab, dict) and (ab.get("strategy") or ab.get("principle")):
+                # 有分层摘要就**优先用它**：9599 字的原文压到 ~330 字，
+                # 而且"套路/道理"那两层才是换个任务也用得上的东西
+                # （论文消融：分层 80.0 vs 原始轨迹 57.6）。
+                body = "\n".join(
+                    f"{label}：{ab[k]}"
+                    for k, label in (("concrete", "具体"), ("strategy", "套路"),
+                                     ("principle", "道理"))
+                    if ab.get(k))
+                narrative[i] = {
+                    **narrative[i],
+                    "full_text": f"{head}\n{body}" if head else body,
+                    "from_abstraction": True,
+                }
+            elif traj:
+                # 没抽象过 → 退回原文。三段摘要现算（不落盘）。
                 body = traj[:EXPAND_CHARS]
                 narrative[i] = {
                     **narrative[i],
@@ -396,8 +413,9 @@ def synthesize(results: list[dict], query: str, include_full: bool = False) -> d
                     "full_text_truncated": len(traj) > EXPAND_CHARS,
                 }
 
-    # trajectory / tool_seq 是"候选展开材料"，没被展开的别跟着往外传
-    narrative = [{k: v for k, v in it.items() if k not in ("trajectory", "tool_seq")}
+    # 这些是"候选展开材料"，没被展开的别跟着往外传
+    narrative = [{k: v for k, v in it.items()
+                  if k not in ("trajectory", "tool_seq", "abstraction")}
                  for it in narrative]
 
     return {
@@ -531,6 +549,7 @@ def find_similar(description: str, top_k: int = 5) -> list[dict]:
                 "description": node.content[:120],
                 "trajectory": node.trajectory,
                 "tool_seq": (node.attrs or {}).get("tool_seq") or [],
+                "abstraction": (node.attrs or {}).get("abstraction"),
                 "similarity": round(sim, 4),
                 "timestamp": node.timestamp,
             })
