@@ -27,6 +27,9 @@ class MemoryHits:
     entity_matches: dict = field(default_factory=dict)          # {file: [task_ids]}
     semantic_baseline: list[dict] = field(default_factory=list) # 纯语义相似任务 (基线)
     graph_coverage: dict = field(default_factory=dict)          # {edge_type: count}
+    # 把检索到的经验**改写成针对当前任务的计划**（deep 路径才有）。
+    # 论文说这是区分成败的那一条：贴通用提示 vs 给具体计划（arXiv 2607.29658）。
+    adapted: str = ""
 
 
 @dataclass
@@ -125,13 +128,23 @@ def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True,
         # depth 3 才展开"实际产出"（见本函数 deep 参数说明）
         mem_result = mem_mod.query(task, max_depth=3 if deep else 1)
         traversal = mem_result.get("traversal", {})
+        _narr = traversal.get("narrative", [])
         res.memory = MemoryHits(
-            narrative=traversal.get("narrative", []),
+            narrative=_narr,
             intent=traversal.get("intent", "semantic"),
             entity_matches=mem_result.get("entity_matches", {}),
             semantic_baseline=mem_result.get("semantic_baseline", []),
             graph_coverage=traversal.get("graph_coverage", {}),
         )
+        # deep 路径：检索到的是**通用经验**，再花一次便宜调用把它**改写成
+        # 针对当前任务的计划** —— 论文说这一步才决定"经验能不能真用上"。
+        # 只在 deep 上调（非 deep 本来就只有标题，没什么可改写的）。
+        if deep and any(it.get("full_text") for it in _narr):
+            try:
+                from . import _memory_consolidator as _cons
+                res.memory.adapted = _cons.adapt_experience(task, _narr)
+            except Exception as e:
+                witness.warn("pre_search", f"adapt:{type(e).__name__}:{e}"[:100])
     except Exception as e:
         try:
             from . import witness

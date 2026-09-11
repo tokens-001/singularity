@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from collections import defaultdict
 
 __all__ = ['_llm_judge_causal', '_resolve_causal_direction', 'consolidate_memory',
-           'abstract_trajectory', 'backfill_abstractions']
+           'abstract_trajectory', 'backfill_abstractions', 'adapt_experience']
 # Slow Channel: 记忆整合 + 因果推断 (ex _memory_consolidator.py)
 # ═══════════════════════════════════════════════════════════
 
@@ -203,6 +203,78 @@ def abstract_trajectory(trajectory: str, task: str = "",
         except Exception:
             pass
         return None
+
+
+_ADAPT_PROMPT = """下面是**从历史任务里检索到的经验**。请针对**当前任务**，把其中适用的部分改写成一份可执行的计划。
+
+要求：
+- **适用的**留住并具体化 —— 写清"在这个任务里，这一步具体该怎么做"
+- **不适用的明确丢掉**，别硬套：历史任务和当前任务不一样的地方，套上去是害人
+- **别复述原文**，别写"可以参考历史经验"这种空话
+- **5 行以内**，直接给计划，不要任何前后缀
+
+【当前任务】
+{task}
+
+【历史经验（可能多条，未必都适用）】
+{experiences}
+"""
+
+
+def adapt_experience(task: str, items: list[dict], max_chars: int = 2500) -> str:
+    """把检索到的历史经验**改写成针对当前任务的计划**。失败 / 没料 → ""。
+
+    论文（arXiv 2607.29658）原话说得很直白：老办法把检索到的摘要当**通用提示**
+    塞进 prompt，而不是**针对当前问题的具体计划** —— **这是它区分成败的那一条**。
+    我们原来干的正是被批评的那件事：`pre_search` 捞到什么就原样贴什么。
+
+    ⚠️ 多花一次便宜模型的调用，所以**只在 deep 路径上调**（那条路本来就 opt-in）。
+    """
+    task = (task or "").strip()
+    if not task or not items:
+        return ""
+    blocks = []
+    for it in items[:3]:                       # 多给几条没意义，反而稀释
+        body = it.get("full_text") or it.get("description") or ""
+        if not body:
+            continue
+        blocks.append(f"— 历史任务：{str(it.get('description', ''))[:120]}\n{body}")
+    if not blocks:
+        return ""
+    prompt = _ADAPT_PROMPT.format(task=task[:600],
+                                  experiences="\n\n".join(blocks)[:max_chars])
+    try:
+        model, env_var, base_url = _pick_api()
+        if not model:
+            return ""
+        api_key = os.environ.get(env_var, "")
+        if not api_key:
+            return ""
+        # ⚠️ max_tokens 要**连思考一起算**（deepseek-flash 关不掉思考，reasoning
+        # 计进 completion_tokens）。实测 1200 时**三次里两次返回空 content**
+        # （finish_reason=length，思考吃光预算）—— 而且当时是**静默返回空串**，
+        # 外面只看到"没产出计划"，看不出为什么。提到 3000 才稳。
+        data = _chat(base_url, api_key, model, prompt, max_tokens=3000)
+        _record(model, data)
+        choice = data["choices"][0]
+        out = (choice["message"].get("content") or "").strip()
+        if not out:
+            # **不许静默**：空 content 多半是预算被思考吃光，不是"模型不想答"
+            try:
+                import logging
+                logging.getLogger("qidian").warning(
+                    "adapt_experience: 空 content (finish_reason=%s, usage=%s)",
+                    choice.get("finish_reason"), data.get("usage"))
+            except Exception:
+                pass
+        return out
+    except Exception as e:
+        try:
+            import logging
+            logging.getLogger("qidian").warning("adapt_experience: %s", e)
+        except Exception:
+            pass
+        return ""
 
 
 def backfill_abstractions(limit: int = 3) -> int:

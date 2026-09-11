@@ -191,7 +191,16 @@ def _run_research(project: ProjectState, agents: dict) -> str:
         # 没栽过就只用标题（depth 1，与改动前行为一致）。
         _deep = bool(getattr(project, "fix_round", 0) or getattr(project, "review_failures", 0))
         pre = pre_mod.pre_search(project.description, route, use_hybrid=True, deep=_deep)
-        if pre.memory and pre.memory.narrative:
+        if pre.memory and pre.memory.adapted:
+            # **优先用改写后的计划**：检索到的是"别人的经验"，改写成"这个任务该怎么干"
+            # 才是能用的东西 —— 论文说这一步区分成败（贴通用提示 vs 给具体计划）。
+            # 原始记录仍附上**当证据**（只有标题）：计划是加工过的，出处不该被藏掉。
+            _src = "\n".join(
+                f"- [{it.get('task_id','')[-8:]}] {str(it.get('description',''))[:80]}"
+                for it in pre.memory.narrative[:5])
+            prompt = (f"[针对本任务的计划（由历史经验改写而来）]\n{pre.memory.adapted}\n\n"
+                      f"[计划的来源（原始记录，需要时再查）]\n{_src}\n\n{prompt}")
+        elif pre.memory and pre.memory.narrative:
             lines = []
             for it in pre.memory.narrative[:5]:
                 line = f"- [{it.get('task_id','')[-8:]}] {it.get('description','')[:80]}"

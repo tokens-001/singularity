@@ -86,6 +86,73 @@ class TestAbstractTrajectory:
         assert seen["max_tokens"] >= 2000, "思考也吃预算，太小会返回空 content"
 
 
+class TestAdaptExperience:
+    """检索到经验之后**改写成针对当前任务的计划**。
+
+    论文（arXiv 2607.29658）说这一步区分成败：老办法把检索到的摘要当**通用提示**
+    塞进 prompt，而不是**针对当前问题的具体计划**。
+    """
+
+    def _items(self):
+        return [{"task_id": "t1", "description": "上次做统计工具",
+                 "full_text": "具体：用 codecs 增量解码器跨块解码；套路：别每块独立处理"}]
+
+    def test_returns_adapted_text(self, monkeypatch):
+        monkeypatch.setattr(cons, "_chat",
+                            lambda *a, **k: _reply("1. 先定统计对象\n2. 大文件逐块读"))
+        out = cons.adapt_experience("写个统计工具", self._items())
+        assert "逐块读" in out
+
+    def test_no_items_returns_empty(self, monkeypatch):
+        monkeypatch.setattr(cons, "_chat", lambda *a, **k: pytest.fail("没料不该调模型"))
+        assert cons.adapt_experience("写个统计工具", []) == ""
+
+    def test_no_task_returns_empty(self, monkeypatch):
+        monkeypatch.setattr(cons, "_chat", lambda *a, **k: pytest.fail("没任务不该调模型"))
+        assert cons.adapt_experience("  ", self._items()) == ""
+
+    def test_items_without_body_returns_empty(self, monkeypatch):
+        monkeypatch.setattr(cons, "_chat", lambda *a, **k: pytest.fail("没正文不该调模型"))
+        assert cons.adapt_experience("写个统计工具",
+                                     [{"task_id": "t", "description": "", "full_text": ""}]) == ""
+
+    def test_prompt_carries_task_and_experience(self, monkeypatch):
+        seen = {}
+
+        def _spy(base, key, model, prompt, max_tokens, timeout=60.0):
+            seen["prompt"] = prompt
+            seen["max_tokens"] = max_tokens
+            return _reply("计划")
+
+        monkeypatch.setattr(cons, "_chat", _spy)
+        cons.adapt_experience("写个统计工具", self._items())
+        assert "写个统计工具" in seen["prompt"]
+        assert "codecs" in seen["prompt"], "历史经验要进 prompt"
+        assert seen["max_tokens"] >= 2000, "思考也吃预算，1200 会返回空 content（实测 3 次里 2 次空）"
+
+    def test_empty_content_is_not_silent(self, monkeypatch):
+        """空 content（预算被思考吃光）必须**留痕** —— 不许静默返回空串。"""
+        import logging
+        monkeypatch.setattr(cons, "_chat", lambda *a, **k: {
+            "choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+            "usage": {"total_tokens": 10}})
+        recs = []
+
+        class _H(logging.Handler):
+            def emit(self, r):
+                recs.append(r.getMessage())
+
+        lg = logging.getLogger("qidian")
+        h = _H()
+        lg.addHandler(h)
+        try:
+            out = cons.adapt_experience("写个统计工具", self._items())
+        finally:
+            lg.removeHandler(h)
+        assert out == ""
+        assert any("adapt_experience" in m for m in recs), "空产出要留痕，别静默"
+
+
 class TestBackfill:
     def test_only_untouched_nodes_and_respects_limit(self, monkeypatch, tmp_path):
         from singularity.scheduler import _memory_core as mc
