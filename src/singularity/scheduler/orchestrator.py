@@ -112,14 +112,22 @@ def _dispatch_ready(dispatched: set, pool, agents, runner: TaskRunner,
     return dispatched_any
 
 
-def _salvage_timed_out(task, elapsed_s: float):
-    """超时被杀时把**已知事实**留下来：改了哪些文件、实际跑了多久。
+def _salvage_timed_out(task, elapsed_s: float, snap=None):
+    """超时被杀时把**已知事实**留下来：改了哪些文件、有没有提交、实际跑了多久。
 
     原来这里给 `_save_trace` 传 `None` → trace 里 `changed_files=[]` /
     `elapsed=0` / `tokens=0`，看上去"这个任务什么都没干"。而 worktree 里
-    文件其实是写全的。2026-09-11 探路轮实测：3 个任务各撞 900s 被杀，
-    事后**完全查不出它们做过什么**，用量也一条没进账 —— 最需要排查的场景
-    恰恰什么都没留下。
+    文件其实是写全的（2026-09-11 探路轮实测：3 个任务各撞 900s 被杀，
+    事后**完全查不出它们做过什么**）。
+
+    ⚠️ **2026-09-12 更正：只跑 `git status --porcelain` 是不够的 —— 那只看得到
+    「未提交」的改动。而 agent 干完一轮会自己 `commit_wt`（"agent changes in
+    <taskid>"），提交之后 `git status` 是干净的** → 于是"干完了并提交了"和
+    "什么都没干"在 trace 里长得一模一样。
+    探路2 的 T2 就是这样：373 行测试 + 完整实现都提交了（worktree 里 `163a52a`），
+    trace 里只剩一个 `__pycache__`、`agent_output` 23 字。
+    修法：跟**执行前快照的 ref** 比 —— 和 `validator._diff_base` 同一招，
+    它的注释早就写着"裸 git diff 恒为空"（09-11 修了 validator，这里没同步）。
 
     用量（token）**取不到**（executor 没返回），所以如实留 None，不填 0。
     """
@@ -127,19 +135,49 @@ def _salvage_timed_out(task, elapsed_s: float):
         import subprocess
         from singularity.scheduler.project import repo_root_for
         from singularity.scheduler._git_worktree import _worktrees_dir
+        try:
+            from singularity.scheduler.validator import _diff_base
+            base = _diff_base(snap)
+        except Exception:
+            base = ""
+
         repo_root = repo_root_for(task)
         files: list[str] = []
+        commits: list[str] = []
+
+        def _git(wt, *args) -> str:
+            try:
+                return subprocess.run(["git", *args], cwd=str(wt), capture_output=True,
+                                      text=True, timeout=10).stdout or ""
+            except Exception:
+                return ""
+
         for wt in _worktrees_dir(repo_root).glob(f"{task.id}_*"):
-            r = subprocess.run(["git", "status", "--porcelain"], cwd=str(wt),
-                               capture_output=True, text=True, timeout=10)
-            for ln in (r.stdout or "").split("\n"):
-                if ln.strip():
-                    files.append(ln[3:].strip())
+            if base:
+                # 与基准比：**已提交 + 未提交一起**看得见
+                files += [f.strip() for f in
+                          _git(wt, "diff", "--name-only", base).split("\n") if f.strip()]
+                commits += [c.strip() for c in
+                            _git(wt, "log", "--oneline", f"{base}..HEAD").split("\n")
+                            if c.strip()]
+            else:
+                # 拿不到基准（copy 型快照 / 没传 snap）→ 退回旧行为，但**如实标注**
+                for ln in _git(wt, "status", "--porcelain").split("\n"):
+                    if ln.strip():
+                        files.append(ln[3:].strip())
+
+        files = sorted(set(files))
+        tail = (f"，另有 {len(commits)} 个提交未合并（{commits[0].split()[0]}）"
+                if commits else "")
+        if not base:
+            tail += "；⚠️ 拿不到执行前基准，这里**只**能看到未提交的改动"
 
         class _TimedOutResult:
             """只填**能确定的**字段；token 未知就 None（不是 0）。"""
             changed_files = files
-            raw_output = f"(执行超时(>{int(elapsed_s)}s) 被杀，未及输出总结)"
+            new_commits = commits
+            raw_output = (f"(执行超时(>{int(elapsed_s)}s) 被杀，未及输出总结。"
+                          f"磁盘上改动了 {len(files)} 个文件{tail})")
             token_count = None          # 不可知 —— 不是"没花钱"
             elapsed = float(elapsed_s)  # 这个是真的：确实跑了这么久
             success = False
@@ -229,7 +267,7 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
                 pass
             results.append((t.id, "timeout", None))
             # 抢救已知事实再落 trace —— 传 None 会让 trace 变成一份"什么都没干"的假象
-            _save_trace(t, route, snap, _salvage_timed_out(t, now - submitted_at),
+            _save_trace(t, route, snap, _salvage_timed_out(t, now - submitted_at, snap),
                         None, False)
             try:
                 from singularity.scheduler.project import repo_root_for
