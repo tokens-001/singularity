@@ -50,6 +50,54 @@ class TestValidatorV2:
         assert r["runner"] == "none"
         assert "目录不存在" in r["output"]
 
+    def test_crossover_review_needs_base_to_see_committed_work(self, tmp_path, monkeypatch):
+        """反证：worktree 里改动被 `commit_wt` 提交之后，**不带基准就看不见**。
+
+        看不见 → 早退返回 `verdict:"pass"` → **审查静默漏过整份改动**。
+        这是同一个形状的第三处（validator 09-11 修过、orchestrator 09-12 修过）。
+        """
+        import subprocess
+
+        def g(*a):
+            subprocess.run(["git", *a], cwd=str(repo), check=True,
+                           capture_output=True, text=True)
+
+        repo = tmp_path / "r"
+        repo.mkdir()
+        g("init")
+        g("config", "user.email", "t@t")
+        g("config", "user.name", "t")
+        (repo / "a.py").write_text("x = 1\n")
+        g("add", "-A")
+        g("commit", "-m", "base")
+        base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                              capture_output=True, text=True).stdout.strip()
+        (repo / "a.py").write_text("x = 2\n")
+        g("add", "-A")
+        g("commit", "-m", "agent changes in t1_any")   # ← 模拟 commit_wt
+
+        # 不带基准：看不见改动 → 早退
+        r1 = crossover_review("t", "o", ["a.py"], "any", cwd=str(repo))
+        assert "empty diff" in r1["summary"]
+        assert not r1["issues"], "看不见改动却给了 pass —— 正是这条的坑"
+
+        # 带基准：看得见 → 不会早退（走到调模型那步，桩掉它）
+        from singularity.scheduler import dispatcher as _disp
+        import types as _t
+
+        class _ER:
+            raw_output = '{"issues":[],"verdict":"pass","summary":"no issues"}'
+        class _R:
+            executor_result = _ER()
+
+        monkeypatch.setattr(_disp, "load_agents", lambda: {"any": [{"model": "m1"}]})
+        monkeypatch.setattr(_disp, "pick_agent_fallback_chain",
+                                 lambda *a, **k: [{"model": "m1"}])
+        monkeypatch.setattr(_disp, "dispatch", lambda *a, **k: _R())
+
+        r2 = crossover_review("t", "o", ["a.py"], "any", cwd=str(repo), base_ref=base)
+        assert "empty diff" not in r2["summary"], "带了基准就该看得见，不该早退"
+
     def test_crossover_review_no_files(self):
         r = crossover_review("test", "output", [], "any", "test")
         assert r["verdict"] == "pass"

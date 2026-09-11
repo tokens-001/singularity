@@ -425,7 +425,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                     task_desc=_review_requirements(task),
                     raw_output=exec_result.raw_output,
                     changed_files=changed, writer_level=level,
-                    writer_model=writer_model, cwd=cwd)
+                    writer_model=writer_model, cwd=cwd, base_ref=base_ref)
                 if review.get("issues"):
                     crit = [i for i in review["issues"]
                             if _sev(i) == "critical"]

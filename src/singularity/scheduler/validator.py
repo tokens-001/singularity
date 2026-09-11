@@ -312,28 +312,41 @@ def _norm_verdict(v, default: str) -> str:
     return s or default
 
 
-def crossover_review(task_desc, raw_output, changed_files, writer_level, writer_model="", cwd=None):
-    """Use a DIFFERENT model to review agent output. Returns {issues,verdict,summary}."""
+def crossover_review(task_desc, raw_output, changed_files, writer_level, writer_model="", cwd=None,
+                     base_ref=""):
+    """Use a DIFFERENT model to review agent output. Returns {issues,verdict,summary}.
+
+    ⚠️ **`base_ref` 必须传**（worktree 路径上）。改动在 `validate()` 之前就被
+    `commit_wt` 提交了 → 裸 `git diff`（跟 HEAD 比）对已提交的改动**恒为空** →
+    下面那句空 diff 的早退会返回 `verdict: "pass"` —— **审查静默漏过整份改动**。
+    这是**同一个形状的第三处**：validator 的 multi_model_review 09-11 修过、
+    orchestrator 的抢救 09-12 修过，这处没跟上。
+    """
     if not changed_files:
         return {"issues":[],"verdict":"pass","summary":"no file changes"}
 
     review_level = writer_level
 
-    # Get git diff
+    # Get git diff —— 带基准
+    _base = [base_ref] if base_ref else []
     diff_text = ""
     try:
-        r = subprocess.run(["git","diff","--stat"]+changed_files,
+        r = subprocess.run(["git","diff",*_base,"--stat",*changed_files],
                          capture_output=True,text=True,timeout=10,cwd=cwd or str(config.PROJECT_ROOT))
         diff_text = (r.stdout or "")[:3000]
         if diff_text:
-            r2 = subprocess.run(["git","diff"]+changed_files,
+            r2 = subprocess.run(["git","diff",*_base,*changed_files],
                               capture_output=True,text=True,timeout=10,cwd=cwd or str(config.PROJECT_ROOT))
             diff_text += "\n" + (r2.stdout or "")[:5000]
     except Exception as _e:
         logging.getLogger(__name__).warning("git diff failed: %s", _e)
 
     if not diff_text.strip():
-        return {"issues":[],"verdict":"pass","summary":"empty diff"}
+        # 有基准 = 真的没改动，判 pass 没问题。
+        # **没基准就别装**：可能只是看不见（已提交的改动裸 diff 看不到）。
+        return {"issues":[],"verdict":"pass",
+                "summary": "empty diff" if base_ref
+                           else "empty diff（**没拿到基准**，这条结论不可信）"}
 
     files_list = ", ".join(changed_files[:10])
     # 角色定位/审查重点在 roles.toml [reviewer]（页面上可改）；这里只填动态内容和输出契约
