@@ -164,3 +164,26 @@ class TestAliasIsNotSecondOpinion:
         chain = [a["model"] for a in D.pick_agent_fallback_chain(agents, "any")]
         assert chain == ["real-model", "other"], \
             f"别名没去重或留错了那个：{chain}"
+
+
+class TestConfigKeysAreAlive:
+    """⑥ 配置文件里的键必须真的有人读 —— **死键比没配更糟**。
+
+    真实事故：`fusion.toml` 的 `[custom]` 里躺着 `judge_model` + `call_model`，
+    两个都是 v1 的角色名、v2 全仓无人读；而 v2 唯一读的 `extract_model` 不存在。
+    于是永远静默走硬编码默认值，谁也看不出"我配了呀"配的是空气。
+    代价：默认值恰是欠费的 `glm-5.3-flash` → 连撞两个 429 → 退到委员身上，
+    「提取」一步单独烧 170 秒，整场融合 621 秒。
+    """
+
+    def test_every_key_in_fusion_toml_is_read_somewhere(self):
+        import re
+        from singularity.scheduler import config
+        d = config.SCHEDULER_DIR
+        keys = re.findall(r"^([a-z_]+)\s*=", (d / "fusion.toml").read_text(encoding="utf-8"), re.M)
+        assert keys, "fusion.toml 一个键都没有 —— 那 [custom] 就是摆设"
+        src = (d / "execution_judge.py").read_text(encoding="utf-8")
+        dead = [k for k in keys if f'"{k}"' not in src and f"'{k}'" not in src]
+        assert not dead, (
+            f"fusion.toml 里的 {dead} 没有任何地方读 —— 你以为配上了，"
+            f"实际走的是代码里的硬编码默认值，而且没有任何提示。")
