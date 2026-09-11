@@ -480,11 +480,9 @@ Layer 1: 原始输入 (不可变, 零丢失保证)
 ├──────────────────────────────────────────────┤
 │  memory.py        ── 数据层 ──                  │
 │    MAGMA 多图记忆 (事件/语义/锚点/时序)            │
-│  _lifecycle.py         记忆衰减与清理            │
 │  project.py            项目状态机               │
 │  snapshot.py           写入前快照               │
 │  model_registry.py     模型注册表               │
-│  model_profile.py      模型画像                 │
 │  api_store.py          API Key 库               │
 │  roles.py              角色/人格面具             │
 │  mcp.py                MCP 集成                 │
@@ -500,16 +498,13 @@ Layer 1: 原始输入 (不可变, 零丢失保证)
 │    validator.py        校验闭环                 │
 │    execution_judge.py  执行裁判                 │
 │    goal_loop.py        Goal 循环               │
-│    conductor.py        项目自动推进             │
 │    supervisor.py       独立校验引擎             │
-│    judge_monitor.py    裁判监控                 │
 │    chancellor.py       报错总管                 │
 │    neijinglu.py        交付完整性报告           │
 ├──────────────────────────────────────────────┤
 │  基础设施                                      │
 │    config.py           集中配置                 │
 │    _io.py              统一 I/O (TOML+JSON)     │
-│    _cache.py           TTL 缓存                 │
 │    _auth.py            认证                    │
 │    _types.py           数据类型                 │
 │    _token_budget.py    Token 预算               │
@@ -517,7 +512,6 @@ Layer 1: 原始输入 (不可变, 零丢失保证)
 │    permission.py       权限引擎                 │
 │    witness.py          心跳+观测                 │
 │    log.py              文件日志                 │
-│    handoff.py          Agent 交接记录            │
 │    pre_search.py       I 层预检                 │
 │    task_templates.py   任务模板                 │
 │    codegraph.py        代码知识图谱             │
