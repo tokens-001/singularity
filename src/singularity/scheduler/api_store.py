@@ -266,10 +266,47 @@ _QUOTA_HINTS = ("insufficient balance", "insufficient_quota", "exceeded_current_
 
 
 _QUOTA_DEAD_KEY = "_quota_dead"   # {model_id: 标记时间戳}
+_ALIAS_KEY = "_aliases"           # {请求名: 实际模型名}
 
 
 def _quota_dead() -> dict:
     return _load_raw().get(_QUOTA_DEAD_KEY, {}) or {}
+
+
+def record_alias(requested: str, actual: str) -> None:
+    """记下「请求名 → 实际模型」的映射。
+
+    厂商会把旧模型名路由到新模型：DeepSeek 2026-09-14 12:00 起，`deepseek-v4-pro`
+    的请求**全部路由到 V4.1-Flash** —— 请求名不变，但返回体里的 `model` 字段变了。
+    而委员会是按**请求名**选席位的：两个名字指向同一个模型时，看起来是"多视角碰撞"，
+    实际是同一个模型自己跟自己碰，唯一验证过的核心价值直接归零。
+
+    只有**实际调用**才知道真相（`/v1/models` 只列主推名），所以对账放在响应路径上。
+    """
+    if not requested or not actual or requested == actual:
+        return
+    try:
+        data = _load_raw()
+        aliases = data.setdefault(_ALIAS_KEY, {})
+        if aliases.get(requested) == actual:
+            return
+        aliases[requested] = actual
+        _store_path().write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    except Exception:
+        pass   # 记不上不该影响调用本身
+
+
+def canonical(model: str) -> str:
+    """把别名归一到实际模型名（跟着链走，防 A→B→C）。没记过就原样返回。"""
+    try:
+        aliases = _load_raw().get(_ALIAS_KEY, {}) or {}
+    except Exception:
+        return model
+    seen, cur = set(), model
+    while cur in aliases and cur not in seen:
+        seen.add(cur)
+        cur = aliases[cur]
+    return cur
 
 
 def is_model_available(model: str) -> bool:

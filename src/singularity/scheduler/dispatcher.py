@@ -334,6 +334,27 @@ def pick_agent_fallback_chain(agents: dict, level: str, role: str = None,
     # fail-open: 全池都熔断时原样返回，否则一个坏 key 能让整个调度停摆
     from singularity.scheduler import _model_breaker
     alive = [a for a in deduped if _model_breaker.is_available(a.get("model", ""))]
+
+    # ── 别名去重：两个 id 可能指向**同一个实际模型**（厂商把旧名路由到新模型）──
+    # 委员会按"请求名"选席位，不去重就会拿同一个模型占两席 —— 看着是"多视角碰撞"，
+    # 实际是自己跟自己碰，而这是唯一验证过有价值的那个能力。
+    # 映射由 openai_agent 在响应路径上对账写入（`/v1/models` 只列主推名，看不出来）。
+    try:
+        from . import api_store as _as
+        by_canon: dict[str, dict] = {}
+        for a in alive:
+            m = a.get("model", "")
+            c = _as.canonical(m)
+            cur = by_canon.get(c)
+            # 撞车时**优先留"名字就是实际模型"的那个**：留着旧名会把能力评级也带错
+            # （models.toml 里 deepseek-v4-pro 是 SS+，可它 9/14 后实际是 V4.1-Flash）。
+            if cur is None or m == c:
+                by_canon[c] = a
+        if by_canon:
+            alive = list(by_canon.values())   # dict 保插入序 → 链的顺序不变
+    except Exception:
+        pass   # 去重失败就当没去重，不能因此让链空掉
+
     return alive or deduped
 
 

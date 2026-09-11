@@ -117,3 +117,50 @@ class TestCorruptFileDoesNotVanishSilently:
         msgs = [str(a.get("msg", "")) for a in witness.read_alerts(limit=200)]
         assert any("unlistable" in m for m in msgs), \
             "磁盘上有个不认的项目文件，界面上少一个，告警里也什么都没有"
+
+
+class TestAliasIsNotSecondOpinion:
+    """⑤ 两个 id 指向同一个实际模型时，委员会不能拿它占两个席位。
+
+    假多样性也是静默失败：界面上明明三个模型、看着是"多视角碰撞"，
+    实际是同一个模型自己跟自己碰 —— 而那是唯一验证过有价值的那个能力。
+
+    真实触发点：DeepSeek 2026-09-14 12:00 起把 `deepseek-v4-pro` 全部路由到
+    V4.1-Flash。请求名不变，只有响应体的 `model` 字段说实话。
+    """
+
+    def test_alias_roundtrip(self):
+        from singularity.scheduler import api_store as A
+        A.record_alias("old-name", "new-name")
+        assert A.canonical("old-name") == "new-name"
+        assert A.canonical("new-name") == "new-name", "非别名不该被改"
+        assert A.canonical("unrelated") == "unrelated"
+
+    def test_alias_chain_follows(self):
+        """A→B→C 也要归到 C；环不能死循环。"""
+        from singularity.scheduler import api_store as A
+        A.record_alias("a", "b")
+        A.record_alias("b", "c")
+        assert A.canonical("a") == "c"
+        A.record_alias("c", "a")      # 成环
+        assert A.canonical("a") in ("a", "b", "c")   # 只要不挂住就行
+
+    def test_identity_not_recorded(self):
+        from singularity.scheduler import api_store as A
+        A.record_alias("same", "same")
+        assert not (A._load_raw().get(A._ALIAS_KEY) or {}), "同名不该记账"
+
+    def test_chain_keeps_canonical_not_stale_alias(self, monkeypatch):
+        """撞车时留"名字就是实际模型"的那个 —— 留旧名会把能力评级也带错。"""
+        from singularity.scheduler import dispatcher as D
+        from singularity.scheduler import api_store as A
+        from singularity.scheduler import _model_breaker as MB
+        A.record_alias("stale-alias", "real-model")
+        monkeypatch.setattr(D, "agent_api_available", lambda a: True)
+        monkeypatch.setattr(MB, "is_available", lambda m: True)
+
+        agents = {"any": [{"model": "stale-alias"}, {"model": "real-model"},
+                          {"model": "other"}]}
+        chain = [a["model"] for a in D.pick_agent_fallback_chain(agents, "any")]
+        assert chain == ["real-model", "other"], \
+            f"别名没去重或留错了那个：{chain}"

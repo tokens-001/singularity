@@ -701,6 +701,14 @@ class OpenAIAgentExecutor(BaseExecutor):
             data = resp.json()
             if data.get("error"):
                 raise _FormatError(f"API错误: {data['error']}")
+            # 别名对账：请求名和返回的 model 不一致，说明厂商把旧名路由到新模型了
+            # （DeepSeek 2026-09-14 起 deepseek-v4-pro 全部路由到 V4.1-Flash）。
+            # 记下来供委员会去重 —— 否则两个别名会占两个席位、自己跟自己碰。
+            try:
+                from .. import api_store
+                api_store.record_alias(self._model, data.get("model") or "")
+            except Exception:
+                pass   # 记账失败不能影响这次调用
             return data
         except json.JSONDecodeError as e:
             raise _FormatError(f"JSON解析失败: {e}")
