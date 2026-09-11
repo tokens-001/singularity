@@ -147,20 +147,29 @@ def post_execution_hook(exec_result, snap):
 
 def run_project_tests(cwd=None):
     """Run project test suite (pytest->unittest->npm). Returns {passed,total,failures,output,runner}."""
-    import sys, re as _re
+    import sys, os as _os, re as _re
     root = cwd or str(config.PROJECT_ROOT)
     result = {"passed":True,"total":0,"failures":0,"output":"","runner":""}
+    # 目录不存在也要**说清楚**。不查的话三个 runner 全在 subprocess 里抛异常被
+    # `except Exception: continue` 吞掉，最后报"三个都启动不了"—— 排查方向全错。
+    if not _os.path.isdir(root):
+        result["output"] = f"测试目录不存在: {root}"
+        result["runner"] = "none"
+        return result
     _py = sys.executable  # ponytail: 用当前Python，不用硬编码python3（uv run下python3可能没pytest）
     runners = [
         ([_py,"-m","pytest","-q","--tb=short"],"pytest"),
         ([_py,"-m","unittest","discover","-q"],"unittest"),
         (["npm","test","--","--silent"],"npm"),
     ]
+    ran_but_empty: list[str] = []   # 跑起来了、但**没找到测试**的 runner
     for cmd, name in runners:
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=60, cwd=root)
             output = (r.stdout + "\n" + r.stderr)[:4000]
-            if "no tests ran" in output.lower(): continue
+            if "no tests ran" in output.lower():
+                ran_but_empty.append(name)
+                continue
             if r.returncode != 0 and name != "npm":
                 result["passed"] = False; result["failures"] = r.returncode
                 result["output"] = output; result["runner"] = name; return result
@@ -176,7 +185,15 @@ def run_project_tests(cwd=None):
                 result["output"] = output; result["runner"] = name; return result
         except FileNotFoundError: continue
         except Exception: continue
-    result["output"] = "no test runner found (pytest/unittest/npm)"
+    # **"跑不起来"和"没找到测试"要分开说** —— 两者的排查方向完全不同：
+    # 前者查环境，后者查"测试文件在不在"。2026-09-12 探路2 的 T4 实测：
+    # 报的是"无可用 runner (pytest/unittest/npm 均不可用)"，而真相是
+    # **它的 worktree 里压根没有测试文件**（T2 写好的测试因为超时没合并进来）。
+    # 同一族见防御模式 §52：拦了/没跑，但说不清是什么。
+    result["output"] = (
+        f"runner 跑得起来（{'/'.join(ran_but_empty)}），但**没找到测试文件**"
+        if ran_but_empty else
+        "no test runner found (pytest/unittest/npm 都启动不了)")
     result["runner"] = "none"
     return result
 

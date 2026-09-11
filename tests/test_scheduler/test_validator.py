@@ -36,6 +36,19 @@ class TestValidatorV2:
         r = run_project_tests(cwd=self.root)
         assert r["runner"] == "none"
         assert r["passed"]
+        # 2026-09-12：原来只断言 runner=="none" —— **所以消息写错也没人管**。
+        # 真相是"**没找到测试**"（要么环境坏、要么测试文件不在），
+        # 而报的却是"pytest/unittest/npm 均不可用"，排查方向直接带偏。
+        # 探路2 的 T4 就是这么被误导的。
+        assert "没找到测试" in r["output"]
+        assert "启动不了" not in r["output"]
+
+    def test_run_tests_missing_dir_says_so(self):
+        """目录不存在也要说清楚 —— 别让 `except Exception: continue` 把它吞成
+        "三个 runner 都启动不了"。"""
+        r = run_project_tests(cwd=os.path.join(self.root, "并不存在"))
+        assert r["runner"] == "none"
+        assert "目录不存在" in r["output"]
 
     def test_crossover_review_no_files(self):
         r = crossover_review("test", "output", [], "any", "test")

@@ -287,8 +287,11 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                     # 返回的 passed 仍是初值 True。这是**没跑**，不是**跑过了**。
                     # 不加分也不拦（test_validator.test_run_tests_no_tests 锁定了那个语义），
                     # 但必须披露 —— 否则交付报告把"没验证"和"验证通过"混为一谈。
+                    # 带上 runner 自己给的原因 —— 原来这里写死"无可用 runner
+                    # (三个都不可用)"，但真相经常是"**没找到测试文件**"（两回事：
+                    # 一个查环境、一个查测试在不在）。见 validator.run_project_tests。
                     validation.unverified.append(
-                        "项目测试未执行: 无可用 runner (pytest/unittest/npm 均不可用)")
+                        f"项目测试未执行: {str(test_result.get('output', ''))[:120]}")
             finally:
                 _ex.shutdown(wait=False)   # 不 join：挂死的调用不能拖住整条流水线
         except Exception as e:
@@ -571,10 +574,23 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                 if hard:
                     # 同上：必须进 unverified。安全审计发现真漏洞却只写内存 quality 的话，
                     # 交付报告仍然写 delivered —— 而这份报告正是给人看的那一份。
-                    validation.unverified.append(
-                        "安全审计命中 critical/high: " +
-                        "; ".join(f"{f.get('severity','?')}:{f.get('description','')[:60]}"
-                                  for f in hard[:3]))
+                    #
+                    # ⚠️ **「审计没跑成」和「审计发现了漏洞」都要拦（fail-closed 不变），
+                    # 但播报必须分开**：前者是"没审成"，后者是"审出问题"，
+                    # 人要采取的动作完全不同。原来一律写"命中 critical/high"，
+                    # 于是 "输出非 JSON" 读起来像"发现了严重安全问题"
+                    # （2026-09-12 探路2 的 T4 实测）。
+                    _errs = [f for f in hard if f.get("category") == "review_error"]
+                    _real = [f for f in hard if f.get("category") != "review_error"]
+                    if _real:
+                        validation.unverified.append(
+                            "安全审计命中 critical/high: " +
+                            "; ".join(f"{f.get('severity','?')}:{f.get('description','')[:60]}"
+                                      for f in _real[:3]))
+                    if _errs:
+                        validation.unverified.append(
+                            "安全审计**未完成**（不是发现了漏洞）: " +
+                            "; ".join(str(f.get("description", ""))[:60] for f in _errs[:3]))
                     quality["failure_kind"] = "security_findings"
                     quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.3)
                     validation.action = "retry"
