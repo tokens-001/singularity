@@ -15,9 +15,9 @@ const PHASE_CN: Record<string,string> = {
 const PC: Record<string,string> = {
   template:'var(--text-muted)', researching:'var(--accent)', gate1:'var(--accent-yellow)', planning:'var(--accent-purple)',
   gate2:'var(--accent-yellow)', executing:'var(--accent-green)', integrating:'var(--accent-green)',
-  reviewing:'#ea580c', fixing:'var(--accent-red)', gate3:'var(--accent-yellow)', delivering:'var(--accent)', done:'var(--accent-green)'
+  reviewing:'#ea580c', gate3:'var(--accent-yellow)', delivering:'var(--accent)', done:'var(--accent-green)'
 }
-const PHASES = ['template','researching','gate1','planning','gate2','executing','integrating','reviewing','fixing','gate3','delivering','done']
+const PHASES = ['template','researching','gate1','planning','gate2','executing','integrating','reviewing','gate3','delivering','done']
 
 /** 12 个阶段铺满一行太吵 —— 压成一条进度条（阶段名上面那行已经有了） */
 function PhaseBar({ phase }: { phase: string }) {

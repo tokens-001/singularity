@@ -81,7 +81,9 @@ class TestPhaseRoleMap:
     def test_defaults_match_current_behaviour(self, tmp_path, monkeypatch):
         roles = self._cfg(tmp_path, monkeypatch)
         assert roles.get_phase_role("executing") == "implementer"
-        assert roles.get_phase_role("fixing") == "implementer"
+        # 2026-09-11: "fixing" 随 Phase.FIXING 一并删除 —— 那个状态全仓无人赋值，
+        # 映射一个进不去的阶段只会让人以为"阶段→角色"里还有它。
+        assert "fixing" not in roles._DEFAULT_PHASE_ROLES
 
     def test_config_overrides_default(self, tmp_path, monkeypatch):
         roles = self._cfg(tmp_path, monkeypatch)
@@ -141,7 +143,7 @@ class TestRolePhases:
         from singularity.scheduler.roles import ROLES
         assert ROLES["surveyor"].phases == ["researching"]
         assert ROLES["architect"].phases == ["planning"]
-        assert set(ROLES["implementer"].phases) == {"executing", "fixing"}
+        assert set(ROLES["implementer"].phases) == {"executing"}
         assert ROLES["reviewer"].phases == ["reviewing"]
 
     def test_auxiliary_review_roles_are_not_phase_candidates(self):

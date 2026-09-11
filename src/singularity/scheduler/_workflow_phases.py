@@ -157,6 +157,30 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
                           json.dumps(test_plan, ensure_ascii=False, indent=2))
     arch_issues = _validate_architecture(arch)
     blockers = [i for i in arch_issues if "缺少" in i or "无效" in i or "应为" in i]
+
+    # 校验结果**落盘**。原来只进 lineage 的计数 + 一条返回文案（SSE 一闪而过）——
+    # 于是"架构缺必填字段"这件事在项目状态里查不到、GATE2 面板上也看不见，
+    # 放行后流到执行层才以"拆不出任务、项目无声卡住"的形式爆出来。
+    #
+    # **分两档，判据是"下一步还能不能干"，不是"字段全不全"**：
+    #   致命的（拦）：tasks 缺失/为空 —— 拆不出任务，执行层必然卡死
+    #   非致命（只记）：data_model / tech_stack / constraints 等 ——
+    #     一个单文件 CLI 本来就没有 data_model，按"六字段齐全"拦会把好活挡在门外
+    project.issues = [i for i in project.issues
+                      if i.get("type") not in ("arch_invalid", "arch_warning")]
+    fatal = [i for i in blockers if "tasks" in i]
+    if blockers:
+        kind = "arch_invalid" if fatal else "arch_warning"
+        project.issues.append({"type": kind,
+                               "detail": f"架构校验{'未通过' if fatal else '有缺项'}"
+                                         f"（{len(blockers)} 项）：" + "；".join(blockers[:5])})
+    if fatal:
+        try:
+            from singularity.scheduler import witness
+            witness.warn("planning", f"arch_invalid:{project.id}:{fatal[0]}"[:200])
+        except Exception:
+            pass
+
     project.add_lineage({"action": "planning_complete",
                          "agent": disp_result.agent_cfg.get("model","?") if disp_result else "?",
                          "task_count": len(arch.get("tasks", [])),

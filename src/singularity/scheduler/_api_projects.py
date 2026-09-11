@@ -144,10 +144,19 @@ def project_gate_confirm(project_id: str, gate: str = "", decision: str = "",
     else:
         gate_phase = proj.phase
     if decision == "approved":
+        # 架构校验没过 → confirm_gate 会拒绝放行（返回 None）。
+        # 这时必须**如实报错**，不能顺着往下写成 `next_phase: done` ——
+        # 那会让用户以为批准成功了，而项目其实一步没动。
+        bad_arch = next((i for i in proj.issues if i.get("type") == "arch_invalid"), None)
         next_p = proj.confirm_gate(gate_phase, "approved")
         proj_mod.save(proj)
+        if next_p is None:
+            return {"ok": False, "gate": gate, "decision": "approved",
+                    "error": "架构校验未通过，不能放行。"
+                             + (str(bad_arch.get("detail", "")) if bad_arch else "")
+                             + "  请先打回（rejected）让它重新规划。"}, 409
         return {"ok": True, "gate": gate, "decision": "approved",
-                "next_phase": next_p.value if next_p else "done"}, 200
+                "next_phase": next_p.value}, 200
     elif decision == "rejected":
         proj.confirm_gate(gate_phase, "rejected")
         proj_mod.save(proj)
@@ -266,10 +275,12 @@ def project_cost(project_id: str) -> tuple[dict, int]:
     else:
         level = phase_levels.get(phase, "-")
 
+    # 这里原来还带一个 `token_spent: p.token_spent` —— 那个字段全仓无人赋值、
+    # 恒为 0，和上面算出来的真 `cost` 并排摆着，看着像"这个项目花了 0 元"。
+    # 已删字段（前端本来也不读这个接口）。
     return {"cost": round(cost, 6), "phase": phase.value, "level": level,
             "unpriced_models": stats.get("unpriced_models", []),
-            "token_budget_total": p.token_budget_total or 0,
-            "token_spent": p.token_spent}, 200
+            "token_budget_total": p.token_budget_total or 0}, 200
 
 
 def project_lineage(project_id: str) -> tuple[dict, int]:

@@ -194,27 +194,39 @@ def run_phase(project: ProjectState, agents: dict) -> str:
             msgs.append(_run_execution(project, agents))
             break  # 任务分发后等 orchestrator 跑完
 
+        elif phase in (Phase.INTEGRATING, Phase.DELIVERING):
+            # 非人门，和 EXECUTING 同类：在这儿交棒给调度循环
+            # （`orchestrator._auto_trigger_test_fix` 推 integrating / delivering）。
+            # 以前落到下面的 else，报"未知 phase" —— 而它明明是个正经阶段。
+            # 消息里点明"循环没开就会停这儿"：那条路今天踩过（项目卡着等人，外面看着像坏了）。
+            msgs.append(f"{phase.value} 由调度循环推进，无需人工操作"
+                        f"（调度循环没开的话项目会停在这一步）")
+            break
+
         elif phase in (Phase.GATE1, Phase.GATE2, Phase.GATE3):
             if project.auto_mode:
+                before = project.phase
                 project.confirm_gate(phase, "approved")
                 save(project)
+                if project.phase == before:
+                    # 门没放行（phase 没动）——比如 GATE2 架构校验没过。
+                    # **必须 break**：原来这里无条件 `continue`，
+                    # 配上"不放行就原地不动"就变成死循环 —— auto_mode 下 CPU 烧到天荒地老，
+                    # 而且外面看不出来（不报错、不退出，测试是**挂住**不是失败）。
+                    msgs.append(f"auto: {phase.value} 未放行（校验未通过）→ 停下等人工")
+                    break
                 msgs.append(f"auto: {phase.value} → {project.phase.value}")
                 continue
             msgs.append(f"等待 Owner {phase.value} 确认")
             break
 
         elif phase == Phase.REVIEWING:
-            # ponytail: AI内审已移除，直接交GATE3等人审
-            project.set_phase(Phase.GATE3, "AI内审已移除 → 直接交人工")
+            # 瞬时态：集成合并通过后由 orchestrator 置上，验收（QA+安全审计）跑几分钟，
+            # 这里推进到 GATE3 交人工。**不是死代码** —— UI 靠它显示"审查中"。
+            # （原来紧跟的 FIXING 分支已删：全仓无人赋值，状态不可达。）
+            project.set_phase(Phase.GATE3, "验收完成 → 交人工")
             save(project)
-            msgs.append("AI内审已移除 → GATE3 等人工审核")
-            continue
-
-        elif phase == Phase.FIXING:
-            # ponytail: AI修复已移除，交GATE3等人审
-            project.set_phase(Phase.GATE3, "AI自动修复已移除 → 直接交人工")
-            save(project)
-            msgs.append("AI自动修复已移除 → GATE3 等人工审核")
+            msgs.append("验收完成 → GATE3 等人工审核")
             continue
 
         elif phase == Phase.DONE:

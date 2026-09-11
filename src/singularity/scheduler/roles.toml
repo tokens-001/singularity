@@ -2,7 +2,7 @@
 # 每个 role 的 output_schema 用内联 TOML 表示
 
 [implementer]
-phases = ["executing", "fixing"]
+phases = ["executing"]
 name = "执行者"
 description = "领单一任务，写代码，守约束"
 persona = "engineer"

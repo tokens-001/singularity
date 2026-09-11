@@ -503,7 +503,7 @@ def _loop_worker():
                         for proj in proj_mod.recover_all():
                             if tid not in proj.task_ids:
                                 continue
-                            if proj.phase not in (Phase.EXECUTING, Phase.FIXING):
+                            if proj.phase != Phase.EXECUTING:
                                 continue
                             # 检查是否所有子任务完成
                             all_done = True
@@ -526,14 +526,9 @@ def _loop_worker():
                                         wf_mod.run_phase(proj, agents)
                                     except Exception:
                                         pass
-                            elif proj.phase == Phase.FIXING:
-                                _push_event("workflow", f"项目 {proj.name[:20]}: 修复任务完成 → 回到审查")
-                                wf_mod.run_phase(proj, agents)
-                                if proj.auto_mode:
-                                    try:
-                                        wf_mod.run_phase(proj, agents)
-                                    except Exception:
-                                        pass
+                            # 这里原来还有个 `elif proj.phase == Phase.FIXING:` 分支
+                            # （"修复任务完成 → 回到审查"）—— **永远执行不到**：
+                            # FIXING 全仓无人赋值，那个状态根本进不去。已随枚举一并删除。
                 except Exception:
                     pass
         except Exception as e:
@@ -1723,7 +1718,7 @@ def api_roles_create():
 
 _PHASE_LABELS = [
     ("researching", "调研"), ("planning", "架构"), ("executing", "实现"),
-    ("fixing", "修复"), ("reviewing", "审查"),
+    ("reviewing", "审查"),
 ]
 
 

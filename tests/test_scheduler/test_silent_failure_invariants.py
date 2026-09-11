@@ -9,6 +9,7 @@
 """
 
 import dataclasses
+import json
 
 import pytest
 
@@ -242,3 +243,198 @@ class TestPhaseTrajectory:
                 if re.search(r"\.phase = ", line) and "self.phase = phase" not in line:
                     bad.append(f"{f.name}:{i}")
         assert not bad, f"有绕过 set_phase 的裸赋值（那样不留痕）：{bad}"
+
+
+class TestUnknownKeysDoNotLoseProjects:
+    """⑧ 文件里多余的键，不能让整个项目消失。
+
+    真实形状：`from_dict` 结尾是裸的 `cls(**d)` —— 文件里多一个当前代码不认识的键
+    （旧版本留下的、或手改的）就抛 `TypeError`，而 `load()` 捕的正是 TypeError，
+    于是一句"项目不存在"、项目从界面上消失，只留一条 load_failed 告警。
+    **删任何一个字段，所有存量文件都会立刻变成这样**（防御模式 #40）。
+    """
+
+    def test_unknown_key_dropped_not_fatal(self):
+        d = P.ProjectState(id="x", name="y").to_dict()
+        d["some_future_field"] = 1
+        d["token_spent"] = 0.0        # 真删过的那个字段，存量文件里都有
+        p = P.ProjectState.from_dict(d)
+        assert p.id == "x"
+        assert not hasattr(p, "token_spent"), "已删字段不该复活"
+        assert "token_spent" not in p.to_dict()
+
+    def test_such_a_file_still_loads_and_lists(self):
+        pid = P.create(name="t", template="feature", description="x").id
+        path = P._projects_dir() / f"{pid}.json"
+        d = json.loads(path.read_text(encoding="utf-8"))
+        d["legacy_field"] = "old"
+        path.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+
+        assert P.load(pid) is not None, "文件里多个陌生键 → 整个项目消失"
+        assert any(p.id == pid for p in P.list_all()), "list_all 里也不能少"
+
+    def test_dropping_is_visible_not_silent(self):
+        d = P.ProjectState(id="x", name="y").to_dict()
+        d["legacy_field"] = 1
+        P.ProjectState.from_dict(d)
+        msgs = [str(a.get("msg", "")) for a in witness.read_alerts(limit=200)]
+        assert any("unknown_fields_dropped" in m for m in msgs), \
+            "丢字段本身是新旧兼容，该做；但悄悄丢不是"
+
+
+class TestUnknownPhaseValueDoesNotCrash:
+    """⑫ 文件里的 phase 值不认识时，不能让整个项目炸掉。
+
+    防御模式 #40 那个坑换了个字段名：`Phase(d["phase"])` 抛的是 **ValueError**，
+    而 `load()` 捕的是 `(JSONDecodeError, KeyError, TypeError)` —— ValueError 直接穿出去。
+    **删任何一个枚举值（比如 FIXING），存量文件里的那个值就会立刻变成这种情况。**
+    """
+
+    def test_unknown_phase_falls_back_with_warning(self):
+        d = P.ProjectState(id="x", name="y").to_dict()
+        d["phase"] = "fixing"              # 真删过的那个值
+        p = P.ProjectState.from_dict(d)
+        assert p.phase == Phase.TEMPLATE, "认不出的 phase 该退回安全态，不是抛异常"
+        msgs = [str(a.get("msg", "")) for a in witness.read_alerts(limit=200)]
+        assert any("unknown_phase" in m for m in msgs), "退回了但没说 —— 用户会以为项目自己变回待开始了"
+
+    def test_such_a_file_still_loads(self):
+        pid = P.create(name="t", template="feature", description="x").id
+        path = P._projects_dir() / f"{pid}.json"
+        d = json.loads(path.read_text(encoding="utf-8"))
+        d["phase"] = "some_removed_phase"
+        path.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        assert P.load(pid) is not None, "认不出的 phase 值 → load 抛 ValueError 穿出去"
+        assert any(p.id == pid for p in P.list_all())
+
+
+class TestRunPhaseKnowsEveryPhase:
+    """⑨ `run_phase` 必须认识枚举里的**每一个** Phase。
+
+    真实事故：`INTEGRATING` / `DELIVERING` 是代码后加的两个阶段，
+    而 `run_phase` 的 if 链没跟上 → 落到 `else: 未知 phase`。
+    它明明是个正经阶段，报"未知"就是在骗人 —— 而且不报错、不告警，只印一行字。
+
+    这里排除了 RESEARCHING / PLANNING（会真调模型）和 EXECUTING（会建任务）。
+    剩下这些都是纯状态流转，不碰网络。
+    """
+
+    SAFE = [Phase.TEMPLATE, Phase.GATE1, Phase.GATE2, Phase.GATE3,
+            Phase.REVIEWING, Phase.INTEGRATING,
+            Phase.DELIVERING, Phase.DONE]
+
+    @pytest.mark.parametrize("phase", SAFE)
+    def test_does_not_fall_through_to_unknown(self, phase):
+        from singularity.scheduler import workflow
+        p = P.ProjectState(id="x", name="y", phase=phase)
+        msg = workflow.run_phase(p, {})
+        assert "未知 phase" not in msg, f"{phase.value} 又落到 else 了：{msg}"
+
+    def test_every_phase_value_is_covered(self):
+        """反向锁：枚举里出现新值而 run_phase 没跟上时，上面那条参数化会漏。
+
+        这条直接数"哪些 Phase 值属于 SAFE 之外" —— 新增一个没人处理的阶段时，
+        必须显式决定它归哪边（真调模型的 / 纯流转的），不能默默掉进 else。
+        """
+        uncovered = set(Phase) - set(self.SAFE)
+        expected = {Phase.RESEARCHING, Phase.PLANNING, Phase.EXECUTING}
+        assert uncovered == expected, (
+            f"Phase 枚举变了：{sorted(p.value for p in uncovered - expected)} 新出现，"
+            f"得决定它是否需要真跑（要的话加进排除名单，不要的话加进 SAFE）")
+
+
+class TestArchValidationActuallyBlocks:
+    """⑩ 架构校验不过，就不能放行。
+
+    原来 `_validate_architecture` 的 blockers 只进 lineage 的一个**计数**、
+    加一条返回文案（SSE 一闪而过）—— 项目状态里查不到、GATE2 面板上看不见。
+    放行后流到执行层，以"拆不出任务、项目无声卡住"的形式爆出来
+    （orchestrator 里记着那次：卡了 13 分钟，日志一行都没有）。
+    """
+
+    def test_validator_distinguishes_broken_from_complete(self):
+        from singularity.scheduler._workflow_phases import _validate_architecture
+        good = {"architecture": "x", "modules": [{"name": "a"}],
+                "data_model": {"database": "sqlite"}, "tech_stack": {"language": "py"},
+                "tasks": [{"id": "T1", "title": "t", "description": "d",
+                           "complexity": "low", "layer": "backend", "acceptance": "a"}],
+                "constraints": [{"rule": "r"}]}
+        bad = {"architecture": "x"}
+        blockers = lambda a: [i for i in _validate_architecture(a)
+                              if "缺少" in i or "无效" in i or "应为" in i]
+        assert blockers(good) == [], "完整架构不该有阻塞项"
+        assert blockers(bad), "残缺架构必须被拦下 —— 否则校验器形同虚设"
+
+    def test_arch_invalid_blocks_gate2_approval(self):
+        p = P.ProjectState(id="x", name="y", phase=Phase.GATE2,
+                           issues=[{"type": "arch_invalid", "detail": "缺少必填字段: modules"}])
+        assert p.confirm_gate(Phase.GATE2, "approved") is None, "不合格的架构被放行了"
+        assert p.phase == Phase.GATE2
+
+    def test_cleared_issue_allows_approval(self):
+        p = P.ProjectState(id="x", name="y", phase=Phase.GATE2,
+                           issues=[{"type": "arch_invalid", "detail": "x"}])
+        p.issues = []                       # 重新规划过、校验通过了
+        assert p.confirm_gate(Phase.GATE2, "approved") == Phase.EXECUTING
+
+    def test_other_gates_not_affected(self):
+        """只有 GATE2 有这个前置条件 —— 别的门不该被架构问题卡住。"""
+        p = P.ProjectState(id="x", name="y", phase=Phase.GATE1,
+                           issues=[{"type": "arch_invalid", "detail": "x"}])
+        assert p.confirm_gate(Phase.GATE1, "approved") == Phase.PLANNING
+
+    def test_warning_does_not_block(self):
+        """**判据是"下一步还能不能干"，不是"字段全不全"**。
+
+        缺 data_model / tech_stack / constraints 只记不拦 —— 一个单文件 CLI
+        本来就没有 data_model，按"六字段齐全"拦会把好活挡在门外。
+        只有 tasks 缺失/为空才致命：拆不出任务，执行层必然卡死。
+        """
+        p = P.ProjectState(id="x", name="y", phase=Phase.GATE2,
+                           issues=[{"type": "arch_warning",
+                                    "detail": "架构校验有缺项（3 项）：缺少必填字段: data_model；缺少必填字段: tech_stack"}])
+        assert p.confirm_gate(Phase.GATE2, "approved") == Phase.EXECUTING, \
+            "非致命缺项不该拦住放行"
+
+    def test_auto_mode_does_not_spin_when_gate_is_blocked(self):
+        """被拦时 auto_mode 必须**停下**，不能原地打转。
+
+        真事故：`run_phase` 的 auto 分支原来无条件 `continue`，配上"不放行就原地不动"
+        就成了死循环 —— auto_mode 下烧 CPU 烧到天荒地老，而且**不报错、不退出**，
+        测试是"挂住"不是"失败"（实测跑了十几分钟才发现）。
+
+        **所以这里刻意用线程 + 超时**：让回归表现为"红"，而不是"吊死"。
+        一个挂住的测试比一个失败的测试坏得多 —— 它挡住整套。
+        """
+        import threading
+        from singularity.scheduler import workflow
+        p = P.ProjectState(id="x", name="y", phase=Phase.GATE2, auto_mode=True,
+                           issues=[{"type": "arch_invalid", "detail": "缺少必填字段: tasks"}])
+        box: dict = {}
+
+        def go():
+            box["msg"] = workflow.run_phase(p, {})
+
+        t = threading.Thread(target=go, daemon=True)
+        t.start()
+        t.join(timeout=5)
+        assert not t.is_alive(), "run_phase 5 秒没返回 —— auto_mode 又在原地打转了"
+        assert "未放行" in box.get("msg", "")
+        assert p.phase == Phase.GATE2
+
+    def test_blocked_approval_reports_error_not_done(self):
+        """被拦时必须报错，不能顺着写成 `next_phase: done` —— 那是在骗人。"""
+        from singularity.web.app import app
+        pid = P.create(name="_t", template="feature", description="x").id
+        try:
+            p = P.load(pid)
+            p.set_phase(Phase.GATE2, "架构完成")
+            p.issues = [{"type": "arch_invalid", "detail": "缺少必填字段: modules"}]
+            P.save(p)
+            r = app.test_client().post(f"/api/projects/{pid}/gate-confirm",
+                                       json={"gate": "gate2", "decision": "approved"})
+            assert r.status_code == 409, f"该拒绝放行，实际 {r.status_code}"
+            assert P.load(pid).phase == Phase.GATE2
+        finally:
+            for f in P._projects_dir().glob(f"{pid}*"):
+                f.unlink()

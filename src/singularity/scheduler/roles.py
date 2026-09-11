@@ -227,7 +227,6 @@ _DEFAULT_PHASE_ROLES = {
     "researching": "surveyor",
     "planning": "architect",
     "executing": "implementer",
-    "fixing": "implementer",
     "reviewing": "reviewer",
 }
 

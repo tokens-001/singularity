@@ -363,8 +363,8 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                         "kind": "system", "msg": f"项目 {proj.name}: 交付失败, 需人工处理 - {detail[:100]}",
                         "ts": time.time(), "project_id": proj.id,
                     })
-            elif proj.phase.value in ("reviewing", "fixing"):
-                # P3: 审查/修复阶段 — 直接推GATE3等人审
+            elif proj.phase.value == "reviewing":
+                # P3: 验收阶段 — 直接推GATE3等人审（FIXING 已删，状态不可达）
                 from singularity.scheduler.workflow import run_test_fix_loop
                 run_test_fix_loop(proj, agents)
             elif proj.phase.value == "integrating":

@@ -27,8 +27,7 @@ class Phase(str, Enum):
     GATE2 = "gate2"          # 用户审架构+任务分配
     EXECUTING = "executing"
     INTEGRATING = "integrating"  # D2: 多路worktree合并+集成测试(非用户门)
-    REVIEWING = "reviewing"      # 内部: 强力层审查(非用户门)
-    FIXING = "fixing"            # 内部: 修复任务(非用户门)
+    REVIEWING = "reviewing"      # 内部: 集成合并通过 → 跑验收(非用户门, 瞬时态)
     GATE3 = "gate3"              # 用户最终交付审核
     DELIVERING = "delivering"    # S1: 打包归档 (GATE3通过后)
     DONE = "done"
@@ -43,7 +42,7 @@ _REJECT_FALLBACK: dict[Phase, Phase] = {
 }
 
 # 架构级返工: 可从这些阶段直接回 planning
-_ARCHITECTURE_REDO = {Phase.EXECUTING, Phase.INTEGRATING, Phase.GATE3, Phase.REVIEWING, Phase.FIXING}
+_ARCHITECTURE_REDO = {Phase.EXECUTING, Phase.INTEGRATING, Phase.GATE3, Phase.REVIEWING}
 
 # Gate 确认→下一个 phase
 _GATE_NEXT: dict[Phase, Phase] = {
@@ -83,7 +82,6 @@ class ProjectState:
     lineage: list[dict] = field(default_factory=list)               # 血缘日志
     handoffs: list[dict] = field(default_factory=list)              # Agent 交接记录
     token_budget_total: float = 5.0        # $ (默认 $5)
-    token_spent: float = 0.0               # $ 累计
     fix_round: int = 0                      # 内循环修复轮次(上限3)
     review_failures: int = 0                # D1: 审查自动修失败计数 (上限 _REVIEW_MAX_AUTO_FIX)
     integrate_failures: int = 0             # D2: 集成合并失败计数 (上限 _INTEGRATE_MAX_RETRIES)
@@ -111,8 +109,40 @@ class ProjectState:
 
     @classmethod
     def from_dict(cls, d: dict) -> "ProjectState":
+        """反序列化。**对未知键容错** —— 别让多余的一个键把整个项目弄丢。
+
+        原来结尾是裸的 `cls(**d)`：文件里多一个当前代码不认识的键
+        （旧版本留下的、或手改的），就抛 TypeError；而 `load()` 捕的就是
+        `(json.JSONDecodeError, KeyError, TypeError)`，于是一句"项目不存在"、
+        项目从界面上消失，只留一条 load_failed 告警。
+        **删任何一个字段，所有存量文件都会立刻变成这种情况**（防御模式 #40）。
+        """
         d = dict(d)
-        d["phase"] = Phase(d.get("phase", "template"))
+        known = {f.name for f in dataclasses.fields(cls)}
+        unknown = sorted(set(d) - known)
+        if unknown:
+            for k in unknown:
+                d.pop(k, None)
+            # 落一条告警：丢字段本身是正常的新旧兼容，但"悄悄丢"不是。
+            # 存量文件被 save 一次之后这个键就没了，所以告警是暂时的。
+            try:
+                from singularity.scheduler import witness
+                witness.warn("project", f"unknown_fields_dropped:{','.join(unknown)}"[:200])
+            except Exception:
+                pass
+        # phase 值容错：未知值（旧版本写的、已删的枚举、手改的）**不能让整个项目炸掉**。
+        # `load()` 捕的是 (JSONDecodeError, KeyError, TypeError) —— ValueError 会直接
+        # 穿出去，500 / 崩调用方。删枚举值（比如 FIXING）之前必须先有这一层（防御模式 #40）。
+        raw_phase = d.get("phase", "template")
+        try:
+            d["phase"] = Phase(raw_phase)
+        except ValueError:
+            try:
+                from singularity.scheduler import witness
+                witness.warn("project", f"unknown_phase:{raw_phase!r} → 退回 template"[:200])
+            except Exception:
+                pass
+            d["phase"] = Phase.TEMPLATE
         d.setdefault("description", "")
         d.setdefault("scope", "")
         d.setdefault("raw_constraints", [])
@@ -128,7 +158,6 @@ class ProjectState:
         d.setdefault("handoffs", [])
         d.setdefault("auto_mode", False)
         d.setdefault("token_budget_total", 5.0)
-        d.setdefault("token_spent", 0.0)
         d.setdefault("fix_round", 0)
         d.setdefault("review_failures", 0)
         d.setdefault("integrate_failures", 0)
@@ -144,6 +173,14 @@ class ProjectState:
         self.owner_confirm[gate.value] = decision
         self.updated_at = time.time()
         if decision == "approved":
+            # 架构校验没过 → **不放行**。返回 None 由调用方如实报错。
+            # 拦在"人点通过"这一瞬，而不是自动打回：自动重试会撞上单向棘轮
+            # （防御模式 #45），而且这个仓库的定案就是"人来兜底"。
+            # 放行的话，不合格的架构会流到执行层，以"拆不出任务、项目无声卡住"爆出来
+            # —— 那条路已经踩过（orchestrator 里有 13 分钟一行日志都没有的记录）。
+            if gate == Phase.GATE2 and any(i.get("type") == "arch_invalid"
+                                           for i in self.issues):
+                return None
             next_p = _GATE_NEXT.get(gate)
             if next_p:
                 self.set_phase(next_p, f"人工批准 {gate.value}")
