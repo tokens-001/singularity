@@ -75,6 +75,56 @@ export default function Usage() {
   const days: any[] = h?.days || []
   const trend = days.slice(-30)
   const peak = Math.max(1, ...trend.map((d: any) => d.tokens || 0))
+
+  // 行渲染抽出来：下面要按「已使用 / 未使用」分两组，复制一遍这坨 JSX 迟早走样。
+  const renderRow = (m: any) => (
+    <div key={m.model} className="card-row" style={COL as any}>
+      <span className="flex-center gap-4" style={COL.model}>
+        {/* 模型名走统一出口 modelDisplay —— 这里原来是裸的 id（`deepseek-v4-flash`），
+            而模型页显示 `DeepSeek V4 Flash`，同一个模型两页两个名字。
+            原始 id 留在 title 里，要精确值的时候鼠标一悬就有。 */}
+        <span className="truncate" title={m.model}>{modelDisplay(m.model) || m.model}</span>
+        {/* 非 active 的供应商状态要露出来 —— 否则你只会看到"未使用"，
+            而不知道是没跑过、还是账号欠费了。 */}
+        {STATUS_CN[m.provider_status] && (
+          <span className="card-tag" style={{ color: 'var(--accent-yellow)', flexShrink: 0 }}
+            title={`供应商 ${m.provider} 状态：${m.provider_status}`}>
+            {STATUS_CN[m.provider_status]}
+          </span>
+        )}
+      </span>
+      <span className="mono" style={COL.num}>
+        {m.used ? fmtTokens(m.tokens) : <span className="text-muted">—</span>}
+      </span>
+      <span style={COL.num}>
+        {m.used ? (
+          <>
+            <span className="mono">{Math.round((m.share || 0) * 100)}%</span>
+            <span style={{ display: 'block', height: 2, marginTop: 2, borderRadius: 1,
+              background: 'var(--border)' }}>
+              <span style={{ display: 'block', height: 2, borderRadius: 1,
+                background: 'var(--accent)', width: `${Math.round((m.share || 0) * 100)}%` }} />
+            </span>
+          </>
+        ) : <span className="text-muted">—</span>}
+      </span>
+      <span className="mono text-secondary" style={COL.num}>
+        {/* 走 money.ts，别在这儿自己拼 —— 这里原来手写 `$${...}/M`，
+            绕过了那个「金额唯一出口」，于是单位改全了它也不跟着变。
+            数值不带单位：单位在表头。 */}
+        {isUnpriced(m.price) ? <span className="text-muted">—</span> : fmtPriceValue(m.price)}
+      </span>
+      <span className="mono" style={{ ...COST_COL,
+        color: isUnpriced(m.cost) && m.used ? 'var(--accent-yellow)' : 'var(--text-primary)' }}>
+        {/* 没用过的模型没有费用可报 —— 显示"—"，别拿 0 或"未配置价格"充数 */}
+        {!m.used ? <span className="text-muted">—</span>
+          : isUnpriced(m.cost)
+            ? <span role="button" tabIndex={0} style={{ cursor: 'pointer' }}
+                onClick={() => navigate('/config')}>未配置价格</span>
+            : fmtCost(m.cost)}
+      </span>
+    </div>
+  )
   // 一个模型都没配单价时，合计**没有数可报** —— 这时必须显示"未配置价格"，
   // 而不是 totals.cost 那个 0（那会渲染成看着可信的 $0.0000）。
   const anyPriced = models.some((m: any) => !isUnpriced(m.cost))
@@ -140,52 +190,16 @@ export default function Usage() {
             <span className="fs-10 text-muted" style={COST_COL}>费用</span>
           </div>
 
-          {models.map((m: any) => (
-            <div key={m.model} className="card-row" style={COL as any}>
-              <span className="flex-center gap-4" style={COL.model}>
-                {/* 模型名走统一出口 modelDisplay —— 这里原来是裸的 id（`deepseek-v4-flash`），
-                    而模型页显示 `DeepSeek V4 Flash`，同一个模型两页两个名字。
-                    原始 id 留在 title 里，要精确值的时候鼠标一悬就有。 */}
-                <span className="truncate" title={m.model}>{modelDisplay(m.model) || m.model}</span>
-                {/* 非 active 的供应商状态要露出来 —— 否则你只会看到"未使用"，
-                    而不知道是没跑过、还是账号欠费了。 */}
-                {STATUS_CN[m.provider_status] && (
-                  <span className="card-tag" style={{ color: 'var(--accent-yellow)', flexShrink: 0 }}
-                    title={`供应商 ${m.provider} 状态：${m.provider_status}`}>
-                    {STATUS_CN[m.provider_status]}
-                  </span>
-                )}
-              </span>
-              <span className="mono" style={COL.num}>
-                {m.used ? fmtTokens(m.tokens) : <span className="text-muted">未使用</span>}
-              </span>
-              <span style={COL.num}>
-                {m.used ? (
-                  <>
-                    <span className="mono">{Math.round((m.share || 0) * 100)}%</span>
-                    <span style={{ display: 'block', height: 2, marginTop: 2, borderRadius: 1,
-                      background: 'var(--border)' }}>
-                      <span style={{ display: 'block', height: 2, borderRadius: 1,
-                        background: 'var(--accent)', width: `${Math.round((m.share || 0) * 100)}%` }} />
-                    </span>
-                  </>
-                ) : <span className="text-muted">—</span>}
-              </span>
-              <span className="mono text-secondary" style={COL.num}>
-                {/* 走 money.ts，别在这儿自己拼 —— 这里原来手写 `$${...}/M`，
-                    绕过了那个「金额唯一出口」，于是单位改全了它也不跟着变。
-                    数值不带单位：单位在表头。 */}
-                {isUnpriced(m.price) ? <span className="text-muted">—</span> : fmtPriceValue(m.price)}
-              </span>
-              <span className="mono" style={{ ...COST_COL,
-                color: isUnpriced(m.cost) && m.used ? 'var(--accent-yellow)' : 'var(--text-primary)' }}>
-                {/* 没用过的模型没有费用可报 —— 显示"—"，别拿 0 或"未配置价格"充数 */}
-                {!m.used ? <span className="text-muted">—</span>
-                  : isUnpriced(m.cost)
-                    ? <span role="button" tabIndex={0} style={{ cursor: 'pointer' }}
-                        onClick={() => navigate('/config')}>未配置价格</span>
-                    : fmtCost(m.cost)}
-              </span>
+          {[
+            { title: '已使用', rows: models.filter((m: any) => m.used) },
+            { title: '未使用', rows: models.filter((m: any) => !m.used),
+              hint: '配了但一次没跑过' },
+          ].map(g => g.rows.length === 0 ? null : (
+            <div key={g.title}>
+              <div className="fs-10 text-muted" style={{ padding: '10px 0 4px' }}>
+                {g.title}（{g.rows.length}）{g.hint ? ` —— ${g.hint}` : ''}
+              </div>
+              {g.rows.map(renderRow)}
             </div>
           ))}
 

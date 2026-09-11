@@ -198,6 +198,15 @@ describe('用量页 — 配了但没用过的模型', () => {
     expect(text).toContain('未使用')
   })
 
+  it('按「已使用 / 未使用」分组 —— 两类混在一起看不出各有几个', async () => {
+    current = HISTORY_WITH_UNUSED            // 2 个用过 + 1 个没用过
+    const el = await render(<Usage />)
+    const text = el.textContent || ''
+    expect(text).toContain('已使用（2）')
+    expect(text).toContain('未使用（1）')
+    expect(text).toContain('配了但一次没跑过')
+  })
+
   it('供应商欠费要露出来 —— 否则只知道"没用过"，不知道是欠费', async () => {
     current = HISTORY_WITH_UNUSED
     const el = await render(<Usage />)
@@ -211,7 +220,9 @@ describe('用量页 — 配了但没用过的模型', () => {
       .find(r => r.textContent?.includes('GLM Unused')) as HTMLElement
     expect(row, '没找到未使用那一行').toBeTruthy()
     const t = row.textContent || ''
-    expect(t).toContain('未使用')
+    // 「未使用」现在由**分组表头**承担，行里不重复 —— 行内四栏全该是「—」
+    expect(el.textContent).toContain('未使用')
+    expect(t).not.toContain('未使用')
     expect(t).not.toContain('%')            // 占比那栏对没用过的模型没意义
     expect(t).not.toContain('未配置价格')    // 没用过就没有"费用算不出来"这回事
   })
