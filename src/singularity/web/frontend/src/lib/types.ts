@@ -20,8 +20,10 @@ export interface AgentItem {
 }
 
 export interface AgentsData {
-  any?: AgentItem[]; D?: AgentItem[]
-  _disabled?: { any?: string[]; D?: string[] }
+  // 只有 "any" 一档 —— 两档制合并后 D/E 这些档位名已经不存在了，
+  // 类型里留着的 D 只是旧字段的影子（全仓无人读，2026-09-11 清掉）。
+  any?: AgentItem[]
+  _disabled?: { any?: string[] }
   _order?: { any?: string[] }
 }
 
