@@ -115,6 +115,17 @@ def record_failure(model: str) -> None:
 def record_success(model: str) -> None:
     if not model:
         return
+    # 一次成功 = 这个模型现在活着 → 顺手把 api_store 里可能残留的欠费标记清掉。
+    # 不清的话状态是**单向棘轮**：调用真的成功了、钱也花了，
+    # 用量页上还挂着"配额耗尽"（见 api_store.note_api_success 的说明）。
+    # 绝大多数情况只是一次文件读（状态本来就是 active），不值当加缓存。
+    try:
+        from singularity.scheduler import api_store
+        api_store.note_api_success(model)
+    except Exception:
+        # 不在这里再告警：`note_api_success` 内部失败时自己会 `witness.warn`。
+        # （本模块没 import witness，这里写它反而会 NameError 被 except 吞掉 —— §48。）
+        pass
     with _lock:
         _load()
         b = _breakers.get(model)

@@ -273,6 +273,50 @@ def _quota_dead() -> dict:
     return _load_raw().get(_QUOTA_DEAD_KEY, {}) or {}
 
 
+def note_api_success(model: str) -> None:
+    """一次**成功**调用 = 这个模型（和它的 provider）现在是活的 → 把欠费标记清掉。
+
+    没有这条，状态就是个**单向棘轮**（§45）：`note_api_error` 把它标成
+    `quota_exhausted` 之后，只有 `is_available()` 那侧"过了冷却期半开放行"，
+    **落盘的 status 永远不回来**。于是用户充值了、调用也真的成功了，
+    用量页上仍挂着一行"配额耗尽"（2026-09-11 实测：智谱 12:14 被一次 http429 标记，
+    到次日仍在显示 —— 功能其实早就恢复了，只有显示卡死）。
+
+    和 `is_available()` 的半开是**两回事**：那个管"敢不敢再试一次"，
+    这个管"盘上的状态该不该改回 active"。
+    """
+    if not model:
+        return
+    try:
+        live = _load_raw()
+        changed = False
+
+        qd = live.get(_QUOTA_DEAD_KEY) or {}
+        if model in qd:
+            qd.pop(model, None)
+            changed = True
+
+        provider = ""
+        try:
+            from singularity.scheduler import model_registry as mr
+            provider = mr.provider_for_model(model)
+        except Exception:
+            provider = ""
+        entry = (live.get(provider) or {}) if provider else {}
+        if entry.get("status") in ("quota_exhausted", "rate_limited"):
+            entry["status"] = "active"
+            entry["updated_at"] = time.time()
+            entry["notes"] = f"自动恢复: {model} 调用成功"
+            changed = True
+
+        if changed:
+            _store_path().write_text(json.dumps(live, ensure_ascii=False, indent=2))
+    except Exception as e:
+        # 恢复状态失败不该影响调用本身，但也不能静默 —— 静默就等于又回到
+        # "页面上挂着死的、没人知道为什么"
+        witness.warn("api_store", f"note_api_success:{type(e).__name__}:{e}"[:120])
+
+
 def record_alias(requested: str, actual: str) -> None:
     """记下「请求名 → 实际模型」的映射。
 

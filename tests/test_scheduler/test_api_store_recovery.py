@@ -123,3 +123,82 @@ class TestModelLevelAvailability:
         """人工显式关闭的 provider，其下所有模型都挡。"""
         self._mark_provider(store, monkeypatch, provider="p_disabled")
         assert store.is_model_available("any-model-of-it") is False
+
+
+class TestSuccessClearsTheMark:
+    """一次**成功**调用要把落盘的欠费标记清掉（2026-09-12）。
+
+    上面那组测的是 `is_available()` 的**半开**：过了冷却期就"敢再试一次"。
+    但半开只影响返回值 —— **落盘的 `status` 没有任何人写回**。
+
+    现场：智谱 2026-09-11 12:14 被一次 http429 标成 `quota_exhausted`，
+    用户充值后调用早就恢复了（半开生效），**用量页上却一直挂着"配额耗尽"**，
+    到次日仍在显示。功能是好的，显示是死的 —— 单向棘轮（§45）。
+    """
+
+    def _seed(self, store, status):
+        store.add("zhipu", "智谱", "http://x", "FAKE_KEY")
+        store.set_status("zhipu", status)
+        return store
+
+    def test_quota_exhausted_goes_back_to_active(self, store, monkeypatch):
+        self._seed(store, "quota_exhausted")
+        monkeypatch.setattr(store, "model_registry", None, raising=False)
+        monkeypatch.setattr(store, "provider_for_model", None, raising=False)
+
+        store.note_api_success("glm-5.3-flash")
+
+        ent = store._load()["zhipu"]
+        assert ent.status == "active", "充值了也调通了，页面还写着'配额耗尽'"
+        assert "自动恢复" in (ent.notes or ""), "得说清这是自动恢复的，别让人以为是手改的"
+
+    def test_rate_limited_also_recovers(self, store):
+        """限流也是暂态，成功一次就该回 active。"""
+        self._seed(store, "rate_limited")
+        store.note_api_success("glm-5.3-flash")
+        assert store._load()["zhipu"].status == "active"
+
+    def test_disabled_is_not_silently_revived(self, store):
+        """人工显式 `disabled` 不许被自动改回来 —— 那是用户意图。"""
+        self._seed(store, "disabled")
+        store.note_api_success("glm-5.3-flash")
+        assert store._load()["zhipu"].status == "disabled"
+
+    def test_model_level_quota_dead_is_cleared(self, store):
+        """模型级 `_quota_dead` 也要清，否则那个模型会一直被跳过。"""
+        data = store._load_raw()
+        data[store._QUOTA_DEAD_KEY] = {"glm-5.3": time.time()}
+        store._store_path().write_text(json.dumps(data))
+
+        store.note_api_success("glm-5.3")
+
+        assert "glm-5.3" not in (store._load_raw().get(store._QUOTA_DEAD_KEY) or {})
+
+    def test_no_write_when_nothing_to_recover(self, store):
+        """本来就是 active 时不写盘 —— 每次成功调用都写一遍纯属浪费。"""
+        self._seed(store, "active")
+        before = store._store_path().read_text(encoding="utf-8")
+        store.note_api_success("glm-5.3-flash")
+        assert store._store_path().read_text(encoding="utf-8") == before
+
+    def test_empty_model_is_noop(self, store):
+        self._seed(store, "quota_exhausted")
+        store.note_api_success("")
+        assert store._load()["zhipu"].status == "quota_exhausted"
+
+
+def test_breaker_success_reports_to_api_store(monkeypatch):
+    """真正的接线点：`_model_breaker.record_success` 成功后必须回报 api_store。
+
+    只测 `note_api_success` 本身是不够的 —— 那是"函数对不对"，
+    这条管的是"有没有人调它"。函数写对了但没人调，等于没修。
+    """
+    from singularity.scheduler import _model_breaker as mb
+    from singularity.scheduler import api_store as A
+
+    seen = []
+    monkeypatch.setattr(A, "note_api_success", lambda m: seen.append(m))
+
+    mb.record_success("glm-5.3-flash")
+
+    assert seen == ["glm-5.3-flash"], "成功了却不回报 → 状态还是单向棘轮"
