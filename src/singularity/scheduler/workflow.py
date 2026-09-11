@@ -124,28 +124,97 @@ Schema 规则:
 # 辅助
 # ═══════════════════════════════════════════════════════════
 
+def _phase_cwd(project: ProjectState) -> str:
+    """非执行阶段（调研/架构/QA/安全）的运行目录 = **项目自己的仓库**。
+
+    这里以前不给 cwd，`dispatch` 的默认值是空串，执行器再兜底成
+    `config.PROJECT_ROOT` —— **奇点仓库自己**。于是调研员带着写文件/跑命令的工具，
+    在**主仓根目录**里干活：2026-09-11 实测仓库根冒出 `wc_lite.py` + `examples/`
+    （同一形状此前已在委员会合成那条支路上踩到过一次，当时只修了那一处，
+    见 `_dispatch_exec.py` 合成兜底的注释 —— 修症状没修根因）。
+
+    非执行阶段**没有 worktree 隔离**，cwd 就是唯一那道边界，不能空。
+    取不到项目目录时也**绝不退回 PROJECT_ROOT**：先自己 mkdir，宁可 cwd 是个空目录。
+    """
+    from singularity.scheduler import project as proj_mod
+    from singularity.scheduler import witness
+    try:
+        return str(proj_mod.ensure_repo(project.id))   # mkdir + git init，幂等
+    except Exception as e:
+        witness.warn("workflow", f"phase_cwd_fallback:{type(e).__name__}:{e}"[:120])
+        d = proj_mod.repo_dir(project.id)
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        return str(d)
+
+
 def _safe_dispatch(prompt: str, level: str, task_id: str, agents: dict,
                    project: ProjectState, project_lineup=None,
-                   restrict_to_lineup: bool = False, phase: str = "") -> tuple:
+                   restrict_to_lineup: bool = False, phase: str = "",
+                   no_tools: bool = False) -> tuple:
     """调 disp_mod.dispatch 并记录错误到 project lineage。返回 (disp_result_or_None, error_str)。
 
     ``restrict_to_lineup`` 见 `dispatcher.pick_agent_fallback_chain`：「阶段 → 模型」
     配了名单时为 True，委员会席位才限制得住。
 
     ``phase`` 透传给技能解析（阶段级技能绑定）。不传 = 只用模型级绑定。
+
+    ``cwd`` 必须给（见 `_phase_cwd`）：漏传 = 在奇点仓库自己里跑。
+
+    ``no_tools`` 见 `dispatch` 的同名参数：产出是 JSON 的阶段（调研/架构）必须给，
+    否则模型会当实现任务干、把工具轮次烧光，报告一句不剩。
     """
     try:
         disp_result = disp_mod.dispatch(
             prompt, level, task_id, agents,
+            cwd=_phase_cwd(project),
             project_lineup=project_lineup,
             restrict_to_lineup=restrict_to_lineup,
             phase=phase,
+            no_tools=no_tools,
         )
+        _record_phase_usage(project, task_id, level, disp_result)
         return disp_result, ""
     except Exception as e:
         err = f"{type(e).__name__}: {e}"[:200]
         project.add_lineage({"action": "llm_error", "level": level, "task_id": task_id, "error": err})
         return None, err
+
+
+def _record_phase_usage(project: ProjectState, task_id: str, level: str,
+                        disp_result) -> None:
+    """把一次阶段调用的用量记到项目账上。
+
+    这条路上原来**一次都不记**：`record_tokens` 全仓只有一个调用方
+    （`_task_runner.py`，调度循环派任务那条），而调研 / 架构 / QA / 安全 都走
+    本函数。后果是三重的 ——
+
+    1. **项目花费恒为 0**（`project_cost` 按 project_id 查，查不到东西）；
+    2. **预算无从比对**：`token_budget_total` 拦不住，根子在这儿而不只是"没接判断"；
+    3. 那些调用挤进 `_unknown` 桶，成了用量页最大的一桶。
+
+    2026-09-11 实测：三次完整调研（各 ~77 秒、上万字报告）在用量表上**贡献 0**，
+    那一小时只有各一发 router 被记下（432×3）。
+
+    记账失败不能把阶段带崩，但也**不许静默** —— 静默就等于又回到"账对不上还查不出"。
+    """
+    try:
+        from singularity.scheduler import witness
+        from singularity.scheduler._token_budget import record_tokens
+        er = getattr(disp_result, "executor_result", None)
+        tokens = int(getattr(er, "token_count", 0) or 0)
+        if tokens <= 0:
+            return
+        record_tokens(project_id=project.id, project_name=project.name,
+                      task_id=task_id, level=level,
+                      model=(getattr(disp_result, "agent_cfg", None) or {}).get("model", ""),
+                      tokens=tokens,
+                      elapsed_s=float(getattr(er, "elapsed", 0.0) or 0.0))
+    except Exception as e:
+        from singularity.scheduler import witness
+        witness.warn("workflow", f"record_phase_usage:{type(e).__name__}:{e}"[:120])
 
 def _needs_research(project: ProjectState) -> bool:
     if project.template == "bug_fix":

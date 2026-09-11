@@ -63,6 +63,7 @@ def dispatch(
     restrict_to_lineup: bool = False,
     route_role: str = "",
     phase: str = "",
+    no_tools: bool = False,
 ) -> DispatchResult:
     """选 executor 并执行。架构任务: 委员会并行→合成; 其他: 单模型 fallback 链。
 
@@ -71,6 +72,12 @@ def dispatch(
     ``route_role`` 是"这活儿是谁的角色"，用来挡委员会误入（见下面的守卫）。
     ``phase`` 是阶段名（researching/planning/executing/…），用来解析**阶段级**技能绑定
     （见 `skill_loader.get_agent_skills` 的两条轴）。留空 = 只用模型级绑定。
+
+    ``no_tools`` 给"产出就是一段 JSON、不该碰磁盘"的阶段（调研 / 架构）。不给的话
+    模型会把它当实现任务干：2026-09-11 实测调研员在**项目仓库里把整个项目实现完了**
+    （wc_lite.py + 测试 + 真跑了一遍），5 个工具轮次耗尽后执行器只回一句
+    "(达到最大工具轮次, 已产出文件)" —— 报告解析失败，GATE1 无物可审，这轮白烧。
+    委员会那条路一直自带禁工具（`_run_no_tools`），这里补的是**单模型**那条。
     """
     chain = pick_agent_fallback_chain(agents, level, project_lineup=project_lineup,
                                       restrict_to_lineup=restrict_to_lineup)
@@ -107,6 +114,13 @@ def dispatch(
         if not executor_cls:
             last_error = f"未知 executor type: {etype}"
             continue
+
+        if no_tools:
+            # 与 `_run_no_tools` 同一条禁令、同一个告警：claude-cli 这类自带工具的执行器
+            # 禁不掉 —— 让它在 trace 里可见，而不是假装禁住了。
+            if not getattr(executor_cls, "honors_no_tools", False):
+                witness.warn("dispatcher", f"no_tools_not_enforced:{etype}"[:80])
+            agent_cfg = {**agent_cfg, "no_tools": True}
 
         full_task = task
         if feedback:

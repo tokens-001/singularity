@@ -62,8 +62,12 @@ def _run_research(project: ProjectState, agents: dict) -> str:
 
     task_id = f"research_{project.id}"
     lineup, restrict = _phase_selection("researching", project)
+    # no_tools: 调研员的产出契约是一段 JSON 报告，不该碰磁盘。不禁的话它会当实现任务
+    # 干（2026-09-11 实测在项目仓库里把整个项目写完，工具轮次耗尽 → 报告只剩一句
+    # "(达到最大工具轮次, 已产出文件)"，GATE1 无物可审）。
     disp_result, err = _safe_dispatch(prompt, "any", task_id, agents, project,
-                                       lineup, restrict, phase="researching")
+                                       lineup, restrict, phase="researching",
+                                       no_tools=True)
     raw = disp_result.executor_result.raw_output if disp_result else ""
     if err:
         raw = f'{{"parse_error": true, "error": "{err}"}}'
@@ -115,8 +119,11 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     # 架构这一项 = 委员会席位。restrict 才限制得住：不限制的话 chain 还是全池，
     # 界面上配的"三家"会变成"池里所有模型各出一份初稿"。
     lineup, restrict = _phase_selection("planning", project)
+    # no_tools: 架构阶段的产出同样是 JSON 方案。委员会那条路自带禁工具，但**单模型**
+    # 兜底那条没有 —— 席位只有一家时它会带着 write_file 去改磁盘。
     disp_result, err = _safe_dispatch(prompt, "any", task_id, agents, project,
-                                       lineup, restrict, phase="planning")
+                                       lineup, restrict, phase="planning",
+                                       no_tools=True)
     raw = disp_result.executor_result.raw_output if disp_result else ""
     if err:
         raw = f'{{"parse_error": true, "error": "{err}"}}'
@@ -125,7 +132,8 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     if arch.get("parse_error"):
         retry_prompt = prompt + "\n\n[格式错误] 上一次输出不是合法JSON。请用 ```json ... ``` 包裹输出。"
         disp_result2, err2 = _safe_dispatch(retry_prompt, "any", task_id + "_r", agents,
-                                             project, lineup, restrict, phase="planning")
+                                             project, lineup, restrict, phase="planning",
+                                             no_tools=True)
         raw2 = disp_result2.executor_result.raw_output if disp_result2 else ""
         if err2:
             raw2 += f'\n[LLM错误: {err2}]'
