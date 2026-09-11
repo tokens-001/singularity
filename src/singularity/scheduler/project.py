@@ -231,9 +231,49 @@ class ProjectState:
         """
         if phase == self.phase:
             return                      # 没变就不记，免得轨迹被空转刷满
+        if phase == Phase.GATE3:
+            self._gate3_admission()
         self.add_lineage({"action": "phase", "from": self.phase.value,
                           "to": phase.value, "reason": str(reason)[:120]})
         self.phase = phase
+
+    def has_verification_evidence(self) -> bool:
+        """本轮验收有没有结论。`verification_ran` = 跑过；`verification_skipped` = 有结论（没跑）。
+
+        两个标记都由 `workflow._run_verification` 写，并在 `run_test_fix_loop`
+        每轮开头连同 issues 一起清空 —— 所以它反映的是**本轮**，不会拿上一轮的
+        报告当这一轮的证据。
+        """
+        return any(i.get("type") in ("verification_ran", "verification_skipped")
+                   for i in self.issues)
+
+    def _gate3_admission(self) -> None:
+        """进 GATE3 的入门票：必须有验收结论，没有就补一条记录 + 告警。
+
+        **为什么需要**：REVIEWING 被两套驱动同时认识，但行为不同 ——
+        orchestrator 走 `run_test_fix_loop`（真跑 QA + 安全审计），而
+        `run_phase` 的 REVIEWING 分支**直接 `set_phase(GATE3)`**。三条出事路径：
+          (a) 异步验收线程炸了（外层只 warn）→ 停 REVIEWING → 用户点"下一步"；
+          (b) 竞态：合并置 REVIEWING、验收还在跑，用户手快先点了；
+          (c) auto_mode 且调度循环没开 → REVIEWING → GATE3 → 自动批准 → 交付。
+        三条的结局一样：**验收整段没跑、零记录**，人审时看不出来。
+
+        这里不阻断（补票 + 告警，不抛异常）—— GATE3 本来就是人审门，
+        把"缺证据"摆到台面上比卡死项目有用。判据是 issues 里的标记：
+        验收跑完会写 `verification_ran`，跑不了会写 `verification_skipped`。
+        """
+        if self.has_verification_evidence():
+            return
+        self.issues.append({
+            "type": "gate3_no_evidence",
+            "detail": "进 GATE3 时没有任何验收记录 —— QA/安全审计没跑过，"
+                      "本页的结论不构成有效验收",
+        })
+        try:
+            from . import witness
+            witness.warn("project", f"gate3_no_evidence:{self.id}"[:120])
+        except Exception:
+            pass
 
 # ═══════════════════════════════════════════════════════════
 # 持久化

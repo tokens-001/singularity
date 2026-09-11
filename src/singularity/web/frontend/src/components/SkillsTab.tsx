@@ -11,10 +11,17 @@ const SKILL_SHORT: Record<string,string> = {
   'ponytail': 'Ponytail', 'codegraph': '代码地图',
 }
 
+/** 与后端 phase_models.PHASES 对齐。 */
+const PHASES: [string,string][] = [
+  ['researching','调研'], ['planning','架构'], ['executing','实现'],
+  ['reviewing','审查'], ['extract','融合提取'],
+]
+
 export default function SkillsTab() {
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [agents, setAgents] = useState<AgentItem[]>([])
   const [matrix, setMatrix] = useState<Record<string,string[]>>({})
+  const [phaseMatrix, setPhaseMatrix] = useState<Record<string,string[]>>({})
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ name: '', description: '', type: 'prompt', content: '' })
   const run = useRun()
@@ -33,6 +40,12 @@ export default function SkillsTab() {
       try { mx[ag.model] = (await api.agentSkills(ag.model)).skills||[] } catch { mx[ag.model] = [] }
     }))
     setMatrix({...mx})
+    // 阶段级绑定（跟岗位走）。同样并发拉，失败时留空而不是让整页挂掉。
+    const pm: Record<string,string[]> = {}
+    await Promise.all(PHASES.map(async ([k]) => {
+      try { pm[k] = (await api.phaseSkills(k)).skills||[] } catch { pm[k] = [] }
+    }))
+    setPhaseMatrix({...pm})
     if (flat.length === 1 && s.length > 0 && (mx[flat[0].model]||[]).length === 0) {
       const allNames = s.map(sk=>sk.name)
       try { await api.updateAgentSkills(flat[0].model, allNames); mx[flat[0].model] = allNames; setMatrix({...mx}) } catch {}
@@ -52,6 +65,12 @@ export default function SkillsTab() {
     setMatrix(prev=>({...prev,[model]:allSkillNames}))
     try { await api.updateAgentSkills(model, allSkillNames) } catch { fetch() }
   }
+  const togglePhaseSkill = async (phase: string, skill: string) => {
+    const cur = phaseMatrix[phase]||[]
+    const next = cur.includes(skill) ? cur.filter(s=>s!==skill) : [...cur, skill]
+    setPhaseMatrix(prev=>({...prev,[phase]:next}))
+    try { await api.updatePhaseSkills(phase, next) } catch { setPhaseMatrix(prev=>({...prev,[phase]:cur})) }
+  }
   const create = async () => {
     if (!(await run(() => api.addSkill(form)))) return
     setShowForm(false); setForm({name:'',description:'',type:'prompt',content:''}); fetch()
@@ -64,8 +83,9 @@ export default function SkillsTab() {
         <button onClick={()=>setShowForm(!showForm)} className="btn-sm"><Plus size={12}/> 新建</button>
       </div>
       <div className="fs-10 text-muted" style={{ marginBottom: 8 }}>
-        技能 = 这个模型<b>会什么</b>（能力，绑模型）；角色 = 这个阶段<b>该干什么</b>（职责，绑阶段）。
-        提示词类约束请做成角色，技能只用来加真工具。
+        技能 = <b>会什么</b>（能力）；角色 = 这个阶段<b>该干什么</b>（职责，见「角色」页）。
+        提示词类约束请做成角色，技能只用来加真工具。<br/>
+        <b>阶段默认</b>跟岗位走（换模型不丢）；下面按模型的绑定是<b>例外</b>，会覆盖阶段默认。
       </div>
       {showForm && (
         <div className="flex-center gap-6 flex-wrap" style={{ marginBottom: 8, padding: 8, background: 'var(--bg-secondary)', borderRadius: 'var(--radius)' }}>
@@ -78,6 +98,32 @@ export default function SkillsTab() {
       )}
       {skills.length > 0 && (
         <div>
+          <div className="fs-11 fw-600 text-secondary" style={{ margin: '12px 0 6px' }}>
+            阶段默认（跟岗位走）
+          </div>
+          {PHASES.map(([key, label]) => {
+            const bound = phaseMatrix[key]||[]
+            return (
+              <div key={key} style={{ marginBottom: 8, padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius)' }}>
+                <div className="flex-center" style={{ marginBottom: 6 }}>
+                  <span className="fw-600 fs-11 flex-1">{label}</span>
+                  <span className="fs-10 text-secondary">{bound.length}/{skills.length} 技能</span>
+                </div>
+                <div className="flex-center gap-6 flex-wrap">
+                  {skills.map(s => (
+                    <Tag.CheckableTag key={s.name} checked={bound.includes(s.name)}
+                      onChange={() => togglePhaseSkill(key, s.name)}
+                      style={{ fontSize: 10, padding: '1px 8px', margin: 0 }}>
+                      {SKILL_SHORT[s.name] || s.name}
+                    </Tag.CheckableTag>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+          <div className="fs-11 fw-600 text-secondary" style={{ margin: '12px 0 6px' }}>
+            按模型（例外，覆盖阶段默认）
+          </div>
           {agents.map(a => {
             const bound = matrix[a.model]||[]
             return (

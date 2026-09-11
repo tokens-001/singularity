@@ -85,6 +85,15 @@ export const api = {
     // 界面上标签高亮成已选中、刷新即失效，而服务端数据已经被清掉了。
     request(`/api/agents/any/${model}/skills`,{method:'PUT',body:JSON.stringify({skill_names: skills})}),
 
+  // 阶段级技能绑定（跟岗位走，换模型不丢）。解析时**被模型级覆盖**，
+  // 见 skill_loader.get_agent_skills 的两条轴。
+  phaseSkills: async (phase: string) => {
+    const d = await request<any>(`/api/agent-skills/any?phase=${encodeURIComponent(phase)}`)
+    return { skills: d?.skill_names || [], available: d?.available || [] }
+  },
+  updatePhaseSkills: (phase: string, skills: string[]) =>
+    request('/api/agent-skills/any',{method:'PUT',body:JSON.stringify({phase, skill_names: skills})}),
+
   fusionConfig: () => request<any>('/api/fusion/config'),
   updateFusionConfig: (data: any) => request('/api/fusion/config',{method:'PUT',body:JSON.stringify(data)}),
 

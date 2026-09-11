@@ -318,15 +318,29 @@ def skill_delete(name):
     ok = delete_user_skill(name); disp_mod.invalidate_skill_cache(); return {"ok": ok}, 200
 
 
-def agent_skill_list(level, model):
+def agent_skill_list(level, model="", phase=""):
+    """读绑定。`model` = 模型级那条轴；`phase` = 阶段级那条轴。
+
+    两者都给时按解析顺序（**模型级优先**，见 skill_loader.get_agent_skills）
+    返回实际生效的技能 —— 界面要显示的就是"这家伙现在真会什么"。
+    传入 phase="" 时行为与旧版逐字节一致。
+    """
     from singularity.skills.skill_loader import get_agent_skills, load_skills
-    return {"skill_names": get_agent_skills(level, model), "available": list(load_skills().keys())}, 200
+    return {"skill_names": get_agent_skills(level, model, phase),
+            "available": list(load_skills().keys())}, 200
 
 
-def agent_skill_update(level, model, skill_names):
+def agent_skill_update(level, model="", skill_names=None, phase=""):
     from singularity.skills.skill_loader import set_agent_skills
     from . import dispatcher as disp_mod
-    set_agent_skills(level, model, skill_names); disp_mod.invalidate_skill_cache(level, model); return {"ok": True}, 200
+    set_agent_skills(level, model, skill_names or [], phase)
+    # 传了 model 就清该模型所有阶段；只传 phase 时模型为空，清那一档全部 —— 阶段级
+    # 绑定会影响该档**所有**没有模型级绑定的模型，只清一条会留下读旧缓存的。
+    if model:
+        disp_mod.invalidate_skill_cache(level, model)
+    else:
+        disp_mod.invalidate_skill_cache()
+    return {"ok": True}, 200
 
 
 def perm_profiles():

@@ -364,3 +364,65 @@ def test_extractor_swapped_when_it_is_a_member(monkeypatch):
     ej.fuse_architecture_v2("需求", PLANS)
     used = next(m for m, p in calls if "架构委员会秘书" in p)
     assert used in ej._V2_EXTRACT_FALLBACKS and used not in ("A", "B")
+
+
+# ── 2026-09-11 外派评审后的三处修补 ──────────────────────
+
+def test_bare_adopt_stance_not_counted(monkeypatch):
+    """独有做法的空口 adopt 不算采纳 —— 与分歧票的空口 accept 对称。
+
+    采纳门槛是"全体 adopt"（保守，长度是膨胀主因）。但只有分歧票过了
+    `_demote_bare_accept`（它认 `verdict` 字段），独有做法用的是 `stance`，
+    一直没过闸 —— 一句不带理由的"同意采纳"就能把条目放行，方向和分歧点相反。
+    """
+    calls = []
+    _stub(monkeypatch, calls=calls,
+          r2={**R2_INSIST_ACCEPT,
+              "unique_gains": [{"id": 1, "stance": "adopt"}]})   # 无 reason
+    ej.fuse_architecture_v2("需求", PLANS)
+    p = _finalize_prompt(calls)
+    adopted = p.split("【采纳的独有做法】")[1].split("【已驳回")[0]
+    assert "幂等键" not in adopted
+
+
+def test_rulings_out_param_records_the_debate(monkeypatch):
+    """裁决记录能被调用方取走（落 fusion_meta）。
+
+    多模型碰撞是这套系统的核心价值主张，但它的证据原来只活在内存里：
+    fusion_meta 只存 models/outputs/count，GATE2 的人拿到一份稿子，
+    查不到"谁定稿、哪些分歧判给谁、哪些独有做法被驳回"。
+    """
+    _stub(monkeypatch)
+    r = {}
+    ej.fuse_architecture_v2("需求", PLANS, rulings=r)
+    assert r["writer"] == "A"
+    assert r["rounds"] >= 1
+    assert {d["id"] for d in r["resolved"]} == {1, 2}
+    assert [g["id"] for g in r["adopted"]] == [1]
+    assert r["rejected"] == []
+
+
+def test_rulings_rounds_zero_when_no_debate(monkeypatch):
+    """只有共识、没分歧也没独有做法 → 辩论整段不跑，rounds 必须是 0。
+
+    这条钉的是 NameError：`rounds` 原来只在辩论块里绑定，出参要用它，
+    不预设默认值的话上面那条路径直接抛异常。
+    """
+    _stub(monkeypatch,
+          extract={"consensus": ["都一致"], "disagreements": [], "unique_gains": []})
+    r = {}
+    assert ej.fuse_architecture_v2("需求", PLANS, rulings=r) == "最终稿"
+    assert r["rounds"] == 0
+
+
+def test_second_confirm_issues_are_warned(monkeypatch):
+    """第二轮确认**仍**有问题 → 稿子照交，但不许静默丢掉。
+
+    原写法 `if not issues or attempt: break` 把第二轮的 issues 直接扔了：
+    既不告警也不记录，产物里"改完了"和"没改"长得一样。
+    """
+    warns = []
+    monkeypatch.setattr(ej.witness, "warn", lambda *a, **k: warns.append(a))
+    _stub(monkeypatch, confirm={"approved": False, "issues": ["tasks 段缺字段"]})
+    ej.fuse_architecture_v2("需求", PLANS)
+    assert any("fusion_confirm_unresolved" in str(w) for w in warns)

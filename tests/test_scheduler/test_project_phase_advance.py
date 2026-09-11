@@ -128,3 +128,66 @@ def test_no_decomposable_tasks_is_surfaced_not_silently_stuck(tmp_path, monkeypa
 
     assert any(i.get("kind") == "no_decomposable_tasks" for i in p.issues)
     assert len([i for i in p.issues if i.get("kind") == "no_decomposable_tasks"]) == 1
+
+
+# ── GATE3 入门票（2026-09-11 外派评审）────────────────────
+
+def _mk_proj():
+    return proj_mod.ProjectState(
+        id="proj1", name="测试项目", raw_constraints=[], owner_confirm={},
+        constraints_checklist=[], task_ids=[], issues=[], supervision_log=[],
+        lineage=[], handoffs=[], agent_lineup={},
+    )
+
+
+class TestGate3Admission:
+    """进 GATE3 必须带验收结论，否则补一条记录 + 告警。
+
+    REVIEWING 被两套驱动同时认识但行为不同：orchestrator 跑
+    `run_test_fix_loop`（真跑 QA+安全审计），`run_phase` 的 REVIEWING 分支
+    直接跳。异步验收线程炸了 / 用户手快先点了 / auto_mode 且循环没开 ——
+    三条路的结局都是"验收整段没跑、零记录"，人审时看不出来。
+    """
+
+    def test_no_evidence_adds_ticket(self, tmp_path, monkeypatch):
+        from singularity.scheduler import config
+        monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+        warns = []
+        import singularity.scheduler.witness as w
+        monkeypatch.setattr(w, "warn", lambda *a, **k: warns.append(a))
+
+        p = _mk_proj()
+        p.phase = proj_mod.Phase.REVIEWING
+        p.set_phase(proj_mod.Phase.GATE3, "手点下一步")
+
+        assert any(i.get("type") == "gate3_no_evidence" for i in p.issues), p.issues
+        assert any("gate3_no_evidence" in str(x) for x in warns)
+        assert p.phase == proj_mod.Phase.GATE3, "只补票，不阻断"
+
+    def test_ran_marker_clears_the_ticket(self, tmp_path, monkeypatch):
+        from singularity.scheduler import config
+        monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+        p = _mk_proj()
+        p.issues = [{"type": "verification_ran", "detail": "QA + 安全审计已执行"}]
+        p.phase = proj_mod.Phase.REVIEWING
+        p.set_phase(proj_mod.Phase.GATE3, "验收完成")
+        assert not any(i.get("type") == "gate3_no_evidence" for i in p.issues)
+
+    def test_skipped_marker_also_counts_as_evidence(self, tmp_path, monkeypatch):
+        """`verification_skipped` 是"有结论"——结论就是没跑。不该再补一张票。"""
+        from singularity.scheduler import config
+        monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+        p = _mk_proj()
+        p.issues = [{"type": "verification_skipped", "detail": "架构没产出约束清单"}]
+        p.phase = proj_mod.Phase.REVIEWING
+        p.set_phase(proj_mod.Phase.GATE3, "跳过")
+        assert not any(i.get("type") == "gate3_no_evidence" for i in p.issues)
+
+    def test_other_phases_unaffected(self, tmp_path, monkeypatch):
+        """门票只管 GATE3 —— 别的流转不该被它碰。"""
+        from singularity.scheduler import config
+        monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+        p = _mk_proj()
+        p.phase = proj_mod.Phase.GATE2
+        p.set_phase(proj_mod.Phase.EXECUTING, "架构通过")
+        assert p.issues == []

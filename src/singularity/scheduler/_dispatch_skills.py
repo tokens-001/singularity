@@ -54,13 +54,17 @@ def _ntilc_filter(task_desc: str, skills: dict) -> dict:
     return dict(relevant)
 
 
-def _load_skills_for_agent(level: str, model: str, task_desc: str = "") -> tuple[list, str, dict]:
+def _load_skills_for_agent(level: str, model: str, task_desc: str = "",
+                           phase: str = "") -> tuple[list, str, dict]:
     """为 agent 加载绑定的 Skill。返回 (tools, prompt, skills_dict)。
 
-    P2-4: 结果按 (level, model) 缓存。失效见 invalidate_skill_cache。
+    P2-4: 结果按 **(level, model, phase)** 缓存。失效见 invalidate_skill_cache。
     NTILC: task_desc 非空时按相关性过滤，省无关 skill 上下文。
+
+    `phase` 参与缓存键是必须的：同层同模型在不同阶段可能绑不同技能，
+    不把它算进去就会把甲阶段的技能缓存给乙阶段用。
     """
-    key = (level, model)
+    key = (level, model, phase)
     with _CACHE_LOCK:
         if key in _SKILL_CACHE:
             tools, prompt, skills = _SKILL_CACHE[key]
@@ -73,7 +77,7 @@ def _load_skills_for_agent(level: str, model: str, task_desc: str = "") -> tuple
         from singularity.skills.skill_loader import (
             load_skills, get_tool_definitions, get_prompt_additions, get_agent_skills,
         )
-        skill_names = get_agent_skills(level, model)
+        skill_names = get_agent_skills(level, model, phase)
         if skill_names:
             all_skills = load_skills()
             skills = {n: all_skills[n] for n in skill_names if n in all_skills}
@@ -113,14 +117,17 @@ def _load_mcp_for_agent() -> tuple[list, object]:
 def invalidate_skill_cache(level: str = None, model: str = None) -> None:
     """失效 Skill 缓存。
 
-    不传参 = 清全部 (skill_add/skill_delete 触发);
-    传 (level, model) = 只清那条 (agent_skill_update 触发)。
+    不传参 = 清全部 (skill_add/skill_delete、阶段级绑定变更触发);
+    传 (level, model) = 清该 (level, model) 的**所有阶段** ——
+    缓存键是 (level, model, phase)，原来按两元组 pop 一个都打不中，
+    改了绑定却读到旧技能（静默，最难查的那种）。
     """
     with _CACHE_LOCK:
         if level is None and model is None:
             _SKILL_CACHE.clear()
-        else:
-            _SKILL_CACHE.pop((level, model), None)
+            return
+        for k in [k for k in _SKILL_CACHE if k[0] == level and k[1] == model]:
+            _SKILL_CACHE.pop(k, None)
 
 
 def invalidate_mcp_cache() -> None:

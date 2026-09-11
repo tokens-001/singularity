@@ -126,17 +126,20 @@ Schema 规则:
 
 def _safe_dispatch(prompt: str, level: str, task_id: str, agents: dict,
                    project: ProjectState, project_lineup=None,
-                   restrict_to_lineup: bool = False) -> tuple:
+                   restrict_to_lineup: bool = False, phase: str = "") -> tuple:
     """调 disp_mod.dispatch 并记录错误到 project lineage。返回 (disp_result_or_None, error_str)。
 
     ``restrict_to_lineup`` 见 `dispatcher.pick_agent_fallback_chain`：「阶段 → 模型」
     配了名单时为 True，委员会席位才限制得住。
+
+    ``phase`` 透传给技能解析（阶段级技能绑定）。不传 = 只用模型级绑定。
     """
     try:
         disp_result = disp_mod.dispatch(
             prompt, level, task_id, agents,
             project_lineup=project_lineup,
             restrict_to_lineup=restrict_to_lineup,
+            phase=phase,
         )
         return disp_result, ""
     except Exception as e:
@@ -230,9 +233,17 @@ def run_phase(project: ProjectState, agents: dict) -> str:
             # 瞬时态：集成合并通过后由 orchestrator 置上，验收（QA+安全审计）跑几分钟，
             # 这里推进到 GATE3 交人工。**不是死代码** —— UI 靠它显示"审查中"。
             # （原来紧跟的 FIXING 分支已删：全仓无人赋值，状态不可达。）
-            project.set_phase(Phase.GATE3, "验收完成 → 交人工")
+            #
+            # **别说"验收完成"**：REVIEWING 被两套驱动同时认识，但只有 orchestrator
+            # 那条会跑验收。人手点"下一步"时验收多半还没跑完（异步线程还在跑）、
+            # 甚至从没开始（线程炸了 / auto_mode 且调度循环没开）。真相由
+            # set_phase 的入门票判定 —— 缺证据时 issues 里会多一条 gate3_no_evidence。
+            _verified = project.has_verification_evidence()
+            project.set_phase(Phase.GATE3,
+                              "验收报告完毕 → 交人工" if _verified else "未验收 → 交人工")
             save(project)
-            msgs.append("验收完成 → GATE3 等人工审核")
+            msgs.append("验收完成 → GATE3 等人工审核" if _verified else
+                        "⚠ 未取得验收报告 → GATE3 等人工审核（该页结论不构成有效验收）")
             continue
 
         elif phase == Phase.DONE:
@@ -305,6 +316,8 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     if not project.constraints_checklist:
         # 记进 issues: 只返回字符串的话，这句话不落盘, GATE3 只能看到一个空 issues
         # 和一份不存在的 QA 报告, 谁也说不清验收为什么没跑。
+        # 这条也是进 GATE3 的**入门票**之一（见 ProjectState._gate3_admission）：
+        # 它代表"验收有过结论"，结论就是"没跑"。
         reason = "验收跳过: 架构没产出约束清单, QA/安全审计师都没跑"
         project.issues.append({"type": "verification_skipped", "detail": reason})
         return [reason]
@@ -328,7 +341,8 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
         f"你是 QA 工程师。做验收验证，不写代码，只出报告。\n\n{ctx}\n\n"
         "逐条检查约束是否满足，给出 evidence。输出 JSON。"
     )
-    disp_result, err = _safe_dispatch(qa_prompt, "any", f"qa_{project.id}", agents, project)
+    disp_result, err = _safe_dispatch(qa_prompt, "any", f"qa_{project.id}", agents, project,
+                                      phase="reviewing")
     if disp_result and disp_result.executor_result:
         raw = disp_result.executor_result.raw_output
         _save_phase_output(project.id, "qa-report.md", raw)
@@ -341,7 +355,8 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
         f"你是安全审计师。做安全审计，不写代码，只出报告。\n\n{ctx}\n\n"
         "审计: 权限/注入/密钥/依赖漏洞/隐私合规。输出 JSON。"
     )
-    disp_result2, err2 = _safe_dispatch(sec_prompt, "any", f"sec_{project.id}", agents, project)
+    disp_result2, err2 = _safe_dispatch(sec_prompt, "any", f"sec_{project.id}", agents, project,
+                                        phase="reviewing")
     if disp_result2 and disp_result2.executor_result:
         raw2 = disp_result2.executor_result.raw_output
         _save_phase_output(project.id, "security-report.md", raw2)
@@ -379,6 +394,10 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     except Exception:
         pass
 
+    # 验收入门票：走到这儿才算"验收真的跑过"。放在**最后**、而不是开头 ——
+    # 中途抛异常时不该留下"跑过了"的假证据。GATE3 靠这个标记识别
+    # "验收整段没跑就被推进来了"（见 ProjectState._gate3_admission）。
+    project.issues.append({"type": "verification_ran", "detail": "QA + 安全审计已执行"})
     return msgs
 
 

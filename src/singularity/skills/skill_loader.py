@@ -21,11 +21,28 @@ from typing import Optional
 
 import yaml
 
-# ── 路径（独立计算，不依赖 scheduler.config） ────────────────────
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]   # Singularity/（src/singularity/skills/skill_loader.py → parents[3]=项目根）
+# ── 路径 ─────────────────────────────────────────────────────────
 SYSTEM_SKILLS_DIR = Path(__file__).resolve().parent   # src/singularity/skills/
-_QIDIAN_DIR = _PROJECT_ROOT / ".qidian"
-USER_SKILLS_DIR = _QIDIAN_DIR / "skills"             # .qidian/skills/
+
+
+def _qidian_dir() -> Path:
+    """**每次现算，不要在模块级缓存。**
+
+    `config.QIDIAN_DIR` 是运行时可改的 —— `tests/conftest.py` 的
+    `_isolate_qidian_dir` 正是靠 monkeypatch 它把落盘隔离到临时目录。以前这里
+    写的是模块级 `_QIDIAN_DIR = _PROJECT_ROOT / ".qidian"`（导入时算好），
+    属性改了它不跟着改：**测试会往生产的 `.qidian/agents_custom.json` 写**，
+    而那份文件正是用户界面上绑的技能。同类坑在 conftest 的 docstring 里
+    列过一次，当时漏了这个文件。
+
+    延迟 import 是为了不引入 `skills → scheduler` 的循环依赖。
+    """
+    from singularity.scheduler import config
+    return config.QIDIAN_DIR
+
+
+def _user_skills_dir() -> Path:
+    return _qidian_dir() / "skills"                  # .qidian/skills/
 
 # ── 常量 ──────────────────────────────────────────────────────────
 SKILL_FILE = "SKILL.md"
@@ -149,8 +166,8 @@ def load_skills(include_flow: bool = False) -> dict[str, SkillDef]:
                 skills[skill.name] = skill
 
     # 2. 用户自定义（后加载，同名覆盖系统）
-    if USER_SKILLS_DIR.exists():
-        for skill_dir in USER_SKILLS_DIR.iterdir():
+    if _user_skills_dir().exists():
+        for skill_dir in _user_skills_dir().iterdir():
             if not skill_dir.is_dir():
                 continue
             if skill_dir.name.startswith("_"):
@@ -218,7 +235,7 @@ def create_user_skill(name: str, description: str, skill_type: str,
     if skill_type not in _VALID_TYPES:
         raise ValueError(f"type 无效: {skill_type}")
 
-    skill_dir = USER_SKILLS_DIR / name
+    skill_dir = _user_skills_dir() / name
     skill_dir.mkdir(parents=True, exist_ok=True)
 
     # 构建 SKILL.md 内容
@@ -242,7 +259,7 @@ def create_user_skill(name: str, description: str, skill_type: str,
 
 def delete_user_skill(name: str) -> bool:
     """删除用户 skill 目录。返回是否成功。"""
-    skill_dir = USER_SKILLS_DIR / name
+    skill_dir = _user_skills_dir() / name
     if not skill_dir.exists():
         return False
     import shutil
@@ -250,36 +267,59 @@ def delete_user_skill(name: str) -> bool:
     return True
 
 
-def get_agent_skills(agent_level: str, agent_model: str) -> list[str]:
-    """从 agents_custom.json 读取 agent 绑定的 skill 列表。"""
-    custom_file = _QIDIAN_DIR / "agents_custom.json"
+def get_agent_skills(agent_level: str, agent_model: str, phase: str = "") -> list[str]:
+    """从 agents_custom.json 读取 agent 绑定的 skill 列表。**两条轴，模型级优先。**
+
+        _skills[level][model]   ← 优先级高：模型专属例外（某工具只有个别模型支持）
+        _skills[level][phase]   ← 兜底：跟岗位走
+
+    为什么要有阶段轴：技能原来只绑 `(level, model)`，于是
+      · 换 `phase_models.json` 的模型 → 技能**静默消失**；
+      · fallback 链更糟：主力挂了退到链上第 2 个，技能跟着换人 ——
+        **同一个任务这次有工具、下次没有**，能力取决于运行时故障模式。
+
+    模型级优先是刻意的**向后兼容**：没配阶段级时，逐字节等于旧行为。
+    想用阶段级，把模型级那条清掉即可（或一开始就不配模型级）。
+    """
+    custom_file = _qidian_dir() / "agents_custom.json"
     if not custom_file.exists():
         return []
     try:
         import json
         data = json.loads(custom_file.read_text(encoding="utf-8"))
-        agents_custom = data.get("_skills", {})
-        level_skills = agents_custom.get(agent_level, {})
-        return level_skills.get(agent_model, [])
+        level_skills = (data.get("_skills", {}) or {}).get(agent_level, {}) or {}
+        if agent_model and agent_model in level_skills:
+            return level_skills.get(agent_model) or []
+        return level_skills.get(phase, []) if phase else []
     except Exception:
         return []
 
 
-def set_agent_skills(agent_level: str, agent_model: str, skill_names: list[str]) -> None:
-    """设置 agent 绑定的 skill 列表，写入 agents_custom.json。"""
-    custom_file = _QIDIAN_DIR / "agents_custom.json"
+def set_agent_skills(agent_level: str, agent_model: str, skill_names: list[str],
+                     phase: str = "") -> None:
+    """设置 agent 绑定的 skill 列表，写入 agents_custom.json。
+
+    给 `agent_model` 就写模型轴（模型级例外）；给 `phase` 就写阶段轴（跟岗位走）。
+    两个都空 → 什么都不写（别造出一个没有键名的条目）。
+    传空列表 = 删键，别留 `[]` —— 留空数组会让"恢复默认（回落到另一条轴）"回不去。
+    """
+    if not agent_model and not phase:
+        return
+    import json
+    custom_file = _qidian_dir() / "agents_custom.json"
     data = {}
     if custom_file.exists():
         try:
-            import json
             data = json.loads(custom_file.read_text(encoding="utf-8"))
         except Exception:
             data = {}
-    if "_skills" not in data:
-        data["_skills"] = {}
-    if agent_level not in data["_skills"]:
-        data["_skills"][agent_level] = {}
-    data["_skills"][agent_level][agent_model] = list(skill_names)
+    # ponytail: 两条轴共用一个 dict，靠"模型名不会叫 executing"区分。
+    # 真要重名（模型 ID 恰好等于阶段名）就分不出 —— 那时改成 `_phase` 子字典。
+    key = agent_model or phase
+    level_skills = data.setdefault("_skills", {}).setdefault(agent_level, {})
+    if skill_names:
+        level_skills[key] = list(skill_names)
+    else:
+        level_skills.pop(key, None)
     custom_file.parent.mkdir(parents=True, exist_ok=True)
-    import json
     custom_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

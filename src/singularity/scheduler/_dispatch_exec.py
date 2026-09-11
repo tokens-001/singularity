@@ -28,6 +28,24 @@ import json, os, time, logging, threading
 _WAVE_TIMEOUT = float(os.environ.get("QIDIAN_DEBATE_TIMEOUT", "300"))
 
 
+def _impl_role_veto(route_role: str) -> bool:
+    """这个 route_role 是不是"执行阶段的角色"（= 这是实现活儿，不是架构设计）。
+
+    不写死 `"implementer"`：planner 打的标是
+    `get_phase_role(Phase.EXECUTING) or "implementer"`（_workflow_phases:303 /
+    orchestrator:417），用户在界面上改过执行角色的话，写死就对不上了。
+    取不到角色表时退回字面量，宁可多挡也不要放它进委员会。
+    """
+    if not route_role:
+        return False
+    try:
+        from .project import Phase
+        from .roles import get_phase_role
+        return route_role == (get_phase_role(Phase.EXECUTING) or "implementer")
+    except Exception:
+        return route_role == "implementer"
+
+
 @timed(name="dispatcher")
 def dispatch(
     task: str,
@@ -39,10 +57,16 @@ def dispatch(
     cwd: str = "",
     project_lineup: dict[str, list[str]] = None,
     restrict_to_lineup: bool = False,
+    route_role: str = "",
+    phase: str = "",
 ) -> DispatchResult:
     """选 executor 并执行。架构任务: 委员会并行→合成; 其他: 单模型 fallback 链。
 
     ``restrict_to_lineup=True`` 时 lineup 就是全部候选（委员会席位靠它才限制得住）。
+
+    ``route_role`` 是"这活儿是谁的角色"，用来挡委员会误入（见下面的守卫）。
+    ``phase`` 是阶段名（researching/planning/executing/…），用来解析**阶段级**技能绑定
+    （见 `skill_loader.get_agent_skills` 的两条轴）。留空 = 只用模型级绑定。
     """
     chain = pick_agent_fallback_chain(agents, level, project_lineup=project_lineup,
                                       restrict_to_lineup=restrict_to_lineup)
@@ -54,9 +78,19 @@ def dispatch(
         chain = _prefer_by_strengths(task, chain)
 
     # ── 架构任务: 委员会模式 (多模型并行 → fuse_architecture_v2 合成) ──
-    # 仅架构/系统设计类任务走 3 模型碰撞, research/QA/安全/实现 单模型即可
+    # 仅架构/系统设计类任务走 3 模型碰撞, research/QA/安全/实现 单模型即可。
+    #
+    # 两道条件缺一不可。**只有关键词那道会误伤**：planner 拆出来的子任务描述
+    # 是从架构 JSON 的 title/desc 抄的，天然继承「技术栈 / 模块划分」这些词，
+    # 于是实现任务也被送进委员会 —— 而委员会是 no_tools 路径，跑几波拿回来的
+    # 是一份架构 JSON 而不是代码。所以再加一道角色否决：执行阶段的角色
+    # （planner 给每个子任务打的 route_role，见 _workflow_phases:303 / orchestrator:417）
+    # 明确说"这是实现活儿"时不进委员会。
+    #
+    # 架构阶段自己不受影响：它走 `_safe_dispatch(...)`，**不带 route_role**（默认 ""）。
+    # 用户手打的独立架构任务同理 —— 没有角色标，关键词判据照旧生效。
     from .execution_judge import _is_architecture_task
-    if _is_architecture_task(task) and len(chain) >= 2:
+    if _is_architecture_task(task) and len(chain) >= 2 and not _impl_role_veto(route_role):
         return _dispatch_committee(task, level, task_id, agents, chain, feedback,
                                    baseline_ref, cwd)
 
@@ -80,7 +114,7 @@ def dispatch(
         try:
             result = _run_executor(
                 executor_cls, agent_cfg, full_task, task_id, level,
-                baseline_ref=baseline_ref, cwd=cwd,
+                baseline_ref=baseline_ref, cwd=cwd, phase=phase,
             )
             if result and result.raw_output:
                 _model_breaker.record_success(agent_cfg.get("model", ""))
@@ -99,10 +133,10 @@ def dispatch(
 
 
 def _run_executor(executor_cls, agent_cfg: dict, full_task: str, task_id: str,
-                  level: str, baseline_ref: str = "", cwd: str = ""):
+                  level: str, baseline_ref: str = "", cwd: str = "", phase: str = ""):
     """构建 executor 并执行。"""
     skill_tools, skill_prompt, skills = _load_skills_for_agent(
-        level, agent_cfg.get("model", ""), task_desc=full_task)
+        level, agent_cfg.get("model", ""), task_desc=full_task, phase=phase)
     mcp_tools, mcp_executor = _load_mcp_for_agent()
     perm_checker = _make_permission_checker()
 
@@ -273,7 +307,8 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
         # 兜底；而告警日志显示它**从未在真机触发过**。现在的兜底是 v2 内部的
         # 「提取失败换模型重试」，那条比它强得多。QIDIAN_FUSION_V2 开关随之一并删除
         # （它的语义本来就是"回退旧流程"，没有旧流程了）。
-        fused = fuse_architecture_v2(task, list(outputs))
+        _rulings: dict = {}          # v2 把裁决记录写进来（见其 docstring 的 rulings 参数）
+        fused = fuse_architecture_v2(task, list(outputs), rulings=_rulings)
         if not fused:
             # 落到下面的通用合成：每条产出截断到 3000 字。架构方案 20k+ 字，
             # 这是**降级**不是等价替换，必须留痕。
@@ -290,6 +325,9 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
                 "outputs": [o for _, o in outputs],
                 "fused": fused,
                 "count": len(outputs),
+                # 谁定稿、辩了几轮、哪些分歧判给谁、哪些独有做法采纳/驳回。
+                # 没有它 GATE2 看到的只是一份"结果"，查不到融合过程。
+                "rulings": _rulings,
             }
             # 包装成 ExecutorResult 兼容格式
             class _FusionResult:

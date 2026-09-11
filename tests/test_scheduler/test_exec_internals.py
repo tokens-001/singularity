@@ -717,6 +717,67 @@ class TestArchitectureTrigger:
             assert _is_architecture_task(t) is False, f"实现任务误触发委员会: {t}"
 
 
+class TestCommitteeRoleVeto:
+    """角色否决：关键词命中但这是实现活儿 → 不进委员会（2026-09-11 外派评审）。
+
+    planner 拆出来的子任务描述是**从架构 JSON 的 title/desc 抄的**，天然继承
+    「技术栈 / 模块划分 / 数据模型」这些词。只按关键词判 → 实现任务也被送进
+    委员会，而委员会走 no_tools：跑几波拿回来的是一份架构 JSON，不是代码。
+    """
+
+    def _spy(self, monkeypatch):
+        """让 dispatch 走通，并记录委员会有没有被进。"""
+        from types import SimpleNamespace
+        from singularity.scheduler import _dispatch_exec as de
+        from singularity.scheduler import execution_judge as ej
+        monkeypatch.setattr(ej, "_is_architecture_task", lambda t: True)   # 关键词恒命中
+        monkeypatch.setattr(de, "pick_agent_fallback_chain",
+                            lambda *a, **k: [{"model": "m1", "type": "claude-cli"},
+                                             {"model": "m2", "type": "claude-cli"}])
+        entered = []
+        monkeypatch.setattr(de, "_dispatch_committee",
+                            lambda *a, **k: entered.append(1) or "COMMITTEE")
+        monkeypatch.setattr(de, "_run_executor",
+                            lambda *a, **k: SimpleNamespace(raw_output="SINGLE"))
+        return entered
+
+    def test_implementer_role_vetoes_committee(self, monkeypatch):
+        from singularity.scheduler import _dispatch_exec as de
+        entered = self._spy(monkeypatch)
+        res = de.dispatch("技术栈 模块划分", "any", "t", {},
+                          route_role="implementer")
+        assert entered == [], "实现角色不该进委员会"
+        assert res.executor_result.raw_output == "SINGLE"
+
+    def test_empty_role_still_allows_committee(self, monkeypatch):
+        """架构阶段走 _safe_dispatch 不带 route_role —— 不能把它一起关掉。"""
+        from singularity.scheduler import _dispatch_exec as de
+        entered = self._spy(monkeypatch)
+        assert de.dispatch("技术栈 模块划分", "any", "t", {}) == "COMMITTEE"
+        assert entered == [1]
+
+    def test_non_implementer_role_allows_committee(self, monkeypatch):
+        from singularity.scheduler import _dispatch_exec as de
+        entered = self._spy(monkeypatch)
+        assert de.dispatch("技术栈 模块划分", "any", "t", {},
+                           route_role="architect") == "COMMITTEE"
+        assert entered == [1]
+
+    def test_veto_helper_reads_phase_role(self, monkeypatch, tmp_path):
+        """不写死 "implementer"：用户改过执行角色时要跟着走。"""
+        import json
+        from singularity.scheduler import config as cfg
+        from singularity.scheduler import _dispatch_exec as de
+        monkeypatch.setattr(cfg, "QIDIAN_DIR", tmp_path)
+        assert de._impl_role_veto("") is False
+        assert de._impl_role_veto("architect") is False
+        assert de._impl_role_veto("implementer") is True
+        (tmp_path / "phases.json").write_text(
+            json.dumps({"executing": "builder"}), encoding="utf-8")
+        assert de._impl_role_veto("builder") is True, "改了执行角色后应跟着走"
+        assert de._impl_role_veto("implementer") is False
+
+
 class TestCommitteePerspective:
     """席位视角默认关（A/B 盲评：有视角 31 vs 无视角 32，略输）。"""
 

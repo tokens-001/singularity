@@ -497,18 +497,23 @@ def _j(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2)
 
 
-def _demote_bare_accept(items: list) -> list:
+def _demote_bare_accept(items: list, field: str = "verdict",
+                        accept_value: str = "accept") -> list:
     """空口 accept 不算让步 → 降级成 question（对话继续）。
 
     依据：Not Just RLHF（arXiv 2605.12991）—— 一句"大家都同意了"就能把模型从
     对翻到错 44~98%。让步必须说出被哪条论据说服，否则可能只是被共识信号带跑。
+
+    **两类条目共用这一条规则**：分歧票用 `verdict=accept`，独有做法用
+    `stance=adopt`（采纳门槛是"全体 adopt"）。以前只有前者过这道闸，后者一句
+    不带理由的"同意采纳"就能过关 —— 不对称会让独有做法比分歧点更容易被放行。
     """
     out = []
     for it in items or []:
-        if (isinstance(it, dict) and it.get("verdict") == "accept"
+        if (isinstance(it, dict) and it.get(field) == accept_value
                 and not str(it.get("reason") or "").strip()):
             witness.warn("execution_judge", "bare_accept"[:80])
-            it = {**it, "verdict": "question"}
+            it = {**it, field: "question"}
         out.append(it)
     return out
 
@@ -530,11 +535,16 @@ def _votes_into(store: dict, who: str, items: list, field: str) -> dict:
 
 
 def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
-                         extract_model: str = "") -> str:
+                         extract_model: str = "", rulings: dict = None) -> str:
     """新融合机制。plans: [(模型名, 方案全文)]。任一步失败返回 ""。
 
     参数叫 extract_model 不叫 judge_model —— v2 **没有裁判这个角色**，v1 才有。
     提取员兼职了"分辨共识与分歧"这件事，但它就是提取员。
+
+    `rulings`：可选出参。传一个 dict 进来，会把本场辩论的裁决记录写进去
+    （writer / rounds / resolved / adopted / rejected）。**多模型碰撞是这套系统
+    的核心价值主张，但它的证据原来只活在内存里** —— fusion_meta 只存了
+    models/outputs/count，GATE2 的人看到的是一份"凭什么长这样"无从查证的稿子。
     """
     if len(plans) < 2:
         return plans[0][1] if plans else ""
@@ -649,6 +659,10 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
     if _skip_debate and (disagreements or gains):
         witness.warn("execution_judge", "fusion_v2_debate_skipped"[:80])
 
+    # 只有共识、没有分歧也没有独有做法时下面的辩论块整段不跑 —— 那 `rounds`
+    # 就一次都没绑定过。裁决记录出参要用它，这里先给个默认（0 = 没辩过）。
+    rounds = 0
+
     if (disagreements or gains) and not _skip_debate:
         d_json, g_json = _j(disagreements), _j(gains)
         a1 = try_parse_json(_call_model(
@@ -656,7 +670,10 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
                               disagreements=d_json, unique_gains=g_json),
             writer, max_tokens=_FUSION_MAX_TOKENS) or "") or {}
         transcript.append(f"[{writer} 陈述]\n{_j(a1)}")
-        _votes_into(gain_votes, writer, a1.get("unique_gains"), "stance")
+        _votes_into(gain_votes, writer,
+                    _demote_bare_accept(a1.get("unique_gains"),
+                                        field="stance", accept_value="adopt"),
+                    "stance")
         rounds, prev = 1, {}
 
         while rounds < max_rounds:
@@ -676,7 +693,11 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
                 transcript.append(f"[{m} 回应]\n{_j(a)}")
                 cur.update(_votes_into(resp_votes, m,
                                        _demote_bare_accept(a.get("responses")), "verdict"))
-                _votes_into(gain_votes, m, a.get("unique_gains"), "stance")
+                # 独有做法同样过空口闸：不带理由的 "adopt" 不算 adopt。
+                _votes_into(gain_votes, m,
+                            _demote_bare_accept(a.get("unique_gains"),
+                                                field="stance", accept_value="adopt"),
+                            "stance")
             rounds += 1
             if cur == prev:
                 break                       # 复读机 → 再辩也没新信息，别烧 token
@@ -736,6 +757,17 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
             adopted.append(g)
     rejected = [g for g in gains if g not in adopted]
 
+    # 裁决记录出参（见 docstring）：落进 fusion_meta，GATE2 才查得到"凭什么长这样"。
+    # 只放结构化事实，不放 transcript 全文（那是几万字的模型原文）。
+    if rulings is not None:
+        rulings.update({
+            "writer": writer,
+            "rounds": rounds,
+            "resolved": resolved,
+            "adopted": adopted,
+            "rejected": rejected,
+        })
+
     # ── ④ 定稿 + 确认 ──
     final_prompt = _V2_FINALIZE.format(
         writer=writer, task=task, consensus=_j(consensus), resolved=_j(resolved),
@@ -765,7 +797,14 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
             if p is None or p.get("approved", True):
                 continue              # 拿不到结论按"没意见"处理，但上面已告警
             issues += [str(i) for i in (p.get("issues") or [])] or ["(未给出具体问题)"]
-        if not issues or attempt:
+        if not issues:
+            break
+        if attempt:
+            # 第二次确认**仍**有问题 —— 稿子照样交付，但不能静默。原写法是
+            # `if not issues or attempt: break`，第二轮的 issues 直接被丢掉，
+            # 既不告警也不记录：产物里"改完了"和"没改"长得一模一样。
+            witness.warn("execution_judge",
+                         f"fusion_confirm_unresolved:{len(issues)}"[:80])
             break
         draft = _call_model(
             final_prompt + "\n\n【上一稿被指出的问题，请修正】\n" + "\n".join(issues),

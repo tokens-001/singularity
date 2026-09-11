@@ -63,7 +63,7 @@ def _run_research(project: ProjectState, agents: dict) -> str:
     task_id = f"research_{project.id}"
     lineup, restrict = _phase_selection("researching", project)
     disp_result, err = _safe_dispatch(prompt, "any", task_id, agents, project,
-                                       lineup, restrict)
+                                       lineup, restrict, phase="researching")
     raw = disp_result.executor_result.raw_output if disp_result else ""
     if err:
         raw = f'{{"parse_error": true, "error": "{err}"}}'
@@ -116,7 +116,7 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     # 界面上配的"三家"会变成"池里所有模型各出一份初稿"。
     lineup, restrict = _phase_selection("planning", project)
     disp_result, err = _safe_dispatch(prompt, "any", task_id, agents, project,
-                                       lineup, restrict)
+                                       lineup, restrict, phase="planning")
     raw = disp_result.executor_result.raw_output if disp_result else ""
     if err:
         raw = f'{{"parse_error": true, "error": "{err}"}}'
@@ -125,7 +125,7 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     if arch.get("parse_error"):
         retry_prompt = prompt + "\n\n[格式错误] 上一次输出不是合法JSON。请用 ```json ... ``` 包裹输出。"
         disp_result2, err2 = _safe_dispatch(retry_prompt, "any", task_id + "_r", agents,
-                                             project, lineup, restrict)
+                                             project, lineup, restrict, phase="planning")
         raw2 = disp_result2.executor_result.raw_output if disp_result2 else ""
         if err2:
             raw2 += f'\n[LLM错误: {err2}]'

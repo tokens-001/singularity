@@ -370,6 +370,11 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     effective_task, level, task.id, agents,
                     feedback=feedback, baseline_ref=ctx.snapshot_ref, cwd=cwd,
                     project_lineup=exec_lineup, restrict_to_lineup=exec_restrict,
+                    # 角色标：planner 拆的子任务带"执行阶段角色"，dispatch 靠它
+                    # 把实现任务挡在委员会外面（描述里带架构词汇不等于要出架构）。
+                    route_role=route_role,
+                    # 阶段名：技能解析用它走"阶段级绑定"那条轴（换模型不丢技能）。
+                    phase="executing",
                 )
                 exec_result = disp_result.executor_result
 

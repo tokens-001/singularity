@@ -1829,13 +1829,30 @@ def api_skills_delete(name):
 
 @app.route("/api/agents/<level>/<model>/skills")
 def api_agent_skills(level, model):
-    data, code = _api_handler.agent_skill_list(level, model)
+    data, code = _api_handler.agent_skill_list(level, model, request.args.get("phase", ""))
     return jsonify(data), code
 
 @app.route("/api/agents/<level>/<model>/skills", methods=["PUT"])
 def api_agent_skills_update(level, model):
     body = request.get_json(silent=True) or {}
-    data, code = _api_handler.agent_skill_update(level, model, body.get("skill_names", []))
+    data, code = _api_handler.agent_skill_update(
+        level, model, body.get("skill_names", []), body.get("phase", ""))
+    return jsonify(data), code
+
+@app.route("/api/agent-skills/<level>", methods=["GET", "PUT"])
+def api_agent_skills_by_phase(level):
+    """**阶段级**技能绑定（跟岗位走，换模型不丢）。
+
+    路径里没有 model —— 这条轴按阶段存（researching/planning/executing/…），
+    解析时被模型级绑定覆盖（见 skill_loader.get_agent_skills 的两条轴）。
+    """
+    if request.method == "GET":
+        data, code = _api_handler.agent_skill_list(
+            level, "", request.args.get("phase", ""))
+    else:
+        body = request.get_json(silent=True) or {}
+        data, code = _api_handler.agent_skill_update(
+            level, "", body.get("skill_names", []), body.get("phase", ""))
     return jsonify(data), code
 
 # ═══════════════════════════════════════════════════════════
