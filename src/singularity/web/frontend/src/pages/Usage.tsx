@@ -131,7 +131,9 @@ export default function Usage() {
 
   return (
     <div className="page-wrap">
-      <div className="flex-center gap-8" style={{ marginBottom: 4 }}>
+      {/* 左右 10px 是跟 .card-row 对齐的 —— .page-wrap 自己没有横向内边距，
+          不补的话标题会顶着表格左边 10px 开外，整页左边缘是毛的 */}
+      <div className="flex-center gap-8" style={{ marginBottom: 4, padding: '0 10px' }}>
         <h2 className="fs-13 fw-600" style={{ color: 'var(--text-primary)' }}>用量</h2>
         <div className="flex-center gap-4">
           {RANGES.map(r => (
@@ -149,7 +151,7 @@ export default function Usage() {
 
       {/* 历史只留最近 400 天 —— 截断过的"全部"不加说明就是在撒谎 */}
       {h?.earliest && (
-        <div className="fs-10 text-muted" style={{ marginBottom: 12 }}>
+        <div className="fs-10 text-muted" style={{ marginBottom: 12, padding: '0 10px' }}>
           统计自 {h.earliest}（只保留最近 400 天）
         </div>
       )}
@@ -157,11 +159,11 @@ export default function Usage() {
       {loading ? (
         [0, 1, 2].map(i => <div key={i} className="skeleton skeleton-row" />)
       ) : models.length === 0 ? (
-        <div className="fs-11 text-muted" style={{ padding: '12px 0' }}>这段时间暂无用量⋯</div>
+        <div className="fs-11 text-muted" style={{ padding: '12px 10px' }}>这段时间暂无用量⋯</div>
       ) : (
         <>
           {trend.length > 1 && (
-            <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 16, padding: '0 10px' }}>
               <div className="fs-10 text-muted" style={{ marginBottom: 5 }}>
                 按天（最近 {trend.length} 天{trend.length < days.length ? `，共 ${days.length} 天` : ''}
                 {' · '}活跃 {totals.active_days ?? 0} 天{' · '}共 {totals.tasks ?? 0} 个任务）
@@ -196,7 +198,7 @@ export default function Usage() {
               hint: '配了但一次没跑过' },
           ].map(g => g.rows.length === 0 ? null : (
             <div key={g.title}>
-              <div className="fs-10 text-muted" style={{ padding: '10px 0 4px' }}>
+              <div className="fs-10 text-muted" style={{ padding: '10px 10px 4px' }}>
                 {g.title}（{g.rows.length}）{g.hint ? ` —— ${g.hint}` : ''}
               </div>
               {g.rows.map(renderRow)}
@@ -215,7 +217,7 @@ export default function Usage() {
           </div>
 
           {unpriced.length > 0 && (
-            <div className="fs-10" style={{ color: 'var(--accent-yellow)', marginTop: 6 }}>
+            <div className="fs-10" style={{ color: 'var(--accent-yellow)', marginTop: 6, padding: '0 10px' }}>
               ⚠ {unpriced.join('、')} 未配置单价，未计入上面的费用。
               <span role="button" tabIndex={0}
                 style={{ marginLeft: 6, textDecoration: 'underline', cursor: 'pointer' }}
@@ -225,7 +227,7 @@ export default function Usage() {
         </>
       )}
 
-      <div className="fs-10 text-muted" style={{ marginTop: 16, lineHeight: 1.7 }}>
+      <div className="fs-10 text-muted" style={{ marginTop: 16, lineHeight: 1.7, padding: '0 10px' }}>
         单价单位：USD / 百万 token（混合价 —— 系统只记总 token，不区分输入/输出）。
         费用按单价实时计算，补上单价后历史用量会一起变对。<br />
         已覆盖：任务执行、观察者对话、任务分类、架构融合、记忆整合、目标循环。
