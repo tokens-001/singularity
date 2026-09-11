@@ -32,7 +32,7 @@
 
 ### 验证
 
-- `pytest tests/test_scheduler/ -q`（797 个，~11s，全绿基线；全量 `pytest tests/` 是 806）
+- `pytest tests/test_scheduler/ -q`（~11s，全绿基线；全量 `pytest tests/` 是 823）
 - `.venv/bin/python tests/test_exec_run.py`（`_exec.run()` 退出路径，桩测试不碰真 API）
 - `.venv/bin/python tests/test_review_gate.py`（门禁能不能看到改动 —— 真 git + 真快照，不 mock；桩测试测不出这个时序）
 - `.venv/bin/python tests/smoke_test.py`（走 HTTP，40 项；需先 `.venv/bin/python -m singularity.web.app` 起后端）
