@@ -344,7 +344,7 @@ def _check_artifact(changed_files: list[str], root: Path, tests_result: dict = N
 
 
 # ═══════════════════════════════════════════════════════════════
-# 需求符合性校验 (按 production-flow.md: 测试阶段两层之一)
+# 需求符合性校验（审查层的一项，随 QA 报告一起出）
 # ═══════════════════════════════════════════════════════════════
 
 def _conformance_via_llm(trace: list, agent_output: str, changed_files: list[str]):
