@@ -214,7 +214,15 @@ def system2_extract() -> dict:
         task_type = attrs.get("route_type", "default")
         level = attrs.get("route_level", "any")
         key = f"{task_type}×{level}"
-        if status in ("done", "pass", "merged"):
+        # ⚠️ **两套词汇表**，都要认 —— 写入方不是一个：
+        #   · `_exec.py` 写 `TaskStatus.value` → done / failed / blocked / rolled_back
+        #   · `neijinglu`（trace 重建路径）写 `final_status` → **delivered** /
+        #     delivered_unverified / blocked / rolled_back
+        # 原来只认前者。后者里 **`delivered` 是正常的成功终态**，两个列表都不匹配
+        # → 成功样本被静默丢掉。实测（存量 19 条 trace 的真实分布：5 delivered /
+        # 10 blocked / 4 delivered_unverified）：报出 `failure_hotspot`、成功率 0.0，
+        # **而真实的 5 成 10 败 = 33%** —— 不只是缺一条洞察，是给出**反的**结论。
+        if status in ("done", "pass", "merged", "delivered", "delivered_unverified"):
             successes[key].append(tid)
         elif status in ("failed", "blocked"):
             failures[key].append(tid)

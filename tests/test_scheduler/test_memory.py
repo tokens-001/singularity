@@ -142,3 +142,61 @@ class TestEmbedModelActuallyLoads:
         monkeypatch.setattr(sentence_transformers, "SentenceTransformer", _boom)
         assert mc._get_embed_model() is None
         assert any("embed_model_load_failed" in str(w) for w in warns)
+
+
+class TestSystem2StatusVocabulary:
+    """`system2_extract` 必须认**两套**终态词汇 —— 写入方不是一个。
+
+    `_exec.py` 写 `TaskStatus.value`（done/failed/blocked/rolled_back），
+    而 `neijinglu`（trace 重建路径）写 `final_status`
+    （**delivered** / delivered_unverified / blocked / rolled_back）。
+    原来只认前者 → `delivered`（正常的成功终态）两个列表都不匹配
+    → **成功样本被静默丢掉**。
+
+    实测危害不止"少一条洞察"：拿存量 19 条 trace 的真实分布
+    （5 delivered / 10 blocked / 4 delivered_unverified）喂进去，
+    报出 `failure_hotspot`、success_rate 0.0 —— **真实是 9 成 10 败 = 47%**。
+    结论是**反的**。
+    """
+
+    def _extract(self, tmp_path, monkeypatch, statuses):
+        import singularity.scheduler._memory_lifecycle as ml
+        from singularity.scheduler._memory_core import EventNode
+        from singularity.scheduler import config
+        monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+        monkeypatch.setattr(ml, "_MEMORY_DIR", tmp_path / "memory")
+        # ⚠️ `_INSIGHTS_PATH` 是**模块级算好的**（`_MEMORY_DIR / "insights.json"`），
+        # 只改 `_MEMORY_DIR` 不跟着变 —— 不隔离的话测试会写进**真实**的
+        # `.qidian/memory/insights.json`（我这轮就写脏过一次），
+        # 而且第二轮会被 `_load_insights()` 的去重挡掉、表现成"莫名其妙不报洞察"。
+        # 同一个形状今天出现三次了（skill_loader / _INSIGHTS_PATH / …）。
+        monkeypatch.setattr(ml, "_INSIGHTS_PATH", tmp_path / "memory" / "insights.json")
+        (tmp_path / "memory").mkdir(parents=True, exist_ok=True)
+        nodes = {}
+        for i, st in enumerate(statuses):
+            nodes[f"t{i}"] = EventNode(task_id=f"t{i}", content="x", timestamp=float(i),
+                                       attrs={"status": st, "route_type": "default",
+                                              "route_level": "any"})
+        monkeypatch.setattr(ml, "_load_events", lambda: nodes)
+        return ml.system2_extract()
+
+    def test_delivered_counts_as_success(self, tmp_path, monkeypatch):
+        """9 成 10 败 = 47% → 正常区间，不该报任何洞察。
+
+        修之前 `delivered` 被丢掉 → 10 败 0 成 → 报 failure_hotspot（结论是反的）。
+        """
+        r = self._extract(tmp_path, monkeypatch,
+                          ["delivered"] * 5 + ["blocked"] * 10 + ["delivered_unverified"] * 4)
+        assert r.get("insights") == [], f"不该报洞察，实际 {r.get('insights')}"
+
+    def test_delivered_dominant_reports_success(self, tmp_path, monkeypatch):
+        """全是 delivered 且够多 → 应该报 high_success_pattern（不是什么都不报）。"""
+        r = self._extract(tmp_path, monkeypatch, ["delivered"] * 10 + ["blocked"] * 1)
+        types = [i["type"] for i in r.get("insights", [])]
+        assert types == ["high_success_pattern"], types
+
+    def test_exec_taskstatus_values_still_work(self, tmp_path, monkeypatch):
+        """另一套词汇（`_exec.py` 写的）不能因为这次改动失效。"""
+        r = self._extract(tmp_path, monkeypatch, ["done"] * 10 + ["failed"] * 1)
+        types = [i["type"] for i in r.get("insights", [])]
+        assert types == ["high_success_pattern"], types
