@@ -18,7 +18,9 @@ import { App as AntApp } from 'antd'
 const HISTORY = {
   range: 'all',
   earliest: '2026-08-13',
-  days: [],
+  // 标类型：不标的话 `[]` 推成 `never[]`，下面 spread 它再塞真数据就 TS2322
+  // —— 而 vitest 用 esbuild 剥类型不检查，测试照绿，只有 `tsc` 会红。
+  days: [] as any[],
   models: [
     { model: 'priced-model', tokens: 1_000_000, share: 0.3333, cost: 0.28, price: 0.28,
       used: true, provider: 'deepseek', provider_status: 'active' },
@@ -28,6 +30,16 @@ const HISTORY = {
   totals: { tokens: 3_000_000, tasks: 9, active_days: 1, cost: 0.28,
             unpriced_models: ['unpriced-model'] },
   activity: {},
+}
+
+/** 后端一直在算 `days`（按天历史），页面以前一个字不显示 —— 只看到"当前汇总"。 */
+const HISTORY_WITH_DAYS = {
+  ...HISTORY,
+  days: [
+    { date: '2026-09-09', tokens: 0,        tasks: 0, elapsed_s: 0 },
+    { date: '2026-09-10', tokens: 500_000,  tasks: 3, elapsed_s: 12.5 },
+    { date: '2026-09-11', tokens: 2_500_000, tasks: 6, elapsed_s: 40.0 },
+  ],
 }
 
 /** 一个模型都没配单价 —— 合计**没有数可报**，必须显示"未配置价格"而不是 $0.0000。 */
@@ -99,6 +111,19 @@ describe('用量页', () => {
     // 1,000,000 tokens × $0.28/百万token = $0.28
     expect(text).toContain('$0.2800')
     expect(text).toContain('$0.28/百万token')
+  })
+
+  it('按天历史要真的显示出来 —— 后端算了不能白算', async () => {
+    current = HISTORY_WITH_DAYS
+    const el = await render(<Usage />)
+    const text = el.textContent || ''
+    // 页面上得能看到"按天"和天数、活跃天数、任务数
+    expect(text).toContain('按天')
+    expect(text).toContain('最近 3 天')
+    expect(text).toContain('共 9 个任务')      // totals.tasks
+    // 每根柱子要有 tooltip，鼠标上去能看那天烧了多少
+    const bars = el.querySelectorAll('[title*="2026-09-11"]')
+    expect(bars.length).toBeGreaterThan(0)
   })
 
   it('占比照实显示', async () => {

@@ -65,6 +65,11 @@ export default function Usage() {
   const models: any[] = h?.models || []
   const totals = h?.totals || {}
   const unpriced: string[] = totals.unpriced_models || []
+  // 按天：后端一直在算 `days`（稠密补零、只保留最近 400 天），**页面以前一个字不显示** ——
+  // 于是你只能看到"当前汇总"，看不出哪天在烧、烧了多少。只画最近 30 天，400 根柱子是糊的。
+  const days: any[] = h?.days || []
+  const trend = days.slice(-30)
+  const peak = Math.max(1, ...trend.map((d: any) => d.tokens || 0))
   // 一个模型都没配单价时，合计**没有数可报** —— 这时必须显示"未配置价格"，
   // 而不是 totals.cost 那个 0（那会渲染成看着可信的 $0.0000）。
   const anyPriced = models.some((m: any) => !isUnpriced(m.cost))
@@ -100,6 +105,27 @@ export default function Usage() {
         <div className="fs-11 text-muted" style={{ padding: '12px 0' }}>这段时间暂无用量⋯</div>
       ) : (
         <>
+          {trend.length > 1 && (
+            <div style={{ marginBottom: 16 }}>
+              <div className="fs-10 text-muted" style={{ marginBottom: 5 }}>
+                按天（最近 {trend.length} 天{trend.length < days.length ? `，共 ${days.length} 天` : ''}
+                {' · '}活跃 {totals.active_days ?? 0} 天{' · '}共 {totals.tasks ?? 0} 个任务）
+              </div>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 1, height: 44 }}>
+                {trend.map((d: any) => (
+                  <div key={d.date}
+                    title={`${d.date}：${fmtTokens(d.tokens)} · ${d.tasks} 个任务`}
+                    style={{
+                      flex: 1, minWidth: 1, borderRadius: 1,
+                      // 空白天留 2px 灰底 —— 否则"那天没跑"和"那天不存在"分不出来
+                      height: `${Math.max(d.tokens ? 4 : 2, (d.tokens / peak) * 100)}%`,
+                      background: d.tokens ? 'var(--accent)' : 'var(--border)',
+                    }} />
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="card-row" style={COL as any}>
             <span className="fs-10 text-muted" style={COL.model}>模型</span>
             <span className="fs-10 text-muted" style={COL.num}>tokens</span>

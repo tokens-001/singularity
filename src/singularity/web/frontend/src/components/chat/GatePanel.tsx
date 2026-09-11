@@ -245,7 +245,48 @@ interface Props {
   onGate: (decision: 'approved' | 'rejected') => void
 }
 
-/** GATE 审核面板（含调研报告 / 架构方案）。memo：任务日志高频更新时不该重渲染这棵大树。 */
+const Bar = ({ items, tone = 'normal' }: { items: (string | null | undefined)[]; tone?: 'normal' | 'warn' }) => {
+  const shown = items.filter(Boolean) as string[]
+  if (!shown.length) return null
+  return (
+    <div style={{
+      display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center',
+      background: tone === 'warn' ? '#fffdf5' : '#ffffff',
+      border: `1px solid ${tone === 'warn' ? '#e8dcc0' : '#e5e2d8'}`,
+      borderRadius: 10, padding: '9px 14px', marginBottom: 8, fontSize: 12,
+      color: tone === 'warn' ? '#b45309' : '#141413', lineHeight: 1.5,
+    }}>
+      {shown.map((s, i) => <span key={i}>{s}</span>)}
+    </div>
+  )
+}
+
+/** 每道门的摘要 —— **放在折叠框外面**：不点开就能判断该不该过。
+ *  以前三道门长一个样（两个折叠框 + 两个按钮），要判断只能全部展开读一遍。 */
+const GateSummary = memo(function GateSummary({ gateNum, research, arch, projectIssues }: any) {
+  if (gateNum === '1' && research) {
+    const prods = (research.competitive_analysis?.products || []).length
+    const pits: string[] = research.pitfalls || []
+    return <Bar items={[
+      research.recommendation ? `推荐：${research.recommendation}` : '⚠ 调研没给推荐方案',
+      prods ? `${prods} 个竞品` : null,
+      pits.length ? `${pits.length} 个坑` : null,
+    ]} />
+  }
+  if (gateNum === '2' && arch) {
+    const high = (arch.risks || []).filter((r: any) => r.impact === 'high').length
+    const nTasks = (arch.tasks || []).length
+    return <Bar tone={nTasks ? 'normal' : 'warn'} items={[
+      nTasks ? `${nTasks} 个任务` : '⚠ 架构没拆出任务（下一步会卡住）',
+      `${(arch.modules || []).length} 个模块`,
+      `${(arch.constraints || []).length} 条约束`,
+      high ? `⚠ ${high} 条高风险` : null,
+    ]} />
+  }
+  return null
+})
+
+/** GATE 审核面板。memo：任务日志高频更新时不该重渲染这棵大树。 */
 export const GatePanel = memo(function GatePanel({ info, gateNum, gatePhase, acceptance, onGate }: Props) {
   const isGate3 = gateNum === '3'
   return (
@@ -259,10 +300,21 @@ export const GatePanel = memo(function GatePanel({ info, gateNum, gatePhase, acc
           style={{ background: '#b5b2a8', color: '#dc2626', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: 11, cursor: 'pointer' }}>↩ 打回</button>
       </div>
       <div style={{ maxWidth: 760, margin: '12px auto 0', textAlign: 'left' }}>
-        {/* GATE3 要审的是交付物，先给验收结论；下面那两坨是项目历史，排后面 */}
+        {/* 摘要和"该看的东西"都按门分 —— 三道门以前长一个样，且显示的内容不对：
+            GATE1 那时还没有架构却显示"架构方案"；GATE3 要审交付物，却把几周前的
+            调研/架构摆在最前面。 */}
+        <GateSummary gateNum={gateNum} research={info.research_report}
+                     arch={info.architecture} projectIssues={info.issues} />
         {isGate3 && <AcceptancePanel acceptance={acceptance} projectIssues={info.issues} />}
-        {info.research_report && <ResearchReport report={info.research_report} />}
-        {info.architecture && <ArchitectureDetails arch={info.architecture} />}
+        {/* GATE3 的正文是交付物（上面那块），旧文档降级为"项目背景"排在后面 */}
+        {gateNum !== '1' && info.research_report && <ResearchReport report={info.research_report} />}
+        {gateNum === '2' && info.architecture && <ArchitectureDetails arch={info.architecture} />}
+        {isGate3 && info.architecture && <ArchitectureDetails arch={info.architecture} />}
+        {isGate3 && (
+          <div style={{ fontSize: 11, color: '#6b6b68', marginTop: 4 }}>
+            下面两份是项目早期的调研与架构，仅供追溯，不是本次要审的交付物。
+          </div>
+        )}
       </div>
     </div>
   )
