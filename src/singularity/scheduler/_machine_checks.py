@@ -89,6 +89,70 @@ def coverage(constraints) -> tuple[int, int]:
     return ok, len(items)
 
 
+def requirement_coverage(constraints, requirements) -> dict:
+    """**需求侧**覆盖率：有多少条需求被至少一条约束覆盖到。
+
+    这是"信任上限 = 机械证据覆盖的验证面比例"里**真正的那个分子**。
+    和 `coverage()` 的区别就在分母：
+
+    · `coverage()` 的分母是**架构师自己列的约束** → 他少列一条，分母跟着缩，
+      比例纹丝不动 → 那叫"**自洽率**"，测的是他跟自己一不一致。
+    · 这里的分母是**需求侧的条目**（调研报告的 `scope_clarification.core`）→
+      **架构师漏掉一条需求，分母不缩、分子不给分** → 漏掉会以低分暴露。
+
+    `constraints[].covers` 由架构师给：需求条目的**索引**（0 起算，int）或**原文**
+    （str）。两种都认 —— 索引省 token，原文不怕重排。
+
+    返回 {"total","covered","uncovered","no_covers","hard_covered"}：
+      · covered      —— 被**至少一条**约束声明的需求条数
+      · hard_covered —— 其中被**可机器跑**的约束覆盖的（才算"机器在盯"）
+      · uncovered    —— 一条约束都没声明的需求（**最该看的一栏**）
+    """
+    reqs = list(requirements or [])
+    total = len(reqs)
+    hit: set[int] = set()
+    hard: set[int] = set()
+    no_covers = 0
+
+    def _idx(token) -> int | None:
+        if isinstance(token, bool):          # bool 是 int 的子类，先挡掉
+            return None
+        if isinstance(token, int):
+            return token if 0 <= token < total else None
+        if isinstance(token, str):
+            t = token.strip()
+            if t.isdigit():
+                i = int(t)
+                return i if 0 <= i < total else None
+            if t in reqs:                     # 原文精确匹配
+                return reqs.index(t)
+            for i, r in enumerate(reqs):      # 退一步：包含关系
+                if t and (t in str(r) or str(r) in t):
+                    return i
+        return None
+
+    for c in (constraints or []):
+        if not isinstance(c, dict):
+            continue
+        covers = c.get("covers")
+        if not isinstance(covers, list) or not covers:
+            no_covers += 1
+            continue
+        runnable = validate_check(c.get("check"))[0]
+        for token in covers:
+            i = _idx(token)
+            if i is not None:
+                hit.add(i)
+                if runnable:
+                    hard.add(i)
+
+    return {"total": total,
+            "covered": len(hit),
+            "hard_covered": len(hard),
+            "uncovered": sorted(set(range(total)) - hit),
+            "no_covers": no_covers}
+
+
 def describe(check) -> str:
     """给人看的一行。前端 / prompt 都用它，保证两边口径一致。"""
     parsed = parse_check(check)

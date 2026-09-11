@@ -118,6 +118,9 @@ def _run_preflight(project: ProjectState, agents: dict, stage: str) -> list[str]
     return problems
 
 
+_MAX_UNCOVERED_LISTED = 10   # issues 里最多列几条未被覆盖的需求（有上限就写出来）
+
+
 def _run_budget_gate(project: ProjectState, stage: str) -> str:
     """阶段开跑前查项目预算。**返回空串 = 放行**，非空 = 硬停原因。
 
@@ -374,6 +377,26 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
                 "type": "check_not_machine_runnable",
                 "detail": (f"架构产出 {_total} 条约束，**没有一条**是机器可跑的"
                            f"（全是散文）→ 信任上限这一轮等于 0，验收只能靠人读")})
+
+        # ── 「信任上限」**真正的那个数**：需求侧覆盖率 ──
+        # 分母取调研报告的 scope_clarification.core（**用户侧**条目），不是架构师
+        # 自己列的约束。拿约束当分母的话，他少列一条分母就跟着缩、比例纹丝不动
+        # —— 那是"自洽率"。拿需求当分母，**漏掉的需求才会以低分暴露**。
+        _reqs = (((project.research_report or {}).get("scope_clarification") or {})
+                 .get("core") or [])
+        _rc = mchk.requirement_coverage(arch.get("constraints") or [], _reqs)
+        project.add_lineage({"action": "requirement_coverage",
+                             "total": _rc["total"], "covered": _rc["covered"],
+                             "hard_covered": _rc["hard_covered"],
+                             "uncovered": _rc["uncovered"][:_MAX_UNCOVERED_LISTED]})
+        project.issues = [i for i in project.issues if i.get("type") != "requirement_uncovered"]
+        if _rc["total"] and _rc["uncovered"]:
+            _shown = _rc["uncovered"][:_MAX_UNCOVERED_LISTED]
+            project.issues.append({
+                "type": "requirement_uncovered",
+                "detail": (f"**{len(_rc['uncovered'])}/{_rc['total']} 条需求没有任何约束覆盖**"
+                           f"（索引 {_shown}）→ 这几条没人验。"
+                           f"其中被可机器跑的约束覆盖的只有 {_rc['hard_covered']} 条")})
     except Exception as e:
         from singularity.scheduler import witness
         witness.warn("planning", f"check_coverage:{type(e).__name__}:{e}"[:120])

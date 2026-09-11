@@ -72,6 +72,64 @@ class TestCoverage:
         assert mc.coverage(None) == (0, 0)
 
 
+class TestRequirementCoverage:
+    """**需求侧**覆盖率 —— 分母是需求（用户侧），不是架构师自己列的约束。
+
+    拿约束当分母的话，他少列一条分母就跟着缩、比例纹丝不动（"自洽率"）；
+    拿需求当分母，**漏掉的需求才会以低分暴露**。
+    """
+
+    REQS = ["统计行数/词数/字符数", "位置参数收文件路径", "--json 输出", "单文件 + pytest"]
+
+    def test_index_and_text_both_work(self):
+        cs = [
+            {"rule": "a", "check": "散文", "covers": [0]},              # 索引
+            {"rule": "b", "check": "散文", "covers": ["--json 输出"]},   # 原文
+        ]
+        r = mc.requirement_coverage(cs, self.REQS)
+        assert r["total"] == 4 and r["covered"] == 2
+        assert r["uncovered"] == [1, 3]
+
+    def test_hard_covered_only_counts_runnable_checks(self):
+        """只有**可机器跑**的约束覆盖到的，才算"机器在盯"。"""
+        cs = [
+            {"rule": "a", "check": "散文", "covers": [0]},                        # 覆盖但不可跑
+            {"rule": "b", "check": {"argv": ["pytest"], "expect_exit": 0}, "covers": [1]},
+        ]
+        r = mc.requirement_coverage(cs, self.REQS)
+        assert r["covered"] == 2, "两条都被声明覆盖了"
+        assert r["hard_covered"] == 1, "但只有一条是机器在盯"
+
+    def test_uncovered_is_the_high_signal(self):
+        """一条约束都没声明的需求 —— 最该看的一栏。"""
+        cs = [{"rule": "a", "check": "散文", "covers": [0]}]
+        r = mc.requirement_coverage(cs, self.REQS)
+        assert r["uncovered"] == [1, 2, 3]
+
+    def test_out_of_range_index_ignored(self):
+        cs = [{"rule": "a", "check": "散文", "covers": [0, 99, -1]}]
+        r = mc.requirement_coverage(cs, self.REQS)
+        assert r["covered"] == 1, "越界索引不许算命中"
+
+    def test_bool_is_not_an_index(self):
+        """`True` 是 int 的子类 —— 不挡掉的话会被当成索引 1。"""
+        cs = [{"rule": "a", "check": "散文", "covers": [True]}]
+        assert mc.requirement_coverage(cs, self.REQS)["covered"] == 0
+
+    def test_constraints_without_covers_are_counted(self):
+        cs = [{"rule": "a", "check": "散文"}, {"rule": "b", "check": "散文", "covers": [0]}]
+        r = mc.requirement_coverage(cs, self.REQS)
+        assert r["no_covers"] == 1
+
+    def test_no_requirements_is_zero_not_crash(self):
+        r = mc.requirement_coverage([{"rule": "a", "check": "x", "covers": [0]}], [])
+        assert r["total"] == 0 and r["covered"] == 0
+
+    def test_substring_match_still_works(self):
+        cs = [{"rule": "a", "check": "散文", "covers": ["--json"]}]
+        assert mc.requirement_coverage(cs, self.REQS)["covered"] == 1
+
+
 class TestCleanEnv:
     def test_strips_secrets_and_proxies(self, monkeypatch):
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-secret")

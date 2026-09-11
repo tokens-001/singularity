@@ -100,7 +100,8 @@ _ARCHITECT_CONTEXT = """项目需求: {description}
     {{
       "type": "security/performance/reliability/maintainability (必填)",
       "rule": "具体约束 (必填)",
-      "check": {{"argv": ["python3", "-m", "pytest", "-q"], "expect_exit": 0}}
+      "check": {{"argv": ["python3", "-m", "pytest", "-q"], "expect_exit": 0}},
+      "covers": [0, 2]
     }}
   ]
 }}
@@ -113,6 +114,10 @@ Schema 规则:
 - layer 标注任务所属层: frontend/backend/data/devops
 - depends_on 填其他任务的 id, 可为空数组
 - 每个任务改不相交的文件 (并行 merge 的前提)
+- constraints 每条带 `covers`：这条约束覆盖 **调研报告里 `scope_clarification.core`
+  的哪几条**（给 **0 起算的索引数组**，也可写原文）。**每一条 core 需求都必须被至少
+  一条约束覆盖到** —— 覆盖不了的需求就是**没人验的需求**，会被算成缺口暴露出来。
+  ⚠️ 别为了好看把 covers 乱填：填了就要真能验，填错等于伪造覆盖率。
 - constraints 每条必须可机器检查 (type+rule+check)。`check` 两种写法，二选一：
   · **能机器跑**的 → `{{"argv": ["解释器或程序", "参数", ...], "expect_exit": 0}}`
     必须是**数组**（平台按数组直接 exec，**不过 shell**）。argv[0] 只允许:
