@@ -59,7 +59,10 @@ def _make_route_stub(**kw):
 
 
 def _make_snap_stub():
-    return type("Snap", (), {"id": "s1", "ref": "abc", "created_at": 0.0})()
+    # method 必须给：RunContext 要把它透传给 _SnapProxy，而审查层靠它判这个 ref
+    # 能不能当 diff 基准（漏了它基准就恒空，审查五道检查一起短路 —— 2026-09-11 P0）。
+    return type("Snap", (), {"id": "s1", "ref": "abc", "created_at": 0.0,
+                             "method": "git"})()
 
 
 def _setup(monkeypatch, **overrides):

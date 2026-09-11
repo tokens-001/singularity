@@ -77,7 +77,11 @@ def _run(monkeypatch, tmp_path, *, project_id="", changed=("a.py", "b.py"),
         exec_result=SimpleNamespace(raw_output=""),
         task=SimpleNamespace(project_id=project_id, description="d"),
         agent_cfg={"model": "writer"}, level="any", cwd=str(tmp_path),
-        changed=list(changed))
+        changed=list(changed),
+        # 真实调用路径（_exec.py）一定带基准。不给的话会命中新增的
+        # "审查基准不可用 → fail-closed 全量跑"披露，让"全绿"用例失真 ——
+        # 那条披露本身是对的，只是不该在这个用例里出现。
+        base_ref="HEAD")
     return validation, quality
 
 

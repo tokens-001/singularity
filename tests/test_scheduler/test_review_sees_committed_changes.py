@@ -65,13 +65,19 @@ class TestTrivialJudgement:
         r, base = committed_change
         assert rv._is_trivial_change(["app.py"], str(r), base) is False
 
-    def test_without_base_it_looks_trivial(self, committed_change):
-        """对照：不带基准（旧行为）时看起来是 0 行 → 恒判 trivial。
+    def test_without_base_is_not_trivial(self, committed_change):
+        """不带基准 → **不判** trivial（fail-closed），不再假装"改得小"。
 
-        这条断言的是**缺陷本身**，修复前后都通过 —— 它是"为什么必须带基准"的证据。
+        这条原来断言的是 True —— 那是在记录缺陷本身：没基准就退回裸 `git diff`，
+        而改动在审查前已被 `commit_wt` 提交，裸 diff 恒 0 行 → 恒判 trivial →
+        测试/多模型审查/QA 验收/需求对账/安全审计五道一起静默跳过，而披露文案
+        还写着"改动被判为小改动"。
+
+        2026-09-11 外派评审后改成 fail-closed：拿不到基准就**不敢**下"小改动"
+        的结论，宁可多跑一遍贵的审查。期望值从 True 翻成 False。
         """
         r, _ = committed_change
-        assert rv._is_trivial_change(["app.py"], str(r)) is True
+        assert rv._is_trivial_change(["app.py"], str(r)) is False
 
     def test_really_small_change_still_trivial(self, tmp_path):
         """对照：真的是小改动时仍然跳过（别把这条优化也堵死）。"""

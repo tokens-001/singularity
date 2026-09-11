@@ -25,6 +25,9 @@ _pending_sse_events: list[dict] = []
 class RunContext:
     batch_id: str
     snapshot_ref: str
+    # 快照类型（"git" | "copy"）。**必须跟着 ref 一起传** —— 审查层用它判断
+    # 这个 ref 能不能当 diff 基准（validator._diff_base），丢了它基准就恒为空。
+    snapshot_method: str = "git"
     worktree_base: str = ""
     merge_queue: "Optional[MergeQueue]" = None
 
@@ -52,7 +55,14 @@ class BatchOutput:
 
 
 class _SnapProxy:
-    """轻量快照代理 — 给 validator 读文件用的只读视图。"""
-    def __init__(self, ref: str, worktree_path: str = ""):
+    """轻量快照代理 — 给 validator 读文件用的只读视图。
+
+    `method` 不是装饰：`validator._diff_base` 靠它判 ref 能不能当 diff 基准
+    （"copy" 型的 ref 是目录路径，不是 git ref）。**曾经漏了它** —— 于是
+    `getattr(snap, "method", "")` 恒为 ""，基准恒为空，审查层五道检查一起
+    短路（详见 _SnapProxy 的 method 参数注释与 test_snapshot_base_ref.py）。
+    """
+    def __init__(self, ref: str, worktree_path: str = "", method: str = "git"):
         self.ref = ref
         self.worktree_path = worktree_path
+        self.method = method

@@ -91,6 +91,40 @@ class TestDiffBase:
         assert val_mod._diff_base(snap)
 
 
+class TestSnapProxyCarriesMethod:
+    """P0 回归（2026-09-11 外派评审抓到）：`_SnapProxy` 曾经**没有 method 属性**。
+
+    执行路径上 `_exec.run` 构造的就是它（`snap = _SnapProxy(ctx.snapshot_ref)`），
+    一路传给 `validate()` 和 `run_post_exec_checks()`。而 `_diff_base` 的判据是
+    `getattr(snap, "method", "") == "git"` —— 对没有该属性的 proxy 恒为 ""，
+    于是**基准恒为空**：
+
+      - `validator._hard_diff_rules` 拿不到基准（有披露，但整个检查没跑）；
+      - `_review._is_trivial_change` 退回裸 `git diff` → worktree 里改动已被
+        `commit_wt` 提交 → 恒 0 行 → **单文件改动恒判 trivial** → 测试 / 多模型审查 /
+        QA 验收 / 需求对账 / 安全审计**五道一起短路**，且披露文案说的是"改动被判为小改动"，
+        跟真实原因（拿不到基准）不是一回事。
+
+    **这个文件里前面那几条 `class S: method, ref = ...` 的用例全都测不到它** ——
+    它们用的是鸭子类型假对象，恰好**有** method。真身漏字段，假对象测不出来。
+    """
+
+    def test_proxy_with_git_method_keeps_ref(self):
+        from singularity.scheduler._types import _SnapProxy
+        assert val_mod._diff_base(_SnapProxy("abc123")) == "abc123"
+
+    def test_proxy_copy_method_yields_no_base(self):
+        from singularity.scheduler._types import _SnapProxy
+        assert val_mod._diff_base(_SnapProxy("/tmp/d", method="copy")) == ""
+
+    def test_run_context_carries_snapshot_method(self):
+        """ctx 必须把 method 从真快照带过来 —— 丢了它就等于回到 P0。"""
+        from singularity.scheduler._types import RunContext
+        assert RunContext(batch_id="b", snapshot_ref="r").snapshot_method == "git"
+        assert RunContext(batch_id="b", snapshot_ref="r",
+                          snapshot_method="copy").snapshot_method == "copy"
+
+
 class TestHardDiffRules:
     def test_removed_auth_caught_with_snapshot_base(self, repo_with_removed_auth):
         """核心回归：用快照 ref 当基准，能抓到被删掉的 require_auth。"""

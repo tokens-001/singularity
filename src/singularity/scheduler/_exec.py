@@ -283,7 +283,9 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     qa_verdict = ""                    # worker 内 QA 门禁判定, 随 batch 带回给 finalize 复用
     qa_issues: list = []
 
-    snap = _SnapProxy(ctx.snapshot_ref)
+    # method 必须透传：审查层靠它判这个 ref 能不能当 diff 基准。漏了它，
+    # `_diff_base` 恒返回空串 → 审查五道检查一起短路（2026-09-11 外派评审抓到的 P0）。
+    snap = _SnapProxy(ctx.snapshot_ref, method=ctx.snapshot_method)
 
     # ── 执行前钩子 ──
     pre_warnings = val_mod.pre_execution_hook(task.description, snap)

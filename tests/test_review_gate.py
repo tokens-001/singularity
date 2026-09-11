@@ -9,9 +9,15 @@
 
 本测试**不 mock 任何东西**: 真 git 仓库、真 snapshot 模块、真 validator/_review
 代码路径, 并手动复刻"先提交, 再审查"的时序。对照断言:
-  · 裸 `git diff`          → 0 行   → trivial=True  (bug 复现)
-  · `git diff <快照ref>`   → 128 行 → trivial=False (修复生效)
+  · 裸 `git diff`          → 0 行   → 空 diff 看不见任何改动
+  · `git diff <快照ref>`   → 128 行 → trivial=False (基准生效)
+  · 无基准 (`base_ref=""`) → trivial=False (fail-closed, 不再假装"改得小")
   · `_hard_diff_rules`     → 新基准拦下被删的 require_auth, 旧基准 0 issue
+
+**2026-09-11 外派评审后补的一层**: 除了"基准接没接上", 还钉住"基准丢了会怎样"。
+曾经 `_SnapProxy` 漏了 `method` 属性 → `_diff_base` 恒返回空串 → 这条路径上
+**永远**走 `base_ref=""` 分支, 而它当时判 trivial=True → 五道检查全跳过, 且披露
+文案谎称"改动被判为小改动"。现在无基准一律 fail-closed。
 
 跑法:  .venv/bin/python tests/test_review_gate.py
 不依赖 pytest。退出码 0=全过, 1=有不符合预期项。
@@ -71,9 +77,9 @@ def main() -> int:
     print(f"输出行数: {len(r2.stdout.splitlines())}")
 
     # ③ 走**真实**代码路径判定
-    old_trivial = _is_trivial_change(["service.py"], str(repo), base_ref="")
+    no_base_trivial = _is_trivial_change(["service.py"], str(repo), base_ref="")
     new_trivial = _is_trivial_change(["service.py"], str(repo), base_ref=base_ref)
-    print(f"\n_is_trivial_change(base_ref='')   -> {old_trivial}")
+    print(f"\n_is_trivial_change(base_ref='')   -> {no_base_trivial}")
     print(f"_is_trivial_change(base_ref=快照) -> {new_trivial}")
 
     # ④ 真硬规则检查：diff 类检查必须真的执行
@@ -87,10 +93,10 @@ def main() -> int:
 
     print("\n--- 判定 ---")
     ok = True
-    if old_trivial is not True:
-        print("✗ 预期旧基准判 trivial=True（复现 bug），实际 %s" % old_trivial); ok = False
+    if no_base_trivial is not False:
+        print("✗ 预期无基准时 fail-closed 判 trivial=False，实际 %s" % no_base_trivial); ok = False
     else:
-        print("✓ 旧基准: trivial=True —— 单文件改动被当'微不足道'，审查整层跳过（bug 复现）")
+        print("✓ 无基准: trivial=False —— 拿不到基准就不敢说'改得小'，审查照跑（fail-closed）")
     if new_trivial is not False:
         print("✗ 预期新基准判 trivial=False，实际 %s" % new_trivial); ok = False
     else:

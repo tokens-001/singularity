@@ -120,8 +120,14 @@ def _diff_cmd(base_ref: str, *paths) -> list[str]:
 
 
 def _is_trivial_change(changed: list[str], cwd: str, base_ref: str = "") -> bool:
-    """单文件且 diff < 50 行 → 跳过审查。"""
-    if len(changed) != 1:
+    """单文件且 diff < 50 行 → 跳过审查。
+
+    **取不到基准时一律不判 trivial**（fail-closed）。没有基准就退回裸 `git diff`，
+    而 worktree 里改动在审查前已被 `commit_wt` 提交 → 恒 0 行 → 恒判"小改动"，
+    于是五道检查全被跳过，**而且披露文案还会说"改动被判为小改动"** —— 把
+    "没能判断"伪装成"判断了、确实很小"。宁可多跑一遍贵的审查，不能假装看过。
+    """
+    if len(changed) != 1 or not base_ref:
         return False
     try:
         r = subprocess.run(_diff_cmd(base_ref, changed[0]),
@@ -226,14 +232,17 @@ def run_post_exec_checks(*, validation, quality, exec_result,
         except Exception:
             pass
 
-    # 本次改动是否被判为"小改动"（单文件 + diff<50 行）。
-    # ⚠️ 2026-09-11 审计 P0-1 已知缺陷：worktree 里改动在 validate **之前**已被 commit_wt
-    # 提交，_is_trivial_change 里的裸 `git diff` 恒为 0 行 → **单文件改动恒判 trivial**。
-    # 本次只做披露、不改判据（多模型审查开销大，是否全开另行决定）。
+    # 本次改动是否被判为"小改动"（单文件 + diff<50 行，且**必须**有基准可比）。
+    # 基准可用时它是真判据；基准不可用时 `_is_trivial_change` 返回 False（fail-closed），
+    # 下面的检查照跑 —— 曾经这里没有基准也判 trivial，五道检查全被静默跳过。
     _trivial = bool(changed) and _is_trivial_change(changed, cwd, base_ref)
     if validation.action == "pass" and changed and _trivial:
         validation.unverified.append(
             "审查已跳过: 改动被判为小改动(单文件, diff<50行) — 未跑项目测试/未多模型审查")
+    elif validation.action == "pass" and changed and not base_ref:
+        # 如实说：不是"改得小"，是"拿不到基准所以没法判小"。两者在产物里必须可区分。
+        validation.unverified.append(
+            "审查基准不可用(快照非 git 型或缺失) — 已按 fail-closed 全量跑审查，未经 trivial 裁剪")
 
     # 1) run project tests (S2: 带超时包装)
     # 小改动(单文件<50行)跳过项目全量测试：独立小任务(如写 hello.py)跟项目测试套件无关，跑了会误判

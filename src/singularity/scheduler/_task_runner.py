@@ -186,7 +186,8 @@ class TaskRunner:
         # 快照 (修复 #1: 项目任务快照项目 repo)
         from . import project as proj_mod
         snap = snap_mod.take(task.id, repo_root=proj_mod.repo_root_for(task))
-        ctx = RunContext(batch_id=task.id, snapshot_ref=snap.ref, merge_queue=merge_queue)
+        ctx = RunContext(batch_id=task.id, snapshot_ref=snap.ref,
+                         snapshot_method=snap.method, merge_queue=merge_queue)
         # ── 代码上下文注入 (codegraph) ──
         if pre.code_context:
             task.description = f"{task.description}\n\n[代码结构上下文]\n{pre.code_context}"
