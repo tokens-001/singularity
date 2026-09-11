@@ -75,7 +75,7 @@ def _bucket(rows: list["UsageRecord"]) -> dict:
     谁要往这儿加"平均"、"最大间隔"这类非单调字段，max 合并立刻就是错的。
     """
     b = {"tokens": 0, "tasks": 0, "elapsed_s": 0.0, "max_elapsed_s": 0.0,
-         "models": {}, "hours": [0] * _HOURS}
+         "models": {}, "hours": [0] * _HOURS, "projects": {}}
     for r in rows:
         b["tokens"] += r.tokens
         b["elapsed_s"] += r.elapsed_s
@@ -83,6 +83,11 @@ def _bucket(rows: list["UsageRecord"]) -> dict:
         m = r.model or "_unknown"
         b["models"][m] = b["models"].get(m, 0) + r.tokens
         b["hours"][time.localtime(r.ts).tm_hour] += r.tokens
+        # 项目 × 模型 两级：只有模型不够 —— 算钱要按模型查单价。
+        # 两级都对行集合单调不减，所以和 "models" 一样能参与 max 合并（见 _bump）。
+        pid = r.project_id or "_unknown"
+        pm = b["projects"].setdefault(pid, {})
+        pm[m] = pm.get(m, 0) + r.tokens
         # 数**记录条数**，不是去重任务数 —— 与 per_model_usage / per_project_usage
         # 现有的 `+= 1` 口径保持一致。两边口径不同会让同一页上出现两个不一样的"任务数"，
         # 看着就像 bug。（已知同一个 task 偶有两条记录，那是另一个问题。）
@@ -105,6 +110,7 @@ def _bump(old: dict | None, new: dict) -> dict:
         "max_elapsed_s": max(old.get("max_elapsed_s", 0.0), new["max_elapsed_s"]),
         "models": {},
         "hours": hours,
+        "projects": {},
     }
     for k, v in (old.get("models") or {}).items():
         out["models"][k] = v
@@ -112,7 +118,17 @@ def _bump(old: dict | None, new: dict) -> dict:
         out["models"][k] = max(out["models"].get(k, 0), v)
     for i, v in enumerate(new["hours"]):
         out["hours"][i] = max(out["hours"][i], v)
+    # projects：项目 → {模型: tokens}，逐 (项目, 模型) 取 max。
+    # old 里没有这个键（老 usage_daily.json）→ 当空处理，不会把历史算丢（max 语义）。
+    for pid, m2t in (old.get("projects") or {}).items():
+        out["projects"][pid] = dict(m2t)
+    for pid, m2t in (new.get("projects") or {}).items():
+        cur = out["projects"].setdefault(pid, {})
+        for m, v in m2t.items():
+            cur[m] = max(cur.get(m, 0), v)
     out["models"] = {k: v for k, v in sorted(out["models"].items())}
+    out["projects"] = {p: {m: v for m, v in sorted(d.items())}
+                       for p, d in sorted(out["projects"].items())}
     return out
 
 
@@ -303,6 +319,23 @@ class TokenBudget:
             return msg
         return ""
 
+    def project_spend_total(self, project_id: str) -> float:
+        """某项目**累计**花费（跨天）。只统计配了单价的模型 → 是个**下限**。
+
+        为什么不能拿 `per_project_usage` 的那个数当项目预算用：**它只算今天**
+        （`_today_records`）。跨天的项目永远到不了线 —— 2026-09-12 实测，
+        项目预算 `token_budget_total` 从来没被任何地方读过，根子之一就在这儿：
+        分母（预算）有，分子（累计花费）根本不存在。
+        """
+        prices = model_prices.load_prices()
+        cost = 0.0
+        for day in self._rollup().values():
+            for m, tk in ((day.get("projects") or {}).get(project_id) or {}).items():
+                c = _row_cost(tk, m, prices)
+                if c is not None:
+                    cost += c
+        return round(cost, 6)
+
     def per_project_usage(self) -> list[dict]:
         """按项目汇总今日 token 用量。cost 只统计配了单价的模型（下限）。"""
         prices = model_prices.load_prices()
@@ -401,6 +434,27 @@ def record_system_tokens(model: str, level: str, tokens: int,
     """
     if tokens > 0:
         _budget.record("", "", "", model, level, tokens, elapsed_s=elapsed_s)
+
+
+def project_budget_state(project_id: str, budget: float) -> tuple[str, float, str]:
+    """项目预算档位 → (level, 累计花费, 说明)。level ∈ {"", "warn", "stop"}。
+
+    80% 告警、100% 停 —— 这是分析里 P4 那条，也是 `token_budget_total` 的**第一个**
+    真正的消费点（此前全仓只在 API/CLI 显示层被读过）。
+
+    ⚠️ 花费是**下限**：没配单价的模型不计入（`unpriced_models` 非空时更明显）。
+    """
+    if not budget or budget <= 0:
+        return "", 0.0, ""
+    spent = _budget.project_spend_total(project_id)
+    pct = spent / budget
+    if pct >= 1.0:
+        return "stop", spent, (f"项目预算已用满 {pct*100:.0f}%"
+                               f"（${spent:.4f}/${budget:.2f}）—— 已停新阶段，等人工放行")
+    if pct >= 0.8:
+        return "warn", spent, (f"项目预算已用 {pct*100:.0f}%"
+                               f"（${spent:.4f}/${budget:.2f}）")
+    return "", spent, ""
 
 
 def get_usage_stats() -> dict:

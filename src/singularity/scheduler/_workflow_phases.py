@@ -26,12 +26,146 @@ def _phase_selection(phase: str, project: ProjectState):
     return phase_models.selection(phase, project)
 
 
+def _index_phase_memory(project: ProjectState, prefix: str, stage: str, raw: str) -> None:
+    """把一个阶段的产出记进 MAGMA 记忆（"按阶段切，不按任务切"）。
+
+    以前只有**任务**进记忆（`_exec.py`），阶段产出只落盘不索引 ——
+    于是"上次调研/架构这步是怎么想的"永远查不到，只能查到"上次那个任务"。
+    见 docs/经验分层-STAIR借鉴-20260912.md。
+
+    force=True 是必须的：阶段条目的描述都是同一条项目描述，
+    彼此的 Jaccard 极高，不去重的话会被上一阶段的条目直接挤掉、静默不落盘。
+
+    记忆挂了不该阻塞阶段 → 兜住异常；但**必须留痕**。
+    """
+    try:
+        from . import memory as mem_mod
+        mem_mod.index_task(
+            task_id=f"{prefix}_{project.id}",
+            description=f"[{stage}] {project.description}",
+            created_at=getattr(project, "created_at", None),
+            stage=stage,
+            trajectory=raw or "",
+            force=True,
+        )
+    except Exception as e:
+        from singularity.scheduler import witness
+        witness.warn("memory", f"index_phase:{stage}:{type(e).__name__}:{e}"[:120])
+
+
+def _probe_url(url: str, timeout: float = 5.0) -> bool:
+    """能拿到**任何** HTTP 响应就算通（404/405 也算）—— 只有连不上/超时才算断。"""
+    import httpx
+    try:
+        httpx.head(url, timeout=timeout, follow_redirects=True)
+        return True
+    except Exception:
+        return False
+
+
+def preflight_external(agents: dict) -> list[str]:
+    """跑阶段前探一次外部依赖，探不通就**明着说** —— 别挂在 except 后面装死。
+
+    2026-09-12 立（防御模式 §57）：`sentence_transformers` 加载嵌入模型时会联网查
+    huggingface.co 的 metadata，域名不通就退避重试**挂死**；而**挂起不是异常，
+    `except` 拦不住**，整条调研阶段无声停摆，外面看只剩"启动了没反应"。
+
+    这里**不阻断阶段**（一次网络抖动不该卡死整个项目），只把"哪根线断了"变成
+    一条能查到的记录。真正的兜底在 `_memory_core._get_embed_model`（`local_files_only`）。
+    """
+    problems: list[str] = []
+
+    # ① 嵌入模型：能不能在**不联网**的前提下加载出来
+    try:
+        from . import _memory_core as _mc
+        if _mc._get_embed_model() is None:
+            problems.append(
+                "嵌入模型不可用（本地无缓存或加载失败）→ 记忆语义检索会退化成空")
+    except Exception as e:
+        problems.append(f"嵌入模型探测异常: {type(e).__name__}: {e}")
+
+    # ② 模型 API：base_url 连得上吗（同一家多个别名只探一次）
+    try:
+        from . import dispatcher as disp_mod
+        bases = {a.get("base_url", "") for a in disp_mod._all_agents_list(agents or {})}
+        for base in sorted(b for b in bases if b):
+            if not _probe_url(base):
+                problems.append(f"模型 API 不可达: {base}")
+    except Exception as e:
+        problems.append(f"模型 API 探测异常: {type(e).__name__}: {e}")
+
+    return problems
+
+
+def _run_preflight(project: ProjectState, agents: dict, stage: str) -> list[str]:
+    """探一遍外部依赖，把结果记进项目（issues + lineage），返回问题列表。"""
+    try:
+        problems = preflight_external(agents)
+    except Exception as e:  # 探测本身不该炸掉阶段
+        problems = [f"preflight 自身异常: {type(e).__name__}: {e}"]
+
+    project.issues = [i for i in project.issues if i.get("type") != "preflight"]
+    if problems:
+        for p in problems:
+            project.issues.append({"type": "preflight", "detail": f"[{stage}] {p}"})
+        try:
+            from singularity.scheduler import witness
+            witness.warn("preflight", f"{stage}:{problems[0]}"[:160])
+        except Exception:
+            pass
+    project.add_lineage({"action": "preflight", "stage": stage,
+                         "problems": len(problems)})
+    return problems
+
+
+def _run_budget_gate(project: ProjectState, stage: str) -> str:
+    """阶段开跑前查项目预算。**返回空串 = 放行**，非空 = 硬停原因。
+
+    `token_budget_total` 的第一个真实消费点 —— 此前全仓只在 API/CLI **显示层**
+    被读过（防御模式 §28 同族：声明了没兑现）。80% 只记告警不拦，100% 停下等人工。
+    ⚠️ 花费是**下限**（没配单价的模型不计入）。
+
+    ⚠️ 调用方**必须**像 `_should_skip` 那样把 phase 推到门再返回：
+    `run_phase` 对 RESEARCHING/PLANNING 是 `continue` 死循环，只 return 不改 phase 会转不出来。
+    """
+    try:
+        from singularity.scheduler._token_budget import project_budget_state
+        level, spent, msg = project_budget_state(
+            project.id, getattr(project, "token_budget_total", 0) or 0)
+    except Exception as e:
+        from singularity.scheduler import witness
+        witness.warn("budget", f"{type(e).__name__}:{e}"[:120])
+        return ""          # 探不了就不拦 —— 预算探测不该变成新的卡点
+
+    project.issues = [i for i in project.issues if i.get("type") != "budget"]
+    if not msg:
+        return ""
+    project.issues.append({"type": "budget", "detail": f"[{stage}] {msg}"})
+    try:
+        from singularity.scheduler import witness
+        witness.warn("budget", f"{stage}:{msg}"[:160])
+    except Exception:
+        pass
+    project.add_lineage({"action": "budget", "stage": stage,
+                         "level": level, "spent": spent})
+    return msg if level == "stop" else ""
+
+
 def _run_research(project: ProjectState, agents: dict) -> str:
     """调 Researcher(廉价层) 搜集可借鉴方案 → GATE1。"""
     if _should_skip(project, "gate1"):
         project.set_phase(Phase.GATE1, "调研已跳过 → GATE1")
         save(project)
         return "调研已跳过"
+
+    _stop = _run_budget_gate(project, "researching")
+    if _stop:
+        # 走和 _should_skip 同一条路：**必须改 phase**，否则 run_phase 原地死循环
+        project.set_phase(Phase.GATE1, f"预算硬停 → GATE1 等人工：{_stop[:60]}")
+        save(project)
+        return f"预算硬停（未调研）: {_stop}"
+
+    _run_preflight(project, agents, "researching")
 
     # 角色定位/六维度清单/边界在 roles.toml [surveyor]（页面上可改）；
     # 这里只填动态上下文 + 输出契约
@@ -49,13 +183,21 @@ def _run_research(project: ProjectState, agents: dict) -> str:
         from . import pre_search as pre_mod
         from . import router as router_mod
         route = router_mod.route(project.description)
-        pre = pre_mod.pre_search(project.description, route, use_hybrid=True)
+        # 只有"这事之前栽过"才值得花几倍 token 去读全文：
+        # 项目有返工/失败记录 → 走 deep，把历史任务的实际产出也取回来。
+        # 没栽过就只用标题（depth 1，与改动前行为一致）。
+        _deep = bool(getattr(project, "fix_round", 0) or getattr(project, "review_failures", 0))
+        pre = pre_mod.pre_search(project.description, route, use_hybrid=True, deep=_deep)
         if pre.memory and pre.memory.narrative:
-            items = pre.memory.narrative[:5]
-            mem_ctx = "已知相关历史任务:\n" + "\n".join(
-                f"- [{it.get('task_id','')[-8:]}] {it.get('description','')[:80]}"
-                for it in items
-            )
+            lines = []
+            for it in pre.memory.narrative[:5]:
+                line = f"- [{it.get('task_id','')[-8:]}] {it.get('description','')[:80]}"
+                full = it.get("full_text")
+                if full:
+                    mark = "（已截断）" if it.get("full_text_truncated") else ""
+                    line += f"\n  ↳ 上次实际产出{mark}：\n{full}"
+                lines.append(line)
+            mem_ctx = "已知相关历史任务:\n" + "\n".join(lines)
             prompt = f"[背景记忆]\n{mem_ctx}\n\n{prompt}"
     except Exception:
         pass
@@ -76,6 +218,7 @@ def _run_research(project: ProjectState, agents: dict) -> str:
     project.research_report = report
     # ponytail: 保存结构化调研报告供后续阶段复用
     _save_phase_output(project.id, "research.md", raw)
+    _index_phase_memory(project, "research", "researching", raw)
     project.add_lineage({"action": "research_complete",
                          "agent": disp_result.agent_cfg.get("model","?") if disp_result else "?"})
     project.set_phase(Phase.GATE1, "调研完成 → GATE1 等人工")
@@ -93,6 +236,14 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
         project.set_phase(Phase.GATE2, "规划已跳过 → GATE2")
         save(project)
         return "规划已跳过"
+
+    _stop = _run_budget_gate(project, "planning")
+    if _stop:
+        project.set_phase(Phase.GATE2, f"预算硬停 → GATE2 等人工：{_stop[:60]}")
+        save(project)
+        return f"预算硬停（未规划）: {_stop}"
+
+    _run_preflight(project, agents, "planning")
 
     # 阶段上下文: 优先从磁盘读 research.md
     research_md = _read_phase_output(project.id, "research.md")
@@ -209,6 +360,7 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
                          "traceability_items": len(traceability),
                          "validation_issues": len(arch_issues),
                          "blockers": len(blockers)})
+    _index_phase_memory(project, "architect", "planning", raw)
 
     # D4 拆解器: unified_architecture → 结构化可执行 task 列表
     try:

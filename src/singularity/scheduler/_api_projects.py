@@ -155,6 +155,21 @@ def project_gate_confirm(project_id: str, gate: str = "", decision: str = "",
                     "error": "架构校验未通过，不能放行。"
                              + (str(bad_arch.get("detail", "")) if bad_arch else "")
                              + "  请先打回（rejected）让它重新规划。"}, 409
+        # ── 批准后要不要**顺手启动**下一阶段？ ──
+        # 分两档，判据是"那个阶段归谁推"：
+        #   · planning  —— **只有 run_phase 能推**：调度循环只管 EXECUTING/INTEGRATING/
+        #     DELIVERING，而前端根本没有 run-phase 调用者（`api.runPhase` 定义了没人用）。
+        #     不推的话项目批准完就永远停在那儿：2026-09-12 实测空等 14 分钟，
+        #     界面上只显示"架构设计中"，看不出是没人点火。
+        #   · executing / integrating / delivering —— 归调度循环，**不能在这儿推**，
+        #     推了就是两套驱动抢着写同一个 phase。
+        if next_p == Phase.PLANNING:
+            from . import workflow as wf_mod
+            from . import dispatcher as disp_mod
+            _start_background(project_id, "planning", wf_mod.run_phase,
+                              proj, disp_mod.load_agents())
+            return {"ok": True, "gate": gate, "decision": "approved",
+                    "next_phase": next_p.value, "started_phase": "planning"}, 200
         return {"ok": True, "gate": gate, "decision": "approved",
                 "next_phase": next_p.value}, 200
     elif decision == "rejected":
@@ -186,6 +201,20 @@ def project_run_phase(project_id: str, phase_name: str = "",
     if not hasattr(proj, 'phase') or proj.phase is None:
         return {"error": "项目未设定阶段"}, 400
     phase = phase_name or proj.phase.value
+
+    # run_phase 对这几档只会"等人"就 break（`workflow.run_phase` 的 TEMPLATE / GATE 分支），
+    # 后台线程跑了等于没跑 —— 而返回 `{"ok":true,"started":true}` 会让调用方以为开始了。
+    # 防御模式 §28：**返回 200 不等于动了手**。（前端没调这个接口，改它不影响 UI。）
+    _WAITING = {
+        "template": "template 阶段不自推 —— 先填好需求，用 POST /api/projects/<id>/start 立项",
+        "gate1": "gate1 是人工门，用 POST /api/projects/<id>/gate-confirm 批",
+        "gate2": "gate2 是人工门，用 POST /api/projects/<id>/gate-confirm 批",
+        "gate3": "gate3 是人工门，用 POST /api/projects/<id>/gate-confirm 批",
+    }
+    if phase in _WAITING:
+        return {"ok": False, "phase": phase, "started": False,
+                "error": _WAITING[phase]}, 409
+
     agents = disp_mod.load_agents()
     if not _start_background(project_id, phase, wf_mod.run_phase, proj, agents):
         return {"ok": True, "phase": phase, "running": True,

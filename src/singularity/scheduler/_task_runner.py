@@ -170,7 +170,9 @@ class TaskRunner:
         else:
             route = router_mod.route(task.description)
         # 预检
-        pre = pre_mod.pre_search(task.description, route)
+        # 重试过（retry_count>0）才值得花 token 读历史全文 —— 跟调研阶段
+        # "项目栽过才走 deep" 是同一条规则，只是信号换成任务自己的重试次数。
+        pre = pre_mod.pre_search(task.description, route, deep=task.retry_count > 0)
         pre_mod.apply_escalation(route, pre)
         # 模型排名
         project_phase = None

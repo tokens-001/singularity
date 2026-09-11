@@ -641,12 +641,17 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
     # ── MAGMA 多图记忆索引 + 状态更新 ──
     try:
         changed_files = disp_result.executor_result.changed_files if disp_result else []
+        # raw_output = 这次实际产出的全文，一并存进记忆供 depth>=3 展开读。
+        # 以前只存 task.description，于是"上次到底怎么做的"从来没进过记忆
+        # （见 docs/经验分层-STAIR借鉴-20260912.md）。
+        _traj = (disp_result.executor_result.raw_output or "") if disp_result and disp_result.executor_result else ""
         mem_mod.index_task(
             task_id=task.id,
             description=task.description,
             changed_files=changed_files,
             depends_on=task.depends_on,
             created_at=task.created_at,
+            trajectory=_traj,
         )
         # 补充事件属性: 终态 + route info
         # route_level 取自 task 而非 route —— RouteResult 没有 level 字段（两档制后

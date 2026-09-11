@@ -234,6 +234,7 @@ def traverse(
             results.append({
                 "task_id": task_id,
                 "description": node.content[:120],
+                "trajectory": node.trajectory,
                 "score": round(score, 4),
                 "path": [],
                 "graph_sources": ["anchor"] if is_anchor else [],
@@ -247,6 +248,7 @@ def traverse(
             results.append({
                 "task_id": task_id,
                 "description": node.content[:120],
+                "trajectory": node.trajectory,
                 "score": round(score, 4),
                 "path": [(src[-8:] if len(src) >= 8 else src, et) for src, et in path],
                 "graph_sources": sources,
@@ -266,8 +268,18 @@ def traverse(
 # Stage 4: Narrative Synthesis (Graph Linearization)
 # ═══════════════════════════════════════════════════════════
 
-def synthesize(results: list[dict], query: str) -> dict:
+# depth>=3 的「全文」档：只展开排名最前的这几条，每条截到这个长度。
+# 全展开会把这个函数变成"每次查询塞几万字" —— 上面那个 600 字预算是故意的。
+EXPAND_TOP = 2
+EXPAND_CHARS = 3000
+
+
+def synthesize(results: list[dict], query: str, include_full: bool = False) -> dict:
     """Stage 4: 叙事合成 — 拓扑排序 + 溯源 + 显著性预算。
+
+    include_full: True 时（对应 query(max_depth>=3)），对排名最前的
+                  EXPAND_TOP 条附上 `full_text`（该任务的实际产出）。
+                  标题照旧留在 description —— 检索键不变，只是多挂了细节。
 
     返回:
       {
@@ -313,6 +325,22 @@ def synthesize(results: list[dict], query: str) -> dict:
         else:
             narrative.append(r)
             total_chars += len(desc)
+
+    # ── 「全文」档：只给排名最前的几条补上实际产出 ──
+    # 不在这条路径上压缩/抽象（那要离线花大钱，见 docs/经验分层-STAIR借鉴-20260912.md），
+    # 只做"检索用标题、展开用原文"这一层。
+    if include_full:
+        for i in range(min(EXPAND_TOP, len(narrative))):
+            traj = narrative[i].get("trajectory") or ""
+            if traj:
+                narrative[i] = {
+                    **narrative[i],
+                    "full_text": traj[:EXPAND_CHARS],
+                    "full_text_truncated": len(traj) > EXPAND_CHARS,
+                }
+
+    # trajectory 是"候选展开材料"，没被展开的别跟着往外传
+    narrative = [{k: v for k, v in it.items() if k != "trajectory"} for it in narrative]
 
     return {
         "narrative": narrative,
@@ -368,8 +396,9 @@ def query(
         # ── Depth 3: 实体图 + 全文匹配层（最全） ──
         if files:
             entity_matches = find_by_files(files)
-        # 合成时传入全文上下文
-        narrative = synthesize(results, description) if results else {
+        # 这一行原来跟 depth 2 一模一样，于是"全文"只是个写在文档里的承诺
+        # （2026-09-12 补上；见 docs/经验分层-STAIR借鉴-20260912.md）。
+        narrative = synthesize(results, description, include_full=True) if results else {
             "summary": "无深度遍历结果",
             "nodes": [],
             "synthesis_model": "none",
@@ -442,6 +471,7 @@ def find_similar(description: str, top_k: int = 5) -> list[dict]:
             scored.append({
                 "task_id": tid,
                 "description": node.content[:120],
+                "trajectory": node.trajectory,
                 "similarity": round(sim, 4),
                 "timestamp": node.timestamp,
             })

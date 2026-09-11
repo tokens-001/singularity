@@ -45,9 +45,17 @@ class PreSearchResult:
             self.memory = MemoryHits()
 
 
-def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True) -> PreSearchResult:
-    """调 search.py 查 decision 域 + MAGMA 多图记忆查询。"""
+def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True,
+               deep: bool = False) -> PreSearchResult:
+    """调 search.py 查 decision 域 + MAGMA 多图记忆查询。
+
+    deep: 记忆检索走 depth 3 —— 除标题外，把排名最前几条的**实际产出**
+          （agent_output）也取回来。贵（多几条 × 数千字），默认关。
+          调用方按需传 True；也可以设 `QIDIAN_MEMORY_DEEP=1` 全局强开（排障用）。
+    """
     from . import witness  # 原缺: 函数内 import 使名字整个作用域变局部, L104 早于它执行会 UnboundLocalError
+    import os as _os
+    deep = deep or _os.environ.get("QIDIAN_MEMORY_DEEP") == "1"
     res = PreSearchResult()
 
     # ── Step 1: 知识库搜索 (decision 域) ──
@@ -114,7 +122,8 @@ def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True) ->
     try:
         from . import memory as mem_mod
 
-        mem_result = mem_mod.query(task)
+        # depth 3 才展开"实际产出"（见本函数 deep 参数说明）
+        mem_result = mem_mod.query(task, max_depth=3 if deep else 1)
         traversal = mem_result.get("traversal", {})
         res.memory = MemoryHits(
             narrative=traversal.get("narrative", []),

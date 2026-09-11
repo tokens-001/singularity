@@ -114,9 +114,19 @@ class TestEmbedModelActuallyLoads:
         # （它们是独立脚本，pytest 也会收集），于是这个开关会泄漏到别的用例 ——
         # 单跑本文件绿、全量跑红，红得莫名其妙。这条用例不该依赖环境。
         monkeypatch.delenv("QIDIAN_SKIP_EMBED", raising=False)
-        monkeypatch.setattr(sentence_transformers, "SentenceTransformer",
-                            lambda name: sentinel)
+        seen = {}
+
+        def _fake(name, **kw):
+            seen["name"], seen["kw"] = name, kw
+            return sentinel
+
+        monkeypatch.setattr(sentence_transformers, "SentenceTransformer", _fake)
         assert mc._get_embed_model() is sentinel
+        # 2026-09-12 加：必须带 local_files_only=True。不带的话 transformers 会去
+        # huggingface.co 查 metadata（**哪怕模型已在缓存里**），断网时退避重试**挂死**，
+        # 而挂起不是异常、except 拦不住 —— 见防御模式 §57。
+        assert seen["kw"].get("local_files_only") is True, \
+            f"加载嵌入模型必须只读本地缓存，实际参数: {seen['kw']}"
 
     def test_skip_env_still_short_circuits(self, monkeypatch):
         """QIDIAN_SKIP_EMBED=1 时照旧跳过（CI 用）。"""
@@ -136,7 +146,7 @@ class TestEmbedModelActuallyLoads:
         monkeypatch.setattr(mc, "_EMBED_MODEL", None)
         monkeypatch.delenv("QIDIAN_SKIP_EMBED", raising=False)
 
-        def _boom(name):
+        def _boom(name, **kw):
             raise RuntimeError("模拟下载失败")
 
         monkeypatch.setattr(sentence_transformers, "SentenceTransformer", _boom)

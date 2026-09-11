@@ -67,6 +67,9 @@ def rebuild_from_traces() -> int:
             task_id=task_id, description=description,
             changed_files=changed_files, depends_on=depends_on,
             created_at=created_at,
+            # trace 里本来就存着 agent_output —— 这是"上次怎么做的"的唯一来源，
+            # 以前这条路径把它丢掉了，重建出来的记忆只剩标题。
+            trajectory=trace_data.get("agent_output", "") or "",
         )
         # trace 里本来就有 final_status / route，原来只喂了 task/描述/文件 —— 把终态丢了。
         # 后果：**从 traces 重建出来**的事件 attrs.status 恒空 →

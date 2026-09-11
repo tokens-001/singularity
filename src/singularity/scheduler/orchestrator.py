@@ -89,7 +89,8 @@ def _dispatch_ready(dispatched: set, pool, agents, runner: TaskRunner,
                 task_type=t.route_type)
         else:
             route = router_mod.route(t.description)
-        pre = pre_mod.pre_search(t.description, route)
+        # 同上：重试过的任务才展开历史实际产出。
+        pre = pre_mod.pre_search(t.description, route, deep=t.retry_count > 0)
         pre_mod.apply_escalation(route, pre)
         # PENDING/BLOCKED → ROUTED (若尚未路由)
         if t.status in (TaskStatus.PENDING, TaskStatus.BLOCKED):

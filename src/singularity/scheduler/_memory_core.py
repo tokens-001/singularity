@@ -32,7 +32,11 @@ from singularity.scheduler import witness
 from singularity.scheduler._types import _pending_sse_events
 from singularity.scheduler._io import atomic_write_json
 
-__all__ = ['EdgeType', 'EventNode', '_edges_path', '_EMBED_MODEL', '_entity_idx_path', '_events_path', '_INTENT_EDGE_WEIGHTS', '_INTENT_PATTERNS', '_MAX_EVENTS', '_memory_dir', '_calculate_importance', '_cosine_sim', '_embed', '_ensure_dir', '_evict_if_needed', '_get_embed_model', '_hf_log', '_infer_mem_type', '_load_edges', '_load_events', '_read_json', '_save_edges', '_save_events', '_write_json', 'detect_intent', 'index_task', 'update_attrs']
+# 「完整产出」单条存储上限（字符）。不参与 embedding，只在 depth>=3 展开时读。
+# 16000 覆盖实测最大的一条 agent_output（15,782 字），超出即截断。
+TRAJECTORY_MAX = 16000
+
+__all__ = ['EdgeType', 'EventNode', 'TRAJECTORY_MAX', '_edges_path', '_EMBED_MODEL', '_entity_idx_path', '_events_path', '_INTENT_EDGE_WEIGHTS', '_INTENT_PATTERNS', '_MAX_EVENTS', '_memory_dir', '_calculate_importance', '_cosine_sim', '_embed', '_ensure_dir', '_evict_if_needed', '_get_embed_model', '_hf_log', '_infer_mem_type', '_load_edges', '_load_events', '_read_json', '_save_edges', '_save_events', '_write_json', 'detect_intent', 'index_task', 'update_attrs']
 # ═══════════════════════════════════════════════════════════
 # 存储路径 + I/O 原语 (ex _memory_io.py)
 # ═══════════════════════════════════════════════════════════
@@ -92,16 +96,20 @@ def _write_json(path: Path, data: dict | list) -> None:
 class EventNode:
     """MAGMA 事件节点。
 
-    content  : 任务描述文本
-    timestamp: 创建时间戳 (t_i)
-    emb      : sentence-transformers embedding (384-dim)
-    attrs    : 结构化属性 (A_i): files, status, route_level, route_type, snapshot_id
+    content   : 任务描述文本（**参与 embedding，是检索的键**）
+    timestamp : 创建时间戳 (t_i)
+    emb       : sentence-transformers embedding (384-dim)
+    attrs     : 结构化属性 (A_i): files, status, route_level, route_type, snapshot_id
+    trajectory: 任务的实际产出（agent_output）。**不参与 embedding** ——
+                它是"上次到底怎么做的"，只在 depth>=3 按需展开时读。
+                存之前不压缩，只截断（见 TRAJECTORY_MAX）。
     """
     task_id: str
     content: str
     timestamp: float
     emb: list[float] = field(default_factory=list)  # embedding (384-dim)
     attrs: dict = field(default_factory=dict)
+    trajectory: str = ""  # 完整产出；空 = 老数据或没采到
 
     def to_dict(self) -> dict:
         return {
@@ -110,6 +118,7 @@ class EventNode:
             "timestamp": self.timestamp,
             "emb": self.emb,
             "attrs": self.attrs,
+            "trajectory": self.trajectory[:TRAJECTORY_MAX],
         }
 
     @classmethod
@@ -120,6 +129,7 @@ class EventNode:
             timestamp=d.get("timestamp", 0),
             emb=list(d.get("emb", d.get("tokens", []))),  # backward compat
             attrs=d.get("attrs", {}),
+            trajectory=d.get("trajectory", ""),  # 老数据没有这个键 → ""
         )
 
 
@@ -165,12 +175,20 @@ def _get_embed_model():
             # **一次都没生效过**，而表面上只是"降级跳过"，谁也看不出来。
             # 代价：技能相关性过滤退化成"取绑定列表前 2 个"、记忆语义直查永远返回空。
             from sentence_transformers import SentenceTransformer
-            _EMBED_MODEL = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+            # local_files_only=True —— **只用本地缓存，绝不联网**。
+            # 少了它，transformers 会去 huggingface.co 查 metadata（**哪怕模型已在缓存里**），
+            # 该域名不通时 huggingface_hub 的退避重试会**挂死**；而挂起不是异常，
+            # 下面那个 except 拦不住 —— 整条调研阶段就无声无息停在那儿。
+            # 2026-09-12 实测：同一份代码加上离线后 50 秒跑完（防御模式 §57）。
+            _EMBED_MODEL = SentenceTransformer(
+                "paraphrase-multilingual-MiniLM-L12-v2", local_files_only=True)
         except Exception as e:
-            # 下载失败/网络问题 → 降级跳过, 不阻塞。但**必须留痕**：这条 except
+            # 加载失败 → 降级跳过, 不阻塞。但**必须留痕**：这条 except
             # 之前把"名字没定义"这种低级错误也吞了，导致排查时看不到任何线索。
             witness.warn("memory",
-                         f"embed_model_load_failed:{type(e).__name__}:{e}"[:120])
+                         f"embed_model_load_failed:{type(e).__name__}:{e}"[:120]
+                         + " | 本地无缓存时先跑: huggingface-cli download "
+                           "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
             _EMBED_MODEL = False
         finally:
             sys.stderr = _stderr
@@ -322,14 +340,24 @@ def index_task(
     depends_on: list[str] | None = None,
     created_at: float | None = None,
     mem_type: str = "",
+    trajectory: str = "",
+    stage: str = "",
+    force: bool = False,
 ) -> None:
     """快通道摄入: 创建 EventNode + 更新四图边。
 
-    - embedding 向量 (384-dim)
+    - embedding 向量 (384-dim)  ← **只对 description 做**，trajectory 不参与
     - 追加时间链
     - 添显式因果边 (depends_on)
     - 连实体边 (changed_files)
     - 重算语义边 (增量更新)
+
+    trajectory: 任务的实际产出（agent_output）。存下来供 depth>=3 展开读；
+                不传则保留该节点已有的值（**不会把存过的覆盖成空**）。
+    stage:      产出属于哪个阶段（researching/planning/...）。空=任务层条目。
+                "按阶段切"用（见 docs/经验分层-STAIR借鉴-20260912.md）。
+    force:      跳过去重。阶段条目必须用 —— 它们的描述是同一条项目描述，
+                互相的 Jaccard 极高，不去重的话会被上一阶段的条目挤掉。
     """
     changed_files = changed_files or []
     depends_on = depends_on or []
@@ -340,28 +368,37 @@ def index_task(
 
     # ── 选择性摄入 (Omni-SimpleMem): Jaccard 对比最近摘要 ──
     events = _load_events()
-    # 只看最近 20 条事件 (O(1), 原文用 "recent summaries")
-    recent = sorted(events.items(), key=lambda x: -x[1].timestamp)[:20]
-    desc_words = set(description.lower().split())
-    for existing_id, existing_node in recent:
-        existing_words = set(existing_node.content.lower().split())
-        if desc_words and existing_words:
-            jaccard = len(desc_words & existing_words) / len(desc_words | existing_words)
-            if jaccard > 0.75:
-                return  # 高度重复，跳过 index
+    if not force:
+        # 只看最近 20 条事件 (O(1), 原文用 "recent summaries")
+        recent = sorted(events.items(), key=lambda x: -x[1].timestamp)[:20]
+        desc_words = set(description.lower().split())
+        for existing_id, existing_node in recent:
+            existing_words = set(existing_node.content.lower().split())
+            if desc_words and existing_words:
+                jaccard = len(desc_words & existing_words) / len(desc_words | existing_words)
+                if jaccard > 0.75:
+                    return  # 高度重复，跳过 index
 
     # ── 记忆类型: 显式传入或自动推断 ──
     if not mem_type:
         mem_type = _infer_mem_type(description)
 
     # ── EventNode ──
+    # 没传 trajectory 就别覆盖已有的 —— 静默把"怎么做的"抹成空，
+    # 比一开始没存更坏（外面看不出来，检索照样命中，展开却是空的）。
+    prev = events.get(task_id)
+    if not trajectory and prev is not None:
+        trajectory = prev.trajectory
+
     tokens = _embed(description)
     node = EventNode(
         task_id=task_id,
         content=description,
         timestamp=created_at,
         emb=tokens,
-        attrs={"files": changed_files, "depends_on": depends_on, "mem_type": mem_type},
+        attrs={"files": changed_files, "depends_on": depends_on, "mem_type": mem_type,
+               "stage": stage},
+        trajectory=trajectory,
     )
     events[task_id] = node
     _save_events(events)

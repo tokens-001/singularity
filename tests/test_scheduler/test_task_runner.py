@@ -83,7 +83,7 @@ def _setup(monkeypatch, **overrides):
     monkeypatch.setattr(tr, "router_mod", _o)
 
     _o2 = NS()
-    _o2.pre_search = lambda d, r: pre
+    _o2.pre_search = lambda d, r, **kw: pre  # **kw: pre_search 新增了 deep= 参数
     _o2.apply_escalation = lambda r, p: None
     monkeypatch.setattr(tr, "pre_mod", _o2)
 
@@ -291,7 +291,7 @@ class TestTaskRunnerExecute:
         tr, batch, pre, route, snap = _setup(monkeypatch)
 
         pre.code_context = "src/auth.py\nsrc/login.py"
-        monkeypatch.setattr(tr.pre_mod, "pre_search", lambda d, r: pre)
+        monkeypatch.setattr(tr.pre_mod, "pre_search", lambda d, r, **kw: pre)
 
         from singularity.scheduler._task_runner import TaskRunner
         task = _make_task(description="实现登录功能")
@@ -318,7 +318,7 @@ class TestTaskRunnerExecute:
 
         pre.memory.intent = "修复登录bug"
         pre.memory.narrative = "用户无法登录"
-        monkeypatch.setattr(tr.pre_mod, "pre_search", lambda d, r: pre)
+        monkeypatch.setattr(tr.pre_mod, "pre_search", lambda d, r, **kw: pre)
 
         from singularity.scheduler._task_runner import TaskRunner
         task = _make_task()
