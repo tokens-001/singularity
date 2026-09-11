@@ -134,7 +134,7 @@ export default function Usage() {
       {/* 左右 10px 是跟 .card-row 对齐的 —— .page-wrap 自己没有横向内边距，
           不补的话标题会顶着表格左边 10px 开外，整页左边缘是毛的 */}
       <div className="flex-center gap-8" style={{ marginBottom: 4, padding: '0 10px' }}>
-        <h2 className="fs-13 fw-600" style={{ color: 'var(--text-primary)' }}>用量</h2>
+        <h2 className="page-title">用量</h2>
         <div className="flex-center gap-4">
           {RANGES.map(r => (
             <button key={r.v} onClick={() => setRange(r.v)} className="btn-sm"

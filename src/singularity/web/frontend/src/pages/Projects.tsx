@@ -95,7 +95,7 @@ export default function Projects() {
   return (
     <div className="page-wrap-wide">
       <div className="flex-center gap-8" style={{ marginBottom: 12 }}>
-        <h2 style={{ fontSize: 16, fontWeight: 600 }}>项目</h2>
+        <h2 className="page-title">项目</h2>
         <span className="fs-11 text-muted">{projects.length} 个</span>
         <span className="flex-1"/>
         <button onClick={fetch} className="btn-icon" aria-label="刷新"><RefreshCw size={14}/></button>

@@ -81,7 +81,7 @@ export const ArchitectureDetails = memo(function ArchitectureDetails({ arch }: {
           {tasks.map((t: any, i: number) => (
             <div key={i} style={{ fontSize: 11, color: '#141413', padding: '4px 0', borderBottom: '1px solid #f3f2ec' }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <span style={{ color: '#6b6b68', fontFamily: 'monospace' }}>{t.id}</span>
+                <span style={{ color: '#6b6b68', fontFamily: 'var(--font-mono)'}}>{t.id}</span>
                 <span style={{ flex: 1 }}>{t.title}</span>
                 <span style={{ fontSize: 10, color: t.complexity === 'high' ? '#dc2626' : t.complexity === 'medium' ? '#b45309' : '#16a34a' }}>{t.complexity}</span>
               </div>
@@ -119,8 +119,8 @@ export const ArchitectureDetails = memo(function ArchitectureDetails({ arch }: {
           {contracts.map((a: any, i: number) => (
             <div key={i} style={row}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <span style={{ color: '#16a34a', fontFamily: 'monospace', fontWeight: 600, minWidth: 36 }}>{a.method}</span>
-                <span style={{ color: '#2563eb', fontFamily: 'monospace' }}>{a.path}</span>
+                <span style={{ color: '#16a34a', fontFamily: 'var(--font-mono)', fontWeight: 600, minWidth: 36 }}>{a.method}</span>
+                <span style={{ color: '#2563eb', fontFamily: 'var(--font-mono)'}}>{a.path}</span>
                 <span style={{ color: '#6b6b68', flex: 1 }}>{a.description}</span>
               </div>
               {(a.input || a.output) && (
@@ -219,7 +219,7 @@ export const AcceptancePanel = memo(function AcceptancePanel({ acceptance, proje
                     <span style={{ fontWeight: 600, color: it.severity === 'critical' ? '#dc2626' : it.severity === 'warning' ? '#b45309' : '#6b6b68' }}>[{it.severity || 'info'}]</span>
                     {it.fix_route && <span style={{ color: '#6b6b68', marginLeft: 6 }}>→ 回{it.fix_route === 'design' ? '架构' : it.fix_route === 'impl' ? '实现' : it.fix_route}</span>}
                     <div style={{ lineHeight: 1.5, marginTop: 2 }}>{it.description}</div>
-                    {it.file && <div style={{ color: '#6b6b68', fontFamily: 'monospace' }}>{it.file}</div>}
+                    {it.file && <div style={{ color: '#6b6b68', fontFamily: 'var(--font-mono)'}}>{it.file}</div>}
                   </div>
                 ))}
               </div>

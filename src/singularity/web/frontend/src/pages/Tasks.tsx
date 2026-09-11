@@ -76,7 +76,7 @@ export default function Tasks() {
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div className="flex-center gap-8" style={{ marginBottom: 12 }}>
-        <h2 className="fs-13 fw-600" style={{ color: '#141413' }}>任务</h2>
+        <h2 className="page-title">任务</h2>
         <span className="fs-11 text-muted">{tasks.length} 个</span>
         {dag && dag.node_count > 1 && (
           <span className="fs-10 text-muted"
