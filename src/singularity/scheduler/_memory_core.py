@@ -32,19 +32,31 @@ from singularity.scheduler import witness
 from singularity.scheduler._types import _pending_sse_events
 from singularity.scheduler._io import atomic_write_json
 
-__all__ = ['EdgeType', 'EventNode', '_EDGES_PATH', '_EMBED_MODEL', '_ENTITY_IDX_PATH', '_EVENTS_PATH', '_INTENT_EDGE_WEIGHTS', '_INTENT_PATTERNS', '_MAX_EVENTS', '_MEMORY_DIR', '_calculate_importance', '_cosine_sim', '_embed', '_ensure_dir', '_evict_if_needed', '_get_embed_model', '_hf_log', '_infer_mem_type', '_load_edges', '_load_events', '_read_json', '_save_edges', '_save_events', '_write_json', 'detect_intent', 'index_task', 'update_attrs']
+__all__ = ['EdgeType', 'EventNode', '_edges_path', '_EMBED_MODEL', '_entity_idx_path', '_events_path', '_INTENT_EDGE_WEIGHTS', '_INTENT_PATTERNS', '_MAX_EVENTS', '_memory_dir', '_calculate_importance', '_cosine_sim', '_embed', '_ensure_dir', '_evict_if_needed', '_get_embed_model', '_hf_log', '_infer_mem_type', '_load_edges', '_load_events', '_read_json', '_save_edges', '_save_events', '_write_json', 'detect_intent', 'index_task', 'update_attrs']
 # ═══════════════════════════════════════════════════════════
 # 存储路径 + I/O 原语 (ex _memory_io.py)
 # ═══════════════════════════════════════════════════════════
 
-_MEMORY_DIR = sched_config.QIDIAN_DIR / "memory"
-_EVENTS_PATH = _MEMORY_DIR / "events.json"
-_EDGES_PATH = _MEMORY_DIR / "edges.json"
-_ENTITY_IDX_PATH = _MEMORY_DIR / "entity_index.json"
+# ── 路径：**每次现算，不要在模块级缓存**（防御模式 #34）──────────────
+# `config.QIDIAN_DIR` 是运行时可改的（tests/conftest.py 的隔离靠 monkeypatch 它），
+# 模块级算死的派生路径**不跟着变** —— 后果是测试往**真实**的 .qidian/ 里写。
+# 实测（2026-09-11）：`_insights_path()` 是算死的，一条测试把假的洞察写进了
+# 真实的 `.qidian/memory/insights.json`。同一个形状当天出现三次。
+def _memory_dir() -> Path:
+    return sched_config.QIDIAN_DIR / "memory"
+
+def _events_path() -> Path:
+    return _memory_dir() / "events.json"
+
+def _edges_path() -> Path:
+    return _memory_dir() / "edges.json"
+
+def _entity_idx_path() -> Path:
+    return _memory_dir() / "entity_index.json"
 
 
 def _ensure_dir() -> None:
-    _MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    _memory_dir().mkdir(parents=True, exist_ok=True)
 
 
 def _read_json(path: Path) -> dict | list:
@@ -257,12 +269,12 @@ def _locked(fn):
 
 def _load_events() -> dict[str, EventNode]:
     """加载全部事件节点。"""
-    raw: dict = _read_json(_EVENTS_PATH) or {}
+    raw: dict = _read_json(_events_path()) or {}
     return {tid: EventNode.from_dict(d) for tid, d in raw.items()}
 
 
 def _save_events(events: dict[str, EventNode]) -> None:
-    _write_json(_EVENTS_PATH, {tid: n.to_dict() for tid, n in events.items()})
+    _write_json(_events_path(), {tid: n.to_dict() for tid, n in events.items()})
 
 
 def _load_edges() -> dict:
@@ -276,14 +288,14 @@ def _load_edges() -> dict:
     }
     """
     default = {"semantic": [], "temporal": [], "causal": [], "entity": []}
-    raw: dict = _read_json(_EDGES_PATH) or {}
+    raw: dict = _read_json(_edges_path()) or {}
     for k in default:
         raw.setdefault(k, [])
     return raw
 
 
 def _save_edges(edges: dict) -> None:
-    _write_json(_EDGES_PATH, edges)
+    _write_json(_edges_path(), edges)
 
 
 def _infer_mem_type(description: str) -> str:
@@ -394,12 +406,12 @@ def index_task(
     _save_edges(edges)
 
     # ── 实体倒排索引 ──
-    entity_idx: dict[str, list[str]] = _read_json(_ENTITY_IDX_PATH) or {}
+    entity_idx: dict[str, list[str]] = _read_json(_entity_idx_path()) or {}
     for fp in changed_files:
         entity_idx.setdefault(fp, [])
         if task_id not in entity_idx[fp]:
             entity_idx[fp].append(task_id)
-    _write_json(_ENTITY_IDX_PATH, entity_idx)
+    _write_json(_entity_idx_path(), entity_idx)
 
     # ── T12: LRU 驱逐检查 ──
     evicted = _evict_if_needed(events, edges)

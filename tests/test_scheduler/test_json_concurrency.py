@@ -30,9 +30,11 @@ N = 20
 
 @pytest.fixture
 def learner_path(tmp_path, monkeypatch):
-    p = tmp_path / "route_learner.json"
-    monkeypatch.setattr(rl, "_LEARNER_PATH", p)
-    return p
+    # 只改 config.QIDIAN_DIR 就够 —— `rl._learner_path()` 是读时现算的
+    # （2026-09-11 之前是模块级常量，那时这里必须单独打补丁）。
+    from singularity.scheduler import config
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+    return tmp_path / "route_learner.json"
 
 
 class TestRouteLearnerNoLostUpdate:

@@ -7,7 +7,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from collections import defaultdict
 
-__all__ = ['_COLD_MAX', '_HOT_WINDOW', '_INSIGHTS_PATH', '_WARM_WINDOW', '_get_age_tier', '_load_insights', '_save_insights', 'auto_maintain', 'get_insights', 'lifecycle_stats', 'prune_expired', 'rebuild_from_traces', 'stats', 'system2_extract']
+__all__ = ['_COLD_MAX', '_HOT_WINDOW', '_insights_path', '_WARM_WINDOW', '_get_age_tier', '_load_insights', '_save_insights', 'auto_maintain', 'get_insights', 'lifecycle_stats', 'prune_expired', 'rebuild_from_traces', 'stats', 'system2_extract']
 # 维护
 # ═══════════════════════════════════════════════════════════
 
@@ -16,7 +16,7 @@ def stats() -> dict:
     from singularity.scheduler._memory_graph import find_candidate_latent_edges
     events = _load_events()
     edges = _load_edges()
-    entity_idx: dict[str, list[str]] = _read_json(_ENTITY_IDX_PATH) or {}
+    entity_idx: dict[str, list[str]] = _read_json(_entity_idx_path()) or {}
 
     explicit_causal = sum(1 for _, _, s in edges.get("causal", []) if s == "explicit")
     inferred_causal = sum(1 for _, _, s in edges.get("causal", []) if s != "explicit")
@@ -38,7 +38,7 @@ def rebuild_from_traces() -> int:
     from . import tracker as tracker_mod
 
     _ensure_dir()
-    for path in [_EVENTS_PATH, _EDGES_PATH, _ENTITY_IDX_PATH]:
+    for path in [_events_path(), _edges_path(), _entity_idx_path()]:
         path.write_text("{}", encoding="utf-8")
 
     count = 0
@@ -120,8 +120,8 @@ def lifecycle_stats() -> dict:
         "warm_window_d": _WARM_WINDOW // 86400,
         "cold_max_d": _COLD_MAX // 86400,
     }
-    if _EVENTS_PATH.exists():
-        result["disk_bytes"] = _EVENTS_PATH.stat().st_size
+    if _events_path().exists():
+        result["disk_bytes"] = _events_path().stat().st_size
     return result
 
 
@@ -152,12 +152,12 @@ def prune_expired() -> int:
         edges[edge_type] = filtered
     _save_events(events)
     _save_edges(edges)
-    entity_idx = _read_json(_ENTITY_IDX_PATH) or {}
+    entity_idx = _read_json(_entity_idx_path()) or {}
     for fp in list(entity_idx.keys()):
         entity_idx[fp] = [tid for tid in entity_idx[fp] if tid not in expired_ids]
         if not entity_idx[fp]:
             del entity_idx[fp]
-    _write_json(_ENTITY_IDX_PATH, entity_idx)
+    _write_json(_entity_idx_path(), entity_idx)
     return len(expired_ids)
 
 
@@ -180,7 +180,9 @@ def auto_maintain() -> dict:
 # System 2 (新增): 空闲时异步批处理，提取跨任务模式
 # ponytail: 分组统计 + 简单启发式，不做 LLM 批处理
 
-_INSIGHTS_PATH = _MEMORY_DIR / "insights.json"
+def _insights_path() -> Path:
+    """每次现算（防御模式 #34）：模块级赋值会锁死在导入时的 QIDIAN_DIR。"""
+    return _memory_dir() / "insights.json"
 
 
 def system2_extract() -> dict:
@@ -265,11 +267,11 @@ def system2_extract() -> dict:
 
 
 def _load_insights() -> list[dict]:
-    return list(_read_json(_INSIGHTS_PATH) or [])
+    return list(_read_json(_insights_path()) or [])
 
 
 def _save_insights(data: list[dict]) -> None:
-    _write_json(_INSIGHTS_PATH, data)
+    _write_json(_insights_path(), data)
 
 
 def get_insights(limit: int = 10) -> list[dict]:

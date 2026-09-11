@@ -144,7 +144,10 @@ class RouteLearner:
 
 
 # ── 持久化 ──
-_LEARNER_PATH = config.QIDIAN_DIR / "route_learner.json"
+def _learner_path() -> Path:
+    """每次现算（防御模式 #34）：模块级赋值会锁死在导入时的 QIDIAN_DIR，
+    测试隔离（monkeypatch QIDIAN_DIR）对它无效 → 测试往生产文件写。"""
+    return config.QIDIAN_DIR / "route_learner.json"
 
 # 读-改-写全程互斥。两份风险叠在一起：
 #   ① 并发丢更新 —— 调度线程与 Flask 请求线程都会 load→改→save，后写者盖掉先写者；
@@ -156,9 +159,9 @@ _LOCK = threading.RLock()
 
 def load_learner() -> RouteLearner:
     """加载持久化的学习器状态。"""
-    if _LEARNER_PATH.exists():
+    if _learner_path().exists():
         try:
-            data = json.loads(_LEARNER_PATH.read_text(encoding="utf-8"))
+            data = json.loads(_learner_path().read_text(encoding="utf-8"))
             return RouteLearner.from_dict(data.get("stats", {}))
         except (json.JSONDecodeError, KeyError):
             pass
@@ -169,7 +172,7 @@ def save_learner(learner: RouteLearner) -> None:
     """持久化学习器状态。"""
     data = {"stats": learner.to_dict(), "updated_at": time.time()}
     with _LOCK:
-        atomic_write_json(_LEARNER_PATH, data)
+        atomic_write_json(_learner_path(), data)
 
 
 def record_outcome(**kwargs) -> None:

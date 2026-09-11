@@ -468,14 +468,12 @@ class TestRouteLearnerRejectsEmptyModel:
 
     def test_empty_model_is_dropped(self, monkeypatch):
         from singularity.scheduler import route_learner as rl
-        monkeypatch.setattr(rl, "_LEARNER_PATH", config.QIDIAN_DIR / "route_learner.json")
         learner = rl.RouteLearner()
         learner.record(task_type="default", model="", level="any", success=False)
         assert learner._stats == {}, "空模型样本不该进统计"
 
     def test_named_model_still_records(self, monkeypatch):
         from singularity.scheduler import route_learner as rl
-        monkeypatch.setattr(rl, "_LEARNER_PATH", config.QIDIAN_DIR / "route_learner.json")
         learner = rl.RouteLearner()
         learner.record(task_type="default", model="m", level="any", success=True)
         assert "default::m" in learner._stats

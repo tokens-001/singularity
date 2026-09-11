@@ -11,22 +11,17 @@ def _isolate_qidian_dir(tmp_path, monkeypatch):
     实测整套测试往 `.qidian/alerts.jsonl` 追加 12 行（跑测试污染排查数据 ——
     alerts.jsonl 正是拿来查故障的，混进测试噪声就废了）。
 
-    **只改 QIDIAN_DIR 是不够的** —— 下面这些在**导入时**就算好了，属性改了它们不变，
-    用到它们的代码照样写真实目录（`route_learner` 尤其要紧：`route.level` 修好后它
-    才第一次真正记数据，不隔离就会往生产的 route_learner.json 里灌测试样本）：
+    **只改 QIDIAN_DIR 是不够的** —— `config` 里那几个派生目录在**导入时**就算好了，
+    属性改了它们不变，用到它们的代码照样写真实目录：
       · config.{SNAPSHOT,PATCH,TRACE,HOLD,CANCEL,PAUSE,PARKED}_DIR
-      · _memory_core._MEMORY_DIR
-      · route_learner._LEARNER_PATH
+    （内存模块与 `route_learner` 原来也要在这里单独补一刀，**2026-09-11 已改成
+    读时现算**，见各自的 `_events_path()` / `_learner_path()` —— 补丁撤了。）
     """
     from singularity.scheduler import config
     monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
     for name in ("SNAPSHOT_DIR", "PATCH_DIR", "TRACE_DIR", "HOLD_DIR",
                  "CANCEL_DIR", "PAUSE_DIR", "PARKED_DIR"):
         monkeypatch.setattr(config, name, tmp_path / getattr(config, name).name)
-
-    from singularity.scheduler import _memory_core, route_learner
-    monkeypatch.setattr(_memory_core, "_MEMORY_DIR", tmp_path / "memory")
-    monkeypatch.setattr(route_learner, "_LEARNER_PATH", tmp_path / "route_learner.json")
 
 
 @pytest.fixture

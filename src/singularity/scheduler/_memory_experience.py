@@ -7,12 +7,16 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from collections import defaultdict
 
-__all__ = ['ExperienceRecord', '_EXPERIENCES_PATH', '_FAILURE_PATTERNS_PATH', '_extract_keywords', '_load_failure_patterns', '_match_failure_pattern', '_save_failure_patterns', 'analyze_failures', 'archive_experience', 'find_similar_across_projects', 'get_experience_stats']
+__all__ = ['ExperienceRecord', '_experiences_path', '_failure_patterns_path', '_extract_keywords', '_load_failure_patterns', '_match_failure_pattern', '_save_failure_patterns', 'analyze_failures', 'archive_experience', 'find_similar_across_projects', 'get_experience_stats']
 # T1: 经验归档 + 失败模式识别 + 跨项目知识迁移 (ex _memory_experience.py)
 # ═══════════════════════════════════════════════════════════
 
-_EXPERIENCES_PATH = _MEMORY_DIR / "experiences.json"
-_FAILURE_PATTERNS_PATH = _MEMORY_DIR / "failure_patterns.json"
+def _experiences_path() -> Path:
+    """每次现算（防御模式 #34）。"""
+    return _memory_dir() / "experiences.json"
+def _failure_patterns_path() -> Path:
+    """每次现算（防御模式 #34）。"""
+    return _memory_dir() / "failure_patterns.json"
 
 
 @dataclass
@@ -70,11 +74,11 @@ def archive_experience(task_id: str, description: str, status: str, route_level:
     )
     if status in ("failed", "rolled_back") and failure_mode:
         rec.pattern_id = _match_failure_pattern(failure_mode)
-    existing = list(_read_json(_EXPERIENCES_PATH) or [])
+    existing = list(_read_json(_experiences_path()) or [])
     existing.append(rec.to_dict())
     if len(existing) > 1000:
         existing = existing[-1000:]
-    _write_json(_EXPERIENCES_PATH, existing)
+    _write_json(_experiences_path(), existing)
 
 
 def _match_failure_pattern(failure_reason: str) -> str:
@@ -103,16 +107,16 @@ def _extract_keywords(text: str) -> list[str]:
 
 
 def _load_failure_patterns() -> list[dict]:
-    return list(_read_json(_FAILURE_PATTERNS_PATH) or [])
+    return list(_read_json(_failure_patterns_path()) or [])
 
 
 def _save_failure_patterns(data: list[dict]) -> None:
-    _write_json(_FAILURE_PATTERNS_PATH, data)
+    _write_json(_failure_patterns_path(), data)
 
 
 def analyze_failures(limit: int = 20) -> dict:
     """分析近期失败模式，返回频次排序的失败原因。"""
-    experiences = list(_read_json(_EXPERIENCES_PATH) or [])
+    experiences = list(_read_json(_experiences_path()) or [])
     failed = [e for e in experiences if e.get("status") in ("failed", "rolled_back")]
     if not failed:
         return {"total_failures": 0, "patterns": [], "summary": "无近期失败记录"}
@@ -133,7 +137,7 @@ def analyze_failures(limit: int = 20) -> dict:
 
 def find_similar_across_projects(description: str, min_score: float = 0.3, limit: int = 5) -> list[dict]:
     """跨项目知识迁移：在经验库中搜索相似成功案例。"""
-    experiences = list(_read_json(_EXPERIENCES_PATH) or [])
+    experiences = list(_read_json(_experiences_path()) or [])
     if not experiences:
         return []
     successful = [e for e in experiences if e.get("status") == "done"]
@@ -166,7 +170,7 @@ def find_similar_across_projects(description: str, min_score: float = 0.3, limit
 
 def get_experience_stats() -> dict:
     """获取经验库统计概览。"""
-    experiences = list(_read_json(_EXPERIENCES_PATH) or [])
+    experiences = list(_read_json(_experiences_path()) or [])
     if not experiences:
         return {"total": 0}
     statuses = {}

@@ -119,7 +119,7 @@ def _expand_node(
             neighbors.append((src, EdgeType.CAUSAL))
 
     # 实体邻居 (共享文件)
-    entity_idx: dict[str, list[str]] = _read_json(_ENTITY_IDX_PATH) or {}
+    entity_idx: dict[str, list[str]] = _read_json(_entity_idx_path()) or {}
     node = events.get(task_id)
     if node:
         for fp in node.attrs.get("files", []):
@@ -419,7 +419,7 @@ def query(
 
 def find_by_files(files: list[str]) -> dict[str, list[str]]:
     """实体图直查: 哪些任务改过这些文件？"""
-    entity_idx: dict[str, list[str]] = _read_json(_ENTITY_IDX_PATH) or {}
+    entity_idx: dict[str, list[str]] = _read_json(_entity_idx_path()) or {}
     result: dict[str, list[str]] = {}
     for fp in files:
         matches = entity_idx.get(fp, [])
@@ -496,7 +496,7 @@ def find_candidate_latent_edges() -> list[dict]:
     """
     events = _load_events()
     edges = _load_edges()
-    entity_idx: dict[str, list[str]] = _read_json(_ENTITY_IDX_PATH) or {}
+    entity_idx: dict[str, list[str]] = _read_json(_entity_idx_path()) or {}
 
     # 现有因果边集合 (无向, 用于判断是否已有边)
     existing_causal: set[tuple[str, str]] = set()

@@ -163,14 +163,10 @@ class TestSystem2StatusVocabulary:
         import singularity.scheduler._memory_lifecycle as ml
         from singularity.scheduler._memory_core import EventNode
         from singularity.scheduler import config
+        # 只改 config.QIDIAN_DIR 就够 —— 内存模块的路径 2026-09-11 起是**读时现算**的
+        # （`ml._insights_path()` 等）。以前是模块级常量，那时必须在这里逐个补刀，
+        # 漏一个测试就写进**真实**的 `.qidian/memory/insights.json`（我这轮写脏过一次）。
         monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
-        monkeypatch.setattr(ml, "_MEMORY_DIR", tmp_path / "memory")
-        # ⚠️ `_INSIGHTS_PATH` 是**模块级算好的**（`_MEMORY_DIR / "insights.json"`），
-        # 只改 `_MEMORY_DIR` 不跟着变 —— 不隔离的话测试会写进**真实**的
-        # `.qidian/memory/insights.json`（我这轮就写脏过一次），
-        # 而且第二轮会被 `_load_insights()` 的去重挡掉、表现成"莫名其妙不报洞察"。
-        # 同一个形状今天出现三次了（skill_loader / _INSIGHTS_PATH / …）。
-        monkeypatch.setattr(ml, "_INSIGHTS_PATH", tmp_path / "memory" / "insights.json")
         (tmp_path / "memory").mkdir(parents=True, exist_ok=True)
         nodes = {}
         for i, st in enumerate(statuses):

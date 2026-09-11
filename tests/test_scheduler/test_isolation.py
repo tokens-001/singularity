@@ -26,26 +26,48 @@ def test_tasks_not_written_to_production():
 
 
 def test_import_time_paths_also_isolated():
-    """**导入时**固定死的路径也得隔离 —— 只改 config.QIDIAN_DIR 覆盖不到它们。
-
-    这些是今晚实际踩到的：`route.level` 修好后路由学习器第一次真写盘，
-    不隔离就会往生产 route_learner.json 灌测试样本。
-    """
-    import pytest
-    from singularity.scheduler import config, _memory_core, route_learner
+    """`config` 里那几个**导入时**派生好的目录也得隔离（夹具会给它们单独补刀）。"""
+    from singularity.scheduler import config
 
     paths = {
         "config.SNAPSHOT_DIR": config.SNAPSHOT_DIR,
         "config.TRACE_DIR": config.TRACE_DIR,
         "config.PARKED_DIR": config.PARKED_DIR,
-        "_memory_core._MEMORY_DIR": _memory_core._MEMORY_DIR,
-        "route_learner._LEARNER_PATH": route_learner._LEARNER_PATH,
     }
     bad = {k: str(v) for k, v in paths.items() if _under_real_qidian(v)}
     assert not bad, f"这些还指着生产 .qidian：{bad}"
-    # 反向对照：得真的指到临时目录下，不是被改成了别处的常量
     for k, v in paths.items():
         assert str(v).startswith(str(config.QIDIAN_DIR)), (k, str(v))
+
+
+def test_derived_paths_are_computed_at_call_time():
+    """**读时现算**（防御模式 #34）：改完 `config.QIDIAN_DIR`，派生路径要跟着变。
+
+    这几处原来是模块级常量（`_MEMORY_DIR = config.QIDIAN_DIR / "memory"`），
+    导入时算死 —— 只 monkeypatch `QIDIAN_DIR` 覆盖不到它们，于是测试往**真实**的
+    `.qidian/memory/` 里写（2026-09-11 实测：一条测试把假洞察写进了生产的
+    `insights.json`）。2026-09-11 全改成函数，这条钉住别退回去。
+
+    **为什么单列一条**：这类 bug 的默认表现是"测试静默写进生产文件"，
+    不做反向对照根本发现不了 —— 加了常量回退没人会注意到。
+    """
+    from singularity.scheduler import config, _memory_core, _memory_lifecycle
+    from singularity.scheduler import _memory_experience, route_learner
+
+    checks = {
+        "_memory_core._memory_dir": _memory_core._memory_dir,
+        "_memory_core._events_path": _memory_core._events_path,
+        "_memory_core._edges_path": _memory_core._edges_path,
+        "_memory_core._entity_idx_path": _memory_core._entity_idx_path,
+        "_memory_lifecycle._insights_path": _memory_lifecycle._insights_path,
+        "_memory_experience._experiences_path": _memory_experience._experiences_path,
+        "_memory_experience._failure_patterns_path": _memory_experience._failure_patterns_path,
+        "route_learner._learner_path": route_learner._learner_path,
+    }
+    for name, fn in checks.items():
+        p = fn()
+        assert not _under_real_qidian(p), f"{name}() 指到生产了: {p}"
+        assert str(p).startswith(str(config.QIDIAN_DIR)), (name, str(p))
 
 
 def test_warn_actually_lands_somewhere():
