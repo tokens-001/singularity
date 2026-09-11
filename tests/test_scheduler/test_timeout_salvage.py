@@ -173,3 +173,76 @@ def test_report_says_unknown_when_no_executor_result():
     d = rep.to_dict() if hasattr(rep, "to_dict") else rep
     assert d["token_count"] is None, "0 是'没花钱'，None 才是'不知道'"
     assert d["elapsed"] is None
+
+
+class TestTimeoutAlsoIndexesIntoMemory:
+    """超时的任务**记忆那侧也要进** —— §55 只修了 trace 侧。
+
+    2026-09-12 探路2 实测：T2 写完 373 行测试 + 完整实现、T3 写完计数核，
+    两个都超时被杀 —— trace 里捞得回来，但 `events.json` 里**轨迹是 0 字**，
+    因为 `index_task` 走的是 `_exec.py` 那条正常收尾路径，被 deadline 砍掉就整个跳过。
+    **干完了但超时的经验，永远进不了记忆。**
+    """
+
+    def test_timeout_calls_index_task(self, tmp_path, monkeypatch):
+        from concurrent.futures import Future
+
+        from singularity.scheduler import memory as mem
+
+        class _ER:
+            changed_files = ["a.py", "test_a.py"]
+            raw_output = "(超时摘要)"
+
+        class _Disp:
+            executor_result = _ER()
+
+        monkeypatch.setattr(orch, "_salvage_timed_out", lambda *a, **k: _Disp())
+        monkeypatch.setattr(orch, "_save_trace", lambda *a, **k: None)
+        monkeypatch.setattr(orch, "_release_ref", lambda *a, **k: None)
+        monkeypatch.setattr(orch.config, "CANCEL_DIR", tmp_path)
+        monkeypatch.setattr(orch.config, "ensure_dirs", lambda: None)
+        monkeypatch.setattr(orch.tracker, "transition", lambda *a, **k: None)
+        # `_reap_futures` 开头会"等第一个 future 完成，最多 10s"——假 future 永远
+        # 不完成，桩掉它，否则每个用例白等 10 秒（纯测试开销，不是产品行为）。
+        monkeypatch.setattr(orch, "wait", lambda *a, **k: None)
+
+        seen = {}
+        monkeypatch.setattr(mem, "index_task", lambda **kw: seen.update(kw))
+
+        t = type("T", (), {"id": "t1", "description": "任务", "depends_on": [],
+                           "created_at": 1.0})()
+        fut = Future()
+        running = {fut: (t, None, None, None, 0.0)}   # submitted_at=0 → 早过 deadline
+        orch._reap_futures(running, {}, None, None, [])
+
+        assert seen.get("task_id") == "t1", "超时的任务也要进记忆"
+        assert seen.get("changed_files") == ["a.py", "test_a.py"]
+        assert seen.get("force") is True, "超时条目要留下，别被 Jaccard 去重吃掉"
+
+    def test_index_task_failure_does_not_break_reap(self, tmp_path, monkeypatch):
+        """记忆写失败不许把回收带崩 —— 但要有痕（witness.warn）。"""
+        from concurrent.futures import Future
+
+        from singularity.scheduler import memory as mem
+
+        class _Disp:
+            executor_result = type("E", (), {"changed_files": [], "raw_output": ""})()
+
+        monkeypatch.setattr(orch, "_salvage_timed_out", lambda *a, **k: _Disp())
+        monkeypatch.setattr(orch, "_save_trace", lambda *a, **k: None)
+        monkeypatch.setattr(orch, "_release_ref", lambda *a, **k: None)
+        monkeypatch.setattr(orch.config, "CANCEL_DIR", tmp_path)
+        monkeypatch.setattr(orch.config, "ensure_dirs", lambda: None)
+        monkeypatch.setattr(orch.tracker, "transition", lambda *a, **k: None)
+        # `_reap_futures` 开头会"等第一个 future 完成，最多 10s"——假 future 永远
+        # 不完成，桩掉它，否则每个用例白等 10 秒（纯测试开销，不是产品行为）。
+        monkeypatch.setattr(orch, "wait", lambda *a, **k: None)
+
+        def boom(**kw):
+            raise RuntimeError("记忆挂了")
+        monkeypatch.setattr(mem, "index_task", boom)
+
+        t = type("T", (), {"id": "t2", "description": "x", "depends_on": [],
+                           "created_at": 1.0})()
+        running = {Future(): (t, None, None, None, 0.0)}
+        orch._reap_futures(running, {}, None, None, [])   # 不抛就算过

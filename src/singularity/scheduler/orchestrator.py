@@ -267,8 +267,31 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
                 pass
             results.append((t.id, "timeout", None))
             # 抢救已知事实再落 trace —— 传 None 会让 trace 变成一份"什么都没干"的假象
-            _save_trace(t, route, snap, _salvage_timed_out(t, now - submitted_at, snap),
-                        None, False)
+            _salvaged = _salvage_timed_out(t, now - submitted_at, snap)
+            _save_trace(t, route, snap, _salvaged, None, False)
+            # ⚠️ **记忆这一侧也要进** —— 原来超时只写 trace，`index_task` 走的是
+            # `_exec.py` 那条正常收尾路径，被 deadline 砍掉就整个跳过。
+            # 后果：**干完了但超时的任务，经验永远进不了记忆**（探路2 的 T2/T3 实测：
+            # 373 行测试 + 计数核都写了，events.json 里轨迹是 0 字）。
+            # 同族：09-12 修的 §55（trace 侧）—— 这是它的记忆侧。
+            try:
+                from singularity.scheduler import memory as _mem
+                _er = getattr(_salvaged, "executor_result", None)
+                _mem.index_task(
+                    task_id=t.id,
+                    description=t.description,
+                    changed_files=list(getattr(_er, "changed_files", []) or []),
+                    depends_on=getattr(t, "depends_on", []) or [],
+                    created_at=getattr(t, "created_at", None),
+                    trajectory=str(getattr(_er, "raw_output", "") or ""),
+                    force=True,   # 超时条目要留下，别被去重吃掉
+                )
+            except Exception as _e:
+                try:
+                    from singularity.scheduler import witness
+                    witness.warn("orch", f"timeout_index_task:{type(_e).__name__}"[:120])
+                except Exception:
+                    pass
             try:
                 from singularity.scheduler.project import repo_root_for
                 _release_ref(t.id, repo_root=repo_root_for(t))
