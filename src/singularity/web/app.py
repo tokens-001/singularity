@@ -76,13 +76,42 @@ _CSRF_TOKEN = os.environ.get("QIDIAN_CSRF_TOKEN") or os.urandom(16).hex()
 
 import logging as _al
 _audit_logger = _al.getLogger("qidian.audit")
-sched_config.ensure_dirs()
-(_ad := sched_config.QIDIAN_DIR / "logs").mkdir(parents=True, exist_ok=True)
-_ah = _al.FileHandler(str(_ad / "audit.log"))
-_ah.setFormatter(_al.Formatter('{"ts":"%(asctime)s","level":"%(levelname)s","msg":%(message)s}', datefmt='%Y-%m-%dT%H:%M:%S'))
-_audit_logger.addHandler(_ah); _audit_logger.setLevel(_al.INFO); _audit_logger.propagate = False
+_audit_ready = False
+
+
+def _setup_audit_logger() -> None:
+    """审计日志落盘。**故意不在 import 期做。**
+
+    原来这三行是模块级语句 `ensure_dirs()` + mkdir + FileHandler ⇒ 任何
+    `import singularity.web.app` 的测试都会在**真** `.qidian/` 下建目录、开日志文件。
+    `tests/conftest.py` 那套隔离**够不着 import 期**（它是在 fixture 里改
+    `config.QIDIAN_DIR` 的）—— 实测：跑 `test_exec_run.py` 往生产
+    `.qidian/partial_usage/` 写进了一个文件（防御模式 §56 / §59）。
+
+    改成懒初始化 + 路径**读时现算**：这样 conftest 改的 `config.QIDIAN_DIR`
+    才管得住它，测试里的审计日志落进 tmp 而不是生产目录。
+    """
+    global _audit_ready
+    if _audit_ready:
+        return
+    _audit_ready = True        # 先置位：配置失败也别每次调用都重试
+    try:
+        sched_config.ensure_dirs()
+        _ad = sched_config.QIDIAN_DIR / "logs"
+        _ad.mkdir(parents=True, exist_ok=True)
+        _ah = _al.FileHandler(str(_ad / "audit.log"))
+        _ah.setFormatter(_al.Formatter(
+            '{"ts":"%(asctime)s","level":"%(levelname)s","msg":%(message)s}',
+            datefmt='%Y-%m-%dT%H:%M:%S'))
+        _audit_logger.addHandler(_ah)
+        _audit_logger.setLevel(_al.INFO)
+        _audit_logger.propagate = False
+    except Exception:
+        pass                   # 审计日志落不下来不该让请求挂掉
+
 
 def audit_log(action, detail="", user="", ip=""):
+    _setup_audit_logger()
     import json as _j
     _audit_logger.info(_j.dumps({"action":action,"detail":detail[:500],"user":user or "-","ip":ip or "-"}))
 
@@ -2063,6 +2092,10 @@ if __name__ == "__main__":
     import logging as _logging
 
     _startup_log = _logging.getLogger("startup")
+
+    # 审计日志/目录改成懒初始化了（原来在 import 期，测试一 import 就污染真 .qidian/）。
+    # 真正跑服务时在这里显式建一次 —— 别指望"第一个请求碰巧会调 audit_log"。
+    _setup_audit_logger()
 
     def _graceful_shutdown(signum, frame):
         _startup_log.info("收到信号, 优雅关闭中...")

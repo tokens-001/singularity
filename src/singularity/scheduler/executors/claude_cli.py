@@ -130,6 +130,15 @@ def _git_changed_files(baseline_ref: str = "", cwd: str = "") -> list:
     """
     run_cwd = cwd if cwd else str(config.PROJECT_ROOT)
     changed = []
+    if not baseline_ref:
+        # 降级路径要**出声**（防御模式 §55）：没有基线就只能跟 HEAD 比，
+        # 而 agent 自己 `git commit` 之后跟 HEAD 比是**恒空**的 —— 静默降级
+        # 会让"判据不完整"看起来和"没改东西"一模一样。
+        try:
+            from .. import witness as _wit
+            _wit.warn("claude_cli", "collect_changes:no_baseline_ref（跟 HEAD 比，已提交的看不见）"[:200])
+        except Exception:
+            pass
     try:
         diff_args = ["git", "diff", "--name-only"]
         if baseline_ref:

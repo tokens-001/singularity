@@ -756,26 +756,32 @@ class OpenAIAgentExecutor(BaseExecutor):
             return f"搜索错误: {e}"
 
     def _track_changed_files(self):
-        """通过 git status 追踪改动的文件 (含 untracked 新文件, 修复 #1)。
+        """追踪改动的文件。
 
-        git diff --name-only 漏掉 untracked 新文件 (模型用 run_command heredoc 写的新文件),
-        改用 git status --porcelain 全覆盖。
+        ⚠️ **原来这里只跑裸的 `git status --porcelain`（跟 HEAD 比），会被"改动已提交"
+        骗到**：agent 自己 `git commit` 之后工作区是干净的 ⇒ changed_files 空 ⇒
+        `_exec` 那句 `if changed:` 为假 ⇒ **审查 / QA / 安全审计整条被跳过**，
+        而 `git commit` 并不在 `base.py` 的 `_BLOCKED_COMMANDS` 里（拦不住）。
+
+        同一个形状在 `validator._diff_base` 和 `_salvage_timed_out` 已各踩过一次
+        （防御模式 §55）—— 那两处都改成了"跟执行前的快照 ref 比"，这里漏了。
+        改法直接复用 `claude_cli._git_changed_files`（同一招，别各写一份）：
+        `git diff <baseline_ref>` 看得见**已提交 + 未提交**，再并上 untracked。
         """
         try:
-            r = subprocess.run(
-                ["git", "status", "--porcelain"],
-                capture_output=True, text=True, cwd=str(self._cwd), timeout=15,
-            )
-            if r.returncode == 0:
-                for line in r.stdout.splitlines():
-                    # 格式: "XY path" (X=index, Y=worktree), 重命名 "R  old -> new"
-                    f = line[3:].split(" -> ")[-1].strip()
-                    # 过滤构建产物 (__pycache__/.pyc), 不算交付文件
-                    if not f or f in self._changed_files:
-                        continue
-                    if "__pycache__" in f or f.endswith((".pyc", ".pyo")):
-                        continue
-                    self._changed_files.append(f)
+            # 降级路径要**出声**：拿不到基线时 `_git_changed_files` 会退回裸 diff，
+            # 那就又会漏掉已提交的部分 —— 静默降级正是这个 bug 的一半。
+            if not self.baseline_ref:
+                try: witness.warn('oa_exec', 'collect_changes:no_baseline_ref（判据不完整）'[:120])
+                except Exception: pass
+            from singularity.scheduler.executors.claude_cli import _git_changed_files
+            for f in _git_changed_files(self.baseline_ref, str(self._cwd)):
+                # 过滤构建产物 (__pycache__/.pyc), 不算交付文件
+                if not f or f in self._changed_files:
+                    continue
+                if "__pycache__" in f or f.endswith((".pyc", ".pyo")):
+                    continue
+                self._changed_files.append(f)
         except Exception as e:
             try: witness.warn('oa_exec', f'collect_changes:{e}'[:80])
             except Exception: pass

@@ -205,8 +205,21 @@ class AnthropicApiExecutor(BaseExecutor):
             return f"Error: {e}"
 
     def _get_changed_files(self) -> list[str]:
-        """Get list of changed files via git diff."""
+        """Get list of changed files via git diff.
+
+        ⚠️ 原来这里是 `self.baseline_ref or "HEAD"` —— 拿不到基线就**静默**退化成
+        跟 HEAD 比。而 agent 自己 `git commit` 之后跟 HEAD 比是**恒空**的
+        （`git commit` 不在 `base.py` 的 `_BLOCKED_COMMANDS` 里）⇒ changed_files 空
+        ⇒ 下游审查/QA/安全审计整条被跳过。防御模式 §55 的同形状，第三次。
+        现在：拿不到基线就**出声**（降级仍然发生，但不再静默）。
+        """
         import subprocess as _sp
+        if not self.baseline_ref:
+            try:
+                from singularity.scheduler import witness as _w
+                _w.warn('anthropic_exec', 'collect_changes:no_baseline_ref（退化成跟 HEAD 比，已提交的改动看不见）'[:200])
+            except Exception:
+                pass
         try:
             r = _sp.run(
                 ["git", "diff", "--name-only", self.baseline_ref or "HEAD"],
