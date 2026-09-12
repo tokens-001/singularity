@@ -30,6 +30,11 @@ HOLD_DIR = QIDIAN_DIR / "holds"      # 人工扣留标记
 CANCEL_DIR = QIDIAN_DIR / "cancels"  # 取消标记
 PAUSE_DIR = QIDIAN_DIR / "pauses"    # 暂停标记：逐步确认模式 / 手动暂停按钮 (GATE 不走这里)
 PARKED_DIR = QIDIAN_DIR / "parked"   # 合并冲突 parking 持久化
+# 执行中累计的 token（每次 dispatch 后落一盘）。
+# 为什么需要它：超时被杀的任务**不走收尾记账**（`_archive_task_outcome` 到不了），
+# 于是"烧了多少 token"整条丢掉。执行器自己那个累加值在线程里，超时方拿不到 ——
+# 只能边跑边落盘。见 `docs/防御模式.md` §59。
+PARTIAL_USAGE_DIR = QIDIAN_DIR / "partial_usage"
 AGENTS_TOML = SCHEDULER_DIR / "agents.toml"  # stdlib tomllib, 不依赖 pyyaml
 
 # ── 超时 ──────────────────────────────────────────────────────────────
@@ -83,7 +88,7 @@ def ensure_dirs() -> None:
 
     MEMORY_DIR = QIDIAN_DIR / "memory"
     WORKTREES_DIR = QIDIAN_DIR / "worktrees"
-    for d in (QIDIAN_DIR, SNAPSHOT_DIR, PATCH_DIR, TRACE_DIR, HOLD_DIR, CANCEL_DIR, PAUSE_DIR, PARKED_DIR, MEMORY_DIR, WORKTREES_DIR):
+    for d in (QIDIAN_DIR, SNAPSHOT_DIR, PATCH_DIR, TRACE_DIR, HOLD_DIR, CANCEL_DIR, PAUSE_DIR, PARKED_DIR, MEMORY_DIR, WORKTREES_DIR, PARTIAL_USAGE_DIR):
         d.mkdir(parents=True, exist_ok=True)
     free = shutil.disk_usage(QIDIAN_DIR).free / (1024 * 1024)
     if free < MIN_DISK_MB:

@@ -74,7 +74,15 @@ def test_salvage_marks_usage_unknown_not_zero(tmp_path, monkeypatch):
 
 
 def test_salvage_never_raises(tmp_path, monkeypatch):
-    """抢救本身不许把调度循环带崩 —— 取不到就返回 None，走老路。"""
+    """抢救本身不许把调度循环带崩。
+
+    ⚠️ **这条的契约 2026-09-12 改过，不是测试迁就代码，是原来那个 `return None` 本身有两个洞**
+    （防御模式 §59）。git 那段砸了不代表**账**也不用记：
+      ① 用量是**先读**的（跟 git 无关），返回 None 调用方就再也拿不到 token；
+      ② `_save_trace(..., None, ...)` 会写出一份"这个任务什么都没干"的假 trace。
+    所以改成返回一个**残的 disp 对象**（字段能填多少填多少）。
+    断言也跟着从 `is None` 改成"拿得到对象、且 token 字段还在"。
+    """
     from singularity.scheduler import project as proj_mod
 
     def boom(t):
@@ -82,7 +90,13 @@ def test_salvage_never_raises(tmp_path, monkeypatch):
 
     monkeypatch.setattr(proj_mod, "repo_root_for", boom)
     task = type("T", (), {"id": "task-3"})()
-    assert orch._salvage_timed_out(task, 900.0) is None
+    disp = orch._salvage_timed_out(task, 900.0)
+    assert disp is not None, "抢救失败也得回一个对象 —— 理由见 docstring"
+    er = disp.executor_result
+    # 这个用例没落过用量盘 → 如实 None（"不知道"），不是 0（"没花钱"）
+    assert er.token_count is None
+    assert er.elapsed == 900.0 and er.error_kind == "timeout"
+    assert "超时" in er.raw_output
 
 
 def _mk_committed_worktree(tmp_path, task_id):

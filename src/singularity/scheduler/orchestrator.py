@@ -129,8 +129,18 @@ def _salvage_timed_out(task, elapsed_s: float, snap=None):
     修法：跟**执行前快照的 ref** 比 —— 和 `validator._diff_base` 同一招，
     它的注释早就写着"裸 git diff 恒为空"（09-11 修了 validator，这里没同步）。
 
-    用量（token）**取不到**（executor 没返回），所以如实留 None，不填 0。
+    用量（token）：2026-09-12 起**读得回来了** —— 执行器每 dispatch 一次就把累计值
+    落一盘（`_exec._persist_partial_usage`），这里读回。**它是下界**（超时那一刻
+    正在飞的那次调用没算进去），一次都没落盘才留 None。**None = 不知道，不是没花钱。**
     """
+    # 用量先读 —— **必须放在下面的 try 外面**：那段要跑 git、可能抛，
+    # 抛了就落进 except 分支，账又跟着丢了（这正是本次要修的东西，别再绕回去）。
+    # 执行器每 dispatch 一次落一盘（`_exec._persist_partial_usage`），这里读回来。
+    # ⚠️ 它是**下界**：超时那一刻正在飞的那次模型调用不在里面。
+    # 一条都没落（比如第一轮就超时）才如实留 None —— None 是"不知道"，不是"没花钱"。
+    from singularity.scheduler._exec import read_partial_usage
+    _partial_tokens, _partial_model = read_partial_usage(task.id)
+
     try:
         import subprocess
         from singularity.scheduler.project import repo_root_for
@@ -177,8 +187,10 @@ def _salvage_timed_out(task, elapsed_s: float, snap=None):
             changed_files = files
             new_commits = commits
             raw_output = (f"(执行超时(>{int(elapsed_s)}s) 被杀，未及输出总结。"
-                          f"磁盘上改动了 {len(files)} 个文件{tail})")
-            token_count = None          # 不可知 —— 不是"没花钱"
+                          f"磁盘上改动了 {len(files)} 个文件{tail}"
+                          + (f"；已知花费 {_partial_tokens} token（下界，最后那次调用未计）"
+                             if _partial_tokens else "；用量未知（一次都没落盘）") + ")")
+            token_count = _partial_tokens or None
             elapsed = float(elapsed_s)  # 这个是真的：确实跑了这么久
             success = False
             error = "timeout"
@@ -188,7 +200,8 @@ def _salvage_timed_out(task, elapsed_s: float, snap=None):
 
         class _TimedOutDisp:
             executor_result = _TimedOutResult()
-            agent_cfg = {"model": ""}
+            # 带上模型名：记账要按模型单价算钱，空串会进 unpriced_models。
+            agent_cfg = {"model": _partial_model}
 
         return _TimedOutDisp()
     except Exception as e:
@@ -197,7 +210,30 @@ def _salvage_timed_out(task, elapsed_s: float, snap=None):
             witness.warn("orchestrator", f"salvage_timeout:{type(e).__name__}:{e}"[:120])
         except Exception:
             pass
-        return None
+        # git 那段砸了**不等于账也不用记** —— 用量是先读的，跟 git 没关系。
+        # 原来这里直接 return None：调用方连 token 都拿不到，`_save_trace` 还会
+        # 拿到 None 写出一份"这个任务什么都没干"的假 trace。两头都错。
+        _tok_txt = (f"；已知花费 {_partial_tokens} token（下界）" if _partial_tokens
+                    else "；用量未知（一次都没落盘）")
+
+        class _FallbackResult:
+            changed_files: list = []
+            new_commits: list = []
+            raw_output = (f"(执行超时(>{int(elapsed_s)}s) 被杀；改动抢救失败"
+                          f"({type(e).__name__}){_tok_txt})")
+            token_count = _partial_tokens or None
+            elapsed = float(elapsed_s)
+            success = False
+            error = "timeout"
+            error_kind = "timeout"
+            patch_path = ""
+            tool_events: list = []
+
+        class _FallbackDisp:
+            executor_result = _FallbackResult()
+            agent_cfg = {"model": _partial_model}
+
+        return _FallbackDisp()
 
 
 def _reap_futures(running_futures: dict, pending_batches: dict,
@@ -269,6 +305,33 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
             # 抢救已知事实再落 trace —— 传 None 会让 trace 变成一份"什么都没干"的假象
             _salvaged = _salvage_timed_out(t, now - submitted_at, snap)
             _save_trace(t, route, snap, _salvaged, None, False)
+            # 记账：超时任务**走不到** `_archive_task_outcome`（那是唯一记账入口，
+            # 在 finalize 那条路上；超时分支直接判失败、不进 pending）⇒ 花掉的钱
+            # 一条都不落。§55 要求超时路径留"烧了多少 token"，这是那半的兑现。
+            try:
+                _tk = int(getattr(_salvaged.executor_result, "token_count", 0) or 0)
+                if _tk > 0:
+                    from singularity.scheduler._token_budget import record_tokens
+                    _pname = ""
+                    _pid = getattr(t, "project_id", "") or ""
+                    if _pid:
+                        try:
+                            from singularity.scheduler import project as _proj_mod
+                            _pname = getattr(_proj_mod.load(_pid), "name", "") or ""
+                        except Exception:
+                            pass        # 拿不到名字不该影响记账
+                    record_tokens(
+                        project_id=_pid, project_name=_pname, task_id=t.id,
+                        model=getattr(_salvaged, "agent_cfg", {}).get("model", ""),
+                        level=getattr(t, "route_level", "any"), tokens=_tk,
+                        elapsed_s=now - submitted_at,
+                    )
+            except Exception as _e:
+                try:
+                    from singularity.scheduler import witness
+                    witness.warn("orch", f"timeout_record_tokens:{type(_e).__name__}"[:120])
+                except Exception:
+                    pass
             # ⚠️ **记忆这一侧也要进** —— 原来超时只写 trace，`index_task` 走的是
             # `_exec.py` 那条正常收尾路径，被 deadline 砍掉就整个跳过。
             # 后果：**干完了但超时的任务，经验永远进不了记忆**（探路2 的 T2/T3 实测：

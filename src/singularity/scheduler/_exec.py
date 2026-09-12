@@ -97,6 +97,52 @@ def _inject_role_context(route_role: str) -> str:
     return ""
 
 
+def _persist_partial_usage(task_id: str, level: str, model: str, delta: int) -> None:
+    """把执行中**累计**的 token 落一盘，给超时路径用。
+
+    为什么必须边跑边落：超时被杀的任务**走不到收尾记账**
+    （`_task_runner._archive_task_outcome` 是唯一记账入口，它在 finalize 那条路上，
+    而超时分支直接把任务判失败、不进 pending）。执行器自己那个 `total_tokens`
+    在它线程里，超时方 `fut` 已经 pop 掉、拿不到 —— 只能落盘。
+
+    ⚠️ **这是下界，不是精确值**：粒度是"每次 dispatch 之后"，所以
+    **超时那一刻正在飞的那次模型调用**不在里面（那次可能很贵）。
+    如实当下界用，别当准确数。
+
+    累加写（读回来 + delta）：一次任务可能换 agent 重试，每次 dispatch 的
+    `token_count` 是**那一次**的用量，得累加才是这个任务总共烧的。
+    """
+    try:
+        config.ensure_dirs()
+        p = config.PARTIAL_USAGE_DIR / f"{task_id}.json"
+        cur, cur_model = 0, model
+        if p.exists():
+            try:
+                d = json.loads(p.read_text(encoding="utf-8"))
+                cur = int(d.get("tokens", 0) or 0)
+                cur_model = d.get("model") or model
+            except Exception:
+                cur, cur_model = 0, model
+        p.write_text(json.dumps({
+            "task_id": task_id, "level": level, "model": cur_model,
+            "tokens": cur + max(0, int(delta or 0)), "updated_at": time.time(),
+        }, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass    # 落盘失败不该把任务带崩 —— 记不记成账是次要的
+
+
+def read_partial_usage(task_id: str) -> tuple[int, str]:
+    """读回累计用量 → `(tokens, model)`。没有/读坏了一律 `(0, "")`。"""
+    try:
+        p = config.PARTIAL_USAGE_DIR / f"{task_id}.json"
+        if not p.exists():
+            return 0, ""
+        d = json.loads(p.read_text(encoding="utf-8"))
+        return int(d.get("tokens", 0) or 0), str(d.get("model") or "")
+    except Exception:
+        return 0, ""
+
+
 def _check_cancelled(task, all_tool_events: list) -> "BatchOutput | None":
     """检查人工取消标记。返回 BatchOutput 表示已取消; None 表示继续。"""
     cancel_path = config.CANCEL_DIR / f"{task.id}.json"
@@ -403,6 +449,22 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 # ── 收集工具调用事件 ──
                 if exec_result and getattr(exec_result, 'tool_events', None):
                     all_tool_events.extend(exec_result.tool_events)
+
+                # 累计用量落盘 —— 超时路径要靠它才知道这个任务烧了多少（§59）。
+                # 放在这儿是因为 dispatch 刚回来、token_count 是现成的。
+                if exec_result is not None:
+                    _persist_partial_usage(
+                        task.id, level, agent_cfg.get("model", "") if isinstance(agent_cfg, dict) else "",
+                        getattr(exec_result, "token_count", 0) or 0,
+                    )
+
+                # 收尾前**再查一次取消**。原来只在每轮开头查，于是超时（或人工取消）
+                # 之后这一轮仍然会往下走完收尾，而那一堆活要碰 worktree —— 超时方
+                # 已经把它撤了 ⇒ 刷一屏 `collect_changes: [Errno 2]`，从外面看
+                # 像"任务还在跑"（§59 实测：超时 8 分钟后告警里还在报）。
+                _cancelled_now = _check_cancelled(task, all_tool_events)
+                if _cancelled_now is not None:
+                    return _cancelled_now
 
                 if not exec_result.success:
                     # 容灾: 切下一个 agent

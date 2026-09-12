@@ -13,14 +13,17 @@ def _isolate_qidian_dir(tmp_path, monkeypatch):
 
     **只改 QIDIAN_DIR 是不够的** —— `config` 里那几个派生目录在**导入时**就算好了，
     属性改了它们不变，用到它们的代码照样写真实目录：
-      · config.{SNAPSHOT,PATCH,TRACE,HOLD,CANCEL,PAUSE,PARKED}_DIR
+      · config.{SNAPSHOT,PATCH,TRACE,HOLD,CANCEL,PAUSE,PARKED,PARTIAL_USAGE}_DIR
+    ⚠️ **加了新的 `config.X_DIR` 就必须回来往下面那个元组里加一行** ——
+    2026-09-12 加 `PARTIAL_USAGE_DIR` 时漏了，`test_exec_run.py` 一跑就把真
+    `.qidian/partial_usage/` 建了出来（§56 的同一个坑，第 N 次）。
     （内存模块与 `route_learner` 原来也要在这里单独补一刀，**2026-09-11 已改成
     读时现算**，见各自的 `_events_path()` / `_learner_path()` —— 补丁撤了。）
     """
     from singularity.scheduler import config
     monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
     for name in ("SNAPSHOT_DIR", "PATCH_DIR", "TRACE_DIR", "HOLD_DIR",
-                 "CANCEL_DIR", "PAUSE_DIR", "PARKED_DIR"):
+                 "CANCEL_DIR", "PAUSE_DIR", "PARKED_DIR", "PARTIAL_USAGE_DIR"):
         monkeypatch.setattr(config, name, tmp_path / getattr(config, name).name)
 
 

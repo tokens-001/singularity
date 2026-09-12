@@ -79,6 +79,10 @@ def install_stubs():
     _tmp = Path(tempfile.mkdtemp())
     _exec.config.CANCEL_DIR = _tmp / "cancel"
     (_exec.config.CANCEL_DIR).mkdir(parents=True, exist_ok=True)
+    # 这个脚本是独立跑的、不走 tests/conftest.py —— `_persist_partial_usage` 会
+    # 调 `ensure_dirs()`，而 PARTIAL_USAGE_DIR 是**导入时**算好的真路径：
+    # 不指走，一跑就把生产 `.qidian/partial_usage/` 建出来（§56 同族）。
+    _exec.config.PARTIAL_USAGE_DIR = _tmp / "partial_usage"
 
     _exec.witness.heartbeat = lambda *a, **k: None
     _exec._inject_memory = lambda d: ""
@@ -162,6 +166,23 @@ if __name__ == "__main__":
     check("带 merge_request", b.merge_request == "FAKE_MR")
     check("非 planner_decomposed", b.planner_decomposed is False)
     check("worktree 对称 (建=清)", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
+
+    print("── 接线: 每轮把累计用量落盘 (防御模式 §59) ──")
+    # 单独一条是因为：`_persist_partial_usage` 自己有单测，但**函数对 ≠ 接线通** ——
+    # 超时的账之所以丢，坏的就是接线（run 根本不记）。这条钉的是"run() 真会调"。
+    reset_wt()
+    S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2}]
+    _e = FakeExec(success=True); _e.token_count = 4321
+    S.dispatch_queue = [("ok", _e)]
+    S.validate_queue = [FakeVal(action="pass")]
+    _t = make_task()
+    S.task = _t
+    _exec.run(_t, make_ctx(v3=True), {"any": list(S.chain)})
+    _tok, _mdl = _exec.read_partial_usage(_t.id)
+    check("run() 真把用量落进 sidecar", _tok == 4321, f"读到 {_tok}")
+    # 取的是**chain 里那个** model（agent_cfg["model"]），不是 FakeDispResult 里那个 ——
+    # _exec 手上只有前者。对，因为真要记账的就是这条链上跑的模型。
+    check("模型名也带上 (记账要按单价算钱, 空串会进 unpriced)", _mdl == "m1", f"读到 {_mdl!r}")
 
     print("── 路径2: 用户取消 ──")
     reset_wt()

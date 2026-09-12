@@ -87,6 +87,10 @@ def cleanup_task_artifacts(task_id: str, repo_root) -> int:
     _rm(config.CANCEL_DIR / f"{task_id}.json")
     _rm(config.PAUSE_DIR / f"{task_id}.json")
 
+    # 执行中的累计用量 —— 只在"超时那条路"被读走，正常跑完的任务不会消费它。
+    # 不清就是每个任务留一个孤儿文件（§59 的账是补上了，但垃圾别留下）。
+    _rm(config.PARTIAL_USAGE_DIR / f"{task_id}.json")
+
     # snapshot ({ts}_{task_id}.json)
     for p in config.SNAPSHOT_DIR.glob(f"*_{task_id}.json"):
         _rm(p)
