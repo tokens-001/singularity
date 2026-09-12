@@ -162,3 +162,125 @@ def test_consolidate_memory_runs_without_nameerror(tmp_path, monkeypatch):
     mc.consolidate_memory()
     bad = [w for w in warns if "is not defined" in w]
     assert not bad, f"还是未定义名（用户看不到，只留一条告警）: {bad}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 盲区补丁 2：import 的**目标**对不对 —— F821 够不着的另一半
+# ═══════════════════════════════════════════════════════════════
+# 上面那些守卫只看**裸名字**有没有出现过。但"名字对不上"还有两半它管不到：
+#   · `from M import N` —— N 在 M 里根本不存在（写错名 / 被改名 / 被删）
+#   · `模块.属性`     —— 属性不存在（`add_inferred_causal_edge` 那个 bug 的邻居形状）
+# 两者都是**跑到那一行才抛**，而这类调用多半包在 `except Exception` 里
+# —— §64 那三处就是这么藏了一整天的。
+#
+# 判据是**运行时**的：import 真模块、`hasattr` 真查，不做文本比对。
+# ⚠️ **范围**：只看 `singularity.*` 里 import 得成功的模块；相对 import（`from . import x`）
+# 和第三方模块跳过 —— **跳过多少会报出来**，别让它看着像"全覆盖"。
+# ⚠️ **它查的是"存不存在"，不是"调得对不对"**：签名不符、参数写反，这条守卫抓不到。
+
+def _walk_src_py():
+    import ast as _ast
+    for p in sorted(SRC.rglob("*.py")):
+        try:
+            yield p, _ast.parse(p.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+
+
+def _importable(modname: str):
+    """只碰本仓的模块 —— 别的模块 import 可能有副作用/可选依赖。"""
+    if not modname.startswith("singularity"):
+        return None
+    try:
+        return importlib.import_module(modname)
+    except Exception:                     # noqa: BLE001
+        return None
+
+
+def _is_submodule(modname: str, attr: str) -> bool:
+    try:
+        importlib.import_module(f"{modname}.{attr}")
+        return True
+    except Exception:                     # noqa: BLE001
+        return False
+
+
+def test_from_import_targets_exist():
+    """`from M import N` 里 N 必须真的在 M 里。"""
+    import ast as _ast
+    bad: list[str] = []
+    checked = skipped = 0
+    for p, tree in _walk_src_py():
+        for node in _ast.walk(tree):
+            if not isinstance(node, _ast.ImportFrom) or node.level or not node.module:
+                continue
+            m = _importable(node.module)
+            if m is None:
+                skipped += 1
+                continue
+            for a in node.names:
+                if a.name == "*":
+                    continue
+                checked += 1
+                if hasattr(m, a.name) or _is_submodule(node.module, a.name):
+                    continue
+                bad.append(f"{p.relative_to(SRC)}:{node.lineno}  "
+                           f"from {node.module} import {a.name}")
+    # 判据自检：扫不到东西的守卫比没有更坏（看着绿，其实什么都没查）
+    assert checked > 400, f"只扫到 {checked} 条 import —— 判据本身可能坏了"
+    assert not bad, (
+        f"from import 的目标不存在（跳过 {skipped} 个模块，多为相对/第三方）。\n"
+        "跑到那一行才抛 ImportError，多半被 `except Exception` 吞掉：\n"
+        + "\n".join("  " + b for b in bad)
+    )
+
+
+def test_module_attributes_exist():
+    """`模块.属性` 里的属性必须真的存在。"""
+    import ast as _ast
+    bad: list[str] = []
+    checked = 0
+    for p, tree in _walk_src_py():
+        # 本文件里绑到"模块对象"上的别名 → 真模块
+        aliases: dict[str, str] = {}
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Import):
+                for a in node.names:
+                    top = a.name.split(".")[0]
+                    # `import a.b.c` 绑的是顶层 `a`（指向模块 a）；
+                    # `import a.b.c as x` 绑 `x`（指向 a.b.c）。这一支我第一次写错过。
+                    aliases[a.asname or top] = a.name if a.asname else top
+            elif (isinstance(node, _ast.ImportFrom) and node.module
+                  and not node.level and node.module.startswith("singularity")):
+                for a in node.names:
+                    if a.name != "*":
+                        aliases[a.asname or a.name] = f"{node.module}.{a.name}"
+        real = {k: _importable(v) for k, v in aliases.items()}
+        real = {k: v for k, v in real.items() if v is not None}
+        if not real:
+            continue
+        # 被重新赋值 / 被定义成函数类的名字，已经不是那个模块了 —— 跳过
+        rebound = {t.id for n in _ast.walk(tree)
+                   if isinstance(n, (_ast.Assign, _ast.AnnAssign))
+                   for t in ((n.target,) if isinstance(n, _ast.AnnAssign) else n.targets)
+                   if isinstance(t, _ast.Name)}
+        rebound |= {n.name for n in _ast.walk(tree)
+                    if isinstance(n, (_ast.FunctionDef, _ast.ClassDef))}
+        for node in _ast.walk(tree):
+            if not isinstance(node, _ast.Attribute):
+                continue
+            v = node.value
+            if not isinstance(v, _ast.Name) or v.id not in real or v.id in rebound:
+                continue
+            checked += 1
+            mod = real[v.id]
+            if hasattr(mod, node.attr) or _is_submodule(mod.__name__, node.attr):
+                continue
+            bad.append(f"{p.relative_to(SRC)}:{node.lineno}  "
+                       f"{v.id}.{node.attr}  （{mod.__name__} 里没有）")
+    assert checked > 500, f"只扫到 {checked} 处模块属性 —— 判据本身可能坏了"
+    assert not bad, (
+        "引用了不存在的模块属性。跑到那一行才抛 AttributeError，"
+        "多半被 `except Exception` 吞掉：\n"
+        + "\n".join("  " + b for b in bad)
+    )
