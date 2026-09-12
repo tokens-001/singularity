@@ -210,7 +210,7 @@ _ARCH_SCHEMA = """{
   "data_model": {"database":"","entities":[],"relationships":[]},
   "api_contracts": [{"method":"","path":"","description":"","input":{},"output":{},"errors":[]}],
   "tech_stack": {"language":"","framework":"","database":"","cache":"","mq":""},
-  "constraints": [{"type":"","rule":"","check":""}],
+  "constraints": [{"type":"","rule":"","check":{"argv":["pytest","-q"],"expect_exit":0},"covers":[0]}],
   "test_cases": {
     "unit": [{"name":"","target_module":"","input":"","expected":""}],
     "integration": [{"name":"","interfaces_tested":[],"setup":"","expected":""}],
@@ -385,6 +385,12 @@ _V2_FINALIZE = """你是架构定稿人「{writer}」。下面是委员会的最
    api_contracts。实测教训：需求只要求计费，融合稿却继承了成员稿里的支付网关与账本，
    在"需求边界明确"的任务上因此输给更克制的单稿。
 5. 顺便生成 test_cases（基于 PRD 成功标准 + API契约 + state_machine）
+6. constraints 每条**必须带 `covers`** —— 0 起算的索引数组，指向这条约束覆盖了原始需求的
+   哪几条（成员原稿里都有这个字段，**照搬别丢**）。丢了 = 这几条需求变成"没人验的需求"，
+   会被算成缺口。`check` 能机器跑的写成 `{{"argv":["python3","-m","pytest","-q"],"expect_exit":0}}`
+   数组形（argv[0] 只允许 python3/pytest/npm/node/git/ls/cat/wc/test，python3 只允许跟 `-m pytest`）；
+   机器验不了的（界面美观、命名风格之类）**如实写一段散文说明为什么验不了** ——
+   不许编一条反正跑不通的命令凑格式。
 
 输出必须严格遵循以下 JSON schema:
 

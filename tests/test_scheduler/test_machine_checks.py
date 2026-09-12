@@ -4,6 +4,8 @@
 最要紧的一条：`python3 -c` 等于任意代码执行 —— 模型生成的架构 JSON 是
 prompt injection 面，这条必须堵死，而且必须**在参数层判**（只判程序名挡不住）。
 """
+import re
+
 import pytest
 
 from singularity.scheduler import _machine_checks as mc
@@ -164,3 +166,54 @@ class TestRunCheck:
     def test_missing_root_is_refused(self, tmp_path):
         r = mc.run_check({"argv": ["pytest"], "expect_exit": 0}, tmp_path / "nope")
         assert r["ran"] is False and "根目录" in r["reason"]
+
+
+class TestArchSchemaCoversContract:
+    """防御模式 §61：架构 schema 有**两份拷贝**，字段漂过 —— `covers` 在重流程下全丢，
+    于是"8/8 条需求没人验"（覆盖率分子恒 0）。
+
+    光把某一处改对不解决复发，所以这里钉住「两份的 constraints 字段集必须一致」。
+    ⚠️ 判"prompt 有没有起作用"要挑**原稿里没有、只有 schema 里有的字段**看 ——
+    拿两边都有的字段判，会把"抄来的"当成"要求生效了"（§61 规则 2）。
+    """
+    CANON = {"type", "rule", "check", "covers"}
+
+    @staticmethod
+    def _constraint_fields(prompt: str) -> set[str]:
+        """抓「约束对象」那个数组里的示例字段。按方括号配对找数组结尾。
+
+        ⚠️ prompt 里 `"constraints"` 不止一处 —— `data_model` 下也有个同名的字符串数组
+        （`"constraints": ["约束"]`）。取**含 `"rule"` 的那个**，那才是约束对象。
+        """
+        for m in re.finditer(r'"constraints"', prompt):
+            j = prompt.index("[", m.end())
+            depth, k = 0, j
+            while k < len(prompt):
+                if prompt[k] == "[":
+                    depth += 1
+                elif prompt[k] == "]":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                k += 1
+            fields = set(re.findall(r'"(\w+)"\s*:', prompt[j:k + 1]))
+            if "rule" in fields:
+                return fields
+        raise AssertionError(f"没找到约束对象数组：{prompt[:80]!r}")
+
+    def test_both_copies_declare_the_same_constraint_fields(self):
+        from singularity.scheduler.workflow import _ARCHITECT_CONTEXT
+        from singularity.scheduler.execution_judge import _ARCH_SCHEMA
+
+        seat = self._constraint_fields(_ARCHITECT_CONTEXT)
+        final = self._constraint_fields(_ARCH_SCHEMA)
+        assert seat == final, (
+            f"两份架构 schema 的 constraints 字段漂了 —— "
+            f"席位 prompt={sorted(seat)}，委员会定稿={sorted(final)}")
+        assert self.CANON <= seat, f"缺字段: {sorted(self.CANON - seat)}"
+
+    def test_seat_prompt_documents_covers_semantics(self):
+        """字段出现在 schema 里 ≠ 模型知道它什么意思。席位 prompt 得有解释，否则照抄不出。"""
+        from singularity.scheduler.workflow import _ARCHITECT_CONTEXT
+        assert "covers" in _ARCHITECT_CONTEXT
+        assert "0 起算的索引" in _ARCHITECT_CONTEXT
