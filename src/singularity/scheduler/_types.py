@@ -50,6 +50,9 @@ class BatchOutput:
     pre_search_code_context: str = ""
     tool_events: list = field(default_factory=list)   # 工具调用事件 [{tool,status,time,...}]
     turn_count: int = 0                                # 实际推理轮次
+    # 执行器自己撞了总预算、主动收尾（不是被 orchestrator 900s 收割）。
+    # 作用是**终止升级/重试**: 换模型只会把剩下的时间再烧一遍，换完照样被无声收割。
+    deadline_wrapup: bool = False
     qa_verdict: str = ""                               # worker 内 QA 门禁判定 (pass/fail/escalate/retry; 空=未跑)
     qa_issues: list = field(default_factory=list)      # QA 问题明细 (finalize 写 error 用, 免二次跑 supervise)
 

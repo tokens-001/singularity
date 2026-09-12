@@ -100,6 +100,14 @@ _RETRY_TOTAL_BUDGET = float(os.environ.get("QIDIAN_RETRY_TOTAL_BUDGET", "600"))
 # 非流式只能干等整体 240s 超时，且线程 join 不掉 —— 见 _dispatch_exec 顶部注释。
 _STREAM = os.environ.get("QIDIAN_STREAM", "1") != "0"
 _STALL_TIMEOUT = float(os.environ.get("QIDIAN_STALL_TIMEOUT", "90"))
+# 执行器自查的总预算 = orchestrator 的收割上限 − 收尾余量（单一来源在 config）。
+# **为什么执行器要自己看表**：以前它只转 max_turns 轮、一圈表都不看，唯一的上限
+# 就是 orchestrator 到 900s 的**无声收割** —— 被杀就什么都留不下（token/文件/轮次全丢，
+# 2026-09-13 复查 8003/8384/8386 定的案）。现在提前 TASK_WRAPUP_MARGIN_S 自己收尾，
+# 把已知事实交回去。
+# 环境变量可调：真机验证时设个小值就能几十秒内撞上这条路径。
+_EXEC_BUDGET = float(os.environ.get(
+    "QIDIAN_EXEC_BUDGET", str(config.TASK_DEADLINE_S - config.TASK_WRAPUP_MARGIN_S)))
 # 进度上流节流：多久推一条 "生成中 N 字" 到前端（0 = 关）
 _PROGRESS_INTERVAL = float(os.environ.get("QIDIAN_PROGRESS_INTERVAL", "1.0"))
 
@@ -354,8 +362,16 @@ class OpenAIAgentExecutor(BaseExecutor):
         last_tool_calls = ""     # 上一轮工具调用指纹 (去重)
         max_tool_turns = self.cfg.get("max_tool_turns", 3)
         _force_at = force_output_at(self._max_turns, max_tool_turns)
+        # 自查总预算（轮间看表 + 单次调用封顶都用它，见 _EXEC_BUDGET）
+        self._deadline_at = start + _EXEC_BUDGET
+        _wrapped = False
 
         for turn in range(1, self._max_turns + 1):
+            # 轮间看表：到点不再开新轮，直接收尾（否则下一轮一跑就是几分钟，
+            # 冲过 orchestrator 的 900s 一样被无声砍 —— 那就白改了）。
+            if time.time() >= self._deadline_at:
+                _wrapped = True
+                break
             # 从 request_template 读取参数，只传模型支持的
             tmpl = self.cfg.get("request_template", {})
             if self._is_responses_api:
@@ -441,6 +457,11 @@ class OpenAIAgentExecutor(BaseExecutor):
                                           error_kind="exec", elapsed=time.time() - start,
                                           tool_events=list(self._tool_events))
             except _NetworkError as e:
+                # 预算已到 → 这多半是上面封顶超时导致的断流，**不是**该换模型重来的
+                # 瞬时网络故障。报成网络错会被上层 failover 掉，白烧剩下的时间。
+                if time.time() >= self._deadline_at:
+                    _wrapped = True
+                    break
                 return ExecutorResult(success=False, error=str(e),
                                       error_kind="exec", elapsed=time.time() - start,
                                       tool_events=list(self._tool_events))
@@ -595,6 +616,21 @@ class OpenAIAgentExecutor(BaseExecutor):
                     elapsed=elapsed, token_count=total_tokens,
                     tool_events=list(self._tool_events),
                 )
+
+        if _wrapped:
+            # 撞总预算: 主动收尾，把**已知事实**交回去（烧掉的 token、改过的文件、跑过的轮次）。
+            # success=False 是实话（活确实没干完）—— 别为了好走流程谎报成功。
+            # error_kind="deadline" 是给 _exec 的信号：**别换模型重来**。换一个只会把
+            # 剩下的时间再烧一遍，换完照样被 900s 无声收割，而这份账同样保不住。
+            self._track_changed_files()
+            return ExecutorResult(
+                success=False,
+                error=(f"到达执行预算 {_EXEC_BUDGET:.0f}s，主动收尾"
+                       f"（工具轮 {len(self._tool_events)} 次，改动 {len(self._changed_files)} 个文件）"),
+                error_kind="deadline",
+                changed_files=list(self._changed_files),
+                elapsed=time.time() - start, token_count=total_tokens,
+                tool_events=list(self._tool_events))
 
         # 达到最大轮次: 模型可能已写文件但没输出终答 → 追踪 changed_files, 有文件就算产出
         self._track_changed_files()
@@ -878,9 +914,14 @@ class OpenAIAgentExecutor(BaseExecutor):
         content, reasoning = [], []
         tool_calls, finish, usage = {}, "", {}
         bad_frames = 0
+        # 单次调用也要封在**剩余预算**内：只在轮间看表是不够的 —— 一轮本身可能跑
+        # 几分钟，看完表再开一轮照样冲过 900s，又变成被无声收割。
+        _left = getattr(self, "_deadline_at", 0.0)
+        _cap = min(240.0, max(1.0, _left - time.time())) if _left else 240.0
         try:
             with client.stream("POST", self._url, json=payload, headers=headers,
-                               timeout=httpx.Timeout(240.0, connect=15.0, read=_STALL_TIMEOUT)) as resp:
+                               timeout=httpx.Timeout(_cap, connect=15.0,
+                                                     read=min(_STALL_TIMEOUT, _cap))) as resp:
                 if resp.status_code >= 400:
                     resp.read()                      # 先取回 body 才能读 .text
                     self._raise_for_status(resp)

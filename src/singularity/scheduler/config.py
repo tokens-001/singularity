@@ -44,6 +44,17 @@ GATE_TIMEOUT = 120.0          # eval.py 要跑 30 条 golden, 不快
 CLAUDE_CLI_TIMEOUT = 300.0
 ZHIPU_API_TIMEOUT = 240.0     # 代码生成任务长 (审计 5.3); 与 openai_agent 的 httpx 240s 对齐 — 慢模型出长 JSON 120s 不够
 
+# ── 单任务总时限 ──────────────────────────────────────────────────────
+# **两个地方共用这一个数**（以前 orchestrator 里硬编码 900，执行器不知道）:
+#   · orchestrator._reap_futures —— 到点无声收割（写取消标记 + 判 FAILED）
+#   · executor 自己（openai_agent）—— 提前 TASK_WRAPUP_MARGIN_S 收尾返回
+# 分成两份写必然漂移；漂了就回到"干到被砍、砍完无账"（2026-09-13 复查的 8003）。
+TASK_DEADLINE_S = 900.0
+# 留给收尾/合并的余量: 执行器预算 = 900 - 90 = 810s。
+# 执行器从自己起跑算，比 orchestrator 的 submit 时刻晚十几秒（建 worktree/text 预检），
+# 90s 够盖住这点差 + 让 finalize 跑完。
+TASK_WRAPUP_MARGIN_S = 90.0
+
 # ── 模型输出额度 ──────────────────────────────────────────────────────
 # 是保险丝，不是油门：模型按需用额度（实测 trivial 任务只烧 41/20000），
 # 设小了只会把**正常**输出掐断 —— 6000/16000/20000 三档都实测截断过

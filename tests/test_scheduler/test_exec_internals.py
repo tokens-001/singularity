@@ -3,7 +3,7 @@
 ponytail: 只测分支密度最高的 leaf 函数。run() 路径已由 test_exec_run.py 覆盖。
 """
 
-import os, sys, json, tempfile
+import os, sys, json, tempfile, time
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch, PropertyMock
@@ -1324,3 +1324,86 @@ class TestStreamCall:
         with pytest.raises(oa._NetworkError) as e:
             ex._stream_call({})
         assert "停滞" in str(e.value)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 执行器自查总预算（2026-09-13 补）
+#
+# 症状：三个任务撞 orchestrator 的 900s 收割（8003 / 8384 / 8386），死法都是
+# "一直跑到被砍"。根因不是"哪个模型卡住了"，是**执行器的 turn 循环一圈表都不看**
+# —— 唯一的上限就是外面那次无声收割，砍完 token / 改动文件 / 轮次全丢。
+# 修法：执行器提前 TASK_WRAPUP_MARGIN_S 自己收尾，把已知事实交回去。
+# 这里钉两道闸门：轮间看表、以及"看表之后别再把账丢掉"。
+# ═══════════════════════════════════════════════════════════════
+
+class TestExecutorBudgetWrapup:
+
+    def _ex(self, monkeypatch, budget):
+        from singularity.scheduler.executors import openai_agent as oa
+        monkeypatch.setenv("TEST_KEY", "k")
+        monkeypatch.setattr(oa, "_EXEC_BUDGET", budget)
+        cfg = {"model": "m", "api_key_env": "TEST_KEY", "entry": "http://x", "max_turns": 5}
+        return oa, oa.OpenAIAgentExecutor(
+            cfg, "任务", "tid", skill_tools=[], mcp_tools=[])
+
+    @staticmethod
+    def _tool_reply(_body):
+        """一次"模型要调工具"的响应 —— 让循环有第二轮的由头。"""
+        return {"choices": [{"message": {"content": "", "tool_calls": [
+            {"id": "1", "type": "function",
+             "function": {"name": "read_file", "arguments": '{"path": "x"}'}}]}}],
+            "usage": {"total_tokens": 7}}
+
+    def test_budget_already_spent_makes_no_call(self, monkeypatch):
+        """预算已到 → **一个调用都不发**，直接收尾。"""
+        oa, ex = self._ex(monkeypatch, budget=0.0)
+        calls = []
+        monkeypatch.setattr(ex, "_api_call", lambda b: (calls.append(b), self._tool_reply(b))[1])
+        r = ex.run()
+        assert calls == [], "预算已到还在发模型调用"
+        assert r.error_kind == "deadline"
+        assert r.success is False, "活没干完不许谎报成功"
+
+    def test_wrapup_carries_the_account(self, monkeypatch):
+        """撞预算收尾时，**已经烧掉的 token / 跑过的轮次 / 改过的文件要跟着交回去**。
+
+        这是这次修改的全部意义：以前被 900s 砍掉 = 什么都没留下（8003 的
+        `token_count=None` / `turns=0` 就是这么来的）。
+        """
+        oa, ex = self._ex(monkeypatch, budget=600.0)
+        calls = []
+
+        def _call(body):
+            calls.append(body)
+            ex._deadline_at = time.time() - 1     # 这次调用之后预算就过点了
+            return self._tool_reply(body)
+
+        monkeypatch.setattr(ex, "_api_call", _call)
+        r = ex.run()
+        assert len(calls) == 1, "过点之后不该再开新轮"
+        assert r.error_kind == "deadline", "收尾要能被上层识别成'别换模型重来'"
+        assert r.token_count == 7, "收尾把已烧的 token 丢了 —— 那和被砍没区别"
+        assert r.tool_events, "收尾把跑过的轮次丢了"
+
+    def test_wrapup_is_not_retried(self, monkeypatch):
+        """收尾结果**不许再重试** —— 重试就是把剩下的时间再烧一遍。"""
+        from singularity.scheduler._exec import _run_with_retry
+        attempts = []
+
+        class _R:
+            executor_result = MagicMock(ok=False)
+            agent_cfg = {"model": "m"}
+
+        class _D:
+            executor_result = _R.executor_result
+            agent_cfg = {"model": "m"}
+
+        batch = BatchOutput(ok=False, task_id="tid", deadline_wrapup=True,
+                            term_reason="no_escalation_path (level=any, last_action=abort)",
+                            validation=MagicMock())
+        task = MagicMock(max_retries=3)
+        monkeypatch.setattr("singularity.scheduler._exec.run",
+                            lambda *a, **k: (attempts.append(1), batch)[1])
+        out = _run_with_retry(task, MagicMock(retry_count=0, merge_queue=None), {})
+        assert out is batch
+        assert len(attempts) == 1, f"撞预算收尾被重试了 {len(attempts)} 次"

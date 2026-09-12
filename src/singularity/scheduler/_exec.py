@@ -391,6 +391,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     final_turn = 0                     # 实际推理轮次
     qa_verdict = ""                    # worker 内 QA 门禁判定, 随 batch 带回给 finalize 复用
     qa_issues: list = []
+    deadline_wrapup = False            # 执行器自己撞总预算收尾 → 别升级/别重试
 
     # method 必须透传：审查层靠它判这个 ref 能不能当 diff 基准。漏了它，
     # `_diff_base` 恒返回空串 → 审查五道检查一起短路（2026-09-11 外派评审抓到的 P0）。
@@ -504,6 +505,17 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     return _cancelled_now
 
                 if not exec_result.success:
+                    if getattr(exec_result, "error_kind", "") == "deadline":
+                        # 执行器自己撞了总预算收尾。**不换模型** —— 换一个只会把剩下的
+                        # 时间再烧一遍，烧完照样被 orchestrator 900s 无声收割，而这一份
+                        # 已经拿到手的账（token/文件/轮次）也会跟着丢。直接收。
+                        deadline_wrapup = True
+                        last_validation = val_mod.ValidationReport(
+                            verdict="未知", action="abort",
+                            unverified=[f"执行器到达总预算主动收尾: {exec_result.error}"],
+                            turns_used=turn,
+                        )
+                        break
                     # 容灾: 切下一个 agent
                     tried_models.add(agent_cfg.get("model", ""))
                     fallback_chain = [a for a in fallback_chain if a.get("model", "") not in tried_models]
@@ -672,6 +684,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
         term_reason=term_reason, validation=last_validation,
         tool_events=all_tool_events, turn_count=final_turn,
         qa_verdict=qa_verdict, qa_issues=qa_issues,
+        deadline_wrapup=deadline_wrapup,
     )
 
 def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
@@ -700,6 +713,10 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
         if batch.ok or batch.planner_decomposed:
             return batch
         if batch.term_reason.startswith(("merge_conflict", "soft_quality_gate")):
+            return batch
+        if getattr(batch, "deadline_wrapup", False):
+            # 撞总预算收尾。重试 = 把剩下的时间再烧一遍，而且下次多半是被 orchestrator
+            # 900s 无声收割 —— 这一份已经拿到手的账（token/文件）也跟着丢。收下就走。
             return batch
 
         retry += 1
