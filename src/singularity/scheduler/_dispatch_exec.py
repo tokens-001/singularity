@@ -157,6 +157,18 @@ def dispatch(
                 executor_cls, agent_cfg, full_task, task_id, level,
                 baseline_ref=baseline_ref, cwd=cwd, phase=phase,
             )
+            # ⚠️ **执行器自己撞总预算收尾 —— 这是终态，不是"这个模型空输出"。**
+            # 必须挡在下面那道 `raw_output` 判据**前面**：收尾结果没有终答，raw_output
+            # 是空的（它就是"没写完"），落进"空输出"分支会被当成"换个模型再试"
+            # ⇒ 换一个只会把剩下的时间再烧一遍，而且 `error_kind="deadline"` 跟
+            # 那份已经拿到手的账（token/文件）一起丢掉。
+            # 2026-09-13 真机实测：一次正常收尾**被吞成 3 轮重试、423 秒**。
+            # 不记 breaker：这不是模型的锅（它没坏、也没限流），记了会误伤好模型。
+            if result is not None and getattr(result, "error_kind", "") == "deadline":
+                return DispatchResult(
+                    level=level, agent_cfg=agent_cfg,
+                    executor_result=result, attempts=attempt + 1,
+                )
             if result and result.raw_output:
                 _model_breaker.record_success(agent_cfg.get("model", ""))
                 return DispatchResult(

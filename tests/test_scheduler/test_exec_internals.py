@@ -1407,3 +1407,57 @@ class TestExecutorBudgetWrapup:
         out = _run_with_retry(task, MagicMock(retry_count=0, merge_queue=None), {})
         assert out is batch
         assert len(attempts) == 1, f"撞预算收尾被重试了 {len(attempts)} 次"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 收尾是**终态**，不是"这个模型空输出"（2026-09-13 真机抓到的）
+# ═══════════════════════════════════════════════════════════════
+# `dispatch()` 的 fallback 链判据是 `if result and result.raw_output` ——
+# 而执行器撞预算收尾时**没有终答**，raw_output 就是空的（它就是"没写完"）。
+# 于是收尾结果落进"空输出"分支 ⇒ 被当成"换个模型再试" ⇒ 换一个把剩下的时间
+# 再烧一遍，`error_kind="deadline"` 和那份账（token/文件）**一起丢掉**。
+#
+# 真机实测（2026-09-13 02:42，`QIDIAN_EXEC_BUDGET=60`）：一次正常收尾
+# **被吞成 3 轮重试、423 秒**，而收尾本身只用了 57.5 秒。
+
+def test_deadline_wrapup_is_terminal_not_empty_output(monkeypatch):
+    """收尾结果必须**原样返回**，不能被"空输出"那条判据吞掉。"""
+    from singularity.scheduler import _dispatch_exec as pd
+    from singularity.scheduler.executors.base import ExecutorResult
+
+    wrapped = ExecutorResult(
+        success=False, raw_output="",              # ← 关键：收尾没有终答
+        error="到达执行预算 60s，主动收尾", error_kind="deadline",
+        token_count=1234, tool_events=[{"kind": "tool:start", "tool": "read_file"}])
+
+    monkeypatch.setattr(pd, "pick_agent_fallback_chain",
+                        lambda *a, **k: [{"model": "m", "type": "openai-agent"}])
+    monkeypatch.setattr(pd, "_prefer_by_strengths", lambda task, chain: chain)
+    monkeypatch.setattr(pd, "_committee_allowed", lambda *a, **k: False)
+    monkeypatch.setattr(pd, "_ensure_agent_type", lambda c: c)
+    monkeypatch.setattr(pd, "_run_executor", lambda *a, **k: wrapped)
+
+    out = pd.dispatch("任务", "any", "tid", {})
+    assert out.executor_result is wrapped, (
+        "收尾结果被吞掉了 —— 它多半是被当成'空输出'换模型重试了（真机上烧了 423 秒）")
+    assert out.executor_result.token_count == 1234, "账跟着丢了"
+
+
+def test_empty_output_still_falls_through(monkeypatch):
+    """**对照**：真正的空输出（不是 deadline）仍然要走"换模型"那条 —— 别把这次修复改宽了。"""
+    from singularity.scheduler import _dispatch_exec as pd
+    from singularity.scheduler.executors.base import ExecutorResult
+
+    monkeypatch.setattr(pd, "pick_agent_fallback_chain",
+                        lambda *a, **k: [{"model": "m", "type": "openai-agent"}])
+    monkeypatch.setattr(pd, "_prefer_by_strengths", lambda task, chain: chain)
+    monkeypatch.setattr(pd, "_committee_allowed", lambda *a, **k: False)
+    monkeypatch.setattr(pd, "_ensure_agent_type", lambda c: c)
+    monkeypatch.setattr(pd, "_model_breaker",
+                        type("B", (), {"record_failure": lambda *a: None,
+                                       "record_success": lambda *a: None})())
+    monkeypatch.setattr(pd, "_run_executor",
+                        lambda *a, **k: ExecutorResult(success=False, raw_output="",
+                                                       error="模型吐了个空", error_kind="exec"))
+    with pytest.raises(RuntimeError):
+        pd.dispatch("任务", "any", "tid", {})
