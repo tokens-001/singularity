@@ -248,17 +248,21 @@ class ProjectState:
         ⚠️ 为什么要有这层（防御模式 §60）：`_run_execution` 里明明
         `project.constraints_checklist = architecture["constraints"]` 紧跟着 `save()`，
         可真机上落到盘里的却是 **`[]`**，而**同一份 json 里 `architecture.constraints`
-        完好有 8 条**。后果不是"少几个字段"：`_run_verification` 进门第一句就早退
+        完好有 8~9 条**。后果不是"少几个字段"：`_run_verification` 进门第一句就早退
         ⇒ **机械检查一条都跑不了**，"信任上限 = 机械证据覆盖的验证面比例"分子恒 0。
 
-        覆盖源**没定位到**（全仓只有 `_run_execution` 一处写它，`architecture_redo()`
-        是死代码），读代码定不了案 —— 所以这里不赌是谁覆盖的，直接让症状不可能发生：
-        **清单为空、而架构里有约束，就用架构里那份**。
-        两者按构造应该相等（`constraints_checklist` 就是它的副本，没有任何地方做过
-        GATE2 过滤），所以兜底不会绕过什么确认。
+        **根因 2026-09-12 定位（真机 · 项目 1789223754637）：不是被覆盖，是没人写。**
+        这条路 `_run_execution` **压根不执行** —— 批准 GATE2 时 `project_gate_confirm`
+        只启 planning、不启 executing（executing 归调度循环推），所以建任务的是
+        `orchestrator._decompose_and_create_tasks`；而清单的唯一写点在 `_run_execution` 里。
+        （此处原来写的是"覆盖源没定位到，赌一个源怕赌错" —— 那个猜测可以撤了。）
+        已在 `_decompose_and_create_tasks` 补上写入；**这层兜底继续留着**：
+        它是"症状不可能发生"的保险，且写入点以后还可能再分叉。
 
-        ⚠️ **兜底时必须出声**：不告警的话，这个 bug 就永远查不出来了 ——
-        降级可见是刻意留的（见 `docs/防御模式.md` §55 补的那条规则）。
+        ⚠️ **告警语义（别再读错）**：`constraints_checklist_fallback` 出现 ≠ "覆盖源还在"，
+        而是 **"有某条建任务的路没写清单"**。修之前走 GATE2 批准路径**它必然出现**
+        （真机实测就出现了）；补上写入之后**它应该消失** —— 下次真跑若还见到这条告警，
+        说明又有新的写入点分叉了，别当成老问题复发。
         """
         got = self.constraints_checklist or []
         if got:

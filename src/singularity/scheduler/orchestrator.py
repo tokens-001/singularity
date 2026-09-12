@@ -643,8 +643,19 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
 def _decompose_and_create_tasks(proj, agents: dict) -> None:
     """P2 兜底: 项目进了 executing 却一个任务都没有时，从架构再拆一次。
 
-    正常路径用不到它 —— `run_phase` → `_workflow_phases._run_execution` 在项目进入
-    executing **之前**就把任务建好了。这条只在"没建上"时兜底。
+    ⚠️ **它不是"兜底"，是 GATE2 批准路径上的正常路径。** 这里原来写着"正常路径用不到它
+    —— `run_phase` → `_run_execution` 在项目进入 executing 之前就把任务建好了"，
+    **这个前提是假的**（2026-09-12 真机 · 项目 1789223754637 实测）：批准 GATE2 时
+    `_api_projects.project_gate_confirm` **只顺手启 planning，不启 executing**
+    （理由见那里的注释：executing 归调度循环推，推了就是两套驱动抢同一个 phase）。
+    `_run_execution` 只被 `workflow.run_phase` 的 EXECUTING 分支调用 ⇒ 这条路它**不跑**。
+    证据：lineage 里 `gate2→executing` 的 reason 是"人工批准 gate2"，
+    **没有** `_run_execution` 才会写的"架构确认 → 建任务进执行"。
+
+    ⇒ 所以这里必须**自己把 `constraints_checklist` 写上**（见下面的赋值）：
+    它的唯一写点在 `_run_execution` 里，而这里才是真正建任务的那条路。
+    漏写的后果不是"少个字段"：`_run_verification` 进门第一句就早退，
+    **机械检查一条都跑不了**（防御模式 §60）。
 
     ⚠️ 它以前读 `<项目目录>/architecture.json` —— **全仓没有任何代码写这个文件**
     （唯一提及它的就是这里），所以永远卡在第一步 `if not arch_path.exists(): return`：
@@ -688,6 +699,11 @@ def _decompose_and_create_tasks(proj, agents: dict) -> None:
                              route_role=role_key)
             proj.task_ids.append(task.id)
             id_map[local_id] = task.id
+
+        # 约束清单的唯一写点在 `_run_execution`，而这条路它不跑（见 docstring）——
+        # 所以在这里补上，否则验收时清单恒空 ⇒ 机械检查整段跳过（§60）。
+        # 与 `_run_execution` 同源同式（`architecture["constraints"]`），按构造相等。
+        proj.constraints_checklist = arch_json.get("constraints", []) or []
 
         from singularity.scheduler.project import save
         save(proj)

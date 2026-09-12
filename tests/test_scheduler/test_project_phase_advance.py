@@ -102,6 +102,39 @@ def test_decompose_fallback_reads_project_architecture(tmp_path, monkeypatch):
     assert len(p.task_ids) == 1, "架构里有任务却没建出来 = 兜底还在读那个没人写的文件"
 
 
+def test_decompose_fallback_writes_constraints_checklist(tmp_path, monkeypatch):
+    """一条建任务的路，必须自己把 `constraints_checklist` 写上。
+
+    清单的唯一写点在 `_run_execution`，而这条路**恰好不跑它**：批准 GATE2 时
+    `project_gate_confirm` 只启 planning、不启 executing（executing 归调度循环推），
+    于是建任务的是 `_decompose_and_create_tasks` —— 而它以前只建任务、不写清单。
+    后果（2026-09-12 真机 · 项目 1789223754637 实测）：清单恒空 ⇒
+    `_run_verification` 进门第一句就早退 ⇒ **机械检查一条都跑不了**（§60）。
+
+    它的 docstring 当时写着"正常路径用不到它" —— 那句前提是假的，这就是守卫。
+    """
+    from singularity.scheduler import config
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+    monkeypatch.setattr(tracker.config, "QIDIAN_DIR", tmp_path)
+    monkeypatch.setattr(proj_mod, "ensure_repo", lambda _id: tmp_path)
+
+    p = proj_mod.ProjectState(
+        id="proj1", name="测试项目", raw_constraints=[], owner_confirm={},
+        constraints_checklist=[], task_ids=[], issues=[], supervision_log=[],
+        lineage=[], handoffs=[], agent_lineup={},
+    )
+    cons = [{"type": "test", "rule": "pytest 全绿",
+             "check": {"argv": ["python3", "-m", "pytest", "-q"], "expect_exit": 0}}]
+    p.architecture = {"constraints": cons,
+                      "tasks": [{"id": "T1", "title": "实现 X",
+                                 "description": "创建 x.py", "layer": "impl"}]}
+    monkeypatch.setattr(proj_mod, "save", lambda _p: None)
+
+    orch._decompose_and_create_tasks(p, {})
+    assert p.constraints_checklist == cons, (
+        "这条路建了任务却没写约束清单 ⇒ 验收时机械检查整段跳过（§60）")
+
+
 def test_no_decomposable_tasks_is_surfaced_not_silently_stuck(tmp_path, monkeypatch):
     """架构拆不出任务 → 必须留痕，不能无声卡死。
 
