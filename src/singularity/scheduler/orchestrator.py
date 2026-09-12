@@ -160,8 +160,11 @@ def _salvage_timed_out(task, elapsed_s: float, snap=None):
     # 执行器每 dispatch 一次落一盘（`_exec._persist_partial_usage`），这里读回来。
     # ⚠️ 它是**下界**：超时那一刻正在飞的那次模型调用不在里面。
     # 一条都没落（比如第一轮就超时）才如实留 None —— None 是"不知道"，不是"没花钱"。
-    from singularity.scheduler._exec import read_partial_usage, read_partial_tool_events
+    from singularity.scheduler._exec import (
+        read_partial_usage, read_partial_tool_events, read_partial_started_at)
     _partial_tokens, _partial_model = read_partial_usage(task.id)
+    # **进没进过 dispatch** —— 它决定下面那句"用量未知"该说哪一种（§59 的边界）。
+    _started_at = read_partial_started_at(task.id)
     # tool_events 也一样：它平时只在内存/SSE 里过一遍，超时路径拿不到
     # ⇒ trace 里 `tool_batches.turns` 恒 0，"一次多动作"那套度量在超时任务上没法算。
     _partial_events = read_partial_tool_events(task.id)
@@ -214,7 +217,13 @@ def _salvage_timed_out(task, elapsed_s: float, snap=None):
             raw_output = (f"(执行超时(>{int(elapsed_s)}s) 被杀，未及输出总结。"
                           f"磁盘上改动了 {len(files)} 个文件{tail}"
                           + (f"；已知花费 {_partial_tokens} token（下界，最后那次调用未计）"
-                             if _partial_tokens else "；用量未知（一次都没落盘）") + ")")
+                             if _partial_tokens
+                             # ⚠️ **两种"没账"要说清楚是哪一种**（§59 的边界）：
+                             # 进过 dispatch = 调用了、只是没落账；没进过 = 真没发起过。
+                             # 以前一律说"一次都没落盘"，等于把这两件事混起来报。
+                             else ("；用量未知 —— **dispatch 已经开始了**，是没落账，不是没调用"
+                                   if _started_at
+                                   else "；用量未知 —— **一次 dispatch 都没进去过**")) + ")")
             token_count = _partial_tokens or None
             elapsed = float(elapsed_s)  # 这个是真的：确实跑了这么久
             success = False

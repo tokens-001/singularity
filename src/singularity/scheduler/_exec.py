@@ -133,6 +133,14 @@ def _persist_partial_usage(task_id: str, level: str, model: str, delta: int,
             "task_id": task_id, "level": level, "model": cur_model,
             "tokens": cur + max(0, int(delta or 0)), "updated_at": time.time(),
         }
+        # `started_at` 是 `_mark_dispatch_started` 在 dispatch 开头落的 —— 这里必须
+        # **带着它一起写回去**，否则一次正常的累加落盘就把"进过 dispatch"这个事实抹了。
+        try:
+            _prev_started = json.loads(p.read_text(encoding="utf-8")).get("started_at")
+        except Exception:
+            _prev_started = None
+        if _prev_started is not None:
+            payload["started_at"] = _prev_started
         if tool_events is not None:
             # tool_events 平时只在内存和 SSE 里过一遍、**从来不落盘**
             # ⇒ 超时任务的 trace 里 tool_batches 的 turns 恒为 0
@@ -147,6 +155,46 @@ def _persist_partial_usage(task_id: str, level: str, model: str, delta: int,
         p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass    # 落盘失败不该把任务带崩 —— 记不记成账是次要的
+
+
+def _mark_dispatch_started(task_id: str) -> None:
+    """dispatch **开始**时落一个时间戳 —— 只为让两种"没账"分得开。
+
+    被 900s 收割的任务，`token_count = None` 有**两种成因**：
+      ① 压根没发起过模型调用；
+      ② 发起了，但那一刻正在飞的调用没落盘。
+    §59 说过"分不出'真没调工具'和'没落盘'"—— 落到 token 上就是这两条。
+    加这个标记之后：**sidecar 在不在**就能分开它们（在 = 进过 dispatch）。
+
+    ⚠️ **不改 token 的语义**：它照样是**下界**，别当准确数。
+    ⚠️ `started_at` 只写第一次（后来的 dispatch 不覆盖它）——
+    它回答的是"这个任务有没有进过 dispatch"，不是"最后一次什么时候"。
+    """
+    try:
+        config.ensure_dirs()
+        p = config.PARTIAL_USAGE_DIR / f"{task_id}.json"
+        d: dict = {}
+        if p.exists():
+            try:
+                d = json.loads(p.read_text(encoding="utf-8")) or {}
+            except Exception:
+                d = {}
+        d.setdefault("started_at", time.time())
+        d["task_id"] = task_id
+        p.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass    # 落盘失败不该把任务带崩
+
+
+def read_partial_started_at(task_id: str) -> "float | None":
+    """dispatch 开始过的时刻；**从没进过 dispatch** 才返回 `None`。"""
+    try:
+        p = config.PARTIAL_USAGE_DIR / f"{task_id}.json"
+        if not p.exists():
+            return None
+        return json.loads(p.read_text(encoding="utf-8")).get("started_at")
+    except Exception:
+        return None
 
 
 def read_partial_usage(task_id: str) -> tuple[int, str]:
@@ -471,6 +519,9 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                                                         tool_events=all_tool_events,
                                                         route_role=route_role)
 
+                # dispatch **开始**就落一个时间戳 —— 被 900s 收割时，
+                # "压根没发起过调用" 和 "发起了但没落账" 从此分得开（§59 那个边界）。
+                _mark_dispatch_started(task.id)
                 disp_result = disp_mod.dispatch(
                     effective_task, level, task.id, agents,
                     feedback=feedback, baseline_ref=ctx.snapshot_ref, cwd=cwd,

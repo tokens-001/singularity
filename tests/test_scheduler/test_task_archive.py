@@ -464,3 +464,119 @@ def test_save_trace_keeps_tool_events_without_disp_result(monkeypatch, tmp_path)
     report = nj.DeliveryReport.from_dict(_json.loads(raw))
     assert report.to_dict()["tool_batches"] == on_disk, "转一圈回来把轮次丢了（会报成 0）"
     assert nj.format_report(report), "trace 导 markdown 没产出内容"
+
+
+# ═══════════════════════════════════════════════════════════════
+# §59 的边界：两种"没账"要分得开（2026-09-13）
+# ═══════════════════════════════════════════════════════════════
+# 被 900s 收割的任务 `token_count = None` 有**两种成因**：
+#   ① 压根没发起过模型调用   ② 发起了，但那一刻正在飞的调用没落盘
+# 以前一律报"一次都没落盘" —— **分不出就等于没有这个信号**。
+
+def test_partial_usage_distinguishes_never_started_from_not_persisted(monkeypatch, tmp_path):
+    from singularity.scheduler import config
+    from singularity.scheduler._exec import (
+        _mark_dispatch_started, _persist_partial_usage,
+        read_partial_started_at, read_partial_usage)
+
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+    monkeypatch.setattr(config, "PARTIAL_USAGE_DIR", tmp_path / "partial_usage")
+    (tmp_path / "partial_usage").mkdir()
+
+    assert read_partial_started_at("t1") is None, "没进过 dispatch 却说进过"
+
+    _mark_dispatch_started("t2")
+    assert read_partial_started_at("t2") is not None, "dispatch 开始了却没留痕"
+    assert read_partial_usage("t2")[0] == 0, "标记不该凭空造出 token"
+
+    # ⚠️ 累加落盘**不许把 started_at 抹掉** —— 抹了又变成"分不出"
+    _persist_partial_usage("t2", "any", "m", 100)
+    assert read_partial_started_at("t2") is not None, "累加落盘把'进过 dispatch'抹了"
+    assert read_partial_usage("t2")[0] == 100
+
+
+def test_salvage_names_which_kind_of_no_account(monkeypatch, tmp_path):
+    """收尾那句要**说清是哪一种**没账。"""
+    tr = _patch_dispatch_env(monkeypatch, tmp_path)
+    from singularity.scheduler import config
+    from singularity.scheduler._exec import _mark_dispatch_started
+    monkeypatch.setattr(config, "PARTIAL_USAGE_DIR", tmp_path / "partial_usage")
+    (tmp_path / "partial_usage").mkdir()
+    monkeypatch.setattr(orch, "_worktrees_dir", lambda *a, **k: tmp_path, raising=False)
+    monkeypatch.setattr("singularity.scheduler._git_worktree._worktrees_dir",
+                        lambda *a, **k: tmp_path, raising=False)
+
+    t_never = tr.create("从没进过 dispatch")
+    r1 = orch._salvage_timed_out(t_never, 12.0, None)
+    out1 = r1.executor_result.raw_output
+    assert "一次 dispatch 都没进去过" in out1, out1
+
+    t_started = tr.create("进过 dispatch 但没落账")
+    _mark_dispatch_started(t_started.id)
+    r2 = orch._salvage_timed_out(t_started, 12.0, None)
+    out2 = r2.executor_result.raw_output
+    assert "dispatch 已经开始了" in out2, out2
+    assert "没落账" in out2
+
+
+def test_dispatch_start_is_marked_before_dispatch_runs(monkeypatch, tmp_path):
+    """**接线**：`_mark_dispatch_started` 必须在 `dispatch(...)` **之前**执行。
+
+    上面那两条测的是函数本身 —— 函数对 ≠ 接线通（今晚已经栽过两次）。
+    这条借 `tests/test_exec_run.py` 的桩驱动一遍真的 `_exec.run`，
+    在 `dispatch` 被调用**的那一刻**回头看 sidecar 在不在。
+    """
+    import importlib.util
+    import pathlib
+    from singularity.scheduler import config, _exec
+    from singularity.scheduler._exec import read_partial_started_at
+
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+    monkeypatch.setattr(config, "PARTIAL_USAGE_DIR", tmp_path / "partial_usage")
+    (tmp_path / "partial_usage").mkdir()
+
+    spec = importlib.util.spec_from_file_location(
+        "exec_run_harness", pathlib.Path(__file__).resolve().parents[1] / "test_exec_run.py")
+    harness = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(harness)        # 有 __main__ 保护，import 不会跑用例
+
+    # ⚠️ `install_stubs()` 是**直接改模块属性**的（不走 monkeypatch）——
+    # 不还原就会污染**后面所有测试**。2026-09-13 实测：跑完这条再跑
+    # `test_tracker.py` 会挂两条（症状是"单独跑是绿的"）。
+    # 这是我自己写测试时踩的坑，就地钉住。
+    import singularity.scheduler.supervisor as _sup
+    # ⚠️ 要拍的**不止 `_exec`** —— 桩是顺着 `_exec.X` 改到**别的模块本身**上的：
+    # `_exec.tracker.read_task = ...` 改的是 tracker 模块、`_exec.witness.heartbeat = ...`
+    # 改的是 witness 模块。只还原 `_exec` 等于没还（2026-09-13 实测：
+    # 漏了那两个，跑完这条再跑 `test_tracker.py` 挂两条，而单独跑是绿的）。
+    snap = [(m, dict(vars(m))) for m in (_exec, _exec.tracker, _exec.witness, _sup)]
+    snap_s = dict(vars(harness.S))
+    seen: dict = {}
+    try:
+        harness.install_stubs()
+        harness.reset_wt()
+        harness.S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2}]
+        harness.S.dispatch_queue = [("ok", harness.FakeExec(success=True))]
+        harness.S.validate_queue = [harness.FakeVal(action="pass")]
+        t = harness.make_task()
+        harness.S.task = t
+
+        orig = _exec.disp_mod.dispatch
+
+        def _spy(*a, **k):
+            seen["started_at"] = read_partial_started_at(t.id)
+            return orig(*a, **k)
+
+        _exec.disp_mod.dispatch = _spy
+        _exec.run(t, harness.make_ctx(v3=True), {"any": list(harness.S.chain)})
+    finally:
+        for mod, saved in snap:
+            for k in [k for k in vars(mod) if k not in saved]:
+                delattr(mod, k)
+            for k, v in saved.items():
+                setattr(mod, k, v)
+        vars(harness.S).clear()
+        vars(harness.S).update(snap_s)
+
+    assert seen.get("started_at") is not None, (
+        "dispatch 被调用时 sidecar 还不存在 —— 说明那个标记没接在 dispatch 前面")
