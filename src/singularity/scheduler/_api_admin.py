@@ -506,6 +506,9 @@ def status_overview():
         "avg_done": f"{sum(dd)/len(dd):.1f}s" if dd else "--",
         "token_totals": tt, "stalled": stalled, "agents": agents,
         "alerts": witness.read_alerts(limit=20),  # 最近告警，新→旧
+        # 按 key 归并的近 24h 告警 —— "常驻条件"那一栏的数据源。
+        # 常亮不是"最近问题多"，是判据跟配置脱节；混在 `alerts` 里会把真事故盖住。
+        "alert_summary": witness.alert_summary(since=time.time() - 86400),
         "workdir": str(proj_mod.get_projects_root())}, 200
 
 

@@ -137,7 +137,9 @@ def _run_budget_gate(project: ProjectState, stage: str) -> str:
             project.id, getattr(project, "token_budget_total", 0) or 0)
     except Exception as e:
         from singularity.scheduler import witness
-        witness.warn("budget", f"{type(e).__name__}:{e}"[:120])
+        # 显式给 key：这句 msg 以异常类名开头，靠句首前缀取键会把所有 ValueError
+        # 并成一条（见 witness._derive_alert_key 的说明）。
+        witness.warn("budget", f"{type(e).__name__}:{e}"[:120], key="budget_probe_failed")
         return ""          # 探不了就不拦 —— 预算探测不该变成新的卡点
 
     project.issues = [i for i in project.issues if i.get("type") != "budget"]

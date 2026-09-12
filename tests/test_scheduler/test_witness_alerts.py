@@ -144,3 +144,79 @@ def test_no_message_written_into_heartbeat_level():
             if m and m.group(1).lstrip().startswith(("f'", 'f"')):
                 bad.append(f"{py.name}:{i}: {line.strip()[:70]}")
     assert not bad, "心跳第二参数被当成消息用了（应改走 witness.warn）:\n" + "\n".join(bad)
+
+
+# ── 告警聚合：把"常驻条件"从事件流里分出来 ──────────────────────
+#
+# 背景（2026-09-13）：真机一段 26 分钟的窗口里 25 条告警，**22 条（88%）挤在两个
+# key 上**（collect_changes 12× / constraints_checklist_fallback 10×）。
+# 常亮不是"最近问题多"，是判据跟配置脱节 —— 淹在事故流里会把真事故盖住。
+
+class TestAlertKey:
+
+    def test_clean_prefix_is_the_key(self):
+        assert witness._derive_alert_key("collect_changes:no_baseline_ref") == "collect_changes"
+
+    def test_bare_exception_is_not_a_key(self):
+        """裸 `f'{e}'` 长成 `KeyError: 'x'`，看着像 key —— 认了就等于把所有
+        KeyError 并成一条，真事故会被并进噪声栏（比不聚合更坏）。"""
+        assert witness._derive_alert_key("KeyError: 'x'") == ""
+        assert witness._derive_alert_key("RuntimeError: boom") == ""
+        assert witness._derive_alert_key("TimeoutException: t") == ""
+
+    def test_no_colon_is_not_a_key(self):
+        assert witness._derive_alert_key("read_task_file") == ""
+        assert witness._derive_alert_key("拒绝非法流转 a→b (task=x)") == ""
+
+    def test_explicit_key_wins(self, qdir):
+        """写法不像 `标识符:` 的调用点可以显式传 key。"""
+        witness.warn("budget", "ValueError: x", key="budget_probe_failed")
+        assert witness.read_alerts()[0]["key"] == "budget_probe_failed"
+
+
+class TestAlertSummary:
+
+    def test_groups_by_key_and_marks_chronic(self, qdir):
+        for _ in range(3):
+            witness.warn("orch", "collect_changes:no_baseline_ref")
+        witness.warn("exec", "cascade_skip:m1→m2")
+        s = witness.alert_summary(chronic_min=3)
+        assert s[0]["key"] == "collect_changes" and s[0]["n"] == 3 and s[0]["chronic"]
+        assert s[1]["key"] == "cascade_skip" and s[1]["n"] == 1 and not s[1]["chronic"]
+
+    def test_two_different_exceptions_do_not_collapse(self, qdir):
+        """这条是**不聚合**那一侧的安全网：两条无关的裸异常各自成组，
+        不许因为都叫 `KeyError` 就被并成"常驻条件"。"""
+        witness.warn("orch", "KeyError: 'alpha'")
+        witness.warn("orch", "KeyError: 'beta'")
+        s = witness.alert_summary(chronic_min=2)
+        assert len(s) == 2, f"两条不相干的异常被并成一条了: {s}"
+        assert all(not e["chronic"] for e in s)
+
+    def test_same_key_across_scopes_merge(self, qdir):
+        """同一个 key 从两个 scope 报出来 = **一个常驻条件被两个调用方各报一遍**。
+        拿 scope 当身份会把它劈成两行、每行都不够"常驻"（真机上 `collect_changes`
+        就是从 `oa_exec` / `claude_cli` 两边报出来的）。范围信息不丢，`scopes` 带着。"""
+        witness.warn("a", "same_key:x")
+        witness.warn("b", "same_key:x")
+        s = witness.alert_summary(chronic_min=2)
+        assert len(s) == 1 and s[0]["n"] == 2 and s[0]["chronic"]
+        assert sorted(s[0]["scopes"]) == ["a", "b"]
+
+    def test_since_window_filters(self, qdir):
+        p = qdir / "alerts.jsonl"
+        p.write_text("\n".join([
+            json.dumps({"ts": 100.0, "scope": "s", "msg": "old_key:x", "key": "old_key"}),
+            json.dumps({"ts": 900.0, "scope": "s", "msg": "new_key:x", "key": "new_key"}),
+        ]) + "\n", encoding="utf-8")
+        keys = [e["key"] for e in witness.alert_summary(since=500.0)]
+        assert keys == ["new_key"], f"时间窗没起作用: {keys}"
+
+    def test_same_key_different_details_aggregate(self, qdir):
+        """**真机的形状就是这样**：同一个 key、后面跟着不同明细 ——
+        `collect_changes:no_baseline_ref（判据不完整）` 与 `...（跟 HEAD 比，已提交的看不见）`。
+        按整条 msg 分组的实现会在这里把它们算成两组，聚合就等于没做。"""
+        witness.warn("oa_exec", "collect_changes:no_baseline_ref（判据不完整）")
+        witness.warn("claude_cli", "collect_changes:no_baseline_ref（跟 HEAD 比，已提交的看不见）")
+        s = witness.alert_summary(chronic_min=2)
+        assert len(s) == 1 and s[0]["key"] == "collect_changes" and s[0]["n"] == 2, s

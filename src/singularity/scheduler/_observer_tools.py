@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 
 from singularity.scheduler import config, tracker, witness
@@ -39,6 +40,10 @@ def _tool_get_system_status() -> dict[str, Any]:
         "token_totals": token_totals,
         "stalled_task_ids": stalled,
         "recent_alerts": witness.read_alerts(limit=20),  # 最近告警，新→旧
+        # 同 key 高频重复的告警（近 24h）—— 观察者最该看的是"常亮"，不是"最新"。
+        # 常亮 = 判据跟配置脱节，夹在 `recent_alerts` 里看不出是常态还是一起新事故。
+        "chronic_alerts": [a for a in witness.alert_summary(since=time.time() - 86400)
+                           if a["chronic"]],
     }
 
 

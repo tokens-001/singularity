@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -31,12 +32,38 @@ _ALERT_MAX_BYTES = 512 * 1024
 _ALERT_KEEP = 1000
 
 
-def warn(scope: str, msg: str) -> None:
-    """记一条告警到 .qidian/alerts.jsonl（append-only，不受心跳清理影响）。"""
+_ALERT_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]{0,40}):")
+
+
+def _derive_alert_key(msg: str) -> str:
+    """从告警文本里取聚合键：`标识符:` 里的那个标识符。取不到返回 ""（= 不聚合）。
+
+    ⚠️ **不认异常类名**。裸异常串（`warn('orch', f'{e}')`）长成 `KeyError: 'x'`，
+    看着就像个 key —— 按它聚合等于**把所有 KeyError 并成一条**，
+    真事故会被并进"常驻"那一栏，**比不聚合更坏**。全仓实测有 **25 处**是这种裸写法。
+    """
+    m = _ALERT_KEY_RE.match(msg)
+    if not m:
+        return ""
+    k = m.group(1)
+    return "" if k.endswith(("Error", "Exception", "Warning")) else k
+
+
+def warn(scope: str, msg: str, key: str = "") -> None:
+    """记一条告警到 .qidian/alerts.jsonl（append-only，不受心跳清理影响）。
+
+    `key` 是**聚合键** —— "常驻条件"按它归并（见 `alert_summary`）。
+    不传就从句首的 `标识符:` 取；取不到就用整条 msg 当键（= 不聚合，安全的一侧）。
+    写法不像 `标识符:` 的调用点可以显式传 key，别再往 msg 里塞格式化技巧。
+    """
     try:
         p = _alerts_path()
-        line = json.dumps({"ts": time.time(), "scope": scope, "msg": str(msg)[:500]},
-                          ensure_ascii=False)
+        text = str(msg)[:500]
+        rec = {"ts": time.time(), "scope": scope, "msg": text}
+        _k = (key or _derive_alert_key(text))[:60]
+        if _k:
+            rec["key"] = _k
+        line = json.dumps(rec, ensure_ascii=False)
         with p.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
         # ponytail: 单向追加，超过阈才重写一次；告警量小(一次任务几十条)，不值得做轮转
@@ -66,6 +93,44 @@ def read_alerts(limit: int = 50, since: float = 0.0) -> list[dict]:
             continue
         out.append(d)
     return out[-limit:][::-1]
+
+
+def alert_summary(limit: int = 1000, since: float = 0.0, chronic_min: int = 3) -> list[dict]:
+    """按聚合键把告警归并 —— 把"常驻条件"从事件流里分出来。
+
+    **为什么需要它**：真机实测一段 26 分钟的窗口里 25 条告警，**22 条（88%）挤在
+    两个 key 上**（`collect_changes` 12× / `constraints_checklist_fallback` 10×）。
+    常亮**不是**"最近问题多"，是**判据跟配置脱节** —— 它该出现在配置问题栏，
+    不该淹在事故流里把真事故盖住。
+
+    返回 `[{key, scopes, n, first_ts, last_ts, chronic, sample}]`，按 n 降序。
+    `key` 为 `""` = 这条没有可聚合的名字（退化成"按 scope + 整条 msg 各自成组"）。
+    **不做时间窗** —— 窗口由调用方用 `since` 给，免得"常驻"的定义散在两个地方。
+
+    ⚠️ **按 key 归并、不带 scope**。真机上 `collect_changes` 同时从 `oa_exec` 和
+    `claude_cli` 两个 scope 报出来 —— 那是**同一个常驻条件被两个调用方各报一遍**。
+    带上 scope 当身份会把它劈成两行、每行都不够"常驻"。范围信息不丢，`scopes` 里全带着。
+    """
+    g: dict[str, dict] = {}
+    for d in read_alerts(limit=limit, since=since):
+        msg = str(d.get("msg", ""))
+        scope = d.get("scope", "")
+        k = d.get("key") or _derive_alert_key(msg)
+        ident = f"key:{k}" if k else f"msg:{scope}:{msg}"
+        e = g.get(ident)
+        if e is None:
+            e = g[ident] = {"key": k, "scopes": [], "n": 0,
+                            "first_ts": d.get("ts", 0), "last_ts": d.get("ts", 0),
+                            "sample": msg[:120]}
+        e["n"] += 1
+        if scope not in e["scopes"]:
+            e["scopes"].append(scope)
+        e["first_ts"] = min(e["first_ts"], d.get("ts", 0))
+        e["last_ts"] = max(e["last_ts"], d.get("ts", 0))
+    out = sorted(g.values(), key=lambda e: e["n"], reverse=True)
+    for e in out:
+        e["chronic"] = e["n"] >= chronic_min
+    return out
 
 
 def _hb_path(task_id: str, agent_level: str) -> Path:
