@@ -14,6 +14,58 @@ __all__ = ['_llm_judge_causal', '_resolve_causal_direction', 'consolidate_memory
 
 _consolidate_calls = 0
 
+# 重活（auto_maintain / system2_extract / 分层抽象）多久跑一次。
+# 两个条件**满足其一** —— 计数管"忙"、时间管"闲"。
+_HEAVY_EVERY_CALLS = 10
+_HEAVY_EVERY_SEC = 3600
+
+
+def _heavy_state_path() -> Path:
+    # 读时现算：conftest 改 `config.QIDIAN_DIR` 时要管得住它（防御模式 §56 那族）
+    return sched_config.QIDIAN_DIR / "memory" / "consolidate_state.json"
+
+
+def _heavy_due() -> bool:
+    """这一次要不要跑重活。
+
+    ⚠️ **原来的判据是 `_consolidate_calls % 10 == 0`，而 `_consolidate_calls` 是
+    模块级变量、后端每次重启归零** ⇒ 只要"单个进程生命周期内的整合次数 < 10"，
+    这一步**永远不跑**。实测（2026-09-12）：三个失败任务的 `attrs.abstraction`
+    全是 None（有个任务有 3414 字真轨迹也没被抽象），那晚重启 4 次、没有一个进程
+    跑到 10 —— **这个功能从来没运行过一次**。
+
+    改成把计数和上次时间**落盘**：重启不再清零；再加一条时间兜底，
+    免得系统闲下来时永远攒不够 10 次。
+    """
+    now = time.time()
+    st = {}
+    try:
+        st = json.loads(_heavy_state_path().read_text(encoding="utf-8"))
+    except Exception:
+        st = {}
+    calls = int(st.get("calls", 0) or 0) + 1
+    last = float(st.get("last_heavy", 0) or 0)
+    if not last:
+        # 首次：只记时间起点，**不跑** —— 否则每换一个新目录就先烧一轮重活
+        _save_heavy_state(calls, now)
+        return calls >= _HEAVY_EVERY_CALLS
+    due = calls >= _HEAVY_EVERY_CALLS or (now - last) >= _HEAVY_EVERY_SEC
+    if due:
+        _save_heavy_state(0, now)
+    else:
+        _save_heavy_state(calls, last)
+    return due
+
+
+def _save_heavy_state(calls: int, last_heavy: float) -> None:
+    try:
+        p = _heavy_state_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"calls": calls, "last_heavy": last_heavy}),
+                     encoding="utf-8")
+    except Exception:
+        pass    # 状态落不下去只影响"跑得勤不勤"，不该把整合带崩
+
 
 def consolidate_memory() -> int:
     global _consolidate_calls; _consolidate_calls += 1
@@ -23,7 +75,7 @@ def consolidate_memory() -> int:
     consolidate_memory._last_run = now
     _MAX_LLM = 5
 
-    if _consolidate_calls % 10 == 0:
+    if _heavy_due():
         try:
             lc = auto_maintain()
             if lc.get("pruned", 0) > 0:
