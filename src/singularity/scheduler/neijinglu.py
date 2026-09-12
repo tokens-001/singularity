@@ -72,13 +72,22 @@ class DeliveryReport:
     # 但没有 `dispatch_result` ⇒ `executor_result` 是 None ⇒ `to_dict` 里那句
     # `getattr(None, "tool_events", [])` 拿到空列表 ⇒ **攥着也白攥**。
     fallback_tool_events: list = None
+    # **存下来的** tool_batches 摘要（`from_dict` 从 trace 里读回来的那份）。
+    # 有它就优先用它 —— 因为 raw tool_events 根本不落盘，重建成 DeliveryReport 之后
+    # `to_dict` 现算只能算出全 0，等于把"3 轮"报成"0 轮"（2026-09-13 实测：
+    # 导出的 markdown 说 turns=0，而 trace 文件里明明是 2）。
+    stored_tool_batches: dict = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "DeliveryReport":
         """从 JSON dict 重建 (简化版, 仅字段映射)。"""
         route_data = d.get("route", {})
+        # ⚠️ **别加 `level=`** —— `RouteResult` 两档之后就不带这个字段了
+        # （见 orchestrator._dispatch_ready 的注释："route_level 仅作 trace 标签存于 task"）。
+        # 这一行原来还在传，于是 `from_dict` **每次调用都抛 TypeError** ⇒
+        # `GET /api/tasks/<id>/trace?format=md`（唯一调用点）**恒 500**。
+        # 2026-09-13 真机验到（顺手打那个接口就是 500）。**字段被删了要全仓扫一遍调用点。**
         route = RouteResult(
-            level=route_data.get("level", ""),
             gate_required=route_data.get("gate_required", False),
             task_type=route_data.get("task_type", "default"),
             matched_signals=route_data.get("matched_signals", []),
@@ -124,6 +133,7 @@ class DeliveryReport:
             pre_search_reason=d.get("pre_search", {}).get("reason", ""),
             pre_search_top_decisions=d.get("pre_search", {}).get("top_decisions", []),
             pre_search_memory=d.get("pre_search", {}).get("memory"),
+            stored_tool_batches=d.get("tool_batches") or None,
         )
 
     def to_dict(self) -> dict:
@@ -132,7 +142,7 @@ class DeliveryReport:
             "final_status": self.final_status,
             # 每轮调用数摘要（派生值，见 batch_summary 的注释）。从 tool_events 现算 ——
             # 那玩意儿不落盘，不在这儿留一份就永远算不了。
-            "tool_batches": batch_summary(
+            "tool_batches": self.stored_tool_batches or batch_summary(
                 getattr(self.executor_result, "tool_events", None)
                 or self.fallback_tool_events or []),
             "route": {

@@ -420,3 +420,47 @@ def test_strand_guard_only_touches_running(monkeypatch, tmp_path):
 
     assert len(calls) == 1, f"该只改 RUNNING 那个，实际改了 {len(calls)} 个"
     assert calls[0][0] == t_run.id
+
+
+def test_save_trace_keeps_tool_events_without_disp_result(monkeypatch, tmp_path):
+    """**真落盘**验一遍：取消路径的 `tool_events` 要能进 trace。
+
+    `_check_cancelled` 造的 BatchOutput 是"有 tool_events、**没有** dispatch_result"，
+    而 `_save_trace` 的唯一输入本来是 `disp_result` ⇒ 事件攥着也进不了 trace
+    （修复前 `tool_batches.turns` 恒 0）。
+
+    真机上验这条**窗口很窄**（`_check_cancelled` 只在两次 dispatch 之间生效，
+    任务往往已经跑完了）—— 所以这里直接把整条写盘路径走通、再读回来核对：
+    比赌时机可靠，而且钉的是同一个东西。
+    """
+    from singularity.scheduler import config, tracker as tr
+    from singularity.scheduler._exec import _save_trace
+    from singularity.scheduler.router import RouteResult
+    from singularity.scheduler.snapshot import Snapshot
+    from singularity.scheduler import neijinglu as nj
+
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+    # TRACE_DIR 是 import 时算好的常量，光改 QIDIAN_DIR 不跟着动
+    monkeypatch.setattr(config, "TRACE_DIR", tmp_path / "traces")
+    (tmp_path / "traces").mkdir()
+    monkeypatch.setattr(tr.config, "QIDIAN_DIR", tmp_path)
+
+    t = tr.create("取消路径的 trace")
+    events = [{"kind": "tool:start", "tool": "read_file", "turn": 1},
+              {"kind": "tool:done", "tool": "read_file", "turn": 1},
+              {"kind": "tool:start", "tool": "write_file", "turn": 2}]
+
+    _save_trace(t, RouteResult(gate_required=False, task_type="default"),
+                Snapshot(id="s", method="git", ref="r", created_at=0.0),
+                None, None, False, tool_events=events)
+
+    raw = (config.TRACE_DIR / f"{t.id}.json").read_text(encoding="utf-8")
+    # 顺带走一遍 `from_dict` —— 它是 `GET /api/tasks/<id>/trace?format=md` 的唯一入口，
+    # 2026-09-13 之前**恒 500**（它还在给 RouteResult 传早就删掉的 `level=`）。
+    import json as _json
+    on_disk = _json.loads(raw)["tool_batches"]
+    assert on_disk["turns"] == 2 and on_disk["total_calls"] == 2, f"事件没进 trace: {on_disk}"
+
+    report = nj.DeliveryReport.from_dict(_json.loads(raw))
+    assert report.to_dict()["tool_batches"] == on_disk, "转一圈回来把轮次丢了（会报成 0）"
+    assert nj.format_report(report), "trace 导 markdown 没产出内容"
