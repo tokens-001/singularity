@@ -1252,6 +1252,28 @@ class TestStreamCall:
         assert tc["function"]["name"] == "write_file"
         assert tc["function"]["arguments"] == '{"path":"a"}'
 
+    def test_bad_chunk_不杀整轮(self, monkeypatch):
+        """坏帧（截断 / 厂商噪声）只**跳过 + 告警**，不能抛穿。
+
+        抛穿的代价不是"少一个 token"：它会穿出 `_stream_call` → 被当成
+        "agent 失败" → 整条 fallback 链全灭 → **任务 0 产物**。
+        实测 2026-09-12：glm-5.3-flash 一个坏帧
+        （`Unterminated string ... (char 187)`）就让 `any` 层两个 agent 一起废掉。
+        """
+        oa, ex = self._ex(monkeypatch)
+        seen = []
+        monkeypatch.setattr(oa.witness, "warn", lambda src, msg: seen.append(msg))
+        lines = [
+            'data: {"choices":[{"delta":{"content":"前"}}]}',
+            'data: {"choices":[{"delta":{"content":"截断',      # ← 坏帧：JSON 没闭合
+            'data: {"choices":[{"delta":{"content":"后"}}]}',
+            'data: [DONE]',
+        ]
+        monkeypatch.setattr(oa, "_get_http_client", lambda: self._client(oa, lines))
+        d = ex._stream_call({})                                  # 不应抛
+        assert d["choices"][0]["message"]["content"] == "前后"   # 坏帧前后的都还在
+        assert any("sse_chunk_unparsed:1" in m for m in seen), seen  # 但要明报
+
     def test_emits_throttled_progress_event(self, monkeypatch):
         """进度必须上流到 SSE（前端任务卡滚动日志），且是节流后的。"""
         oa, ex = self._ex(monkeypatch)

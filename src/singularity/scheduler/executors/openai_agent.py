@@ -871,6 +871,7 @@ class OpenAIAgentExecutor(BaseExecutor):
         headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
         content, reasoning = [], []
         tool_calls, finish, usage = {}, "", {}
+        bad_frames = 0
         try:
             with client.stream("POST", self._url, json=payload, headers=headers,
                                timeout=httpx.Timeout(240.0, connect=15.0, read=_STALL_TIMEOUT)) as resp:
@@ -884,7 +885,18 @@ class OpenAIAgentExecutor(BaseExecutor):
                     chunk_str = line[5:].strip()     # 容忍 "data:{...}" 无空格
                     if chunk_str == "[DONE]":
                         break
-                    chunk = json.loads(chunk_str)
+                    try:
+                        chunk = json.loads(chunk_str)
+                    except json.JSONDecodeError:
+                        # 单个 SSE 分片坏掉（截断 / 厂商噪声）**不能杀掉整轮**。
+                        # 原来这里是裸解析：一个坏帧抛穿 `_stream_call`，上层当成
+                        # "agent 失败" → 整条 fallback 链全灭 → 任务 0 产物。
+                        # 实测 2026-09-12：glm-5.3-flash 报
+                        # `JSONDecodeError: Unterminated string ... (char 187)`，
+                        # `any` 层两个 agent 一起废掉。
+                        # 按 §58 的规矩：**认不出要明报**，不能静默吞（下面计数 + 告警）。
+                        bad_frames += 1
+                        continue
                     if chunk.get("usage"):
                         usage = chunk["usage"]
                     for ch in chunk.get("choices", []) or []:
@@ -920,6 +932,12 @@ class OpenAIAgentExecutor(BaseExecutor):
             raise _NetworkError(f"流停滞 {_STALL_TIMEOUT:.0f}s 无新 token")
         except httpx.HTTPError as e:
             raise _NetworkError(f"网络错误: {e}")
+
+        if bad_frames:
+            # 坏帧被跳过了 ⇒ 这轮内容可能**少了一截**，必须可查 ——
+            # 否则"模型输出莫名其妙变短"永远找不到原因。
+            try: witness.warn('oa_exec', f'sse_chunk_unparsed:{bad_frames}'[:80])
+            except Exception: pass
 
         msg = {"role": "assistant", "content": "".join(content)}
         if reasoning:
