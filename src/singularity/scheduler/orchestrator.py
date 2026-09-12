@@ -138,8 +138,11 @@ def _salvage_timed_out(task, elapsed_s: float, snap=None):
     # 执行器每 dispatch 一次落一盘（`_exec._persist_partial_usage`），这里读回来。
     # ⚠️ 它是**下界**：超时那一刻正在飞的那次模型调用不在里面。
     # 一条都没落（比如第一轮就超时）才如实留 None —— None 是"不知道"，不是"没花钱"。
-    from singularity.scheduler._exec import read_partial_usage
+    from singularity.scheduler._exec import read_partial_usage, read_partial_tool_events
     _partial_tokens, _partial_model = read_partial_usage(task.id)
+    # tool_events 也一样：它平时只在内存/SSE 里过一遍，超时路径拿不到
+    # ⇒ trace 里 `tool_batches.turns` 恒 0，"一次多动作"那套度量在超时任务上没法算。
+    _partial_events = read_partial_tool_events(task.id)
 
     try:
         import subprocess
@@ -196,7 +199,8 @@ def _salvage_timed_out(task, elapsed_s: float, snap=None):
             error = "timeout"
             error_kind = "timeout"
             patch_path = ""
-            tool_events: list = []
+            # 边跑边落的那些事件 —— 补上之后超时任务的 tool_batches 才有数
+            tool_events = _partial_events
 
         class _TimedOutDisp:
             executor_result = _TimedOutResult()
@@ -227,7 +231,7 @@ def _salvage_timed_out(task, elapsed_s: float, snap=None):
             error = "timeout"
             error_kind = "timeout"
             patch_path = ""
-            tool_events: list = []
+            tool_events = _partial_events
 
         class _FallbackDisp:
             executor_result = _FallbackResult()

@@ -83,3 +83,36 @@ def test_cleanup_removes_the_sidecar(tmp_path, monkeypatch):
     from singularity.scheduler import _worktree
     _worktree.cleanup_task_artifacts("t5", tmp_path)
     assert _exec.read_partial_usage("t5") == (0, ""), "sidecar 没被清掉"
+
+
+def test_tool_events_survive_the_timeout(tmp_path, monkeypatch):
+    """超时任务的 tool_events 不再恒空 —— "一次多动作"那套度量才有数。
+
+    原来它只在线程的内存里过一遍，超时方 fut 已 pop ⇒ trace 里
+    `tool_batches.turns` 恒 0（探路3 的 T1/T2 实测）。
+    """
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(proj_mod, "repo_root_for", lambda t: tmp_path)
+
+    ev = [{"kind": "tool:start", "turn": 1, "tool": "write_file"},
+          {"kind": "tool:start", "turn": 2, "tool": "run_command"},
+          {"kind": "tool:start", "turn": 2, "tool": "read_file"},
+          {"kind": "tool:start", "turn": 4, "tool": "run_command"}]
+    _exec._persist_partial_usage("t6", "any", "glm-5.2", 100, tool_events=ev)
+
+    disp = orch._salvage_timed_out(SimpleNamespace(id="t6"), 901.0, None)
+    got = disp.executor_result.tool_events
+    assert len(got) == 4, f"工具事件没落住：{got}"
+
+    # 派生出来的埋点也得对得上 —— 这才是消费方真要的那个数
+    from singularity.scheduler.neijinglu import batch_summary
+    bs = batch_summary(got)
+    assert bs == {"turns": 3, "per_turn": [1, 2, 1], "total_calls": 4, "batched_turns": 1}, bs
+
+
+def test_tool_events_absent_stays_empty_not_crash(tmp_path, monkeypatch):
+    """一次都没落（第一轮就超时）→ 空列表，别抛。"""
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(proj_mod, "repo_root_for", lambda t: tmp_path)
+    disp = orch._salvage_timed_out(SimpleNamespace(id="t7"), 901.0, None)
+    assert disp.executor_result.tool_events == []

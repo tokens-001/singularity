@@ -97,7 +97,13 @@ def _inject_role_context(route_role: str) -> str:
     return ""
 
 
-def _persist_partial_usage(task_id: str, level: str, model: str, delta: int) -> None:
+# ponytail: sidecar 里最多留这么多条工具事件。正常一轮就几个，500 够几十轮了；
+# 真被截断也只会让超时 trace 的 tool_batches **少数几轮**（不是好看，是如实少报）。
+_PARTIAL_TOOL_EVENTS_CAP = 500
+
+
+def _persist_partial_usage(task_id: str, level: str, model: str, delta: int,
+                           tool_events: list | None = None) -> None:
     """把执行中**累计**的 token 落一盘，给超时路径用。
 
     为什么必须边跑边落：超时被杀的任务**走不到收尾记账**
@@ -123,10 +129,22 @@ def _persist_partial_usage(task_id: str, level: str, model: str, delta: int) -> 
                 cur_model = d.get("model") or model
             except Exception:
                 cur, cur_model = 0, model
-        p.write_text(json.dumps({
+        payload = {
             "task_id": task_id, "level": level, "model": cur_model,
             "tokens": cur + max(0, int(delta or 0)), "updated_at": time.time(),
-        }, ensure_ascii=False), encoding="utf-8")
+        }
+        if tool_events is not None:
+            # tool_events 平时只在内存和 SSE 里过一遍、**从来不落盘**
+            # ⇒ 超时任务的 trace 里 tool_batches 的 turns 恒为 0
+            # （探路3 的 T1/T2 实测就是这个，见"一次多动作埋点"那一条）。
+            payload["tool_events"] = list(tool_events)[-_PARTIAL_TOOL_EVENTS_CAP:]
+        elif p.exists():
+            try:
+                payload["tool_events"] = json.loads(
+                    p.read_text(encoding="utf-8")).get("tool_events") or []
+            except Exception:
+                pass
+        p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass    # 落盘失败不该把任务带崩 —— 记不记成账是次要的
 
@@ -141,6 +159,24 @@ def read_partial_usage(task_id: str) -> tuple[int, str]:
         return int(d.get("tokens", 0) or 0), str(d.get("model") or "")
     except Exception:
         return 0, ""
+
+
+def read_partial_tool_events(task_id: str) -> list:
+    """读回执行中攒的工具事件。没有/读坏了返回 `[]`。
+
+    超时任务的 tool_events 原来恒空（它在线程里，fut 早被 pop 掉）⇒ trace 里
+    `tool_batches.turns` 是 0 ⇒ **超时任务在"一次多动作"那套度量里根本没法算**
+    （探路3 T1/T2 实测）。跟 token 同一个道理：只能边跑边落。
+    """
+    try:
+        p = config.PARTIAL_USAGE_DIR / f"{task_id}.json"
+        if not p.exists():
+            return []
+        d = json.loads(p.read_text(encoding="utf-8"))
+        ev = d.get("tool_events")
+        return list(ev) if isinstance(ev, list) else []
+    except Exception:
+        return []
 
 
 def _check_cancelled(task, all_tool_events: list) -> "BatchOutput | None":
@@ -456,6 +492,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     _persist_partial_usage(
                         task.id, level, agent_cfg.get("model", "") if isinstance(agent_cfg, dict) else "",
                         getattr(exec_result, "token_count", 0) or 0,
+                        tool_events=all_tool_events,
                     )
 
                 # 收尾前**再查一次取消**。原来只在每轮开头查，于是超时（或人工取消）

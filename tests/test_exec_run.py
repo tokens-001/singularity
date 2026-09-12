@@ -173,11 +173,15 @@ if __name__ == "__main__":
     reset_wt()
     S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2}]
     _e = FakeExec(success=True); _e.token_count = 4321
+    _e.tool_events = [{"kind": "tool:start", "turn": 1, "tool": "write_file"}]
     S.dispatch_queue = [("ok", _e)]
     S.validate_queue = [FakeVal(action="pass")]
     _t = make_task()
     S.task = _t
     _exec.run(_t, make_ctx(v3=True), {"any": list(S.chain)})
+    _ev = _exec.read_partial_tool_events(_t.id)
+    check("run() 也把 tool_events 落下来了 (超时才有 tool_batches)",
+          len(_ev) == 1 and _ev[0].get("turn") == 1, f"读到 {_ev}")
     _tok, _mdl = _exec.read_partial_usage(_t.id)
     check("run() 真把用量落进 sidecar", _tok == 4321, f"读到 {_tok}")
     # 取的是**chain 里那个** model（agent_cfg["model"]），不是 FakeDispResult 里那个 ——
