@@ -127,8 +127,10 @@ def _build_project_context(task) -> str:
             if pitfalls:
                 parts.append(f"注意事项: {'; '.join(pitfalls[:3])}")
         # 约束清单
-        if proj.constraints_checklist:
-            parts.append(f"约束清单: {'; '.join(constraint_text(c) for c in proj.constraints_checklist[:5])}")
+        from . import project as _pm
+        _constraints = _pm.effective_constraints(proj)   # 带兜底，见 §60
+        if _constraints:
+            parts.append(f"约束清单: {'; '.join(constraint_text(c) for c in _constraints[:5])}")
         # 架构验收标准 (匹配子任务)
         if proj.architecture:
             tasks = proj.architecture.get("tasks", [])

@@ -152,8 +152,10 @@ def _review_requirements(task) -> str:
     if proj:
         if getattr(proj, 'description', ''):
             parts.append(f"[顶层需求] {proj.description[:300]}")
-        if proj.constraints_checklist:
-            parts.append(f"[约束] {'; '.join(constraint_text(c) for c in proj.constraints_checklist[:5])}")
+        from . import project as _pm
+        _constraints = _pm.effective_constraints(proj)   # 带兜底，见 §60
+        if _constraints:
+            parts.append(f"[约束] {'; '.join(constraint_text(c) for c in _constraints[:5])}")
         if proj.architecture:
             desc = getattr(task, 'description', '')
             for tdef in proj.architecture.get("tasks", []):
@@ -472,7 +474,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             if project_id:
                 from . import project as proj_mod
                 proj = proj_mod.load(project_id)
-            constraints = getattr(proj, 'constraints_checklist', []) if proj else []
+            constraints = proj_mod.effective_constraints(proj) if proj else []
             if constraints:
                 diff_text = ""
                 try:

@@ -242,6 +242,38 @@ class ProjectState:
                           "to": phase.value, "reason": str(reason)[:120]})
         self.phase = phase
 
+    def effective_constraints(self) -> list:
+        """验收/审查该用哪份约束清单 —— 带兜底的读法。
+
+        ⚠️ 为什么要有这层（防御模式 §60）：`_run_execution` 里明明
+        `project.constraints_checklist = architecture["constraints"]` 紧跟着 `save()`，
+        可真机上落到盘里的却是 **`[]`**，而**同一份 json 里 `architecture.constraints`
+        完好有 8 条**。后果不是"少几个字段"：`_run_verification` 进门第一句就早退
+        ⇒ **机械检查一条都跑不了**，"信任上限 = 机械证据覆盖的验证面比例"分子恒 0。
+
+        覆盖源**没定位到**（全仓只有 `_run_execution` 一处写它，`architecture_redo()`
+        是死代码），读代码定不了案 —— 所以这里不赌是谁覆盖的，直接让症状不可能发生：
+        **清单为空、而架构里有约束，就用架构里那份**。
+        两者按构造应该相等（`constraints_checklist` 就是它的副本，没有任何地方做过
+        GATE2 过滤），所以兜底不会绕过什么确认。
+
+        ⚠️ **兜底时必须出声**：不告警的话，这个 bug 就永远查不出来了 ——
+        降级可见是刻意留的（见 `docs/防御模式.md` §55 补的那条规则）。
+        """
+        got = self.constraints_checklist or []
+        if got:
+            return got
+        arch = ((self.architecture or {}).get("constraints") or []) if self.architecture else []
+        if arch:
+            try:
+                from singularity.scheduler import witness
+                witness.warn("project", (
+                    f"constraints_checklist_fallback:{self.id}:"
+                    f"清单为空但架构里有 {len(arch)} 条 ⇒ 走兜底（§60 的覆盖源仍未定位）")[:200])
+            except Exception:
+                pass
+        return arch
+
     def has_verification_evidence(self) -> bool:
         """本轮验收有没有结论。`verification_ran` = 跑过；`verification_skipped` = 有结论（没跑）。
 
@@ -472,6 +504,19 @@ def _push_project_event(proj: "ProjectState") -> None:
         _hooks.emit("project", payload)
     except Exception:
         pass
+
+
+def effective_constraints(proj) -> list:
+    """`ProjectState.effective_constraints` 的**容错版**，给鸭子类型/桩对象用。
+
+    测试里大量 `SimpleNamespace(constraints_checklist=...)`，它们没有这个方法；
+    为了一个读法把所有桩改一遍不值当，而且真跑时项目对象就是 `ProjectState`。
+    拿不到方法就退回读属性 —— **退化时行为跟改之前完全一致**。
+    """
+    fn = getattr(proj, "effective_constraints", None)
+    if callable(fn):
+        return fn()
+    return list(getattr(proj, "constraints_checklist", None) or [])
 
 
 def load(project_id: str) -> Optional[ProjectState]:

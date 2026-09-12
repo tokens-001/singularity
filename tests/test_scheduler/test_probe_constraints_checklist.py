@@ -54,17 +54,38 @@ def test_write_probe_fires_and_round_trips(tmp_path, monkeypatch):
     assert len(p.constraints_checklist) == 8, "内存对象自己也得有"
 
 
-def test_read_probe_fires_when_checklist_is_empty(tmp_path, monkeypatch):
-    """读取点：清单为空时，把"架构里其实有 8 条"这个事实记下来。"""
+def test_read_probe_fires_only_when_constraints_are_really_absent(tmp_path, monkeypatch):
+    """读取点：**架构里也真没有**约束时才算"验收真的没得跑"。
+
+    ⚠️ 这条的语义 2026-09-12 变了 —— 加了 `effective_constraints()` 兜底之后，
+    "清单为空"**不再等于**"被覆盖"：
+      · 清单空 + 架构里有 → 兜底捞走，**不**打探针（改由
+        `constraints_checklist_fallback` 那条告警来报"覆盖源还没找到"）
+      · 清单空 + 架构里也空 → 真没有，打探针，并走 `verification_skipped`
+    所以这里必须把架构也弄成空的，否则测的是兜底、不是探针。
+    """
     p = _mk_project(tmp_path, monkeypatch)
-    p.architecture = {"constraints": [{"rule": f"r{i}"} for i in range(8)]}
-    p.constraints_checklist = []            # 模拟被覆盖之后的状态
+    p.architecture = {"constraints": []}    # 架构里也真没有
+    p.constraints_checklist = []
     workflow._run_verification(p, agents={})
 
     r = [e for e in _probes(p) if e["at"] == "read"]
     assert len(r) == 1, "读取点探针没打"
     assert r[0]["in_memory"] == 0
-    assert r[0]["arch_constraints"] == 8, "连架构里有多少条都没记，探针就没用了"
+    assert r[0]["arch_constraints"] == 0, "这里应该记到「架构里也是 0」"
+
+
+def test_read_probe_stays_quiet_when_fallback_can_rescue(tmp_path, monkeypatch):
+    """反向：清单空但架构里有 → 兜底救走，探针**不该**打（那是两回事）。"""
+    p = _mk_project(tmp_path, monkeypatch)
+    p.architecture = {"constraints": [{"rule": f"r{i}"} for i in range(8)]}
+    p.constraints_checklist = []            # 模拟被覆盖之后的状态
+    try:
+        workflow._run_verification(p, agents={})
+    except Exception:
+        pass                                # 真往下走会缺依赖，这里只看探针落没落
+    assert [e for e in _probes(p) if e["at"] == "read"] == [], \
+        "兜底能救的情况不该打读取点探针 —— 否则跟「真没有」混成一团"
 
 
 def test_read_probe_stays_quiet_when_checklist_has_content(tmp_path, monkeypatch):

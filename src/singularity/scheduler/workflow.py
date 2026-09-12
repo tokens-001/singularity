@@ -12,7 +12,10 @@ import json
 from singularity.scheduler import config
 from singularity.scheduler import tracker
 from singularity.scheduler import dispatcher as disp_mod
-from singularity.scheduler.project import ProjectState, Phase, save, _projects_dir, resolve_flow
+from singularity.scheduler.project import (
+    ProjectState, Phase, save, _projects_dir, resolve_flow,
+    effective_constraints as _effective_constraints,  # §60 容错读法
+)
 from singularity.scheduler.tracker import TaskStatus
 
 from singularity.scheduler._io import try_parse_json
@@ -428,10 +431,15 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
 
     不调 LLM 写代码，只出验证报告供人工 GATE3 判断。
     """
-    if not project.constraints_checklist:
+    # **带兜底地读** —— 见 `ProjectState.effective_constraints()`：真机上 `_run_execution`
+    # 明明赋了值又 save 了，落到盘里却是空的（覆盖源未定位），而架构里那份是好的。
+    # 直接读 `project.constraints_checklist` 就会在这儿早退 ⇒ 机械检查一条都跑不了。
+    constraints = _effective_constraints(project)
+    if not constraints:
         # ── 探针（临时，定案后删）：防御模式 §60 ──────────────────────
-        # 写入点（_workflow_phases._run_execution）那条记了 on_disk 的值；
-        # 这里是读取点。两边对不上 ⇒ 中途被别的副本覆盖了。
+        # 走到这儿说明**架构里也真没有约束**（兜底都没捞着），不是被覆盖。
+        # 写入点（_workflow_phases._run_execution）那条记了 on_disk 的值，两边对不上
+        # 就说明是中途被别的副本覆盖了 —— 兜底会把那种情况捞走，所以这里记的是"真没有"。
         project.add_lineage({
             "action": "probe_constraints_checklist", "at": "read",
             "in_memory": 0,
@@ -447,7 +455,6 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
         return [reason]
 
     msgs = []
-    constraints = project.constraints_checklist
     changed_files = _collect_changed_files(project)
 
     # 构建验收上下文
@@ -468,7 +475,7 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     _MAX_MACHINE_CHECKS = 10      # 有上限就明说，别静默截断
     try:
         from singularity.scheduler import _machine_checks as mchk
-        runnable = [c for c in (project.constraints_checklist or [])
+        runnable = [c for c in (constraints or [])
                     if isinstance(c, dict) and mchk.validate_check(c.get("check"))[0]]
         if runnable:
             root = _phase_cwd(project)

@@ -138,7 +138,8 @@ def qa_context(task) -> tuple[list, list]:
         from .project import load as _load_proj
         proj = _load_proj(pid)
         if proj:
-            constraints = proj.constraints_checklist
+            from . import project as _pm
+            constraints = _pm.effective_constraints(proj)   # 带兜底，见 §60
             if proj.architecture:
                 for tdef in proj.architecture.get("tasks", []):
                     if tdef.get("title", "") in task.description or tdef.get("id", "") in task.description:
