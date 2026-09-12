@@ -325,6 +325,33 @@ def _account_salvaged(t, salvaged, elapsed_s: float) -> None:
         pass
 
 
+def _strand_guard(t, exc: BaseException, where: str) -> None:
+    """兜住"future/batch **已经消费掉**、后续那步却抛了"—— 别把任务留在 RUNNING 没人管。
+
+    §65 那条形状：**先改状态、后做事，中间断了就出孤儿**；而孤儿的表现是"看起来在跑"
+    （没有 future ⇒ 循环看不见它 ⇒ `ready_tasks()` 也不返回它 ⇒ 900s 收割够不着）。
+    本文里同一形状有 5 处（派发那次是 2026-09-13 真机抓到的），这个是共用的兜底。
+
+    **只在它还停在 RUNNING 时才改** —— `finalize` 可能已经把它推到 DONE/FAILED 了，
+    那种情况不能覆盖（会丢掉真实终态）。
+    ⚠️ 为什么这里"自动改状态"是对的，而 `reconcile_projects` 那条规矩说自动纠正危险：
+    那条说的是**猜**（"状态和磁盘对不上，谁对？"）；这里不猜 —— **没有 future 就是
+    没在跑**，是确定的。留着 RUNNING 才是谎报。
+    """
+    try:
+        fresh = tracker.read_task(t.id)
+        if fresh is not None and fresh.status == TaskStatus.RUNNING:
+            tracker.transition(t.id, TaskStatus.FAILED,
+                               error=f"{where} 失败（任务没在跑）: {type(exc).__name__}: {exc}"[:200])
+    except Exception:
+        pass
+    try:
+        witness.warn("orch", f"{where}:{type(exc).__name__}: {exc}"[:200],
+                     key=f"{where}_failed")
+    except Exception:
+        pass
+
+
 def _reap_futures(running_futures: dict, pending_batches: dict,
                   mq, runner: TaskRunner, results: list) -> bool:
     """_run_queue_v3 步骤④: 回收已完成 future → finalize 或入 pending。返回是否有回收。"""
@@ -376,11 +403,20 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
             record_perf(t.id, t.route_type or "", 0.0, (now - submitted_at) * 1000, 0.0, 0.0)
         except Exception:
             pass
+        # ⚠️ future 在上面已经 pop 掉了 —— 这两条路**任何一步抛都出孤儿**（§65）。
+        # 而且抛出去会**中断整个 reap 循环**，后面那些已完成的 future 这轮就不收了。
         if batch.merge_request:
-            mq.submit(batch.merge_request)
+            try:
+                mq.submit(batch.merge_request)
+            except Exception as _e:
+                _strand_guard(t, _e, "enqueue_merge")
+                continue
             pending_batches[t.id] = (t, t_route, t_snap, batch)
         else:
-            runner.finalize(t, batch, t_route, t_snap, results)
+            try:
+                runner.finalize(t, batch, t_route, t_snap, results)
+            except Exception as _e:
+                _strand_guard(t, _e, "finalize")
 
     # 超时检测
     for fut in list(running_futures.keys()):
@@ -402,10 +438,15 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
             except Exception:
                 pass
             results.append((t.id, "timeout", None))
-            # 抢救已知事实再落 trace —— 传 None 会让 trace 变成一份"什么都没干"的假象
-            _salvaged = _salvage_timed_out(t, now - submitted_at, snap)
-            _save_trace(t, route, snap, _salvaged, None, False)
-            _account_salvaged(t, _salvaged, now - submitted_at)
+            # 抢救已知事实再落 trace —— 传 None 会让 trace 变成一份"什么都没干"的假象。
+            # 包 try：任务已经转 FAILED 了（上面），这里抛**不会出孤儿**，但会**中断整个
+            # reap 循环** —— 后面那些同样超时的 future 这轮就不再处理，白等一轮。
+            try:
+                _salvaged = _salvage_timed_out(t, now - submitted_at, snap)
+                _save_trace(t, route, snap, _salvaged, None, False)
+                _account_salvaged(t, _salvaged, now - submitted_at)
+            except Exception as _e:
+                _strand_guard(t, _e, "salvage_timeout")
             reaped = True
 
     return reaped
@@ -496,54 +537,60 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
     for mr in merge_results:
         if mr.task_id in pending_batches:
             t, route, snap, batch = pending_batches.pop(mr.task_id)
-            if mr.status == "merged":
-                tracker.transition(t.id, TaskStatus.DONE)
-                _maybe_complete_parents(t.id)
-                _release_ref(t.id, repo_root=repo_root_for(t))
-                _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
-                            pre_search_skipped=batch.pre_search_skipped,
-                            pre_search_reason=batch.pre_search_reason,
-                            pre_search_top_decisions=batch.pre_search_top_decisions,
-                            pre_search_memory=batch.pre_search_memory,
-                            # 手里有事件、没有 disp_result 时别白攥着（见 _save_trace）
-                            tool_events=batch.tool_events)
-                results.append((t.id, f"merged: {mr.new_head[:8]}", batch.validation))
-                failure_mode = ""
-            elif mr.status == "conflict":
-                err = mr.conflict_files or mr.reason or "未知冲突"
-                tracker.transition(t.id, TaskStatus.CONFLICT_HELD,
-                                 error=f"conflict: {err}")
-                _release_ref(t.id, repo_root=repo_root_for(t))
-                _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
-                            pre_search_skipped=batch.pre_search_skipped,
-                            pre_search_reason=batch.pre_search_reason,
-                            pre_search_top_decisions=batch.pre_search_top_decisions,
-                            pre_search_memory=batch.pre_search_memory,
-                            # 手里有事件、没有 disp_result 时别白攥着（见 _save_trace）
-                            tool_events=batch.tool_events)
-                results.append((t.id, f"conflict: {mr.conflict_files}", batch.validation))
-                failure_mode = f"merge_conflict: {err}"
-            else:
-                tracker.transition(t.id, TaskStatus.FAILED, error=f"merge {mr.status}")
-                _release_ref(t.id, repo_root=repo_root_for(t))
-                _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
-                            pre_search_skipped=batch.pre_search_skipped,
-                            pre_search_reason=batch.pre_search_reason,
-                            pre_search_top_decisions=batch.pre_search_top_decisions,
-                            pre_search_memory=batch.pre_search_memory,
-                            # 手里有事件、没有 disp_result 时别白攥着（见 _save_trace）
-                            tool_events=batch.tool_events)
-                results.append((t.id, f"merge_failed", batch.validation))
-                failure_mode = f"merge_{mr.status}"
-            # 经验归档 / 用量统计 / 路由学习 —— **这条路径以前完全不调**，
-            # 只有 _save_trace 上面调了，于是走合并队列的任务这三件静默少做。
-            # 实测（2026-09-11 真机验证）：跑完一个任务 experiences.json /
-            # token_usage.json 根本没被创建，route_learner.json 一动不动。
-            fresh = tracker.read_task(t.id)
-            if fresh is not None:
-                t.status = fresh.status      # transition 只改盘上对象，内存里还是旧状态
-            _archive_task_outcome(t, route, batch.dispatch_result, failure_mode=failure_mode)
-            drained += 1
+            # ⚠️ batch 上面已经 pop 掉了 —— 这段里任何一步抛都会出孤儿（§65）：
+            # 任务不在 pending_batches 里了，循环会当成"没活干"直接退出，
+            # 它就永远停在 RUNNING 没人管。包起来，抛了也留个明确的终态。
+            try:
+                if mr.status == "merged":
+                    tracker.transition(t.id, TaskStatus.DONE)
+                    _maybe_complete_parents(t.id)
+                    _release_ref(t.id, repo_root=repo_root_for(t))
+                    _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
+                                pre_search_skipped=batch.pre_search_skipped,
+                                pre_search_reason=batch.pre_search_reason,
+                                pre_search_top_decisions=batch.pre_search_top_decisions,
+                                pre_search_memory=batch.pre_search_memory,
+                                # 手里有事件、没有 disp_result 时别白攥着（见 _save_trace）
+                                tool_events=batch.tool_events)
+                    results.append((t.id, f"merged: {mr.new_head[:8]}", batch.validation))
+                    failure_mode = ""
+                elif mr.status == "conflict":
+                    err = mr.conflict_files or mr.reason or "未知冲突"
+                    tracker.transition(t.id, TaskStatus.CONFLICT_HELD,
+                                     error=f"conflict: {err}")
+                    _release_ref(t.id, repo_root=repo_root_for(t))
+                    _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
+                                pre_search_skipped=batch.pre_search_skipped,
+                                pre_search_reason=batch.pre_search_reason,
+                                pre_search_top_decisions=batch.pre_search_top_decisions,
+                                pre_search_memory=batch.pre_search_memory,
+                                # 手里有事件、没有 disp_result 时别白攥着（见 _save_trace）
+                                tool_events=batch.tool_events)
+                    results.append((t.id, f"conflict: {mr.conflict_files}", batch.validation))
+                    failure_mode = f"merge_conflict: {err}"
+                else:
+                    tracker.transition(t.id, TaskStatus.FAILED, error=f"merge {mr.status}")
+                    _release_ref(t.id, repo_root=repo_root_for(t))
+                    _save_trace(t, route, snap, batch.dispatch_result, batch.validation, False,
+                                pre_search_skipped=batch.pre_search_skipped,
+                                pre_search_reason=batch.pre_search_reason,
+                                pre_search_top_decisions=batch.pre_search_top_decisions,
+                                pre_search_memory=batch.pre_search_memory,
+                                # 手里有事件、没有 disp_result 时别白攥着（见 _save_trace）
+                                tool_events=batch.tool_events)
+                    results.append((t.id, f"merge_failed", batch.validation))
+                    failure_mode = f"merge_{mr.status}"
+                # 经验归档 / 用量统计 / 路由学习 —— **这条路径以前完全不调**，
+                # 只有 _save_trace 上面调了，于是走合并队列的任务这三件静默少做。
+                # 实测（2026-09-11 真机验证）：跑完一个任务 experiences.json /
+                # token_usage.json 根本没被创建，route_learner.json 一动不动。
+                fresh = tracker.read_task(t.id)
+                if fresh is not None:
+                    t.status = fresh.status      # transition 只改盘上对象，内存里还是旧状态
+                _archive_task_outcome(t, route, batch.dispatch_result, failure_mode=failure_mode)
+                drained += 1
+            except Exception as _e:
+                _strand_guard(t, _e, "drain_pending")
     return drained
 
 

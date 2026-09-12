@@ -309,3 +309,114 @@ def test_run_queue_calls_orphan_check_at_break(monkeypatch, tmp_path):
     orch._run_queue_v3({}, 1)      # 队列空 → 立刻走到 break 那一支
 
     assert called, "空转到退出时没查孤儿 —— 探测没接上"
+
+
+# ═══════════════════════════════════════════════════════════════
+# §65 那条形状，全仓扫出另外 4 处（2026-09-13）
+# ═══════════════════════════════════════════════════════════════
+# "future / batch **已经消费掉**、后续那步却抛了" —— 任务不在任何人的视野里，
+# 循环会当成"没活干"退出，它就永远停在 RUNNING。
+
+class _DoneFuture:
+    """一个"已完成"的 future。"""
+    def __init__(self, batch):
+        self._b = batch
+    def done(self): return True
+    def result(self): return (self._b, None, None)
+    def cancel(self): return False
+
+
+class _SubmitBoomMQ:
+    def submit(self, req): raise RuntimeError("入队炸了")
+    def drain(self): return []
+
+
+def test_finalize_failure_does_not_strand_task(monkeypatch, tmp_path):
+    """`runner.finalize` 抛了 —— 任务不能留在 RUNNING（future 已经 pop 掉了）。"""
+    import time as _t
+    tr = _patch_dispatch_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(orch, "_save_trace", lambda *a, **k: None)
+    warns = []
+    monkeypatch.setattr(orch.witness, "warn",
+                        lambda scope, msg, **kw: warns.append(kw.get("key")))
+
+    t = tr.create("finalize 炸")
+    tr.transition(t.id, tr.TaskStatus.RUNNING)
+
+    class _R:
+        def finalize(self, *a, **k):
+            raise RuntimeError("finalize 炸了")
+
+    orch._reap_futures({_DoneFuture(_batch()): (t, None, None, None, _t.time())},
+                       {}, _MQ([]), _R(), [])
+
+    assert tr.read_task(t.id).status == tr.TaskStatus.FAILED, "任务被留在 RUNNING 没人管"
+    assert "finalize_failed" in warns, warns
+
+
+def test_enqueue_merge_failure_does_not_strand_task(monkeypatch, tmp_path):
+    """`mq.submit` 抛了 —— 同上，任务既不在 pending 也不在 future，就是孤儿。"""
+    import time as _t
+    tr = _patch_dispatch_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(orch, "_save_trace", lambda *a, **k: None)
+    warns = []
+    monkeypatch.setattr(orch.witness, "warn",
+                        lambda scope, msg, **kw: warns.append(kw.get("key")))
+
+    t = tr.create("入队炸")
+    tr.transition(t.id, tr.TaskStatus.RUNNING)
+    b = _batch()
+    b.merge_request = object()          # 走 mq.submit 那条
+
+    pending = {}
+    orch._reap_futures({_DoneFuture(b): (t, None, None, None, _t.time())},
+                       pending, _SubmitBoomMQ(), None, [])
+
+    assert pending == {}, "没入成队却记进了 pending_batches"
+    assert tr.read_task(t.id).status == tr.TaskStatus.FAILED
+    assert "enqueue_merge_failed" in warns, warns
+
+
+def test_drain_pending_failure_does_not_strand_task(monkeypatch, tmp_path):
+    """`_drain_pending` 里抛了 —— batch 已经 pop，任务不能留在 RUNNING。"""
+    tr = _patch_dispatch_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(orch, "_save_trace", lambda *a, **k: None)
+    monkeypatch.setattr(orch, "_maybe_complete_parents", lambda *a: None)
+    monkeypatch.setattr(orch, "_release_ref", lambda *a, **k: None)
+    monkeypatch.setattr("singularity.scheduler.project.repo_root_for", lambda t: tmp_path)
+    warns = []
+    monkeypatch.setattr(orch.witness, "warn",
+                        lambda scope, msg, **kw: warns.append(kw.get("key")))
+
+    t = tr.create("drain 炸")
+    tr.transition(t.id, tr.TaskStatus.RUNNING)
+    monkeypatch.setattr(tr, "read_task", lambda tid: (_ for _ in ()).throw(RuntimeError("读盘炸")))
+
+    pending = {t.id: (t, None, None, _batch())}
+    orch._drain_pending(pending, _MQ([_MR(t.id)]), [])
+
+    assert "drain_pending_failed" in warns, warns
+
+
+def test_strand_guard_only_touches_running(monkeypatch, tmp_path):
+    """**对照**：只有还停在 RUNNING 的才改。
+
+    ⚠️ 这条第一版是**假绿**：它断言"终态没被覆盖"，可那个结果是**状态机自己**
+    拒绝 `done→failed` 挡下来的，跟本判据无关（变异验证抓出来的）。
+    现在直接钉"`transition` 被调了几次、调在谁身上" —— 测的是**我这条判据**。
+    """
+    tr = _patch_dispatch_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(orch.witness, "warn", lambda *a, **k: None)
+
+    t_run = tr.create("还在跑的")
+    tr.transition(t_run.id, tr.TaskStatus.RUNNING)
+    t_done = tr.create("已经完事的")
+    tr.transition(t_done.id, tr.TaskStatus.DONE)
+
+    calls = []
+    monkeypatch.setattr(orch.tracker, "transition", lambda *a, **k: calls.append(a))
+    orch._strand_guard(t_run, RuntimeError("x"), "finalize")
+    orch._strand_guard(t_done, RuntimeError("x"), "finalize")
+
+    assert len(calls) == 1, f"该只改 RUNNING 那个，实际改了 {len(calls)} 个"
+    assert calls[0][0] == t_run.id
