@@ -4,7 +4,7 @@ import json, os, time, logging
 
 from singularity.scheduler import tracker
 from singularity.scheduler import dispatcher as disp_mod
-from singularity.scheduler.project import ProjectState, Phase, save, _projects_dir
+from singularity.scheduler.project import ProjectState, Phase, save, load, _projects_dir
 from singularity.scheduler.tracker import TaskStatus
 from singularity.scheduler._io import try_parse_json
 from singularity.scheduler import orchestrator
@@ -566,6 +566,20 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
     project.fix_round = 0
     project.constraints_checklist = constraints
     project.set_phase(Phase.EXECUTING, "架构确认 → 建任务进执行")
+    save(project)
+    # ── 探针（临时，定案后删）：防御模式 §60 ────────────────────────
+    # 症状：这里明明赋了值，走到验收时 project.constraints_checklist 却是空的，
+    # 于是机械检查一条都跑不了。文档里给的下一步就是打这两条。
+    # ⚠️ **只在写入点打证明不了"被覆盖"** —— 顺手在读取点（workflow._run_verification）
+    #    也打一条：on_disk 有值、读取点却是 0 ⇒ 中间有人拿旧副本 save 覆盖了。
+    _back = load(project.id)
+    project.add_lineage({
+        "action": "probe_constraints_checklist", "at": "write",
+        "in_memory": len(constraints),
+        "obj_attr": len(project.constraints_checklist or []),
+        "same_obj": project.constraints_checklist is constraints,
+        "on_disk": len(getattr(_back, "constraints_checklist", None) or []),
+    })
     save(project)
     return f"已分发 {created} 个子任务 (按 layer 路由到对应工程师, 全池选模型)"
 

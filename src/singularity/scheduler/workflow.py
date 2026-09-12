@@ -429,6 +429,15 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     不调 LLM 写代码，只出验证报告供人工 GATE3 判断。
     """
     if not project.constraints_checklist:
+        # ── 探针（临时，定案后删）：防御模式 §60 ──────────────────────
+        # 写入点（_workflow_phases._run_execution）那条记了 on_disk 的值；
+        # 这里是读取点。两边对不上 ⇒ 中途被别的副本覆盖了。
+        project.add_lineage({
+            "action": "probe_constraints_checklist", "at": "read",
+            "in_memory": 0,
+            "arch_constraints": len((project.architecture or {}).get("constraints") or []),
+        })
+        save(project)
         # 记进 issues: 只返回字符串的话，这句话不落盘, GATE3 只能看到一个空 issues
         # 和一份不存在的 QA 报告, 谁也说不清验收为什么没跑。
         # 这条也是进 GATE3 的**入门票**之一（见 ProjectState._gate3_admission）：
