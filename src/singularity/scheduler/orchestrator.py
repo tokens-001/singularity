@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
@@ -105,9 +106,30 @@ def _dispatch_ready(dispatched: set, pool, agents, runner: TaskRunner,
             from singularity.scheduler.project import repo_root_for
             snap = snap_mod.take(t.id, repo_root=repo_root_for(t))
             tracker.transition(t.id, TaskStatus.RUNNING, snapshot_id=snap.id)
-            dispatched.add(t.id)
-            fut = pool.submit(runner.execute, t, agents, mq)
+            # ⚠️ **从这一行往下，任务已经是 RUNNING 了。** 后面任何一步抛，都会留下一个
+            # **没人管的 RUNNING 任务**：没有 future ⇒ 循环看不见它 ⇒
+            # `ready_tasks()` 也不返回它（它是 RUNNING 不是 PENDING）⇒
+            # **900s 收割永远够不着**，它就那么挂着。
+            # 2026-09-13 真机实测就是这么凭空少了一个任务（py-spy 栈：池子里没有工作线程、
+            # 循环空转到 `time.sleep(3)`）。所以这一段必须兜住 ——
+            # **抛了要把它转成 FAILED，不许留在 RUNNING**。
+            try:
+                fut = pool.submit(runner.execute, t, agents, mq)
+            except Exception as _e:
+                try:
+                    tracker.transition(
+                        t.id, TaskStatus.FAILED,
+                        error=f"派发失败（future 没登记上）: {type(_e).__name__}: {_e}"[:200])
+                except Exception:
+                    pass
+                try:
+                    witness.warn("orch", f"dispatch_failed:{type(_e).__name__}: {_e}"[:200],
+                                 key="dispatch_failed")
+                except Exception:
+                    pass
+                continue
             running_futures[fut] = (t, route, snap, pre, time.time())
+            dispatched.add(t.id)
             dispatched_any = True
     return dispatched_any
 
@@ -525,6 +547,41 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
     return drained
 
 
+_orphans_warned: set[str] = set()
+
+
+def _warn_orphan_running() -> None:
+    """**只报不改**：走到"没 future、没 pending、没就绪任务"这一刻，**不该有 RUNNING 任务**。
+
+    本循环是唯一的派发方，所以此刻 tracker 里还挂着 RUNNING 的任务一定是**孤儿**：
+    没有 future ⇒ 循环看不见它 ⇒ `ready_tasks()` 也不返回它（它是 RUNNING 不是 PENDING）
+    ⇒ **900s 收割永远够不着**，就那么挂着。2026-09-13 真机实测凭空少了一个任务
+    （`1789239155520`：py-spy 栈显示池子里没有工作线程、循环空转到 `time.sleep(3)`）。
+
+    ⚠️ **只报警、不改状态** —— 自动"纠正"会把真问题抹平成假的一致
+    （同 `reconcile_projects` 的规矩）。
+    ⚠️ **每个任务只报一次**：这个检查每次空转都会走到，不去重会刷屏。
+    """
+    try:
+        for p in tracker.tasks_dir().glob("*.json"):
+            try:
+                d = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            tid = d.get("id") or p.stem
+            if d.get("status") != TaskStatus.RUNNING.value or tid in _orphans_warned:
+                continue
+            _orphans_warned.add(tid)
+            try:
+                witness.warn("orch",
+                             f"orphan_running_task:{tid}:没有 future，也没人收割它",
+                             key="orphan_running_task")
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
     """v3 调度循环: dispatch→reap→drain 三步，支持 1..N 并发。
 
@@ -548,6 +605,7 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                 _auto_trigger_test_fix(agents, results)
                 remaining = tracker.ready_tasks(exclude=dispatched)
                 if not remaining:
+                    _warn_orphan_running()
                     break
                 time.sleep(0.5)
                 continue

@@ -574,6 +574,16 @@ def _loop_worker():
                     pass
         except Exception as e:
             _push_event("error", f"loop error: {e}")
+            # ⚠️ **必须进告警通道，不能只推 SSE。** 只推 SSE 的话这句话飘一次就没了 ——
+            # 2026-09-13 一次"任务被标成 running 却一个字节没跑"的事故，
+            # **连一条持久痕迹都没留**：日志没有、alerts.jsonl 没有，
+            # 当天刚造的聚合视图也照样看不见它。排障时只能靠猜。
+            try:
+                from singularity.scheduler import witness as _w
+                _w.warn("loop", f"loop_error:{type(e).__name__}: {str(e)[:160]}",
+                        key="loop_error")
+            except Exception:
+                pass
             time.sleep(5)
 
     _push_event("system", "loop stopped")

@@ -161,3 +161,151 @@ def test_worker_exception_salvages_and_accounts(monkeypatch, tmp_path):
     assert traces, "worker 异常时没写 trace"
     assert traces[0][3] is sentinel, "又把 None 传给了 _save_trace —— 事实全丢"
     assert accounted, "worker 异常这条没记账（钱和经验都不会落）"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 「任务标成 running 却没人管」—— 三件防护（2026-09-13 真机抓到）
+# ═══════════════════════════════════════════════════════════════
+# 真机症状：`1789239155520` 被标 RUNNING + 拍了快照，之后**一个字节没跑**
+# （0 日志 / 无 sidecar / 无心跳 / 无取消标记 / 无 trace），过了 1100 秒**收割也没触发**。
+# py-spy 栈给了两条硬证据：池子里**没有工作线程**、循环空转到 `time.sleep(3)`。
+# ⇒ 它被标成 RUNNING 了，但 future **从来没登记进 running_futures** ⇒ 被孤立。
+
+class _Runner:
+    """假 runner：`_dispatch_ready` 会取 `runner.execute` 当提交参数。"""
+    def execute(self, *a, **k):
+        raise AssertionError("假 runner 不该真的被执行")
+
+
+class _BoomPool:
+    """提交必炸的假池子。"""
+    def submit(self, *a, **k):
+        raise RuntimeError("cannot schedule new futures after shutdown")
+
+
+def _patch_dispatch_env(monkeypatch, tmp_path):
+    from singularity.scheduler import config, tracker as tr
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+    monkeypatch.setattr(tr.config, "QIDIAN_DIR", tmp_path)
+    monkeypatch.setattr(orch, "tracker", tr)
+    monkeypatch.setattr(orch.router_mod, "route",
+                        lambda d: type("R", (), {"gate_required": False, "task_type": "default"})())
+    monkeypatch.setattr(orch.pre_mod, "pre_search",
+                        lambda *a, **k: type("P", (), {
+                            "code_context": "", "skipped": True, "reason": "",
+                            "top_decisions": [], "memory": None})())
+    monkeypatch.setattr(orch.pre_mod, "apply_escalation", lambda *a: None)
+    monkeypatch.setattr(orch.snap_mod, "take",
+                        lambda *a, **k: type("S", (), {"id": "s1", "method": "git", "ref": "r1"})())
+    monkeypatch.setattr("singularity.scheduler.project.repo_root_for", lambda t: tmp_path)
+    return tr
+
+
+def test_dispatch_failure_leaves_no_orphan_running_task(monkeypatch, tmp_path):
+    """`transition(RUNNING)` 之后 `pool.submit` 炸了 → 任务必须变 FAILED，**不许留在 RUNNING**。
+
+    留在 RUNNING 就是孤儿：没有 future ⇒ 循环看不见它 ⇒ `ready_tasks()` 也不返回它
+    ⇒ 900s 收割永远够不着。这正是 2026-09-13 真机那个凭空少掉的任务。
+    """
+    tr = _patch_dispatch_env(monkeypatch, tmp_path)
+    warns = []
+    monkeypatch.setattr(orch.witness, "warn", lambda scope, msg, **kw: warns.append(msg))
+
+    t = tr.create("孤儿测试：提交必炸")
+    orch._dispatch_ready(set(), _BoomPool(), {}, _Runner(), {}, None)
+
+    fresh = tr.read_task(t.id)
+    assert fresh.status == tr.TaskStatus.FAILED, (
+        f"任务被留在 {fresh.status} —— 没有 future，永远没人收割它")
+    assert "派发失败" in (fresh.error or ""), fresh.error
+    assert any("dispatch_failed" in w for w in warns), warns
+
+
+class _OkPool:
+    """提交成功的假池子：返回一个永不完成的假 future。"""
+    def submit(self, *a, **k):
+        return object()
+
+
+def test_dispatch_success_still_registers_and_runs(monkeypatch, tmp_path):
+    """**对照**：正常提交时任务照旧进 RUNNING 并被登记 —— 别把上面那条改宽了。"""
+    tr = _patch_dispatch_env(monkeypatch, tmp_path)
+    t = tr.create("正常派发")
+    rf: dict = {}
+    assert orch._dispatch_ready(set(), _OkPool(), {}, _Runner(), rf, None) is True
+    assert tr.read_task(t.id).status == tr.TaskStatus.RUNNING
+    assert len(rf) == 1, "future 没登记进 running_futures"
+
+
+def test_orphan_running_task_is_reported_once(monkeypatch, tmp_path):
+    """孤立探测：没有 future 也没人收割的 RUNNING 任务，要**报出来**（只报不改）。"""
+    tr = _patch_dispatch_env(monkeypatch, tmp_path)
+    warns = []
+    monkeypatch.setattr(orch.witness, "warn",
+                        lambda scope, msg, **kw: warns.append((msg, kw.get("key"))))
+    orch._orphans_warned.clear()
+
+    t = tr.create("孤儿")
+    tr.transition(t.id, tr.TaskStatus.RUNNING)
+    orch._warn_orphan_running()
+    assert warns and warns[0][1] == "orphan_running_task", warns
+    assert t.id in warns[0][0]
+
+    # 幂等：这个检查每次空转都会走到，不去重会刷屏
+    n = len(warns)
+    orch._warn_orphan_running()
+    assert len(warns) == n, "同一个孤儿被重复报"
+
+    # 终态任务不算孤儿
+    orch._orphans_warned.clear()
+    tr.transition(t.id, tr.TaskStatus.FAILED)
+    orch._warn_orphan_running()
+    assert len(warns) == n, "终态任务被当成孤儿了"
+
+
+def test_loop_error_is_persisted_not_just_pushed(monkeypatch, tmp_path):
+    """循环级异常必须进**告警通道** —— 只推 SSE 的话飘一次就没了。
+
+    2026-09-13：一次"任务被孤立"的事故**一条持久痕迹都没留**（日志没有、
+    alerts.jsonl 没有），当天刚造的聚合视图也看不见它 —— 排障只能靠猜。
+    """
+    from singularity.web import app as webapp
+    from singularity.scheduler import witness
+
+    monkeypatch.setenv("QIDIAN_DIR", str(tmp_path))
+    warns = []
+    monkeypatch.setattr(witness, "warn", lambda scope, msg, **kw: warns.append(msg))
+    monkeypatch.setattr(webapp.time, "sleep", lambda *a: None)
+    monkeypatch.setattr(webapp, "_push_event", lambda *a: None)
+    monkeypatch.setattr(webapp, "_log_info", lambda *a: None)
+    monkeypatch.setattr(webapp, "_sse_broadcast", lambda *a: None)
+    monkeypatch.setattr(webapp.disp_mod, "load_agents", lambda: {})
+    monkeypatch.setattr(webapp.tracker, "recover", lambda: 0)
+
+    def _boom(*a, **k):
+        webapp._loop_stop.set()          # 让它下一轮退出
+        raise RuntimeError("boom-xyz")
+
+    monkeypatch.setattr(webapp.orchestrator, "run_queue", _boom)
+    webapp._loop_stop.clear()
+    webapp._loop_worker()
+
+    assert any("loop_error" in w and "boom-xyz" in w for w in warns), (
+        f"循环异常没进告警通道: {warns}")
+
+
+def test_run_queue_calls_orphan_check_at_break(monkeypatch, tmp_path):
+    """**接线**测试：走到"没活干"那一刻，必须真的去查孤儿。
+
+    上面那条测的是**函数**（直接调 `_warn_orphan_running()`）—— 函数对不等于接线通。
+    2026-09-13 这条是变异验证逼出来的：把 `_run_queue_v3` 里那句调用删掉，
+    上面那条照样绿。
+    """
+    _patch_dispatch_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(orch, "_auto_trigger_test_fix", lambda *a: None)
+    called = []
+    monkeypatch.setattr(orch, "_warn_orphan_running", lambda: called.append(1))
+
+    orch._run_queue_v3({}, 1)      # 队列空 → 立刻走到 break 那一支
+
+    assert called, "空转到退出时没查孤儿 —— 探测没接上"
