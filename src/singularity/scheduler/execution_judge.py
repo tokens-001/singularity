@@ -420,9 +420,21 @@ _V2_EXTRACT_MAX_TOKENS = int(os.environ.get("QIDIAN_FUSION_EXTRACT_TOKENS", "")
                              or config.MODEL_MAX_TOKENS)
 
 
-# v2 ② 提取的默认模型。**必须是非思考模型**：思考模型会把 max_tokens 烧在
-# reasoning 上、content 返回空，整条 v2 废掉 —— 实测 glm-5.3 和 deepseek-v4-flash
-# 都撞过，而注册表的 reasoning 标注不可靠（v4-flash 标 false，实际会输出思考链）。
+# v2 ② 提取的默认模型。选型要求**不是"非思考"这个标签，是"别把 max_tokens 烧在
+# reasoning 上"** —— 烧光了 content 就返回空，整条 v2 废掉（实测 glm-5.3 和
+# deepseek-v4-flash 都撞过；后者注册表标 reasoning=false、实际会输出思考链）。
+#
+# ⚠️ 2026-09-12 更正：原来这里写的是「**必须是非思考模型**」。那句话**跟实测对不上、
+# 也没有任何地方执行它**：
+#   · `_V2_EXTRACT_FALLBACKS` 那两个（glm-5.2 / deepseek-v4-pro）都是思考模型；
+#   · `extract` 阶段现在配的是 glm-5.2 —— 同样是思考模型（§62 扩池时有意改的）。
+# 真实的护栏是**两件真东西**，不是这条注释：
+#   · `_V2_EXTRACT_MAX_TOKENS`（= config.MODEL_MAX_TOKENS = 131072）额度留得够；
+#   · 提取空产出会**出声**：`fusion_v2_extract_failed_all` / `fusion_v2_empty_extract`
+#     / `empty_content:*:length` —— 不是静默失败。
+# ⇒ 别再拿"必须非思考"当验收标准；要盯的是上面那两条。
+# （也**不加**"注册表标了 reasoning 就告警"的检查 —— 注册表这个标注本身就不可靠，
+#   加了只会制造 §62 那种常亮噪声。）
 # 别改回观察者模型：观察者就是 v4-flash，实测在提取 prompt 上返回空。
 _V2_EXTRACT_DEFAULT = os.environ.get("QIDIAN_FUSION_EXTRACT_MODEL", "glm-5.3-flash")
 
