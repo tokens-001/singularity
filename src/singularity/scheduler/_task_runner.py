@@ -350,7 +350,9 @@ class TaskRunner:
                     pre_search_skipped=batch.pre_search_skipped,
                     pre_search_reason=batch.pre_search_reason,
                     pre_search_top_decisions=batch.pre_search_top_decisions,
-                    pre_search_memory=batch.pre_search_memory)
+                    pre_search_memory=batch.pre_search_memory,
+                    # 取消路径手里有事件、没有 disp_result —— 不传这份就白攥着（见 _save_trace）
+                    tool_events=batch.tool_events)
         # T1 挂钩: 任务完成后归档经验 / 用量 / 路由学习。
         # 抽成共享函数是必须的 —— v3 的合并路径（orchestrator._drain_pending）以前
         # **一次都没调过这三件**，只有 _save_trace 两边都有，于是走合并队列的任务

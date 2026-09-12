@@ -757,7 +757,14 @@ def _read_planner_patch(task_id: str) -> str | None:
 
 def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
                 pre_search_skipped: bool = False, pre_search_reason: str = "",
-                pre_search_top_decisions: list = None, pre_search_memory: dict = None) -> None:
+                pre_search_top_decisions: list = None, pre_search_memory: dict = None,
+                tool_events: list = None) -> None:
+    """写 trace。
+
+    `tool_events`：**没有 `disp_result` 但手里有事件时的兜底**（2026-09-13）。
+    本函数的唯一输入本来是 `disp_result`，可**取消路径**（`_check_cancelled`）造的
+    BatchOutput 是"有 tool_events、没有 dispatch_result" ⇒ 事件攥着也进不了 trace。
+    """
     # ponytail: 幂等保护 — 终态路径互斥但防误调用
     trace_path = config.TRACE_DIR / f"{task.id}.json"
     if trace_path.exists():
@@ -771,6 +778,7 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
             pre_search_reason=pre_search_reason,
             pre_search_top_decisions=pre_search_top_decisions,
             pre_search_memory=pre_search_memory,
+            tool_events=tool_events,
         )
         nj_mod.save_trace(report, task.id)
     except Exception as e:

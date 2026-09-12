@@ -67,6 +67,11 @@ class DeliveryReport:
     pre_search_reason: str = ""
     pre_search_top_decisions: list = None     # [{id, title, score}] 知识库命中
     pre_search_memory: dict = None            # MAGMA 记忆命中 (MemoryHits.to_dict)
+    # **手里攥着 tool_events、却没有 `executor_result` 时**的兜底（2026-09-13）。
+    # 取消路径就是这个形状：`_check_cancelled` 造的 BatchOutput 带着 tool_events，
+    # 但没有 `dispatch_result` ⇒ `executor_result` 是 None ⇒ `to_dict` 里那句
+    # `getattr(None, "tool_events", [])` 拿到空列表 ⇒ **攥着也白攥**。
+    fallback_tool_events: list = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "DeliveryReport":
@@ -127,7 +132,9 @@ class DeliveryReport:
             "final_status": self.final_status,
             # 每轮调用数摘要（派生值，见 batch_summary 的注释）。从 tool_events 现算 ——
             # 那玩意儿不落盘，不在这儿留一份就永远算不了。
-            "tool_batches": batch_summary(getattr(self.executor_result, "tool_events", [])),
+            "tool_batches": batch_summary(
+                getattr(self.executor_result, "tool_events", None)
+                or self.fallback_tool_events or []),
             "route": {
                 "gate_required": self.route.gate_required,
                 "task_type": self.route.task_type,
@@ -181,6 +188,7 @@ def build_report(
     rolled_back: bool = False,
     pre_search_top_decisions: list = None,
     pre_search_memory: dict = None,
+    tool_events: list = None,
 ) -> DeliveryReport:
     """组装交付报告。"""
     # validation 允许为 None —— worker 异常 / 超时路径确实会传 None（orchestrator 那两处）。
@@ -201,6 +209,7 @@ def build_report(
         pre_search_reason=pre_search_reason,
         pre_search_top_decisions=pre_search_top_decisions or [],
         pre_search_memory=pre_search_memory or {},
+        fallback_tool_events=tool_events or [],
     )
 
     # 最终状态判定 (审计 1.3: 通过≠已验证)

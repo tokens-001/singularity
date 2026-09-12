@@ -240,6 +240,69 @@ def _salvage_timed_out(task, elapsed_s: float, snap=None):
         return _FallbackDisp()
 
 
+def _account_salvaged(t, salvaged, elapsed_s: float) -> None:
+    """异常收尾的**记账 + 记忆**：两条非正常路共用（超时收割 / worker 异常）。
+
+    为什么必须单独有这个函数：`_archive_task_outcome` 是唯一记账入口，
+    但它在 `finalize` / `_drain_pending` 那条正常路上 —— **超时和 worker 异常
+    都走不到**（直接判失败、不进 pending）⇒ 花掉的钱一条都不落、经验也进不了记忆。
+    2026-09-12 先给超时那条补上；2026-09-13 数出 worker 异常那条是同一个形状，
+    抽出来共用，免得补一处漏一处。
+
+    每件各自 try：一件炸不该连累另一件（跟 `_archive_task_outcome` 同规矩）。
+    """
+    # 记账 —— §55 要求异常路径留"烧了多少 token"。
+    try:
+        _tk = int(getattr(salvaged.executor_result, "token_count", 0) or 0)
+        if _tk > 0:
+            from singularity.scheduler._token_budget import record_tokens
+            _pname = ""
+            _pid = getattr(t, "project_id", "") or ""
+            if _pid:
+                try:
+                    from singularity.scheduler import project as _proj_mod
+                    _pname = getattr(_proj_mod.load(_pid), "name", "") or ""
+                except Exception:
+                    pass        # 拿不到名字不该影响记账
+            record_tokens(
+                project_id=_pid, project_name=_pname, task_id=t.id,
+                model=getattr(salvaged, "agent_cfg", {}).get("model", ""),
+                level=getattr(t, "route_level", "any"), tokens=_tk,
+                elapsed_s=elapsed_s,
+            )
+    except Exception as _e:
+        try:
+            witness.warn("orch", f"salvage_record_tokens:{type(_e).__name__}"[:120])
+        except Exception:
+            pass
+    # 记忆 —— 同理，`index_task` 走的是 `_exec.py` 那条正常收尾路径。
+    # 后果：**干完了却异常结束的任务，经验永远进不了记忆**
+    # （探路2 的 T2/T3 实测：373 行测试 + 计数核都写了，events.json 里轨迹是 0 字）。
+    try:
+        from singularity.scheduler import memory as _mem
+        _er = getattr(salvaged, "executor_result", None)
+        _mem.index_task(
+            task_id=t.id,
+            description=t.description,
+            changed_files=list(getattr(_er, "changed_files", []) or []),
+            depends_on=getattr(t, "depends_on", []) or [],
+            created_at=getattr(t, "created_at", None),
+            trajectory=str(getattr(_er, "raw_output", "") or ""),
+            force=True,   # 异常条目要留下，别被去重吃掉
+        )
+    except Exception as _e:
+        try:
+            witness.warn("orch", f"salvage_index_task:{type(_e).__name__}"[:120])
+        except Exception:
+            pass
+    # 释放 worktree 引用（留不下会影响下一次派发）
+    try:
+        from singularity.scheduler.project import repo_root_for
+        _release_ref(t.id, repo_root=repo_root_for(t))
+    except Exception:
+        pass
+
+
 def _reap_futures(running_futures: dict, pending_batches: dict,
                   mq, runner: TaskRunner, results: list) -> bool:
     """_run_queue_v3 步骤④: 回收已完成 future → finalize 或入 pending。返回是否有回收。"""
@@ -270,7 +333,15 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
             except Exception:
                 pass
             results.append((t.id, f"worker_error: {e}", None))
-            _save_trace(t, route, snap, None, None, False)
+            # ⚠️ 原来这里传的是 `None, None` —— **worker 干了什么都查不出来**。
+            # 而它跟超时那条是**同一个形状**：`_archive_task_outcome` 挂在正常收尾路上，
+            # 这条走不到 ⇒ 账不落、经验不进记忆。盘上其实**早就有** sidecar
+            # （`_persist_partial_usage` 每 dispatch 一次落一盘），只是没人读。
+            # 2026-09-13 跟超时并成一条路（见 `_account_salvaged`）。
+            _elapsed = time.time() - submitted_at
+            _salvaged = _salvage_timed_out(t, _elapsed, snap)
+            _save_trace(t, route, snap, _salvaged, None, False)
+            _account_salvaged(t, _salvaged, _elapsed)
             try:
                 from singularity.scheduler.project import repo_root_for
                 cleanup_task_artifacts(t.id, repo_root_for(t))
@@ -312,61 +383,7 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
             # 抢救已知事实再落 trace —— 传 None 会让 trace 变成一份"什么都没干"的假象
             _salvaged = _salvage_timed_out(t, now - submitted_at, snap)
             _save_trace(t, route, snap, _salvaged, None, False)
-            # 记账：超时任务**走不到** `_archive_task_outcome`（那是唯一记账入口，
-            # 在 finalize 那条路上；超时分支直接判失败、不进 pending）⇒ 花掉的钱
-            # 一条都不落。§55 要求超时路径留"烧了多少 token"，这是那半的兑现。
-            try:
-                _tk = int(getattr(_salvaged.executor_result, "token_count", 0) or 0)
-                if _tk > 0:
-                    from singularity.scheduler._token_budget import record_tokens
-                    _pname = ""
-                    _pid = getattr(t, "project_id", "") or ""
-                    if _pid:
-                        try:
-                            from singularity.scheduler import project as _proj_mod
-                            _pname = getattr(_proj_mod.load(_pid), "name", "") or ""
-                        except Exception:
-                            pass        # 拿不到名字不该影响记账
-                    record_tokens(
-                        project_id=_pid, project_name=_pname, task_id=t.id,
-                        model=getattr(_salvaged, "agent_cfg", {}).get("model", ""),
-                        level=getattr(t, "route_level", "any"), tokens=_tk,
-                        elapsed_s=now - submitted_at,
-                    )
-            except Exception as _e:
-                try:
-                    from singularity.scheduler import witness
-                    witness.warn("orch", f"timeout_record_tokens:{type(_e).__name__}"[:120])
-                except Exception:
-                    pass
-            # ⚠️ **记忆这一侧也要进** —— 原来超时只写 trace，`index_task` 走的是
-            # `_exec.py` 那条正常收尾路径，被 deadline 砍掉就整个跳过。
-            # 后果：**干完了但超时的任务，经验永远进不了记忆**（探路2 的 T2/T3 实测：
-            # 373 行测试 + 计数核都写了，events.json 里轨迹是 0 字）。
-            # 同族：09-12 修的 §55（trace 侧）—— 这是它的记忆侧。
-            try:
-                from singularity.scheduler import memory as _mem
-                _er = getattr(_salvaged, "executor_result", None)
-                _mem.index_task(
-                    task_id=t.id,
-                    description=t.description,
-                    changed_files=list(getattr(_er, "changed_files", []) or []),
-                    depends_on=getattr(t, "depends_on", []) or [],
-                    created_at=getattr(t, "created_at", None),
-                    trajectory=str(getattr(_er, "raw_output", "") or ""),
-                    force=True,   # 超时条目要留下，别被去重吃掉
-                )
-            except Exception as _e:
-                try:
-                    from singularity.scheduler import witness
-                    witness.warn("orch", f"timeout_index_task:{type(_e).__name__}"[:120])
-                except Exception:
-                    pass
-            try:
-                from singularity.scheduler.project import repo_root_for
-                _release_ref(t.id, repo_root=repo_root_for(t))
-            except Exception:
-                pass
+            _account_salvaged(t, _salvaged, now - submitted_at)
             reaped = True
 
     return reaped
@@ -465,7 +482,9 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
                             pre_search_skipped=batch.pre_search_skipped,
                             pre_search_reason=batch.pre_search_reason,
                             pre_search_top_decisions=batch.pre_search_top_decisions,
-                            pre_search_memory=batch.pre_search_memory)
+                            pre_search_memory=batch.pre_search_memory,
+                            # 手里有事件、没有 disp_result 时别白攥着（见 _save_trace）
+                            tool_events=batch.tool_events)
                 results.append((t.id, f"merged: {mr.new_head[:8]}", batch.validation))
                 failure_mode = ""
             elif mr.status == "conflict":
@@ -477,7 +496,9 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
                             pre_search_skipped=batch.pre_search_skipped,
                             pre_search_reason=batch.pre_search_reason,
                             pre_search_top_decisions=batch.pre_search_top_decisions,
-                            pre_search_memory=batch.pre_search_memory)
+                            pre_search_memory=batch.pre_search_memory,
+                            # 手里有事件、没有 disp_result 时别白攥着（见 _save_trace）
+                            tool_events=batch.tool_events)
                 results.append((t.id, f"conflict: {mr.conflict_files}", batch.validation))
                 failure_mode = f"merge_conflict: {err}"
             else:
@@ -487,7 +508,9 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
                             pre_search_skipped=batch.pre_search_skipped,
                             pre_search_reason=batch.pre_search_reason,
                             pre_search_top_decisions=batch.pre_search_top_decisions,
-                            pre_search_memory=batch.pre_search_memory)
+                            pre_search_memory=batch.pre_search_memory,
+                            # 手里有事件、没有 disp_result 时别白攥着（见 _save_trace）
+                            tool_events=batch.tool_events)
                 results.append((t.id, f"merge_failed", batch.validation))
                 failure_mode = f"merge_{mr.status}"
             # 经验归档 / 用量统计 / 路由学习 —— **这条路径以前完全不调**，
