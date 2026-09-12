@@ -19,6 +19,8 @@
 
 守这条比守"记得写 import"可靠。判据是**行为**（真跑一次检查器），不是文本。
 """
+import importlib
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -72,3 +74,91 @@ def test_allowlist_has_no_stale_entries():
     hits = {str(Path(l.split(":", 1)[0]).resolve().relative_to(SRC)) for l in _ruff_f821()}
     stale = ALLOWED - hits
     assert not stale, f"这些豁免已经不再命中 F821 了，从 ALLOWED 里删掉: {stale}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 盲区补丁：星号 import 会让整个文件的 F821 变成瞎子
+# ═══════════════════════════════════════════════════════════════
+# 2026-09-13 发现：上面那条守卫**漏掉了它本该抓的形状**。
+# `_memory_consolidator.py` 开头一句 `from _memory_core import *`，ruff 解析不了
+# 命名空间，于是**对整个文件不报 F821**。把那行摘掉，同一个文件立刻报 7 行 ——
+# 其中 3 个名字是**真的没导入**（`auto_maintain` / `system2_extract` /
+# `add_inferred_causal_edge`，占 4 行），全部被 `except Exception` 吞成 `consolidate:` 告警，
+# 真机 alerts.jsonl 里已经报过 6 次，功能**从来没跑过**。
+# 形状跟守卫开头写的那两次一模一样 —— 区别只是它藏在星号 import 后面。
+# src 下有 10 个文件带星号 import，就是这么大的盲区。
+
+def _star_import_files() -> list[Path]:
+    return [p for p in sorted(SRC.rglob("*.py"))
+            if re.search(r"^from \S+ import \*", p.read_text(encoding="utf-8"), re.M)]
+
+
+def _f821_with_star_stripped(p: Path) -> list[str]:
+    """摘掉星号 import 后再跑一次 F821（走 stdin，不落临时文件）。
+
+    摘掉之后它会**多报** —— 既报真未定义名，也报"本来是星号 import 供的"那些。
+    所以调用方必须再用 `hasattr(真实模块, 名字)` 分一次类：星号 import 早就执行过了，
+    供不上就是**真的供不上**。
+    """
+    ruff = Path(sys.executable).parent / "ruff"
+    if not ruff.exists():
+        pytest.skip("ruff 没装")
+    stripped = re.sub(r"^from \S+ import \*.*$", "",
+                      p.read_text(encoding="utf-8"), flags=re.M)
+    r = subprocess.run([str(ruff), "check", "--select", "F821", "--no-cache",
+                        "--output-format=concise", "--stdin-filename", str(p), "-"],
+                       input=stripped, capture_output=True, text=True, timeout=120)
+    return [l for l in r.stdout.splitlines() if "F821" in l]
+
+
+def test_star_import_files_have_no_truly_undefined_names():
+    """带星号 import 的文件里，也不许有**真的**未定义名。"""
+    bad: list[str] = []
+    for p in _star_import_files():
+        rel = p.relative_to(SRC).with_suffix("")
+        modname = "singularity." + ".".join(rel.parts)
+        try:
+            mod = importlib.import_module(modname)
+        except Exception as e:                      # noqa: BLE001
+            bad.append(f"{p}: 模块本身 import 就失败了: {type(e).__name__}: {e}")
+            continue
+        for line in _f821_with_star_stripped(p):
+            m = re.search(r"F821 Undefined name `([^`]+)`", line)
+            if m and not hasattr(mod, m.group(1)):
+                bad.append(f"{p}: `{m.group(1)}` 星号 import 也供不上 —— 真·未定义名")
+    assert not bad, (
+        "带星号 import 的文件里有真·未定义名（F821 的盲区）。\n"
+        "调用时必抛 NameError，多半会被 `except Exception` 吞成一条告警。\n"
+        + "\n".join("  " + b for b in bad)
+    )
+
+
+def test_consolidate_memory_runs_without_nameerror(tmp_path, monkeypatch):
+    """上面那条是**静态**判据（源码能不能解析出名字）；这条是**行为**判据。
+
+    真跑一遍 `consolidate_memory()` 的三条支路（重活 / 抽象回填 / 潜因果边），
+    假装它们都正常返回，然后断言**没有** `... is not defined` 这类告警。
+    修复前这里必然红：`auto_maintain` / `system2_extract` / `add_inferred_causal_edge`
+    三个都取不到名字，分别被 `except Exception` 吞成 `consolidate:name '...' is not defined`
+    —— 真机 alerts.jsonl 里就是这么报的。
+    """
+    from singularity.scheduler import config
+    from singularity.scheduler import _memory_consolidator as mc
+    from singularity.scheduler import _memory_lifecycle as ml
+    from singularity.scheduler import _memory_graph as mg
+
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path / ".qidian")
+    (tmp_path / ".qidian").mkdir()
+    monkeypatch.setattr(mc, "_heavy_due", lambda: True)
+    monkeypatch.setattr(mc.consolidate_memory, "_last_run", 0, raising=False)
+    monkeypatch.setattr(mc, "_consolidate_calls", 1)
+    monkeypatch.setattr(ml, "auto_maintain", lambda: {"pruned": 0})
+    monkeypatch.setattr(ml, "system2_extract", lambda: {"added": 0, "insights": []})
+    monkeypatch.setattr(mc, "backfill_abstractions", lambda **kw: 0)
+    monkeypatch.setattr(mg, "find_candidate_latent_edges", lambda: [])
+
+    warns: list[str] = []
+    monkeypatch.setattr(mc.witness, "warn", lambda scope, msg, **kw: warns.append(str(msg)))
+    mc.consolidate_memory()
+    bad = [w for w in warns if "is not defined" in w]
+    assert not bad, f"还是未定义名（用户看不到，只留一条告警）: {bad}"

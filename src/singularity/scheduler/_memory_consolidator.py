@@ -76,6 +76,14 @@ def consolidate_memory() -> int:
     _MAX_LLM = 5
 
     if _heavy_due():
+        # ⚠️ 这两个原来**没导入** —— `auto_maintain`/`system2_extract` 定义在
+        # `_memory_lifecycle`，而本模块只 `from _memory_core import *`，`_memory_core`
+        # 有自己的 `__all__`、不带它们。调用必抛 NameError、被下面的 `except` 吞成
+        # 一条 `consolidate:` 告警 ⇒ **内存维护 + 洞察提取从来没跑过**
+        # （真机 alerts.jsonl 实测：`consolidate:name 'auto_maintain' is not defined`）。
+        # F821 守卫本该拦住，但本文件开头有**星号 import** ⇒ ruff 解析不了命名空间、
+        # 直接不报（2026-09-13 实测：把那行星号去掉，同一个文件立刻报 7 处）。
+        from singularity.scheduler._memory_lifecycle import auto_maintain, system2_extract
         try:
             lc = auto_maintain()
             if lc.get("pruned", 0) > 0:
@@ -96,7 +104,11 @@ def consolidate_memory() -> int:
         except Exception as e: witness.warn('memory', f'abstract:{e}')
 
     try:
-        from singularity.scheduler._memory_graph import find_candidate_latent_edges
+        # `add_inferred_causal_edge` 原来**也没导入** —— 跟上面那两个同一形状：
+        # 定义在 `_memory_graph`，本模块只星号 import `_memory_core`，拿不到。
+        # 于是**高置信那支一进去就抛 NameError**，整个"潜因果边"步骤 `return 0`。
+        from singularity.scheduler._memory_graph import (
+            find_candidate_latent_edges, add_inferred_causal_edge)
         candidates = find_candidate_latent_edges()
         added = 0
         tier3_all = [c for c in candidates if 0.55 <= c.get("semantic_sim", 0) < 0.85]

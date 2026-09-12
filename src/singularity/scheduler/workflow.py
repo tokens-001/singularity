@@ -8,6 +8,10 @@
 
 from __future__ import annotations
 import json
+# `Path` 只出现在 `_phase_output_path`/`_save_phase_output` 的**返回注解**里。
+# 文件有 `from __future__ import annotations`，注解运行时不求值 —— 所以它一直没炸，
+# 但名字确实不在本模块作用域里（2026-09-13 被星号 import 盲区补丁抓出来的）。
+from pathlib import Path
 
 from singularity.scheduler import config
 from singularity.scheduler import tracker
