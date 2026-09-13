@@ -9,6 +9,7 @@ import Chat from './pages/Chat'
 const Tasks = lazy(() => import('./pages/Tasks'))
 const Projects = lazy(() => import('./pages/Projects'))
 const Usage = lazy(() => import('./pages/Usage'))
+const Alerts = lazy(() => import('./pages/Alerts'))
 const Config = lazy(() => import('./pages/Config'))
 
 /** 只把内容区包进 Suspense —— 否则切页时整个侧边栏会被 fallback 顶掉 */
@@ -27,6 +28,7 @@ export default function App() {
           <Route path="/tasks" element={<Page><Tasks /></Page>} />
           <Route path="/projects" element={<Page><Projects /></Page>} />
           <Route path="/usage" element={<Page><Usage /></Page>} />
+          <Route path="/alerts" element={<Page><Alerts /></Page>} />
           <Route path="/config" element={<Page><Config /></Page>} />
         </Route>
       </Routes>

@@ -5,13 +5,14 @@ import { useSSE, useSSEConnected } from '../lib/useSSE'
 import { useToast } from '../lib/toast'
 import { getPinned } from '../lib/pinned'
 import { api } from '../lib/api'
-import { MessageSquare, List, Settings, Boxes, Activity } from 'lucide-react'
+import { MessageSquare, List, Settings, Boxes, Activity, AlertTriangle } from 'lucide-react'
 
 const NAV = [
   { path: '/', label: '对话', icon: MessageSquare },
   { path: '/projects', label: '项目', icon: Boxes },
   { path: '/tasks', label: '任务', icon: List },
   { path: '/usage', label: '用量', icon: Activity },
+  { path: '/alerts', label: '告警', icon: AlertTriangle },
   { path: '/config', label: '配置', icon: Settings },
 ]
 
