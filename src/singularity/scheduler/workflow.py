@@ -689,11 +689,61 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     except Exception:
         pass
 
+    # 本轮有没有任务是在"上游失败、降级运行"下跑完的 —— 必须在人审页上看得见
+    _flag_degraded_tasks(project)
+
     # 验收入门票：走到这儿才算"验收真的跑过"。放在**最后**、而不是开头 ——
     # 中途抛异常时不该留下"跑过了"的假证据。GATE3 靠这个标记识别
     # "验收整段没跑就被推进来了"（见 ProjectState._gate3_admission）。
     project.issues.append({"type": "verification_ran", "detail": "QA + 安全审计已执行"})
     return msgs
+
+
+def _flag_degraded_tasks(project: ProjectState) -> None:
+    """扫一遍本项目任务，把"**上游失败、降级运行**"的挑出来 → 进 issues + 出声。
+
+    ⚠️ **为什么要有这条**（2026-09-13 真机 · 项目 `1789303369052`）：
+    `tracker.ready_tasks` 有意**不级联失败** —— 上游挂了下游照跑，只在
+    `task.error` 里留一句"上游依赖 X 已失败 (降级运行)"。**那个决定是合理的**
+    （让返工循环修，别一挂全挂）。
+
+    但它有个**没被兜住的副作用**：**下游可能把上游的活自己干了**。
+    实测那一轮：实现任务 **900s 超时失败**，写测试的任务于是降级起跑 ——
+    而**上一轮它就是这么自己把实现写了的**（`git log --all` 只有写测试那笔提交）。
+
+    ⚠️ **而"这轮降级过"这件事，当时没有任何出口**：这句 error **只写在 task 字段里**，
+    验收路径不读、`project.issues` 是空的、GATE3 人审页上**一个字都看不到** ——
+    人看到的是"机械检查 9/9 全过"，不知道底下有个失败的实现任务。
+
+    ⇒ **不改变行为**（不级联失败是设计），只让它在人审时**看得见** ——
+    同 `_gate3_admission` 立的规矩：把缺证据摆到台面上，比卡死项目有用。
+    """
+    try:
+        from singularity.scheduler import tracker, witness
+    except Exception:
+        return
+    degraded = []
+    for tid in (project.task_ids or []):
+        try:
+            t = tracker.read_task(tid)
+        except Exception:
+            continue
+        if t is not None and "降级运行" in str(getattr(t, "error", "") or ""):
+            degraded.append(tid)
+    if not degraded:
+        return
+    try:
+        witness.warn("workflow", f"degraded_dependency:{project.id}:{len(degraded)}"[:120],
+                     key="degraded_dependency")
+    except Exception:
+        pass
+    project.issues.append({
+        "type": "degraded_dependency",
+        "detail": (f"本轮有 **{len(degraded)} 个任务是在『上游失败』的前提下跑的**"
+                   f"（{'、'.join(t[:8] for t in degraded)}）—— "
+                   "它们**拿不到上游的产物**，可能自己把上游的活干了。"
+                   "本页的『通过』不覆盖这个前提"),
+    })
 
 
 # ═══════════════════════════════════════════════════════════

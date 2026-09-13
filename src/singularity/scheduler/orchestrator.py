@@ -334,6 +334,26 @@ def _account_salvaged(t, salvaged, elapsed_s: float) -> None:
         pass
 
 
+def _flag_killed_without_wrapup(tid: str) -> None:
+    """任务被外层 900s 砍掉时出声 —— **"被砍"不等于"自己收尾"**。
+
+    执行器自带提前量（`TASK_DEADLINE_S − TASK_WRAPUP_MARGIN_S`，见 config），
+    设计上它**该在外层这刀之前**带着"已知事实"回来（`error_kind="deadline"`，
+    那条走 `deadline_wrapup` 分支、**压根到不了收割这里**）。
+    ⇒ **所以这条告警就是"那条提前收尾的修复这轮没生效"的信号** ——
+    没有它的话，两种情况在盘上长得一模一样（都是 FAILED + 一份没及总结的 trace），
+    **只能靠猜**。2026-09-13 真机：任务 `1789303900782` 就是这么被砍的
+    （零改动 / 5 轮 6 次调用 / `agent_output` 里没有"主动收尾"），当时**一条告警都没有**。
+
+    ⚠️ 带 key ⇒ 进 `alert_summary` 聚合；**常驻就说明"每次都是被砍的"**，那才是真信号。
+    """
+    try:
+        witness.warn("orch", f"task_killed_no_wrapup:{tid}"[:120],
+                     key="task_killed_no_wrapup")
+    except Exception:
+        pass
+
+
 def _strand_guard(t, exc: BaseException, where: str) -> None:
     """兜住"future/batch **已经消费掉**、后续那步却抛了"—— 别把任务留在 RUNNING 没人管。
 
@@ -432,6 +452,15 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
         t, route, snap, pre, submitted_at = running_futures.get(fut, (None,)*5)
         if t is not None and now - submitted_at > deadline:
             running_futures.pop(fut)
+            # ⚠️ **走到这儿 = 执行器没能自己收尾** —— 必须出声。
+            # 执行器自带提前量（`TASK_DEADLINE_S − TASK_WRAPUP_MARGIN_S`，见 config），
+            # 设计上它**该在外层这刀之前**带着"已知事实"回来（`error_kind="deadline"`，
+            # 那条会走 `deadline_wrapup` 分支、压根到不了这里）。
+            # ⇒ **能用这条告警**把"那条提前收尾的修复有没有真生效"和"只是这轮碰巧慢"分开 ——
+            # 不然两种情况的盘上产物长得一样（都是 FAILED + 一份没及总结的 trace）。
+            # 2026-09-13 真机：任务 `1789303900782` 就是这么被砍的（零改动、5 轮 6 次调用、
+            # 没有"主动收尾"），**而当时没有任何告警**。
+            _flag_killed_without_wrapup(t.id)
             try:
                 # 协作式中断: 写取消标记, 让执行线程在下一 turn 边界自行退出
                 config.ensure_dirs()

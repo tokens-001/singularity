@@ -243,6 +243,65 @@ class TestAbstractionBacklog:
             "欠账不多却也报警 ⇒ 又变成噪声源"
 
 
+class TestDegradedDependencyIsVisible:
+    """⑧ 上游失败、下游"降级运行" —— 人审时必须看得见。
+
+    2026-09-13 真机（项目 `1789303369052`）：实现任务 900s 超时失败，
+    写测试的被标"上游依赖 … 已失败 (降级运行)"**照常起跑**（有意设计，不级联失败）——
+    而**上一轮它就是这么自己把实现写了的**。
+    ⚠️ 当时那句 error **只写在 task 字段里**：验收不读、`project.issues` 是空的、
+    GATE3 页上**一个字都没有**，人看到的是"机械检查 9/9 全过"。
+    """
+
+    def _task(self, error: str) -> str:
+        from singularity.scheduler import tracker
+        from singularity.scheduler.tracker import TaskStatus
+        t = tracker.create("实现 txtstat", project_id="p1")
+        tracker.transition(t.id, TaskStatus.FAILED, error=error)
+        return t.id
+
+    def test_degraded_task_leaves_both_traces(self):
+        from singularity.scheduler import workflow as W
+        from singularity.scheduler import config
+        tid = self._task("上游依赖 1789303900782 已失败 (降级运行)")
+        p = P.ProjectState(id="p1", name="t")
+        p.task_ids = [tid]
+        p.issues = []
+        W._flag_degraded_tasks(p)
+
+        assert "degraded_dependency" in [i.get("type") for i in p.issues], \
+            "没进 issues ⇒ GATE3 人审页上看不见（人只看到『机械检查全过』）"
+        log = config.QIDIAN_DIR / "alerts.jsonl"
+        assert log.exists() and "degraded_dependency" in log.read_text(encoding="utf-8"), \
+            "没出声 ⇒ 聚合视图里也看不见"
+
+    def test_normal_task_does_not_flag(self):
+        """普通失败（不是降级）不该被这条抓 —— 否则又是个噪声源。"""
+        from singularity.scheduler import workflow as W
+        tid = self._task("QA:fail: tests failed")
+        p = P.ProjectState(id="p1", name="t")
+        p.task_ids = [tid]
+        p.issues = []
+        W._flag_degraded_tasks(p)
+        assert "degraded_dependency" not in [i.get("type") for i in p.issues]
+
+
+class TestKilledTaskIsNotSelfWrapup:
+    """⑨ "被砍" ≠ "自己收尾" —— 后者是修复生效，前者是它没生效。
+
+    执行器自带提前量（`TASK_DEADLINE_S − TASK_WRAPUP_MARGIN_S`），设计上该在
+    外层那刀**之前**自己回来（走 `deadline_wrapup`，到不了收割那段）。
+    ⇒ **走到收割 = 那条修复这轮没生效**，必须能分开 —— 否则两种情况盘上长得一样。
+    """
+
+    def test_killed_task_warns(self):
+        from singularity.scheduler import orchestrator, config
+        orchestrator._flag_killed_without_wrapup("t-abc")
+        log = config.QIDIAN_DIR / "alerts.jsonl"
+        assert log.exists() and "task_killed_no_wrapup" in log.read_text(encoding="utf-8"), \
+            "被砍却不出声 ⇒ 分不出『修复没生效』和『这轮碰巧慢』"
+
+
 class TestRatchetResetsOnHumanIntervention:
     """③ 人工批准 GATE2 = 人到场兜底，自动重试配额必须跟着恢复。"""
 
