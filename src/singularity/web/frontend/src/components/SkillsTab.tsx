@@ -149,8 +149,15 @@ export default function SkillsTab() {
             const unknown = bound == null     // 同上：读不到 ≠ 没绑
             // 阶段默认优先：配了非空名单的阶段，这份模型绑定在那几个阶段**不生效**。
             // 不标出来就是新的静默失效 —— 界面看着绑了，跑起来用的是阶段那份。
+            // ⚠️ `null` = **读不到**，不是"没绑"。`(x?.length ?? 0)` 把"不知道"碾成 0 ⇒
+            // 某个阶段的绑定读不出来时，这一行**该出的警示不出** —— 用户看着"没被覆盖"，
+            // 跑起来用的是阶段那份（2026-09-14 外派⑦ 抓到）。
+            // 同文件模型那条轴（上面的 `unknown`）早就分了三态，这里当时漏了。
+            const phaseUnknown = PHASES.some(([k]) => phaseMatrix[k] == null)
             const shadowed = PHASES.filter(([k]) => (phaseMatrix[k]?.length ?? 0) > 0)
-            const shadowText = shadowed.length === 0 ? ''
+            const shadowText = phaseUnknown
+              ? '有的阶段默认读不到 —— 这份绑定有没有被覆盖，判不了'
+              : shadowed.length === 0 ? ''
               : shadowed.length === PHASES.length ? '已全部被阶段默认覆盖 —— 这份只在阶段留空时才用'
               : `在「${shadowed.map(([,l])=>l).join('、')}」被阶段默认覆盖`
             return (

@@ -24,6 +24,8 @@ const AGENTS = { any: [{ model: 'm1', max_turns: 5 }] }
 
 /** 哪些模型的绑定"读不到"（模拟网络失败） */
 let unreadable = new Set<string>()
+/** 哪些**阶段**的默认绑定"读不到" */
+let phaseUnreadable = new Set<string>()
 const writes: any[] = []
 
 vi.mock('../lib/api', () => ({
@@ -33,7 +35,9 @@ vi.mock('../lib/api', () => ({
     agentSkills: (m: string) => unreadable.has(m)
       ? Promise.reject(new Error('boom'))
       : Promise.resolve({ skills: [] }),
-    phaseSkills: () => Promise.resolve({ skills: [] }),
+    phaseSkills: (p: string) => phaseUnreadable.has(p)
+      ? Promise.reject(new Error('boom'))
+      : Promise.resolve({ skills: [] }),
     updateAgentSkills: (m: string, s: string[]) => { writes.push([m, s]); return Promise.resolve({ ok: true }) },
     updatePhaseSkills: () => Promise.resolve({ ok: true }),
     addSkill: () => Promise.resolve({ ok: true }),
@@ -116,5 +120,25 @@ describe('读不到技能绑定时的行为', () => {
     const el = await mount()
     const btn = [...el.querySelectorAll('button')].find(b => (b.textContent || '').includes('全选'))
     expect((btn as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  // ── 阶段那条轴的派生值（2026-09-14 外派⑦ 抓到）────────────────────────
+  // 「某个阶段读不到」原来被 `(x?.length ?? 0)` 碾成 0 ⇒ 模型行**该出的警示不出**：
+  // 用户看着"这份绑定没被覆盖"，跑起来用的是阶段那份 —— 正是这条警示要防的事。
+  it('某个阶段读不到时，不许把"判不了"渲染成"没被覆盖"', async () => {
+    unreadable = new Set()
+    phaseUnreadable = new Set(['planning'])          // 只有"架构"这一档读不到
+    const el = await mount()
+
+    expect(el.textContent, '读不到却说"没被覆盖" —— 该出的警示没出')
+      .toContain('有的阶段默认读不到')
+  })
+
+  it('对照：阶段都读得到、且都为空时，**不**出这条警示', async () => {
+    unreadable = new Set()
+    phaseUnreadable = new Set()
+    const el = await mount()
+
+    expect(el.textContent).not.toContain('有的阶段默认读不到')
   })
 })
