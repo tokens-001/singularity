@@ -119,8 +119,6 @@
  "scheduler/_worktree.py::<module>": 1,
  "scheduler/_worktree.py::_lock_wt": 1,
  "scheduler/_worktree.py::_unlock_wt": 1,
- "scheduler/api_store.py::_load": 1,
- "scheduler/api_store.py::_load_raw": 1,
  "scheduler/api_store.py::canonical": 1,
  "scheduler/api_store.py::is_model_available": 1,
  "scheduler/api_store.py::load_custom_models": 1,

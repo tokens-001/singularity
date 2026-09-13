@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from singularity.scheduler import config, witness
-from singularity.scheduler._io import atomic_write_json
+from singularity.scheduler._io import atomic_write_json, load_json_or_quarantine
 
 
 @dataclass
@@ -49,28 +49,58 @@ def _store_path() -> Path:
     return config.QIDIAN_DIR / "api_store.json"
 
 
-def _load_raw() -> dict:
-    """读 api_store.json 原始 dict（含 _observer 等元数据键）。不存在返回 {}。"""
+# 「这一轮读到的库是坏的」标记：`_load` / `_load_raw` 一旦命中损坏就置上，
+# `_save` 见到它**拒绝写**（见 `_save` 那段）。进程内粘住 —— 想恢复要人工处理
+# `.corrupt` 备份后重启，这正是"坏了就别继续当好的用"。
+_CORRUPT = False
+
+
+def _read_store() -> "dict | None":
+    """读 api_store.json。**三态**（委托 `_io.load_json_or_quarantine`）：
+
+      文件不存在 → `{}`（真的空）
+      可解析     → 原始 dict
+      **损坏**   → `None`（已隔离成 `.corrupt` + 双通道出声，原文件一字未动）
+
+    ⚠️ 原来这里是裸 `json.loads` + `except (JSONDecodeError, KeyError): pass` ——
+    "坏了"和"没有"**长得一样**，于是 `_load()` 落到 `_seed()`，而 `_seed()` 末尾
+    就是 `_save()` ⇒ **一次撕裂写，下一次读取拿种子数据把整库盖掉**
+    （欠费标记 / 别名 / 自定义 API 条目全没），而外表看起来"库好好的"
+    （2026-09-14，扫bug-02 ② 核出、我复核属实）。
+    """
+    global _CORRUPT
     path = _store_path()
-    if path.exists():
-        try:
-            return json.loads(path.read_text())
-        except (json.JSONDecodeError, KeyError):
-            pass
-    return {}
+    if not path.exists():
+        return {}
+    data = load_json_or_quarantine(path)
+    if data is None:
+        _CORRUPT = True
+    return data
+
+
+def _load_raw() -> dict:
+    """读 api_store.json 原始 dict（含 _observer 等元数据键）。不存在返回 {}。
+
+    损坏时返回 `{}` —— 但那是**带告警的降级**（隔离 + 出声在 `_io` 里做了），
+    而且 `_CORRUPT` 已置上，后续 `_save` 会拒写。
+    """
+    return _read_store() or {}
 
 
 def _load() -> dict[str, APIEntry]:
-    """读 API 库。不存在则用内置种子数据初始化。跳过 _ 前缀元数据键。"""
+    """读 API 库。**只在文件真的不存在时**才用种子数据初始化。
+
+    🔴 **损坏时绝不 `_seed()`** —— `_seed()` 末尾就是 `_save()`，
+    那等于拿种子数据把整库盖掉。宁可这一轮读空（带告警），也不把真数据换成假的。
+    """
     path = _store_path()
-    if path.exists():
-        try:
-            data = json.loads(path.read_text())
-            return {k: APIEntry.from_dict(v) for k, v in data.items()
-                    if not k.startswith("_") and isinstance(v, dict)}
-        except (json.JSONDecodeError, KeyError):
-            pass
-    return _seed()
+    if not path.exists():
+        return _seed()          # 首次运行：真的没有 ⇒ 建库（`_seed` 自己会 `_save`）
+    data = _read_store()
+    if data is None:
+        return {}               # 坏了：降级成空 + 已出声 + `_save` 会拒写
+    return {k: APIEntry.from_dict(v) for k, v in data.items()
+            if not k.startswith("_") and isinstance(v, dict)}
 
 
 def _seed() -> dict[str, APIEntry]:
@@ -166,6 +196,16 @@ def _guess_base_url(entry_url: str) -> str:
 
 
 def _save(entries: dict[str, APIEntry]) -> None:
+    global _CORRUPT
+    if _CORRUPT:
+        # 🔴 **拒写**：这一轮读到过损坏的库（已隔离到 `.corrupt`）—— 拿手里这份
+        # （多半是空表 + 刚改的那一条）整份写回去，历史配置就全没了，
+        # 而 `api_store.json` 看起来**完全正常**。宁可这次操作失败。
+        witness.warn("api_store",
+                     "save_skipped: api_store.json 损坏已隔离(.corrupt)，拒绝整库重建；"
+                     "人工恢复备份后重启即可",
+                     key="api_store_corrupt")
+        return
     data = {k: v.to_dict() for k, v in entries.items()}
     # 保留元数据键（如 _observer），避免被 API 增删改覆盖丢失
     for k, v in _load_raw().items():
