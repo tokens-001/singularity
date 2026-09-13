@@ -10,7 +10,7 @@
  * 契约：**成功 → 响应本身**（没有响应体时退回 `true`）；**失败 → `false`**。
  * 这条要钉住，否则下一个人把返回值改回 boolean，"死功能"会**无声地回来**。
  */
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App as AntApp } from 'antd'
@@ -22,15 +22,30 @@ beforeAll(() => {
   g.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} }
 })
 
+/** 每次 `callRun` 挂起来的 root —— 文件跑完统一卸掉（见下面的 `afterAll`）。 */
+const roots: ReturnType<typeof createRoot>[] = []
+
 /** 把 hook 的返回值捞出来。 */
 async function callRun(fn: () => Promise<unknown>): Promise<unknown> {
   let got: unknown = 'NEVER_CALLED'
   function Probe() { const run = useRun(); ;(globalThis as any).__run = run; return null }
   const el = document.createElement('div')
-  await act(async () => { createRoot(el).render(<AntApp><Probe /></AntApp>) })
+  const root = createRoot(el)
+  roots.push(root)
+  await act(async () => { root.render(<AntApp><Probe /></AntApp>) })
   await act(async () => { got = await (globalThis as any).__run(fn) })
   return got
 }
+
+/**
+ * ⚠️ **必须卸掉，否则整套会随机变红**（2026-09-14 复核时实测抓到，复现率约 1/15）：
+ * 第三条用例会真的弹一条 antd `message.error`，它带出场动画（rc-motion 的定时器/rAF）；
+ * root 不卸，这堆待办就活过了 jsdom 环境的拆除时刻，随后
+ * `ReferenceError: window is not defined` 以 **unhandled error** 冒出来
+ * ⇒ vitest 汇总报 `Errors 1 error` 且**退出码 1**（用例本身还是全绿 —— 最难查的那种红）。
+ * 同仓会 unmount 的那几份测试都没有这条病。
+ */
+afterAll(async () => { await act(async () => { roots.forEach(r => r.unmount()) }) })
 
 describe('useRun 的返回契约', () => {
   it('成功时把**响应**带回来（不只是 true）', async () => {
