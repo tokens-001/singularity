@@ -10,18 +10,35 @@ def _custom_agents_path():
     return config.QIDIAN_DIR / "agents_custom.json"
 
 def _load_custom_agents() -> dict:
+    """读自定义 agent overlay。**损坏时降级成 `{}`，但那是带告警的降级**
+    （隔离 + 出声在 `_io` 里做了，写侧另见 `_save_custom_agents`）。
+
+    ⚠️ 原来是裸 `_json.loads` + `except: pass` —— "坏了"和"没有"长得一样，
+    于是 `add_agent` 会拿空 dict 写回整份，**把用户配的所有 agent 盖掉**
+    （2026-09-14，C 的 S1 草案 §3.10，我核过）。
+    """
+    from . import _io
     p = _custom_agents_path()
-    if p.exists():
-        try:
-            return _json.loads(p.read_text())
-        except (_json.JSONDecodeError, OSError):
-            pass
-    return {}
+    if not p.exists():
+        return {}
+    data = _io.load_json_or_quarantine(p)
+    return data if data is not None else {}
 
 def _save_custom_agents(data: dict) -> None:
     from . import config
+    from . import _io, witness
+    p = _custom_agents_path()
+    if _io.is_quarantined(p):
+        # 🔴 **拒写**：读侧已经把坏文件隔离出去了，拿手里这份（多半是空表 + 刚改的那条）
+        # 整份写回去 = 历史配置全没，而文件名一模一样。
+        # ⚠️ **这个文件有两个写者**（另一个是 `skill_loader.set_agent_skills`），
+        # 所以标记记在**路径**上（`_io.is_quarantined`），两边问的是同一个。
+        witness.warn("dispatch_crud",
+                     "save_skipped: agents_custom.json 损坏已隔离(.corrupt)，拒绝整份重建",
+                     key="agents_custom_corrupt")
+        return
     config.QIDIAN_DIR.mkdir(parents=True, exist_ok=True)
-    _custom_agents_path().write_text(_json.dumps(data, ensure_ascii=False, indent=2))
+    _io.atomic_write_json(p, data)       # 顺带换成原子写（原来是裸 write_text）
 
 def add_agent(level: str = "", model: str = "", agent_type: str = "openai-agent",
               entry: str = "", api_key_env: str = "", max_turns: int = 5,

@@ -14,6 +14,7 @@ Skill 类型:
 from __future__ import annotations
 
 import fnmatch
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -293,15 +294,14 @@ def get_agent_skills(agent_level: str, agent_model: str, phase: str = "") -> lis
     custom_file = _qidian_dir() / "agents_custom.json"
     if not custom_file.exists():
         return []
-    try:
-        import json
-        data = json.loads(custom_file.read_text(encoding="utf-8"))
-        level_skills = (data.get("_skills", {}) or {}).get(agent_level, {}) or {}
-        if phase and phase in level_skills:
-            return level_skills.get(phase) or []
-        return (level_skills.get(agent_model) or []) if agent_model else []
-    except Exception:
-        return []
+    from singularity.scheduler import _io
+    data = _io.load_json_or_quarantine(custom_file)
+    if data is None:
+        return []          # 损坏：降级成"没绑技能"（隔离+出声在上面的函数里做了）
+    level_skills = (data.get("_skills", {}) or {}).get(agent_level, {}) or {}
+    if phase and phase in level_skills:
+        return level_skills.get(phase) or []
+    return (level_skills.get(agent_model) or []) if agent_model else []
 
 
 def set_agent_skills(agent_level: str, agent_model: str, skill_names: list[str],
@@ -315,13 +315,26 @@ def set_agent_skills(agent_level: str, agent_model: str, skill_names: list[str],
     if not agent_model and not phase:
         return
     import json
+    from singularity.scheduler import _io
     custom_file = _qidian_dir() / "agents_custom.json"
+    if custom_file.exists() and _io.is_quarantined(custom_file):
+        # 🔴 **拒写**：这个文件坏了、已隔离 —— 拿 `{}` 写回去会把**所有 agent 配置和
+        # 别人设过的 skills** 一起盖掉，而文件名一模一样。标记记在路径上，
+        # `_dispatch_crud._save_custom_agents` 问的是同一个（这文件**两个写者**）。
+        try:
+            from singularity.scheduler import witness
+            witness.warn("skill_loader",
+                         "save_skipped: agents_custom.json 损坏已隔离(.corrupt)，拒绝整份重建",
+                         key="agents_custom_corrupt")
+        except Exception as e:      # noqa: BLE001
+            # 第二通道没发出去也要留痕 —— 别让"告警没发出去"这件事本身静默
+            logging.getLogger("skill_loader").error(
+                "agents_custom.json 的损坏告警没发出去: %s: %s", type(e).__name__, e)
+        return
     data = {}
     if custom_file.exists():
-        try:
-            data = json.loads(custom_file.read_text(encoding="utf-8"))
-        except Exception:
-            data = {}
+        got = _io.load_json_or_quarantine(custom_file)
+        data = got if got is not None else {}
     # ponytail: 两条轴共用一个 dict，靠"模型名不会叫 executing"区分。
     # 真要重名（模型 ID 恰好等于阶段名）就分不出 —— 那时改成 `_phase` 子字典。
     key = agent_model or phase

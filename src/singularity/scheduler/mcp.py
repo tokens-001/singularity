@@ -519,16 +519,28 @@ def get_registry() -> MCPRegistry:
 MCP_CONFIG_PATH = config.SCHEDULER_DIR / "mcp_servers.toml"
 
 
+# 同 `api_store._CORRUPT`：这一轮读到过损坏的配置 ⇒ `save_mcp_configs` 拒写。
+_MCP_CONFIG_CORRUPT = False
+
+
 def load_mcp_configs() -> list[MCPServerConfig]:
-    """从 TOML 配置文件加载 MCP 服务器配置。"""
-    from ._io import load_toml
+    """从 TOML 配置文件加载 MCP 服务器配置。
+
+    ⚠️ **解析失败时不许回落 `_default_configs()`**（2026-09-14，C 的 S1 草案 §3.12，我核过）：
+    原来读坏了就返回默认配置，而 `mcp_server_add` / `mcp_server_delete` / `refresh`
+    都会拿手里的这份去 `save_mcp_configs` ⇒ **默认配置覆盖掉用户配的服务器**
+    （命令、env、headers 全没），而 `mcp_servers.toml` 看起来完好。
+    ⇒ 改成：读坏了 → **空列表**（带告警 + `.corrupt` 备份 + 写侧拒写），
+    **宁可这一轮一个服务器都没有**，也不拿默认值去冒充用户的配置。
+    """
+    from ._io import load_toml_or_quarantine
+    global _MCP_CONFIG_CORRUPT
     if not MCP_CONFIG_PATH.exists():
-        return _default_configs()
-    try:
-        data = load_toml(MCP_CONFIG_PATH)
-    except Exception as e:
-        _log_warn(_TAG, f"读取 mcp_servers.toml 失败: {e}, 使用默认配置")
-        return _default_configs()
+        return _default_configs()          # 真的没有文件：默认配置是对的
+    data = load_toml_or_quarantine(MCP_CONFIG_PATH)
+    if data is None:
+        _MCP_CONFIG_CORRUPT = True
+        return []
 
     configs = []
     servers = data.get("servers", [])
@@ -548,7 +560,21 @@ def load_mcp_configs() -> list[MCPServerConfig]:
 
 
 def save_mcp_configs(configs: list[MCPServerConfig]) -> bool:
-    """保存 MCP 配置到 TOML 文件。"""
+    """保存 MCP 配置到 TOML 文件。
+
+    ⚠️ 这一轮读到过损坏的配置（已隔离到 `.corrupt`）就**拒写** —— 见 `load_mcp_configs`。
+    """
+    global _MCP_CONFIG_CORRUPT
+    if _MCP_CONFIG_CORRUPT:
+        _log_warn(_TAG, "保存被拒：mcp_servers.toml 损坏已隔离(.corrupt)，"
+                        "拒绝拿手里的这份整份重建；人工恢复备份后重启即可")
+        try:
+            from singularity.scheduler import witness
+            witness.warn("mcp", "save_skipped: mcp_servers.toml 损坏已隔离，拒绝整份重建",
+                         key="mcp_config_corrupt")
+        except Exception as e:      # noqa: BLE001
+            _log_warn(_TAG, f"损坏告警的第二通道没发出去: {type(e).__name__}")
+        return False
     servers = []
     for c in configs:
         s = {

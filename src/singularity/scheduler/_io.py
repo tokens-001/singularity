@@ -336,6 +336,7 @@ def _quarantine_corrupt(path: Path, reason: str) -> None:
         _log_warn("io", f"{path.name} 的损坏备份没做成: {type(e).__name__}: {e}"[:200])
         note = "备份失败(原文件未动)"
 
+    _QUARANTINED.add(str(path))
     msg = f"{path.name} 损坏({reason}): {note}, 拒绝当空"[:200]
     _log_warn("io", msg)
     try:
@@ -344,6 +345,22 @@ def _quarantine_corrupt(path: Path, reason: str) -> None:
     except Exception as e:               # noqa: BLE001
         # log 通道已经写过一次了，这里别二次抛；但要说清"只有一条通道出去了"
         _log_warn("io", f"损坏告警的第二通道(witness)没发出去: {type(e).__name__}"[:200])
+
+
+# 「本进程内判过损坏的路径」。**同一个文件可能有多个写者**（`agents_custom.json`
+# 就有 `_dispatch_crud` 和 `skill_loader` 两个），让每个模块各记一个标记迟早漏一个
+# ⇒ 把这件事收在**路径**上，写者统一问 `is_quarantined(path)`。
+_QUARANTINED: set = set()
+
+
+def is_quarantined(path: Path) -> bool:
+    """这个路径在**本进程内**被判过损坏吗？（判过的意思是：已隔离 + 已出声）
+
+    ⚠️ 写者必须问这一句：读侧降级成空之后，**拿手里那份整份写回去 = 用空表重建** ——
+    历史配置没了，而文件名一模一样（2026-09-14，S1 那族形状）。
+    ⚠️ 进程内粘住：想恢复要人工处理 `.corrupt` 备份后重启，这正是"坏了就别继续当好的用"。
+    """
+    return str(path) in _QUARANTINED
 
 
 def load_json_or_quarantine(path: Path, *, expect: type = dict):
