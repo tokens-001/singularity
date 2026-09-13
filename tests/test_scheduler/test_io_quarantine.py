@@ -309,3 +309,61 @@ def test_设置文件好的时候照常写且保住别的键(tmp_path, monkeypat
     data = json.loads(p.read_text(encoding="utf-8"))
     assert data["projects_root"].endswith("/tmp/b"), data
     assert data["别的设置"] == "要保住", "读改写把别的键吃了"
+
+
+# ═══════════════════════════════════════════════════════════════
+# ⑥ 第五、六处接入点：自定义模型表（两份实现）
+# ═══════════════════════════════════════════════════════════════
+# `api_store.load_custom_models` / `save_custom_model` 和
+# `model_registry._load_custom` / `_save_custom` 是**同一件事的两份实现**，
+# 两边都是"读坏落空表 → 读改写整份写回" —— 会把用户扫出来/手配过的模型全盖掉。
+
+def test_自定义模型表坏了_api_store_不许整份重建(tmp_path, monkeypatch):
+    from singularity.scheduler import api_store as A
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path / ".qidian")
+    (tmp_path / ".qidian").mkdir()
+    monkeypatch.setattr(_io, "_QUARANTINED", set())
+    monkeypatch.setattr("singularity.scheduler.witness.warn", lambda *a, **k: None)
+    p = A._custom_models_path()
+    raw = '{"扫出来的模型": {"id": "扫出来的模型"}, "坏":'
+    p.write_text(raw, encoding="utf-8")
+
+    assert A.load_custom_models() == {}, "读侧该降级成空表"
+    import pytest as _pytest
+    with _pytest.raises(RuntimeError):
+        A.save_custom_model("新模型", "厂商")
+
+    assert p.read_text(encoding="utf-8") == raw, \
+        "坏文件被整份重建了 —— 用户扫出来/手配的模型全没"
+
+
+def test_自定义模型表坏了_model_registry_不许整份重建(tmp_path, monkeypatch):
+    from singularity.scheduler import model_registry as MR
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path / ".qidian")
+    (tmp_path / ".qidian").mkdir()
+    monkeypatch.setattr(_io, "_QUARANTINED", set())
+    monkeypatch.setattr("singularity.scheduler.witness.warn", lambda *a, **k: None)
+    p = MR._custom_path()
+    raw = '{"m1": {"id": "m1"}, "坏":'
+    p.write_text(raw, encoding="utf-8")
+
+    assert MR._load_custom() == {}
+    import pytest as _pytest
+    with _pytest.raises(RuntimeError):
+        MR._save_custom({})
+
+    assert p.read_text(encoding="utf-8") == raw, "坏文件被整份重建了"
+
+
+def test_自定义模型表好的时候照常读写(tmp_path, monkeypatch):
+    """对照：两份实现都要保住正常路径。"""
+    from singularity.scheduler import api_store as A
+    from singularity.scheduler import model_registry as MR
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path / ".qidian")
+    (tmp_path / ".qidian").mkdir()
+
+    A.save_custom_model("我的模型", "厂商", display="显示名")
+    assert A.load_custom_models()["我的模型"]["display"] == "显示名"
+
+    MR._save_custom({})
+    assert MR._load_custom() == {}

@@ -640,20 +640,37 @@ def _custom_models_path():
 
 
 def load_custom_models() -> dict:
-    """加载自动发现的自定义模型。"""
+    """加载自动发现的自定义模型。
+
+    ⚠️ 读坏了**降级成空表**（带告警 + `.corrupt` 备份），而**写侧会拒写** ——
+    原来是裸 `json.loads` + `except: pass`，"坏了"和"没有"长得一样，
+    于是 `save_custom_model` 会拿空表 + 一个条目整份写回，
+    **把用户扫出来/手配过的自定义模型全盖掉**（2026-09-14，C 的 S1 草案 §3.3，我核过）。
+    """
+    from singularity.scheduler._io import load_json_or_quarantine
     p = _custom_models_path()
-    if p.exists():
-        try:
-            return json.loads(p.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {}
+    if not p.exists():
+        return {}
+    data = load_json_or_quarantine(p)
+    return data if data is not None else {}
 
 
 def save_custom_model(model_id: str, provider: str, display: str = "",
                       tiers: list[str] = None, speed: str = "", cost: str = "",
                       rating: str = "", strengths: list[str] = None, notes: str = "") -> dict:
     """保存一个扫描发现的模型到自定义注册表。已有条目保留原有字段。"""
+    from singularity.scheduler._io import is_quarantined
+    p = _custom_models_path()
+    if p.exists() and is_quarantined(p):
+        # 🔴 拒写：读侧已经把坏文件隔离出去了，拿手里这份（空表 + 这一个模型）
+        # 整份写回去 = 自定义模型表全没，而文件名一模一样。
+        from singularity.scheduler import witness
+        witness.warn("api_store",
+                     "save_skipped: models_custom.json 损坏已隔离(.corrupt)，拒绝整份重建",
+                     key="models_custom_corrupt")
+        raise RuntimeError(
+            "models_custom.json 损坏（已隔离到 .corrupt）—— 拒绝在读不出来的情况下写回整份。"
+            "先人工恢复备份再重试。")
     custom = load_custom_models()
     existing = custom.get(model_id, {})
     # ── 类型安全防护 ──

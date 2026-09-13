@@ -66,21 +66,40 @@ def _custom_path() -> Path:
 
 
 def _load_custom() -> dict[str, ModelEntry]:
-    """加载用户自定义的模型 (JSON overlay)。"""
+    """加载用户自定义的模型 (JSON overlay)。
+
+    ⚠️ 读坏了降级成空表（带告警 + `.corrupt` 备份）；**写侧见 `_save_custom`**。
+    原来裸 `json.loads` + `except: return {}` ⇒ 读改写路径会把用户配的模型全盖掉
+    （2026-09-14，C 的 S1 草案 §3.16，我核过）。
+    """
+    from singularity.scheduler._io import load_json_or_quarantine
     path = _custom_path()
     if not path.exists():
         return {}
-    try:
-        data = json.loads(path.read_text())
-        return {k: ModelEntry.from_dict(v) for k, v in data.items()}
-    except (json.JSONDecodeError, KeyError):
+    data = load_json_or_quarantine(path)
+    if data is None:
         return {}
+    return {k: ModelEntry.from_dict(v) for k, v in data.items()}
 
 
 def _save_custom(models: dict[str, ModelEntry]) -> None:
+    from singularity.scheduler._io import is_quarantined
+    from singularity.scheduler import witness
+    path = _custom_path()
+    if is_quarantined(path):
+        # 🔴 拒写：见 `_load_custom` 的说明。读侧已隔离，拿空表整份写回 = 自定义模型全没。
+        witness.warn("model_registry",
+                     "save_skipped: models_custom.json 损坏已隔离(.corrupt)，拒绝整份重建",
+                     key="models_custom_corrupt")
+        # ⚠️ **抛，不是返回 False** —— 三个调用点谁都不看返回值，
+        # 返回 False 等于"拒写了但调用方照当成功"（接口回 OK、界面上东西却没存）。
+        raise RuntimeError(
+            "models_custom.json 损坏（已隔离到 .corrupt）—— 拒绝在读不出来的情况下写回整份。"
+            "先人工恢复备份再重试。")
     config.QIDIAN_DIR.mkdir(parents=True, exist_ok=True)
     data = {k: v.to_dict() for k, v in models.items()}
-    _custom_path().write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    from singularity.scheduler._io import atomic_write_json
+    atomic_write_json(path, data)      # 顺手换成原子写（原来是裸 write_text）
 
 
 def load_models() -> dict[str, ModelEntry]:
