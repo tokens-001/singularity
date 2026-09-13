@@ -192,7 +192,15 @@ export const AcceptancePanel = memo(function AcceptancePanel({ acceptance, proje
   const sum = qa?.summary || {}
   const issues: any[] = qa?.issues || []
   const failed = sum.failed ?? issues.length
-  const qaOk = !!qa && failed === 0 && sum.verdict !== 'no_go'
+  // ⚠️ **"读不出来"不是"通过"**（2026-09-14 外派反审抓到的真洞 —— `a33bf79` 引入的）。
+  // 后端读不出 `qa_report.json` 时给的是占位符 `{"error": …}`：**它是真值**，
+  // 于是 `!!qa` 成立、`sum` 落成 `{}`、`failed` 算成 0 ⇒ 渲染**绿色「通过」**。
+  // **改之前（`None`）反而是灰色「无报告」** —— 那次"修"把它从灰爬成了绿，而它就坐在人审门上。
+  // 判据：**真报告一定带 `summary`**（见 `validator.build_qa_report` 的返回字面量），
+  // 缺了就是"核不了"。与隔壁 `conformance` 的 `unverifiable → 琥珀色` 同口径 ——
+  // 同一个"我核不了"，不该一边给琥珀、一边给绿灯。
+  const qaUnverifiable = !!qa && !qa.summary
+  const qaOk = !!qa && !qaUnverifiable && failed === 0 && sum.verdict !== 'no_go'
   // 无参调用时后端如实返回"无法核验——这不是通过"，不能当绿灯显示
   const unverifiable = conf?.evidence?.unverifiable === true
   const confColor = !conf ? '#6b6b68' : unverifiable ? '#b45309' : conf.passed ? '#16a34a' : '#dc2626'
@@ -201,11 +209,16 @@ export const AcceptancePanel = memo(function AcceptancePanel({ acceptance, proje
   return (
     <div style={{ marginBottom: 10 }}>
       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', background: '#ffffff', border: '1px solid #e5e2d8', borderRadius: 10, padding: '10px 14px', fontSize: 12 }}>
-        <span style={{ fontWeight: 700, color: qa ? (qaOk ? '#16a34a' : '#dc2626') : '#6b6b68' }}>
-          QA：{!qa ? '无报告' : qaOk ? '通过' : `${failed} 个问题`}
+        <span style={{ fontWeight: 700, color: qa ? (qaUnverifiable ? '#b45309' : qaOk ? '#16a34a' : '#dc2626') : '#6b6b68' }}>
+          QA：{!qa ? '无报告' : qaUnverifiable ? '核不了' : qaOk ? '通过' : `${failed} 个问题`}
         </span>
         <span style={{ fontWeight: 700, color: confColor }}>需求符合性：{confLabel}</span>
         {!qa && <span style={{ color: '#6b6b68', fontSize: 11 }}>（本次没生成 QA 报告，只按下面的明细判）</span>}
+        {qaUnverifiable && (
+          <span style={{ color: '#b45309', fontSize: 11 }}>
+            {qa.error || '（报告里没有 summary，内容可能是空的）'}
+          </span>
+        )}
       </div>
       {/* 项目 issues 放在折叠框外：验收被跳过这类事必须一眼看见，不能再是静默的 */}
       {(projectIssues || []).length > 0 && (
