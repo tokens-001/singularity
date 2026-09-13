@@ -488,6 +488,16 @@ def _loop_worker():
     idle_ticks = 0
 
     while not _loop_stop.is_set():
+        # ── 心跳落盘：给**进程外**的看门狗看的（2026-09-13）──
+        # 为什么必须落盘：我们所有观测者都住在这个进程里，**进程自己装死时一个都看不见**。
+        # `/health` 只报 `_loop_running` 这个标志位 —— 循环卡住它也照样 true，
+        # 所以外部单靠 HTTP 判不出"活着但不动了"。
+        # ⚠️ **这一行会显得"旧"**：下面的 `run_queue()` 是阻塞的，一个任务能占满
+        # 900s，所以长任务期间 tick 天然陈旧 —— 看门狗的阈值必须盖过它
+        # （`scripts/watchdog.py` 默认 25 分钟）。
+        # ⚠️ 只写在**循环里**，不另起心跳线程：另起线程只能证明"进程还能跑线程"，
+        # 那正是 `/health` 已经证明过的东西，等于白写。
+        _write_loop_tick(idle_ticks)
         try:
             agents = disp_mod.load_agents()  # 每轮刷新 agent 配置
             results = orchestrator.run_queue(agents, max_concurrent=_loop_concurrent)
@@ -601,6 +611,28 @@ _WS_CHANNEL_MAP: dict[str, set[str]] = {
     "agent_change": {"system"},
     "observer_answer": {"system"},
 }
+
+
+def _write_loop_tick(idle_ticks: int) -> None:
+    """把「调度循环还在转」这件事落到盘上 —— 给**进程外**的看门狗看。
+
+    为什么需要它：我们所有的观测者（告警 / 聚合视图 / 各种探测）都住在**被观测的
+    进程里**，进程自己装死时一个都看不见。`/health` 只报 `_loop_running` 那个标志位
+    —— 循环卡住它照样是 `true`。⇒ 外部要判"活着但不动了"，需要一个**会随时间变旧**的痕迹。
+
+    **只写一行 JSON、覆写式**（不留历史）：看门狗要的只是"最新一次有多新"。
+    `pid` 让看门狗能分辨"进程换了"（重启后 tick 会突然变新，不是故障恢复）。
+
+    ⚠️ 写失败**要出声**：写不出去 = 看门狗会看到陈旧 tick = 一次假警报，
+    而真原因（多半是磁盘满/权限）会被"看门狗误报"这个表象盖住。
+    """
+    try:
+        (sched_config.QIDIAN_DIR / "loop_tick.json").write_text(
+            json.dumps({"ts": time.time(), "pid": os.getpid(), "idle_ticks": idle_ticks}),
+            encoding="utf-8")
+    except Exception as e:
+        witness.warn("orch", f"loop_tick_write_failed:{type(e).__name__}:{e}"[:200],
+                     key="loop_tick_write_failed")
 
 
 def _push_event(kind: str, msg: str, ts: float = None, extra: dict = None):
