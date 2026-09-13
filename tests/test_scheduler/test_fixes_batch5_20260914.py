@@ -286,6 +286,58 @@ def test_is_terminal_和状态机同源():
     assert not T.is_terminal("") and not T.is_terminal(None)
 
 
+# ═══════════════════════════════════════════════════════════════
+# ⑤ gate 的文件兜底表 vs 分类器 prompt：两份名单得对得上
+# ═══════════════════════════════════════════════════════════════
+# `router._CLASSIFY_PROMPT` 里告诉模型"核心引擎文件 = core/tokenizer/graph/search/config.py"，
+# 而 `config.GATE_TRIGGER_FILES`（分类挂掉时的**文件级兜底**）里**没有 config.py**
+# ⇒ "分类挂 + 只改 config.py"这个窄窗里 gate 真会被跳过。
+
+def test_gate兜底表要认分类器prompt里的核心文件():
+    """**从 prompt 里把文件名抠出来比**，不是手打一份期望值 —— 两边任意一侧改了都该红。
+    变异：从 `GATE_TRIGGER_FILES` 里去掉 `config.py` → 红。"""
+    import re
+    from singularity.scheduler import config as C, router
+    # prompt 里那句"还要判断是否触及核心引擎文件(需要GATE门禁):"后面那一行文件清单
+    tail = router._CLASSIFY_PROMPT.split("需要GATE门禁")[1]
+    names = set(re.findall(r"[\w.]+\.py", tail))
+    assert names, "prompt 里那句核心文件清单没解析出来（格式变了？）"
+    missing = names - set(C.GATE_TRIGGER_FILES)
+    assert not missing, f"分类器说这些要 gate、兜底表里没有：{sorted(missing)}"
+
+
+def test_gate兜底按文件名比_改到核心文件就触发():
+    from singularity.scheduler import validator
+    assert validator._gate_check_by_files(["src/engine/config.py"]) is True
+    assert validator._gate_check_by_files(["a/b/core.py"]) is True
+    assert validator._gate_check_by_files(["src/main.py", "README.md"]) is False
+    assert validator._gate_check_by_files([]) is False
+
+
+# ═══════════════════════════════════════════════════════════════
+# ⑥ is_model_available：查不动就放行（方向刻意），但**必须出声**
+# ═══════════════════════════════════════════════════════════════
+
+def test_模型库查不动时放行但出声(monkeypatch):
+    """变异：去掉那句 `witness.warn` → 本用例红（放行的方向是刻意的，出声不是）。
+
+    改成"拒绝"是**错的**：registry 一坏就全库查不到 ⇒ 候选链整条空掉
+    ⇒ "所有 agent 均失败"，拿更大的误伤换更难查的故障。
+    """
+    from singularity.scheduler import api_store, model_registry, witness
+
+    warned: list[str] = []
+    monkeypatch.setattr(witness, "warn", lambda scope, msg, key="": warned.append(msg))
+    monkeypatch.setattr(api_store, "_quota_dead", lambda: {})
+
+    def _boom(_m):
+        raise RuntimeError("registry 坏了")
+    monkeypatch.setattr(model_registry, "provider_for_model", _boom)
+
+    assert api_store.is_model_available("某个模型") is True, "方向变了：不该拒绝"
+    assert warned and "model_available_lookup_failed" in warned[0], warned
+
+
 def test_run_executor_真的调了这条告警(monkeypatch):
     """**接线**：上面几条测的是函数本体，"接线通不通"是另一回事
     —— 挪走/删掉 `_run_executor` 里那句调用，它们照样全绿。

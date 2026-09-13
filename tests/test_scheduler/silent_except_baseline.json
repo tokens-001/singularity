@@ -118,7 +118,6 @@
  "scheduler/_worktree.py::_lock_wt": 1,
  "scheduler/_worktree.py::_unlock_wt": 1,
  "scheduler/api_store.py::canonical": 1,
- "scheduler/api_store.py::is_model_available": 1,
  "scheduler/api_store.py::note_api_error": 1,
  "scheduler/api_store.py::note_api_success": 1,
  "scheduler/api_store.py::record_alias": 1,

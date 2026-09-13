@@ -86,11 +86,22 @@ MIN_DISK_MB = 500              # 启动前剩余空间检查 (审计 4.4)
 CHROMA_DIR = ENGINE_DIR / "data" / "chroma"
 
 # ── gate (审计 1a: 引擎文件改动强制回归) ──────────────────────────────
+# 这是**文件级兜底**：分类器说 gate=false（或分类本身挂了）时，靠它兜住
+# "改的明明是核心引擎文件"这一类（`validator._gate_check_by_files`，按**文件名**比）。
+#
+# ⚠️ `config.py` 是 2026-09-14 补的（外派 ⑨ 抓到、我核过）：分类器自己的 prompt
+# 里写着它要 gate（`router._CLASSIFY_PROMPT`：核心引擎文件 = core/tokenizer/
+# graph/search/**config**.py），而**这张表里没有它** ⇒ "分类挂 + 只改 config.py"
+# 这个窄窗里 gate 真会被跳过。同一件事写两遍、改的时候只改一遍 —— 本仓的老形状。
 GATE_TRIGGER_FILES = {
-    "core.py", "tokenizer.py", "graph.py", "search.py",  # 引擎核心
+    "core.py", "tokenizer.py", "graph.py", "search.py", "config.py",  # 引擎核心
     "embedder.py", "hybrid.py", "ingest.py",  # 语义搜索
 }
-GATE_TRIGGER_DIR_PARTS = ("qidian-knowledge",)  # 路径含此段 + 上面文件才触发
+# ⚠️ 这儿原来还有个 `GATE_TRIGGER_DIR_PARTS = ("qidian-knowledge",)`，注释写着
+# "路径含此段 + 上面文件才触发" —— 它**从 2026-06-23 加进来起就没有任何读者**
+# （`_gate_check_by_files` 只比文件名、根本不看路径）。一个"看着在限定范围、
+# 实际没生效"的常量比没有更坏：读的人会以为那条限制是活的。**已删**。
+# 真要限定目录段，得先定"限定哪个仓的引擎文件" —— 那是设计决定，不是塞个常量。
 
 
 def ensure_dirs() -> None:

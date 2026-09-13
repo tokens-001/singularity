@@ -403,6 +403,16 @@ def is_model_available(model: str) -> bool:
 
     判据：① 这个模型自己欠费过吗 ② provider 还开着吗（没禁用、配了 key）
     —— 刻意**不看** provider 的 status，那正是会连坐的那一项。
+
+    ⚠️ **"查不到 ⇒ 放行"是刻意的方向，不是漏网的 fail-open**（2026-09-14 外派 ⑨
+    报成 fail-open，我核完后决定**改出声、不改方向**）：
+      · 这是**可用性**判断，不是安全门禁 —— 它决定候选人要不要被踢出链；
+      · 两种"查不到"都得放行：① 模型不在模型库里（`provider_for_model` 返回 ""），
+        而自定义 agent 可以引用没登记过的模型，踢掉等于把能用的 agent 关掉；
+        ② 查的过程本身炸了（registry 坏/导入失败）⇒ **全库都查不到** ⇒ 若改成拒绝，
+        候选链会**整条空掉**、报"所有 agent 均失败" —— 拿一个更大的误伤换一个更难查的故障。
+      · 但它**必须出声**：原来那个 `except` 是静默的，"registry 坏了"和"一切正常"
+        在盘上长得一模一样（防御模式 §55 的老形状）。
     """
     ts = _quota_dead().get(model, 0)
     if ts and (time.time() - ts) < _RECOVERY_COOLDOWN:
@@ -410,7 +420,9 @@ def is_model_available(model: str) -> bool:
     try:
         from singularity.scheduler import model_registry as mr
         provider = mr.provider_for_model(model)
-    except Exception:
+    except Exception as e:
+        witness.warn("api_store",
+                     f"model_available_lookup_failed:{type(e).__name__}"[:120])
         provider = ""
     if not provider:
         return True
