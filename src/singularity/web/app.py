@@ -66,10 +66,19 @@ if not _secret_key:
     _key_file = Path(__file__).resolve().parents[3] / ".qidian" / "secret_key"
     try:
         _secret_key = _key_file.read_text().strip()
-    except Exception:
+    except FileNotFoundError:
+        # 首次启动：生成一份并持久化
         _secret_key = os.urandom(24).hex()
         _key_file.parent.mkdir(parents=True, exist_ok=True)
         _key_file.write_text(_secret_key)
+    # ⚠️ **只捕 FileNotFoundError，别的错让它抛**（2026-09-13 外派分类抓到的）。
+    # 原来是 `except Exception` 一把兜住 → 文件**在**但读不动（权限/损坏）时，
+    # 会走"生成新 key 并**覆盖原文件**"那条路 —— 老 key 当场被毁、所有已登录会话失效，
+    # 而且**再也回不去**。**宁可起不来（看得见），也别悄悄换钥（看不见）。**
+    if not _secret_key:
+        raise RuntimeError(
+            f"{_key_file} 存在但内容是空的 —— 会话签名会是坏的。删掉它再重启会自动生成；"
+            "**绝不会自动覆盖**（见上面那条注释）。")
 app.secret_key = _secret_key
 
 _CSRF_TOKEN = os.environ.get("QIDIAN_CSRF_TOKEN") or os.urandom(16).hex()
@@ -518,7 +527,11 @@ def _loop_worker():
                         if _drifts:
                             _push_event("reconcile", f"对账发现 {len(_drifts)} 处漂移")
                     except Exception as _e:
-                        pass
+                        # ⚠️ **对账这台仪器自己瞎了，必须说出来**（2026-09-13 外派分类抓到）。
+                        # 它的全部意义就是"从盘上重算、把漂移摆出来"—— 它一抛就 `pass`，
+                        # 等于**仪器坏了而没人知道**，比没有这台仪器更坏（假的安全感）。
+                        witness.warn("loop", f"reconcile_failed:{type(_e).__name__}:{_e}"[:160],
+                                     key="reconcile_failed")
                 time.sleep(3)
             else:
                 idle_ticks = 0
@@ -545,8 +558,12 @@ def _loop_worker():
                     added = consolidate_memory()
                     if added:
                         _push_event("memory", f"慢通道: +{added} 条隐含因果边")
-                except Exception:
-                    pass
+                except Exception as _e:
+                    # ⚠️ 记忆整合抛了原来就是 `pass` —— **停摆无痕**（2026-09-13 外派分类抓到）。
+                    # 这正是出事时最该看见的那条：它一停，经验分层/洞察提取全都不再更新，
+                    # 而从界面上完全看不出来（§64 那三处"从来没跑过"就是这么藏了一整天的）。
+                    witness.warn("loop", f"memory_consolidate_failed:{type(_e).__name__}:{_e}"[:160],
+                                 key="memory_consolidate_failed")
 
                 # 项目工作流推进: 检查已完成的任务是否属于某个项目
                 try:
@@ -575,13 +592,22 @@ def _loop_worker():
                                 if proj.auto_mode:
                                     try:
                                         wf_mod.run_phase(proj, agents)
-                                    except Exception:
-                                        pass
+                                    except Exception as _e:
+                                        # ⚠️ **auto_mode 下这一抛出 = 项目停在原地没人知道**
+                                        # （2026-09-13 外派分类抓到）。它正好是那类"看着像成功了"
+                                        # 的死法：批准之后以为会自己往下走，其实一步没动。
+                                        witness.warn("loop",
+                                                     f"run_phase_failed:{proj.id}:"
+                                                     f"{type(_e).__name__}:{_e}"[:160],
+                                                     key="run_phase_failed")
                             # 这里原来还有个 `elif proj.phase == Phase.FIXING:` 分支
                             # （"修复任务完成 → 回到审查"）—— **永远执行不到**：
                             # FIXING 全仓无人赋值，那个状态根本进不去。已随枚举一并删除。
-                except Exception:
-                    pass
+                except Exception as _e:
+                    # ⚠️ 这一段是"任务跑完之后推进项目"的全部逻辑 —— 它一抛就 `pass`，
+                    # 项目会**无声地停在 executing**（2026-09-13 外派分类抓到）。
+                    witness.warn("loop", f"result_handling_failed:{type(_e).__name__}:{_e}"[:160],
+                                 key="result_handling_failed")
         except Exception as e:
             _push_event("error", f"loop error: {e}")
             # ⚠️ **必须进告警通道，不能只推 SSE。** 只推 SSE 的话这句话飘一次就没了 ——
@@ -886,8 +912,15 @@ def api_fusion_config():
     if request.method == "GET":
         try:
             return jsonify(load_toml(fusion_path))
-        except Exception:
-            return jsonify({})
+        except FileNotFoundError:
+            return jsonify({})          # 还没建过配置文件 = 真的空，正常
+        except Exception as e:
+            # ⚠️ **"读坏了" ≠ "空配置"**（2026-09-13 外派分类抓到）。
+            # 回 `{}` 会让界面显示成"空"，而下一次 PUT 会拿这份**假空**去覆盖真的配置文件
+            # —— 一次读取故障就把配置变成永久丢失。⇒ 失败要**说它失败了**，别装成空。
+            witness.warn("web", f"fusion_config_unreadable:{type(e).__name__}:{e}"[:160],
+                         key="fusion_config_unreadable")
+            return jsonify({"ok": False, "error": f"配置读取失败：{e}"}), 500
     # PUT: 只认 [custom]（dual/triple/super 三档火力是历史残留，从未被读过）
     data = request.get_json(silent=True) or {}
     try:

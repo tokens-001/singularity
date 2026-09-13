@@ -273,7 +273,7 @@
  "web/app.py::_graceful_shutdown": 2,
  "web/app.py::_is_local_origin": 1,
  "web/app.py::_is_safe_api_url": 2,
- "web/app.py::_loop_worker": 7,
+ "web/app.py::_loop_worker": 3,
  "web/app.py::_project_repo_root": 1,
  "web/app.py::_push_event": 1,
  "web/app.py::_setup_audit_logger": 1,
