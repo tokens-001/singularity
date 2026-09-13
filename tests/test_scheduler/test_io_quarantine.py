@@ -430,3 +430,46 @@ def test_范围纪律的只读那份坏了也出声(tmp_path, monkeypatch):
 
     assert EJ._model_discipline() == {}
     assert warns, "读坏了却没出声"
+
+
+# ═══════════════════════════════════════════════════════════════
+# ⑧ 角色覆盖表（只读，但"无声回退"是它的问题）+ tmp 清扫的新旧之分
+# ═══════════════════════════════════════════════════════════════
+
+def test_角色覆盖坏了不能只留一行_log(tmp_path, monkeypatch):
+    """**"我配过的角色没了"必须让人看得见** —— 原来只写一行 `logging.warning` 就 return。
+
+    那行 log 在调度器日志里；而**用户看的是界面上的告警面板**。
+    ⇒ 走 S1 那套：隔离 + `witness`（进告警面板）+ `.corrupt` 备份。
+    """
+    from singularity.scheduler import roles as R
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path / ".qidian")
+    (tmp_path / ".qidian").mkdir()
+    monkeypatch.setattr(_io, "_QUARANTINED", set())
+    warns = []
+    monkeypatch.setattr("singularity.scheduler.witness.warn",
+                        lambda *a, **k: warns.append(a))
+    p = tmp_path / ".qidian" / "roles_custom.json"
+    raw = '{"my_role": {"name": "我的角色"}, "坏":'
+    p.write_text(raw, encoding="utf-8")
+
+    R._apply_overrides()            # 不许抛
+
+    assert warns, "回退到出厂角色了却只在日志里说一声 —— 用户在告警面板上看不到"
+    assert (tmp_path / ".qidian" / "roles_custom.json.corrupt").exists(), "没留备份"
+
+
+def test_tmp_清扫只清陈旧的(tmp_path, monkeypatch):
+    """**正在写的那个进程的 tmp 不许被清掉** —— 它只存在几毫秒，但那一刻是活的。"""
+    import os as _os
+    import time as _time
+    p = tmp_path / "x.json"
+    stale = tmp_path / "x.json.99999.tmp"; stale.write_text("崩溃残留", encoding="utf-8")
+    _os.utime(stale, (_time.time() - 9999, _time.time() - 9999))
+    fresh = tmp_path / "x.json.88888.tmp"; fresh.write_text("别的进程正在写", encoding="utf-8")
+
+    _io.atomic_write_json(p, {"a": 1})
+
+    assert not stale.exists(), "陈旧残留没清掉"
+    assert fresh.exists(), "把正在写的那个进程的 tmp 清了 —— 会踩掉它的数据"
+    assert json.loads(p.read_text(encoding="utf-8")) == {"a": 1}

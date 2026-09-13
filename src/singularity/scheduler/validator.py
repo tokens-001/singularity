@@ -145,11 +145,30 @@ def post_execution_hook(exec_result, snap):
 # v2: Independent tests + crossover review
 # ═══════════════════════════════════════════════════════════════
 
+def tests_failed_msg(tr: dict) -> str:
+    """把 `run_project_tests` 的结果说成一句人话。**三处消费端共用这一份。**
+
+    ⚠️ 为什么要有它：`failures` 那个字段一度被塞进**退出码**，
+    于是 "npm 退出码 9" 被渲染成 **"tests failed: 9 failures"** —— 编出来的数字
+    （2026-09-14，外派 D 反升级里点名的"编造数字"同族）。
+    现在退出码单独存 `exit_code`，这里按"有没有数出失败数"分开措辞。
+    """
+    code = tr.get("exit_code")
+    n = tr.get("failures")
+    if code and not n:
+        return f"tests failed: 退出码 {code}（失败个数没能从输出里数出来）"
+    return f"tests failed: {n if n is not None else '?'} failures"
+
+
 def run_project_tests(cwd=None):
     """Run project test suite (pytest->unittest->npm). Returns {passed,total,failures,output,runner}."""
     import sys, os as _os, re as _re
     root = cwd or str(config.PROJECT_ROOT)
-    result = {"passed":True,"total":0,"failures":0,"output":"","runner":""}
+    result = {"passed":True,"total":0,"failures":0,"output":"","runner":"",
+              # ⚠️ **退出码单独存**：它**不是**"失败数"（2026-09-14 登记的那条）。
+              # 原来 `result["failures"] = r.returncode` 把退出码塞进失败数字段，
+              # 三个消费端照念成 "tests failed: 9 failures" —— npm 退出码 9 被读成"9 个失败用例"。
+              "exit_code":0}
     # 目录不存在也要**说清楚**。不查的话三个 runner 全在 subprocess 里抛异常被
     # `except Exception: continue` 吞掉，最后报"三个都启动不了"—— 排查方向全错。
     if not _os.path.isdir(root):
@@ -182,7 +201,10 @@ def run_project_tests(cwd=None):
             # py/unittest 在纯 JS 项目里必然"没找到测试" ⇒ **只剩 npm 这一票**，
             # 于是"纯 JS 项目 npm 全红"被报成"没跑" —— 既不是"跑过了"也不是"跑挂了"。
             if r.returncode != 0:
-                result["passed"] = False; result["failures"] = r.returncode
+                result["passed"] = False
+                # 这里**只拿到了退出码，数不出失败个数** ⇒ failures 保持 0（不知道就是不知道），
+                # 退出码另存一格，让消费端说真话（见 `tests_failed_msg`）。
+                result["exit_code"] = r.returncode
                 result["output"] = output; result["runner"] = name; return result
             if name == "pytest" and r.returncode == 0:
                 mp = _re.search(r'(\d+)\s+passed', output)

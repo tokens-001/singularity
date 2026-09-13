@@ -75,9 +75,12 @@ export function useResource<T>(
       // 成功覆盖一切（清掉 staleError）：数据是新的，失败条就该消失
       setState({ phase: 'ready', data })
     } catch (e) {
+      // error 相带 errorLabel 前缀（它独立成块，需要完整句子）；
+      // staleError 存**原文** —— 琥珀条自己已经说了「刷新失败：」，再带前缀就叠两层。
+      const raw = e instanceof Error ? e.message : String(e ?? '')
       const msg = errText(e, labelRef.current)
       setState((prev) =>
-        prev.phase === 'ready' ? { ...prev, staleError: msg } : { phase: 'error', message: msg }
+        prev.phase === 'ready' ? { ...prev, staleError: raw } : { phase: 'error', message: msg }
       )
     } finally {
       setReloading(false)

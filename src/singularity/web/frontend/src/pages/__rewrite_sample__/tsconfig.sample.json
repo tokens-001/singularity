@@ -1,0 +1,13 @@
+{
+  // 样板目录专用的类型检查配置。根 tsconfig.json 把本目录 exclude 掉了
+  // （理由见那条提交：样板不是发布代码）—— 但"不进默认检查"不等于"不用检查"，
+  // 样板自身的类型还得有人管。单独跑：
+  //   npx tsc --noEmit -p src/pages/__rewrite_sample__/tsconfig.sample.json
+  //
+  // ⚠️ 实测教训（2026-09-14）：排除生效后，一次真实类型错误（AsyncBoundary 的
+  // 数组约束 vs 传进去的 {servers, tools} 对象）就漏网了 —— 它会被 vitest 在
+  // 运行时以更难看的方式爆出来。改完样板，这条命令必须跑。
+  "extends": "../../../tsconfig.json",
+  "include": ["."],
+  "exclude": []
+}

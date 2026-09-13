@@ -53,6 +53,14 @@ async function flush() {
   await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
 }
 
+/** 按可见文案找按钮再点 —— NodeList 没有 .find，得走 Array.from。 */
+async function click(el: HTMLElement, label: string) {
+  const btn = Array.from(el.querySelectorAll('button') as NodeListOf<HTMLButtonElement>)
+    .find((b) => b.textContent?.includes(label))
+  expect(btn, `找不到按钮「${label}」`).toBeTruthy()
+  await act(async () => { btn!.click() })
+}
+
 async function renderTab(): Promise<HTMLElement> {
   const el = document.createElement('div')
   document.body.appendChild(el)
@@ -78,7 +86,7 @@ describe('McpTab 四态', () => {
   })
 
   it('空态：说了"没有"，还说了下一步', async () => {
-    const el = await renderWith([])
+    const el = await renderWith([], [])
     const text = el.textContent || ''
     expect(text).toContain('没有配置任何 MCP 服务器')
     expect(text).toContain('mcp.toml')
@@ -94,7 +102,9 @@ describe('McpTab 四态', () => {
     expect(text).toContain('加载 MCP 服务器失败：toml 读不出来')
     expect(text, '失败被渲染成了空态 —— "读不到"说成了"没有"').not.toContain('没有配置任何 MCP 服务器')
     expect(text, '失败时头部摆 (0) 同样是编的').not.toContain('（0）')
-    expect(el.querySelector('button')?.textContent).toContain('重试')
+    const retry = Array.from(el.querySelectorAll('button') as NodeListOf<HTMLButtonElement>)
+      .find((b) => b.textContent?.includes('重试'))
+    expect(retry?.textContent).toContain('重试')
   })
 
   it('失败后重试能恢复', async () => {
@@ -103,8 +113,7 @@ describe('McpTab 四态', () => {
     const el = await renderTab()
     expect(el.textContent).toContain('后端没起')
     await act(async () => {
-      ;(el.querySelectorAll('button') as NodeListOf<HTMLButtonElement>)
-        .find((b) => b.textContent?.includes('重试'))!.click()
+      click(el, '重试')
     })
     await flush()
     expect(el.textContent).toContain('fs-server')
@@ -131,8 +140,7 @@ describe('McpTab 四态', () => {
     ;(api.mcpRefresh as any).mockRejectedValue(new Error('refresh 炸了'))
     ;(api.mcpServers as any).mockRejectedValue(new Error('列表也炸了'))
     await act(async () => {
-      ;(el.querySelectorAll('button') as NodeListOf<HTMLButtonElement>)
-        .find((b) => b.textContent?.includes('重新加载配置'))!.click()
+      click(el, '重新加载配置')
     })
     await flush()
     const text = el.textContent || ''

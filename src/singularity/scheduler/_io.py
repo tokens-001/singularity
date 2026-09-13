@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re as _re
 import threading
@@ -40,6 +41,34 @@ def atomic_write_json(path: Path, data) -> None:
     with _WRITE_LOCK:
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmp, path)
+    # 顺手清掉**别的进程崩溃时留下的**陈旧 tmp（自己那条刚被 `os.replace` 搬走，不在此列）。
+    # ⚠️ 只清"够旧"的：同一时刻真可能有另一个进程在写，但它的 tmp 只存在**几毫秒**
+    # （写一行 JSON 到 replace 之间），所以超过阈值的**不可能是活的**。
+    # 不带 pid 那版根本不需要这个（确定性名字会被下一次写覆盖，自愈）；
+    # 带 pid 之后旧的不会自愈了，这是**加 pid 换来的代价**（2026-09-14，逆向审 ④ 的"小尾巴"）。
+    _sweep_stale_tmps(path)
+
+
+_STALE_TMP_S = 300.0        # 5 分钟：远大于"写一行 JSON 到 replace"那几毫秒
+
+
+def _sweep_stale_tmps(path: Path) -> None:
+    """删掉这个路径上陈旧的 `<名字>.<pid>.tmp`。**清不掉也不许影响这次写。**"""
+    import time as _time
+    try:
+        now = _time.time()
+        for stale in path.parent.glob(f"{path.name}.*.tmp"):
+            try:
+                if now - stale.stat().st_mtime > _STALE_TMP_S:
+                    stale.unlink()
+            except OSError as e:
+                # 竞态：别的进程刚好把它清掉了 —— 不是问题，但**也不许静默**
+                #（守卫认这一点：handler 要么上抛要么出声；`info` 级够用，别刷 warning）
+                logging.getLogger("io").info(
+                    "陈旧 tmp %s 没清成（多半是竞态）: %s: %s", stale.name, type(e).__name__, e)
+    except OSError as e:
+        # 清理失败只是**整洁问题**，绝不能影响刚刚成功的那次写
+        logging.getLogger("io").warning("陈旧 tmp 清理失败: %s: %s", type(e).__name__, e)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -47,7 +76,14 @@ def atomic_write_json(path: Path, data) -> None:
 # ═══════════════════════════════════════════════════════════════
 
 def load_toml(path: Path) -> dict:
-    """从 .toml 文件加载配置。文件不存在或解析失败返回空 dict。"""
+    """从 .toml 文件加载配置。**文件不存在 → `{}`；解析失败 → 原样抛**。
+
+    ⚠️ 原来的 docstring 写的是"文件不存在**或解析失败**返回空 dict" ——
+    **后半句是假的**：解析失败时 `tomllib.load` 会把 `TOMLDecodeError` 抛出去
+    （2026-09-14 核 C 的草案时顺手抓到的）。
+    **行为是对的**（损坏就得让人知道，参见 `load_toml_or_quarantine`），
+    **撒谎的是注释** —— 而按注释写调用方的人会漏掉 try/except。
+    """
     if not path.exists():
         return {}
     with open(path, "rb") as f:

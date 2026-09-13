@@ -321,14 +321,16 @@ def _check_artifact(changed_files: list[str], root: Path, tests_result: dict = N
         # 调用方 (run_post_exec_checks) 刚跑过 → 复用, 不重复跑
         evidence["tests"] = tests_result
         if not tests_result.get("passed"):
-            errors.append(f"tests failed: {tests_result.get('failures', '?')} failures")
+            from singularity.scheduler.validator import tests_failed_msg
+            errors.append(tests_failed_msg(tests_result))
     else:
         try:
             from singularity.scheduler.validator import run_project_tests
             test_result = run_project_tests(cwd=str(root))
             evidence["tests"] = test_result
             if not test_result.get("passed"):
-                errors.append(f"tests failed: {test_result.get('failures', '?')} failures")
+                from singularity.scheduler.validator import tests_failed_msg
+                errors.append(tests_failed_msg(test_result))
         except Exception:
             pass  # test runner 挂了不阻塞，记在 supervisor 日志
 

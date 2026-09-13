@@ -154,10 +154,13 @@ def _apply_overrides() -> None:
     path = QIDIAN_DIR / "roles_custom.json"
     if not path.exists():
         return
-    try:
-        overrides = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as e:
-        logging.getLogger(__name__).warning("role override load failed: %s", e)
+    # ⚠️ 原来是 `logging.warning` 之后 `return` —— 用户自己配的角色**无声地回到出厂值**：
+    # 那行 log 在调度器日志里，而用户看的是界面上的告警面板。
+    # ⇒ 走 S1 那套：隔离成 `.corrupt` + **双通道出声**（`witness` 那条会进告警面板）。
+    # 只读路径，降级成"用出厂角色"是对的，但**必须让人看得见**（2026-09-14 登记的那条）。
+    from singularity.scheduler import _io
+    overrides = _io.load_json_or_quarantine(path)
+    if overrides is None:
         return
     for key, vals in overrides.items():
         if not isinstance(vals, dict):

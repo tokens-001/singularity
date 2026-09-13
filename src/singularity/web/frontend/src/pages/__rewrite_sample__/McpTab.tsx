@@ -25,7 +25,7 @@ import { useEffect } from 'react'
 import { api } from '../../lib/api'
 import { errText, useToast } from '../../lib/toast'
 import { RefreshCw } from 'lucide-react'
-import { AsyncBoundary, useResource } from './Async'
+import { AsyncBoundary, useResource, type Loadable } from './Async'
 
 /**
  * 后端契约（_api_admin.py `mcp_server_list`）：8 个键**恒给**，但值可能是空串
@@ -151,6 +151,12 @@ export default function McpTab() {
 
   const data = state.phase === 'ready' ? state.data : null
 
+  // 本页的资源是 {servers, tools} 两个列表，但四态判据跟着**主列表** servers 走
+  // （tools 只是头部的计数）。AsyncBoundary 的空判据是 `length === 0`，
+  // 所以把 Loadable 切到 servers 视角再交给它 —— 相（loading/error/staleError）原样保留。
+  const listState: Loadable<McpServer[]> =
+    state.phase === 'ready' ? { ...state, data: state.data.servers } : state
+
   return (
     <div>
       <div className="flex-center gap-8" style={{ marginBottom: 8 }}>
@@ -178,7 +184,7 @@ export default function McpTab() {
       </div>
 
       <AsyncBoundary
-        state={state}
+        state={listState}
         loadingText="正在加载 MCP 服务器…"
         emptyText="没有配置任何 MCP 服务器。"
         emptyHint="编辑 mcp.toml 后点「重新加载配置」即可生效，无需重启后端。"
@@ -186,7 +192,7 @@ export default function McpTab() {
       >
         {(d) => (
           <>
-            {d.servers.map((s, i) => (
+            {d.map((s, i) => (
               <ServerRow key={s.name || `__unnamed_${i}`} server={s} />
             ))}
           </>

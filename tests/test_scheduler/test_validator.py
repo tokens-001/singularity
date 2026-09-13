@@ -30,7 +30,16 @@ class TestValidatorV2:
         self._write("test_fail.py", "def test_oops(): assert False")
         r = run_project_tests(cwd=self.root)
         assert not r["passed"]
-        assert r["failures"] > 0
+        # ⚠️ 判据 2026-09-14 改过：原来断言 `r["failures"] > 0` ——
+        # 而当时 `failures` 里塞的其实是**退出码**（pytest 挂了 rc=1 ⇒ "1 failures"）。
+        # 那是在给"把退出码说成失败数"作证。现在退出码单独存 `exit_code`，
+        # 数不出个数时 `failures` 保持 0（不知道就是不知道）。
+        assert r["exit_code"] != 0, "退出码该记下来"
+        assert r["failures"] == 0, "数不出失败个数时不该编一个"
+        from singularity.scheduler.validator import tests_failed_msg
+        msg = tests_failed_msg(r)
+        assert "退出码" in msg and "failures" not in msg, \
+            f"措辞又在把退出码说成失败数了：{msg}"
 
     def test_run_tests_no_tests(self):
         r = run_project_tests(cwd=self.root)

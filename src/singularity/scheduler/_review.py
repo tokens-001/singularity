@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from singularity.scheduler import witness
+from singularity.scheduler.validator import tests_failed_msg
 
 # D1: 审查自动修上限 (比实现层3轮更紧, 审查修不动=架构/拆解有问题)
 _REVIEW_MAX_AUTO_FIX = 2
@@ -274,7 +275,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                 if not test_result.get("passed"):
                     quality["warnings"].append(
                         f"tests failed ({test_result.get('runner','?')}): "
-                        f"{test_result.get('failures','?')} failures")
+                        + tests_failed_msg(test_result))
                     quality["failure_kind"] = "test_failure"
                     quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.3)
                     validation.unverified.append(
