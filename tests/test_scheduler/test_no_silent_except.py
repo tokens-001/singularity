@@ -58,17 +58,35 @@ NOISY_ROOTS = frozenset({"witness", "logging", "log"})
 
 
 def _is_noisy(handler: ast.ExceptHandler) -> bool:
-    for n in ast.walk(handler):
-        if isinstance(n, ast.Raise):
-            return True
-        if isinstance(n, ast.Call):
-            f = n.func
-            if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
-                if f.value.id in NOISY_ROOTS:
-                    return True
-            if isinstance(f, ast.Name) and f.id in NOISY_ROOTS:
+    """这个 handler **自己**有没有出声 / 上抛。
+
+    ⚠️ **不下钻到嵌套的 except 处理体里**（2026-09-13 修的一个洞）。
+    原来直接用 `ast.walk`，而它会钻进嵌套 `try/except` 的**内层 handler** ——
+    于是"内层出声"会被算成"外层也出声了"。实测：`_reap_futures` 里那个
+    `except Exception as e:` 嵌了一个 `try: transition(...) except: pass`，
+    我只给**内层**加了 warn，基线却报**外层也少一处** —— **虚减**，
+    等于没修也记了功。**量尺不准，所有棘轮数字都是假的。**
+    """
+    def _calls_noisy(node) -> bool:
+        f = node.func
+        if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
+            return f.value.id in NOISY_ROOTS
+        return isinstance(f, ast.Name) and f.id in NOISY_ROOTS
+
+    def _walk(node) -> bool:
+        for child in ast.iter_child_nodes(node):
+            # 内层 handler 的出声不算外层的 —— 它们的"债"分开记
+            if isinstance(child, ast.ExceptHandler) and child is not handler:
+                continue
+            if isinstance(child, ast.Raise):
                 return True
-    return False
+            if isinstance(child, ast.Call) and _calls_noisy(child):
+                return True
+            if _walk(child):
+                return True
+        return False
+
+    return _walk(handler)
 
 
 class _Scan(ast.NodeVisitor):
@@ -181,6 +199,38 @@ def test_no_new_silent_except():
     if msg:
         msg.append(f"\n重算基线：`.venv/bin/python {Path(__file__).name} --write`")
         pytest.fail("\n".join(msg))
+
+
+def test_nested_handler_noise_does_not_count_for_the_outer():
+    """**内层 handler 出声，不算外层出声** —— 判据的射程要切对。
+
+    2026-09-13 修的一个洞：原来 `_is_noisy` 用 `ast.walk` 下钻，于是给内层加一句
+    `witness.warn` 会**顺带把外层的"静默"也消掉** —— 我只改了 2 处，
+    棘轮却报 `_reap_futures 少 3 处`。**虚减 = 没修也记功**，棘轮数字全不可信。
+    """
+    import ast as _ast
+    outer = _ast.parse(
+        "try:\n"
+        "    a()\n"
+        "except Exception as e:\n"
+        "    try:\n"
+        "        b()\n"
+        "    except Exception:\n"
+        "        witness.warn('x', 'boom')\n"
+    ).body[0].handlers[0]
+    assert not _is_noisy(outer), "内层出声被算成外层了 —— 棘轮会虚减"
+
+    # 反过来：外层自己出声，当然要算
+    outer2 = _ast.parse(
+        "try:\n    a()\nexcept Exception:\n    witness.warn('x', 'boom')\n"
+    ).body[0].handlers[0]
+    assert _is_noisy(outer2)
+
+    # 外层自己上抛，也算
+    outer3 = _ast.parse(
+        "try:\n    a()\nexcept Exception:\n    raise\n"
+    ).body[0].handlers[0]
+    assert _is_noisy(outer3)
 
 
 def test_baseline_keys_are_wellformed():

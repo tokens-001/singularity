@@ -418,8 +418,13 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
         except Exception as e:
             try:
                 tracker.transition(t.id, TaskStatus.FAILED, error=f"worker 异常: {e}")
-            except Exception:
-                pass
+            except Exception as _e2:
+                # ⚠️ **安全网自己的失败也要出声**（2026-09-13 外派分类抓到）：
+                # 这一句转不成，任务就**留在 RUNNING 成孤儿** —— 而它正是"别留孤儿"
+                # 这条防护本身。防护失败还静默，等于防护不存在。
+                witness.warn("orch", f"worker_error_transition_failed:{t.id}:"
+                                     f"{type(_e2).__name__}:{_e2}"[:180],
+                             key="worker_error_transition_failed")
             results.append((t.id, f"worker_error: {e}", None))
             # ⚠️ 原来这里传的是 `None, None` —— **worker 干了什么都查不出来**。
             # 而它跟超时那条是**同一个形状**：`_archive_task_outcome` 挂在正常收尾路上，
@@ -483,8 +488,12 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
                 pass
             try:
                 tracker.transition(t.id, TaskStatus.FAILED, error=f"执行超时(>{deadline}s)")
-            except Exception:
-                pass
+            except Exception as _e2:
+                # ⚠️ 同族：转不成 ⇒ **超时任务留在 RUNNING 成孤儿**，而且收割已经
+                # 把它 pop 掉了、下一轮也够不着。**收割者自己失败必须出声。**
+                witness.warn("orch", f"timeout_transition_failed:{t.id}:"
+                                     f"{type(_e2).__name__}:{_e2}"[:180],
+                             key="timeout_transition_failed")
             results.append((t.id, "timeout", None))
             # 抢救已知事实再落 trace —— 传 None 会让 trace 变成一份"什么都没干"的假象。
             # 包 try：任务已经转 FAILED 了（上面），这里抛**不会出孤儿**，但会**中断整个
@@ -673,8 +682,12 @@ def _warn_orphan_running() -> None:
                              key="orphan_running_task")
             except Exception:
                 pass
-    except Exception:
-        pass
+    except Exception as _e:
+        # ⚠️ **探测器自己死了，必须说出来**（2026-09-13 外派分类抓到）。
+        # 「走到没活干那一刻不该有 RUNNING 任务」这条判据，是**唯一**能发现那类孤儿的
+        # 仪器（900s 收割够不着它）。它整体一抛就 pass ⇒ **仪器没了而没人知道**。
+        witness.warn("orch", f"orphan_scan_failed:{type(_e).__name__}:{_e}"[:180],
+                     key="orphan_scan_failed")
 
 
 def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
