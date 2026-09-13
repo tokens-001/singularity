@@ -251,7 +251,6 @@
  "scheduler/witness.py::check_stalled": 2,
  "scheduler/witness.py::force_cleanup_heartbeats": 2,
  "scheduler/witness.py::read_alerts": 2,
- "scheduler/witness.py::warn": 1,
  "scheduler/workflow.py::_changed_files_of": 1,
  "scheduler/workflow.py::_collect_changed_files": 1,
  "scheduler/workflow.py::_flag_degraded_tasks": 3,

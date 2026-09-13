@@ -757,3 +757,41 @@ class TestArchValidationActuallyBlocks:
         finally:
             for f in P._projects_dir().glob(f"{pid}*"):
                 f.unlink()
+
+
+class TestAlertSinkFailureIsVisible:
+    """⑥ 告警写不进去时，**必须从第二条通道出声**。
+
+    形状和上面几条一样：**系统没做、但从外面看一切正常**。
+    而 `witness.warn` 是**全仓告警的唯一汇聚点**（`alerts.jsonl` 是独立通道，
+    心跳那条路早就证明过存不住告警）—— 它静默失败 = **观测整体失明**。
+
+    原来的 `except OSError: pass` 连注释都在替自己辩护（"记告警失败不该再抛"）——
+    **"不抛"是对的，"不吭声"不是**。这里锁的是后半句。
+    """
+
+    def test_写告警失败要走_logging_出声(self, monkeypatch, tmp_path, caplog):
+        import logging
+        # 让告警路径落在一个**文件**底下 ⇒ open('a') 抛 NotADirectoryError。
+        # 不用 chmod：那在 root 下不成立，测试会变成"看运气"。
+        blocker = tmp_path / "blocker"
+        blocker.write_text("i am a file, not a dir", encoding="utf-8")
+        monkeypatch.setattr(witness, "_alerts_path",
+                            lambda: blocker / "alerts.jsonl")
+
+        with caplog.at_level(logging.ERROR, logger="witness"):
+            witness.warn("test_scope", "这条写不进去")   # 不许抛
+
+        assert caplog.records, "写告警失败却一声不吭 —— 观测整体失明而外表看着正常"
+        assert any("失明" in r.getMessage() for r in caplog.records), \
+            f"出声了但没说清后果（下一个读日志的人会以为只是个小毛病）：{[r.getMessage() for r in caplog.records]}"
+
+    def test_写得进去时不许刷日志(self, monkeypatch, tmp_path, caplog):
+        """对照：正常路径**一条 error 都不该有**，否则第二条通道会变成噪声源。"""
+        import logging
+        monkeypatch.setattr(witness, "_alerts_path",
+                            lambda: tmp_path / "alerts.jsonl")
+        with caplog.at_level(logging.ERROR, logger="witness"):
+            witness.warn("test_scope", "正常写一条")
+        assert not caplog.records, f"正常路径也在报错：{[r.getMessage() for r in caplog.records]}"
+        assert (tmp_path / "alerts.jsonl").exists(), "正常路径没写进去"

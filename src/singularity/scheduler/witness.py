@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from pathlib import Path
@@ -70,8 +71,18 @@ def warn(scope: str, msg: str, key: str = "") -> None:
         if p.stat().st_size > _ALERT_MAX_BYTES:
             lines = p.read_text(encoding="utf-8").splitlines()
             p.write_text("\n".join(lines[-_ALERT_KEEP:]) + "\n", encoding="utf-8")
-    except OSError:
-        pass  # 记告警失败不该再抛，否则错误处理本身变成错误源
+    except Exception as e:  # noqa: BLE001
+        # 记告警失败**不该再抛**（否则错误处理本身变成错误源）—— 这个决定不变。
+        # ⚠️ 但原来那个 `except OSError: pass` 是**静默**的，而这里是**全仓告警的唯一汇聚点**：
+        # 写不进去 = **观测整体失明**，而外表看起来一切正常（2026-09-14，外派 D 反升级抓到）。
+        # ⇒ 留**第二条通道**：走 `logging` 落到 stderr / 日志文件。
+        # 不调 `witness.warn` 自己（会递归），也不上抛；用 `logging` 而不是 `print`，
+        # 这样它能被调用方配的 handler 收走，且**没配 handler 时 Python 的 lastResort
+        # 也会把它打到 stderr** —— 不会再一次消失。
+        # 顺带把 `except OSError` 放宽到 `Exception`：`json.dumps` 撞上不可序列化的 msg
+        # 会抛 TypeError，原来那条会一路传到调用方的 `except Exception: pass` —— 又静默一遍。
+        logging.getLogger("witness").error(
+            "告警写入失败（观测可能已整体失明）: %s: %s", type(e).__name__, e, exc_info=True)
 
 
 def read_alerts(limit: int = 50, since: float = 0.0) -> list[dict]:
