@@ -57,7 +57,35 @@ BASELINE = Path(__file__).with_name("silent_except_baseline.json")
 NOISY_ROOTS = frozenset({"witness", "logging", "log"})
 
 
-def _is_noisy(handler: ast.ExceptHandler) -> bool:
+def _noisy_roots(tree: ast.Module) -> frozenset[str]:
+    """本模块里**指向出声根**的名字 —— 含 `import ... as ...` 的别名。
+
+    ⚠️ 原来只认 `witness` / `logging` / `log` 三个**字面**名字（2026-09-14 修）。
+    可本仓大量用别名，最典型的是 `mcp.py` 的
+    `from singularity.scheduler.log import info as _log_info, warn as _log_warn` ——
+    **守卫看不见它**，于是明明调了 `_log_warn` 的 handler 被记成"静默"（**虚增**）。
+    这就是模块 docstring 那句"**量尺不准，所有棘轮数字都是假的**"的另一个面：
+    上次修的是**虚减**（下钻到嵌套 handler），这次修的是**虚增**。
+    ⇒ 别名一律按 import 解析出来，而不是去改业务代码迁就尺子。
+    """
+    roots = set(NOISY_ROOTS)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                top = a.name.split(".")[0]
+                if top in NOISY_ROOTS:
+                    roots.add(a.asname or top)
+        elif isinstance(node, ast.ImportFrom):
+            base = (node.module or "").split(".")[-1]
+            for a in node.names:
+                # `from ...log import warn as _w`（base 是根）和
+                # `from ... import log as _l`（被导入的名字本身是根）都要认
+                if base in NOISY_ROOTS or a.name in NOISY_ROOTS:
+                    roots.add(a.asname or a.name)
+    return frozenset(roots)
+
+
+def _is_noisy(handler: ast.ExceptHandler, roots: frozenset[str] = NOISY_ROOTS) -> bool:
     """这个 handler **自己**有没有出声 / 上抛。
 
     ⚠️ **不下钻到嵌套的 except 处理体里**（2026-09-13 修的一个洞）。
@@ -70,8 +98,8 @@ def _is_noisy(handler: ast.ExceptHandler) -> bool:
     def _calls_noisy(node) -> bool:
         f = node.func
         if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
-            return f.value.id in NOISY_ROOTS
-        return isinstance(f, ast.Name) and f.id in NOISY_ROOTS
+            return f.value.id in roots
+        return isinstance(f, ast.Name) and f.id in roots
 
     def _walk(node) -> bool:
         for child in ast.iter_child_nodes(node):
@@ -92,8 +120,9 @@ def _is_noisy(handler: ast.ExceptHandler) -> bool:
 class _Scan(ast.NodeVisitor):
     """按**函数限定名**分组数静默 handler —— 不含行号，所以行号漂移不影响判据。"""
 
-    def __init__(self, rel: str):
+    def __init__(self, rel: str, roots: frozenset[str] = NOISY_ROOTS):
         self.rel = rel
+        self.roots = roots
         self.stack: list[str] = []
         self.counts: Counter = Counter()
         self.handlers = 0
@@ -120,7 +149,7 @@ class _Scan(ast.NodeVisitor):
             if not h.body:
                 continue
             self.handlers += 1
-            if not _is_noisy(h):
+            if not _is_noisy(h, self.roots):
                 self.counts[(self.rel, self._qual())] += 1
         self.generic_visit(node)
 
@@ -144,7 +173,7 @@ def scan() -> tuple[dict[str, int], int, int]:
             tree = ast.parse(p.read_text(encoding="utf-8"))
         except SyntaxError:                       # 语法错轮不到这台守卫管
             continue
-        s = _Scan(str(p.relative_to(SRC)))
+        s = _Scan(str(p.relative_to(SRC)), _noisy_roots(tree))
         s.visit(tree)
         counts.update(s.counts)
         handlers += s.handlers

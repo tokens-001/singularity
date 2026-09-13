@@ -11,7 +11,7 @@ MCP 允许 Agent 发现和调用外部工具服务器提供的工具。
 from __future__ import annotations
 import json
 import os
-import select
+import queue
 import shlex
 import subprocess
 import threading
@@ -71,6 +71,13 @@ class MCPClient:
         self._http_client: Optional[httpx.Client] = None
         self._initialized = False
         self._tools: list[MCPTool] = []
+        # stdio 是**一条字节流**，没有多路复用：两个线程同时收发会互相读到对方的响应
+        # （各自按 id 判不是自己的就丢掉 ⇒ 两边一起超时）。锁的粒度 = 一次请求/响应往返，
+        # 跟协议本身对齐。见 `_rpc_stdio` / `_recv_stdio`。
+        self._stdio_lock = threading.RLock()
+        # stdout 由**一个专用线程**独占读，读到的行进这个队列（见 `_ensure_reader`）。
+        self._stdout_q: "queue.Queue | None" = None
+        self._reader_proc = None
 
     # ── 连接管理 ──────────────────────────────────────────────────
 
@@ -222,10 +229,13 @@ class MCPClient:
     def _rpc_stdio(self, method: str, params: dict) -> Optional[dict]:
         if not self._proc or self._proc.poll() is not None:
             return None
-        req = {"jsonrpc": "2.0", "id": _next_id(), "method": method, "params": params}
+        req_id = _next_id()
+        req = {"jsonrpc": "2.0", "id": req_id, "method": method, "params": params}
         try:
-            self._send_stdio(json.dumps(req) + "\n")
-            return self._recv_stdio()
+            # **发+收必须在同一把锁里**：只有一个 stdio 管道，两个线程同时往返会串。
+            with self._stdio_lock:
+                self._send_stdio(json.dumps(req) + "\n")
+                return self._recv_stdio(req_id)
         except Exception as e:
             _log_warn(_TAG, f"MCP[{self.cfg.name}]: stdio RPC 错误 ({method}): {e}")
             return None
@@ -238,20 +248,81 @@ class MCPClient:
         except BrokenPipeError:
             pass
 
-    def _recv_stdio(self, timeout: float = 30.0) -> Optional[dict]:
+    def _ensure_reader(self) -> None:
+        """起一个线程**独占**读 `stdout`，读到的行塞进队列（每个子进程一个）。
+
+        ⚠️ **不能 `select` + `readline` 混用**（2026-09-14，我第一版就是这么写的，
+        被自己写的测试当场打回）：`select` 看的是**底层 fd**，而 `readline` 是**带缓冲**的 ——
+        子进程一次写三行时，第一次 `readline` 会把三行全吸进 Python 的缓冲区；
+        之后 fd 上没数据、`select` 再也不 ready ⇒ **数据明明已经在手里，却一直等到超时**。
+        让一个线程从头上独占读取、别人只从队列取，这个坑就不存在。
+
+        哨兵 `None` 表示 **EOF**（子进程退出/管道关闭），消费侧据此立刻返回而不是空等。
+        """
+        if self._stdout_q is not None and self._reader_proc is self._proc:
+            return
+        q: "queue.Queue" = queue.Queue()
+        proc = self._proc
+        self._stdout_q, self._reader_proc = q, proc
+
+        def _pump():
+            try:
+                for line in proc.stdout:      # 迭代到 EOF 自然结束
+                    q.put(line)
+            except Exception as e:            # noqa: BLE001
+                # 读线程炸了 = 这个客户端的通道死了。**必须出声**，
+                # 否则调用方只会看到"一个个请求超时"，查不出是读线程没了。
+                _log_warn(_TAG, f"MCP[{self.cfg.name}]: stdout 读线程异常 "
+                                f"({type(e).__name__})")
+            finally:
+                q.put(None)                   # EOF / 异常，都要叫醒还在等的消费侧
+
+        threading.Thread(target=_pump, daemon=True,
+                         name=f"mcp-reader-{self.cfg.name}").start()
+
+    def _recv_stdio(self, want_id: Optional[int] = None,
+                    timeout: float = 30.0) -> Optional[dict]:
+        """读到**这一次请求**的响应为止 —— 按 `id` 认领，不认的丢掉继续等。
+
+        ⚠️ 原来是"`readline` 一行就返回、`json.loads` 完就交差"，**从不看 `id`**
+        （2026-09-14，外派 扫bug-02 ③ 核出，我回当前树确认过）。两个后果：
+          · 服务端发**通知**（`notifications/*`，按协议就是没有 `id` 的）或往 stdout
+            打日志时，返回的是那一条 —— **不是这次请求的响应**；
+          · 更坏的是**超时之后**：30s 没等到就 `return None`，而响应还躺在管道里
+            ⇒ **下一次调用读到的是上一次的响应**，从此整体串位。
+            而且**全程不报错** —— 拿到的是一份形状合法、内容错位的结果，
+            上层只会看到"工具返回了看不懂的东西"。
+
+        现在：非 JSON 行跳过、`id` 对不上的丢掉，都**继续等**到这次的响应或超时。
+        `want_id=None` 时退回旧行为（收到第一条 JSON 就返回）。
+        """
         if not self._proc or not self._proc.stdout:
             return None
-        try:
-            # ponytail: select 防永久阻塞, 30s 超时保护
-            ready, _, _ = select.select([self._proc.stdout], [], [], timeout)
-            if not ready:
+        self._ensure_reader()
+        q = self._stdout_q
+        deadline = time.monotonic() + timeout
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
                 return None
-            line = self._proc.stdout.readline()
-            if not line:
+            try:
+                line = q.get(timeout=left)     # 超时是**剩余**时间，不是每次重新 30s
+            except queue.Empty:
                 return None
-            return json.loads(line)
-        except (json.JSONDecodeError, Exception):
-            return None
+            if line is None:                   # EOF 哨兵：子进程没了
+                return None
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                # 不少 MCP 服务器会往 stdout 打日志。**必须跳过继续等** ——
+                # `return None` 就等于把这次的响应丢了（正是上面那个串位的起点）。
+                _log_info(_TAG, f"MCP[{self.cfg.name}]: 跳过非 JSON 行 {line[:120]!r}")
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if want_id is not None and msg.get("id") != want_id:
+                continue          # 通知 / 上一次的迟到响应 —— 丢掉，继续等这一次的
+            return msg
 
     def _rpc_http(self, method: str, params: dict) -> Optional[dict]:
         if not self._http_client:
