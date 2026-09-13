@@ -9,19 +9,37 @@ from __future__ import annotations
 import json
 import os
 import re as _re
+import threading
 import tomllib
 from pathlib import Path
+
+
+# 🔴 **tmp 名要带 pid、写的时候要拿锁 —— 两样缺一不可**（2026-09-14，外派 J 审
+# `防御模式.md` §46 时抓到：那条的修法**只落在 `project.py:479`**，这个共用入口没跟着改）。
+#   · **不带 pid**：两个独立进程写同一个文件时共用同一个确定性 `<name>.tmp` ——
+#     A replace 成功后 tmp 就没了，B 的 replace 撞 ENOENT；或者两边写入交错，
+#     正式文件里多出半个 `}` → 解析失败 → 读侧静默跳过（`project.py:474-478`
+#     把那整条链写得最全，那里当时修了）。
+#   · **不带锁**：同进程多线程（调度循环 / merge 执行器 / Flask 请求线程）拿到的
+#     是**同一个 pid**，pid 后缀挡不住它们 ⇒ 上面那条竞态在进程内原样成立。
+# `project.py:479` 两块都做了；这里是把它挪到共用的那一层来 —— 这正是那份文档
+# 自己的规矩（§65："按形状全仓扫"）。
+# ⚠️ `route_learner.py:156` 的注释写着"atomic_write_json 解决②、这把锁解决①" ——
+#   它把**跨进程那半托付给了本函数**；在本函数没 pid 的那段时间里，那个承诺是空的。
+_WRITE_LOCK = threading.Lock()
 
 
 def atomic_write_json(path: Path, data) -> None:
     """原子写 JSON: 先写同目录 .tmp 再 os.replace, crash 不损坏正式文件。
 
-    统一入口: api_store/tracker/_memory_core 共用 (原各自复制一份)。
+    统一入口: api_store/tracker/_memory_core/_token_budget 共用 (原各自复制一份)。
+    **跨进程 + 同进程线程都安全** —— 见上面 `_WRITE_LOCK` 那段说明。
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    with _WRITE_LOCK:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
 
 
 # ═══════════════════════════════════════════════════════════════

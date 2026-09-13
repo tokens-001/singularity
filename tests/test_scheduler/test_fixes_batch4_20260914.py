@@ -11,6 +11,8 @@
   ④ `mcp_server_reconnect` 喂的是**单个** config，而 `load_configs` 是整体替换
      ⇒ 重连一个把别的全抹了
   ⑤ anthropic `_tmo` 循环外算一次、多轮共用 ⇒ 最坏 max_turns 倍预算
+  ⑥ `_io.atomic_write_json` 的 tmp 不带 pid、写入不拿锁（外派 J 审 `防御模式.md` §46 抓到：
+     那条的修法只落在 `project.py:479`，这个共用入口没跟着改）
 
 测试都**钉接线**：删掉对应那一行判据（或把参数改回去），测试必须红。
 """
@@ -157,3 +159,63 @@ def test_observer_无鉴权这件事本身还开着(monkeypatch):
         "observer/server.py 里出现鉴权了 —— 那说明 token 握手已经补上，"
         "这条测试和 OPEN.md 里那条待办都该销账了"
     )
+
+
+# ═══════════════════════════════════════════════════════════════
+# ⑦ `_io.atomic_write_json` —— tmp 带 pid + 写入拿锁
+# ═══════════════════════════════════════════════════════════════
+# 外派 J 审 `防御模式.md` §46 时抓到：那条的修法**只落在 `project.py:479`**，
+# 而 `_io.atomic_write_json` 是 api_store/tracker/_memory_core/_token_budget 的共用入口，
+# tmp 仍是确定性命名、写入也不拿锁 —— §46 描述的那个竞态在共享层原样活着。
+
+def test_原子写的tmp名要带pid(monkeypatch, tmp_path):
+    """不带 pid ⇒ 两个独立进程共用同一个 `<name>.tmp`：
+
+    A replace 成功后 tmp 就没了，B 的 replace 撞 ENOENT；或者两边写入交错，
+    正式文件里多出半个 `}` → 解析失败 → 读侧静默跳过。
+    """
+    import os as _os
+    from pathlib import Path as _P
+    from singularity.scheduler import _io
+
+    seen = {}
+    real = _P.write_text
+
+    def spy(self, *a, **k):
+        seen.setdefault("tmp", self.name)
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(_P, "write_text", spy)
+    monkeypatch.setattr(_os, "getpid", lambda: 4242)
+    _io.atomic_write_json(tmp_path / "x.json", {"a": 1})
+
+    assert "4242" in seen.get("tmp", ""), \
+        f"tmp 名里没有 pid ⇒ 跨进程会撞（project.py:474-478 记着这条链）：{seen.get('tmp')}"
+    assert not list(tmp_path.glob("*.tmp")), "写完没清干净 tmp 残留"
+
+
+def test_原子写多线程并发不炸(tmp_path):
+    """同进程多线程拿到的是**同一个 pid** ⇒ pid 后缀挡不住它们，必须还有锁。"""
+    import json
+    import threading
+    from singularity.scheduler import _io
+
+    p = tmp_path / "y.json"
+    errs: list = []
+
+    def w(n: int) -> None:
+        try:
+            for i in range(60):
+                _io.atomic_write_json(p, {"n": n, "i": i})
+        except Exception as e:            # noqa: BLE001
+            errs.append(f"{type(e).__name__}: {e}")
+
+    ts = [threading.Thread(target=w, args=(n,)) for n in range(8)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+
+    assert not errs, f"并发写炸了（没锁时 replace 会撞 ENOENT）：{errs[:3]}"
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["n"] in range(8), f"读出来的不是完整的一份：{data}"
