@@ -331,8 +331,8 @@ class OpenAIAgentExecutor(BaseExecutor):
         super().__init__(cfg, task, task_id, baseline_ref=baseline_ref, cwd=cwd,
                          agent_level=agent_level or cfg.get("_level", ""))
         self._api_key = os.environ.get(cfg.get("api_key_env", ""), "")
-        # ponytail: 存为实例属性, 不写全局 os.environ (防并发 Agent 竞态)
-        self._agent_env = dict(cfg.get("env", {}))
+        # `_agent_env` 改由 BaseExecutor 存（原来只有这份存，anthropic 那份因此看不到它）。
+        # ponytail: 仍然只存实例属性, 不写全局 os.environ (防并发 Agent 竞态)
         self._url = cfg.get("entry", "")
         self._is_responses_api = "/v1/responses" in self._url or "/responses" in self._url
         self._model = cfg.get("request_template", {}).get("model", cfg.get("model", ""))
@@ -781,23 +781,13 @@ class OpenAIAgentExecutor(BaseExecutor):
         return f"已写入 {path} ({len(content)} 字符)"
 
     def _tool_run(self, command: str) -> str:
-        dangerous, reason = self._is_dangerous_command(command)
-        if dangerous:
-            return f"命令被拦截: {reason}"
-        if not command.strip():
-            return "空命令"
-        # ponytail: 合并 agent env 到局部环境, 不污染 os.environ
-        merged = {**os.environ, **getattr(self, '_agent_env', {})}
-        safe_env = {k: v for k, v in merged.items() if not _is_sensitive_env(k)}
-        try:
-            # shell=True: 支持 && | source 等 shell 语法 (shell=False 会把 &&/source 当参数生成垃圾目录)。
-            # 安全性靠 _is_dangerous_command 黑名单前置拦截 (rm -rf/curl/python -c/bash -c 等)
-            r = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30, cwd=str(self._cwd), env=safe_env)
-            out = r.stdout[-4000:] if r.stdout else ""
-            err = r.stderr[-2000:] if r.stderr else ""
-            return f"exit={r.returncode}\nstdout:\n{out}\nstderr:\n{err}"
-        except subprocess.TimeoutExpired:
-            return "命令超时 (30s)"
+        """**派给模块级 `_run_command`**（2026-09-14）—— 这个工具的语义只留一份。
+
+        原来这里和模块级那份（anthropic 在用）**是两套实现**：`shell=True` vs
+        `shell=False`、带不带 agent env 全都不同 ⇒ 同一个工具名换个执行器两种行为。
+        现在两边走同一个函数；这里只负责把 `self._agent_env` 递过去。
+        """
+        return _run_command({"command": command}, self._cwd, getattr(self, "_agent_env", None))
 
     def _tests_green(self, command: str, result: str) -> bool:
         """run_command 跑了测试且 exit=0 → 测试通过。治 thinking 模型反复测不收敛撞 900s。"""
@@ -1127,30 +1117,44 @@ def _write_file(args: dict, cwd, blocked_patterns) -> str:
     p.write_text(content, encoding="utf-8")
     return f"已写入 {path} ({len(content)} 字符)"
 
-def _run_command(args: dict, cwd) -> str:
-    """模块级命令执行。
+def _run_command(args: dict, cwd, extra_env: dict | None = None) -> str:
+    """命令执行的**唯一实现** —— 类方法 `_tool_run` 现在也派到这儿。
 
-    ⚠️ **要和类方法 `_tool_run` 一样脱敏 `os.environ`**（2026-09-14，外派 K 条3 / E'②）：
-    `anthropic_api.py:195` 把 `run_command` 工具**直接派到这个模块级函数**，
-    而它原来 `subprocess.run(...)` 没传 `env=` ⇒ 子进程继承**未脱敏的全量环境**
-    —— 模型随口一条 `env` 就能读走 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`。
-    openai 执行器自己走 `self._tool_run`（有 `env=safe_env`），所以**全仓只有这一条路不脱敏**。
+    ⚠️ 2026-09-14 收敛（外派 ⑩ 抓到、我核过）：同一个工具名 `run_command`
+    在两个执行器上**行为不一样**，而模型看不见这个区别 ——
+      · `openai_agent._tool_run`：`shell=True`（支持 `&&` / `|` / `source`）
+        + 合并 agent 自己的 env（PATH/代理/endpoint）；
+      · 这个模块级函数（anthropic 在用）：`shell=False` + `shlex.split`
+        （`&&` 会被当成普通参数、`source` 直接不存在）+ **完全不带 agent env**。
+    ⇒ 同一份任务提示词，换个 `type` 就是两种行为；模型写 `a && b` 在一边能跑、
+    在另一边静默变成一条把 `&&` 当文件名的命令。
+
+    现在统一成 `shell=True`（类方法那条注释解释过为什么必须支持 shell 语法：
+    `shell=False` 会把 `&&` / `source` 当参数、生成垃圾目录），
+    安全性仍靠 `_is_dangerous_command` 黑名单**前置**拦截。
+    `extra_env` = agent 配置里的 `env`（`BaseExecutor._agent_env`），
+    合并进子进程环境后**再统一脱敏**（`_is_sensitive_env`）。
     """
-    import subprocess, shlex
+    import subprocess
     cmd = args.get("command", "")
     if not cmd:
         return "请指定 command"
     dangerous, reason = _is_dangerous_command_at(cmd)
     if dangerous:
         return f"命令被拦截: {reason}"
+    if not str(cmd).strip():
+        return "空命令"
+    # ponytail: 合并 agent env 到局部环境, 不污染 os.environ（并发 Agent 会打架）
+    merged = {**os.environ, **(extra_env or {})}
+    safe_env = {k: v for k, v in merged.items() if not _is_sensitive_env(k)}
     try:
-        argv = shlex.split(cmd)
-        safe_env = {k: v for k, v in os.environ.items() if not _is_sensitive_env(k)}
-        r = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=30,
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30,
                            cwd=str(cwd), env=safe_env)
         out = r.stdout[-4000:] if r.stdout else ""
         err = r.stderr[-2000:] if r.stderr else ""
         return f"exit={r.returncode}\nstdout:\n{out}\nstderr:\n{err}"
+    except subprocess.TimeoutExpired:
+        return "命令超时 (30s)"
     except Exception as e:
         return f"命令错误: {e}"
 

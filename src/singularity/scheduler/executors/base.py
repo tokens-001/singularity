@@ -129,6 +129,10 @@ class BaseExecutor:
         self.baseline_ref = baseline_ref
         self.cwd = cwd
         self.agent_level = agent_level
+        # agent 配置里的 `env`（PATH / 代理 / endpoint 这类）—— 原来只有 openai 执行器
+        # 在 `__init__` 里存它，于是 **anthropic 路上的工具子进程完全看不到它**
+        # （外派 ⑩ 抓到、我核过）。提到基类：谁要用谁拿，`_run_command` 负责合并+脱敏。
+        self._agent_env = dict(agent_cfg.get("env", {}) or {})
         # ponytail: store injected kwargs for subclasses (skills, mcp_tools, etc.)
         for k, v in kwargs.items():
             setattr(self, f"_{k}", v)

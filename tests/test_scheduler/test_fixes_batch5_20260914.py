@@ -699,3 +699,62 @@ def test_run_executor_真的调了这条告警(monkeypatch):
 
     D._run_executor(_FakeExec, {"model": "m"}, "任务", "tid", "ops")
     assert called == [("_FakeExec", "ops", "m")], f"没调（或调错了）：{called}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# ⑬ `run_command` 的两种语义收敛成一种（同一个工具名，换个执行器两种行为）
+# ═══════════════════════════════════════════════════════════════
+# `openai_agent._tool_run`：`shell=True` + 合并 agent env；
+# 模块级 `_run_command`（anthropic 在用）：`shell=False` + 不带 agent env。
+# ⇒ 同一份提示词，模型写 `a && b` 在一边能跑、在另一边静默变成"把 && 当文件名的命令"。
+
+def test_两个执行器跑命令是同一套语义(tmp_path):
+    """**变异判据**：把 `_tool_run` 改回自己那份 `subprocess.run(command, shell=False...)`
+    或让它不再传 `_agent_env` → 本用例红。
+
+    判据取"agent env 到没到子进程" —— 那是两套实现之间**看得见**的差别
+    （shell 语义那条没法在单测里断言，见下）。
+    """
+    import os as _os
+    from singularity.scheduler.executors.openai_agent import (
+        OpenAIAgentExecutor, _run_command)
+
+    ex = OpenAIAgentExecutor({"model": "m", "api_key_env": "NOPE",
+                              "env": {"QIDIAN_TEST_MARKER": "从agent配置来"}},
+                             "t", "tid", cwd=str(tmp_path))
+    out = ex._tool_run("echo $QIDIAN_TEST_MARKER")
+    assert "从agent配置来" in out, f"agent 配的 env 没到子进程：{out!r}"
+
+    # 模块级那份（anthropic 走的路）必须**也是同一套**：给了 extra_env 就得看到
+    out2 = _run_command({"command": "echo $QIDIAN_TEST_MARKER"}, tmp_path,
+                        {"QIDIAN_TEST_MARKER": "从agent配置来"})
+    assert "从agent配置来" in out2, f"模块级那份还是不带 agent env：{out2!r}"
+
+    # 脱敏两条路都得做（别为了合 env 把密钥漏出去）
+    _os.environ["QIDIAN_FAKE_API_KEY"] = "sk-should-not-leak"
+    try:
+        leak1 = ex._tool_run("echo $QIDIAN_FAKE_API_KEY")
+        leak2 = _run_command({"command": "echo $QIDIAN_FAKE_API_KEY"}, tmp_path, {})
+        assert "sk-should-not-leak" not in leak1, f"类方法漏了密钥：{leak1!r}"
+        assert "sk-should-not-leak" not in leak2, f"模块级漏了密钥：{leak2!r}"
+    finally:
+        _os.environ.pop("QIDIAN_FAKE_API_KEY", None)
+
+
+def test_两个执行器跑命令都是_shell_真值(tmp_path, monkeypatch):
+    """shell 语义：`a && b` 在两边都该被 shell 解释（`shell=False` 会把它当参数）。
+    变异：把 `shell=True` 改回 `shell=False`（或删掉 `shlex.split` 的替代）→ 红。"""
+    from singularity.scheduler.executors.openai_agent import (
+        OpenAIAgentExecutor, _run_command)
+
+    ex = OpenAIAgentExecutor({"model": "m", "api_key_env": "NOPE"}, "t", "tid",
+                             cwd=str(tmp_path))
+    # ⚠️ 判据必须是"**两条命令分别执行了**"，不能只断言输出里有 `b`：
+    # `shell=False` 下 `"echo a && echo b".split()` 会把整串原样 echo 出来，
+    # 里面**也有** `b` —— 第一版就是这么假绿的（变异实测）。
+    for label, out in (("类方法", ex._tool_run("echo a && echo b")),
+                       ("模块级", _run_command({"command": "echo a && echo b"}, tmp_path))):
+        assert "exit=0" in out, f"{label}没跑起来：{out!r}"
+        assert "a && echo b" not in out, \
+            f"{label}没走 shell（`&&` 被当参数原样回显了）：{out!r}"
+        assert "a\nb" in out, f"{label}看起来没分成两条命令：{out!r}"

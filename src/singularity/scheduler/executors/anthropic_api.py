@@ -233,7 +233,9 @@ class AnthropicApiExecutor(BaseExecutor):
             elif name == "write_file":
                 return _write_file(args, self.cwd, _BLOCKED_PATTERNS)
             elif name == "run_command":
-                return _run_command(args, self.cwd)
+                # ⚠️ 带上 `_agent_env`（agent 配的 PATH/代理/endpoint）—— 不带的话，
+                # 同一个工具的同一份配置在两个执行器上**效果不同**（2026-09-14 收敛）。
+                return _run_command(args, self.cwd, self._agent_env)
             elif name == "search_code":
                 return _search_code(args, self.cwd)
             else:
