@@ -26,11 +26,13 @@ const AGENTS = { any: [{ model: 'm1', max_turns: 5 }] }
 let unreadable = new Set<string>()
 /** 哪些**阶段**的默认绑定"读不到" */
 let phaseUnreadable = new Set<string>()
+/** 列表级那两下（`api.skills` / `api.agents`）读得到吗 —— 抛的话整页该怎么显示 */
+let skillsUnreadable = false
 const writes: any[] = []
 
 vi.mock('../lib/api', () => ({
   api: {
-    skills: () => Promise.resolve(SKILLS),
+    skills: () => skillsUnreadable ? Promise.reject(new Error('boom')) : Promise.resolve(SKILLS),
     agents: () => Promise.resolve(AGENTS),
     agentSkills: (m: string) => unreadable.has(m)
       ? Promise.reject(new Error('boom'))
@@ -140,5 +142,43 @@ describe('读不到技能绑定时的行为', () => {
     const el = await mount()
 
     expect(el.textContent).not.toContain('有的阶段默认读不到')
+  })
+
+  // ── 列表级三态（2026-09-14，外派⑧ 的 C1；见 docs/防御模式.md §70）──────────
+  // `api.skills()` 一抛，原来整页停在初值：头部「技能 (0)」是编的，列表区空白。
+  // ⚠️ 这不是理论风险 —— 铺开方案第 9 步正打算给 `api.skills` 加"缺键就抛"。
+  it('技能列表读不到时，头部不许显示 (0)', async () => {
+    unreadable = new Set(); phaseUnreadable = new Set(); skillsUnreadable = true
+    const el = await mount()
+
+    expect(el.textContent, '读不到却显示「技能 (0)」—— 那是在编数字').not.toContain('技能 (0)')
+    expect(el.textContent).toContain('技能 （读不到）')
+    expect(el.textContent).toContain('读不到技能 / 智能体列表')
+    expect(el.textContent).toContain('不知道')
+  })
+
+  it('这条错误态**有出口**：点「重试」能恢复成真数据', async () => {
+    // ⚠️ 第一版这条写的是"读不到时不许出现「全选」" —— **那是假绿**：
+    // 没有修复时整个 fetch 抛掉、什么都不渲染，照样没有「全选」，两边都过。
+    // 换成能分辨的：错误块必须**真能点回去**（顺带钉住 wiring）。
+    unreadable = new Set(); phaseUnreadable = new Set(); skillsUnreadable = true
+    const el = await mount()
+    expect(el.textContent).toContain('读不到技能 / 智能体列表')
+
+    skillsUnreadable = false                       // 后端好了
+    const btn = [...el.querySelectorAll('button')].find(b => (b.textContent || '').includes('重试'))
+    expect(btn, '错误态没有重试按钮 = 把人堵死在失败里').toBeTruthy()
+    await click(btn as HTMLElement)
+
+    expect(el.textContent).toContain('技能 (2)')
+    expect(el.textContent).not.toContain('读不到技能 / 智能体列表')
+  })
+
+  it('对照：列表读得到时头部是**真数**、也没有那条错误块', async () => {
+    unreadable = new Set(); phaseUnreadable = new Set(); skillsUnreadable = false
+    const el = await mount()
+
+    expect(el.textContent).toContain('技能 (2)')          // SKILLS 有两条
+    expect(el.textContent).not.toContain('读不到技能 / 智能体列表')
   })
 })

@@ -29,9 +29,23 @@ export default function SkillsTab() {
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ name: '', description: '', type: 'prompt', content: '' })
   const run = useRun()
+  // ⚠️ **列表级**也得是三态（2026-09-14，外派⑧ 的 C1 顺带暴露；见 `docs/防御模式.md` §70）。
+  // `api.skills()` / `api.agents()` 一抛，原来整页停在初值：头部「技能 (0)」是在**编数字**，
+  // 列表区一个字都不渲染。**这不是理论风险** —— 方案第 9 步正打算给 `api.skills`
+  // 加"缺键就抛"，而这一页正是它的消费端（那 5 条测试全 mock 了 api 层，测不到）。
+  const [listUnreadable, setListUnreadable] = useState(false)
 
   const fetch = async () => {
-    const [s, a] = await Promise.all([api.skills() as Promise<SkillInfo[]>, api.agents() as Promise<AgentsData>])
+    let s: SkillInfo[]; let a: AgentsData
+    try {
+      [s, a] = await Promise.all([api.skills() as Promise<SkillInfo[]>, api.agents() as Promise<AgentsData>])
+    } catch {
+      // 读不到就**停在这儿**：再往下走会把矩阵填成"一个都没绑"——
+      // 那正是这一页要防的事（**读不到 ≠ 没绑**）。计数由 `listUnreadable` 挡住。
+      setListUnreadable(true)
+      return
+    }
+    setListUnreadable(false)
     setSkills(s)
     const flat: AgentItem[] = []; const disabledSet = new Set((a?._disabled?.any||[]) as string[])
     for (const lst of Object.values(a||{})) if (Array.isArray(lst)) {
@@ -90,9 +104,18 @@ export default function SkillsTab() {
   return (
     <div>
       <div className="flex-center gap-8" style={{ marginBottom: 8 }}>
-        <span className="fw-600 fs-12 text-secondary">技能 ({skills.length})</span>
+        <span className="fw-600 fs-12 text-secondary">
+          技能 {listUnreadable ? '（读不到）' : `(${skills.length})`}
+        </span>
         <button onClick={()=>setShowForm(!showForm)} className="btn-sm"><Plus size={12}/> 新建</button>
       </div>
+      {listUnreadable && (
+        <div style={{ padding: '8px 12px', marginBottom: 8, fontSize: 12,
+                      color: '#b45309', background: '#fef3c7', border: '1px solid #e8dcc0', borderRadius: 6 }}>
+          读不到技能 / 智能体列表 —— 现在<b>不是</b>"一个都没有"，是<b>不知道</b>。
+          <button onClick={() => fetch()} className="btn-sm" style={{ marginLeft: 8 }}>重试</button>
+        </div>
+      )}
       <div className="fs-10 text-muted" style={{ marginBottom: 8 }}>
         技能 = <b>会什么</b>（能力）；角色 = 这个阶段<b>该干什么</b>（职责，见「角色」页）。
         提示词类约束请做成角色，技能只用来加真工具。<br/>
