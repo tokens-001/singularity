@@ -73,13 +73,27 @@ READ_ONLY = PermissionProfile(
     require_approval=["write_file", "run_command"],
 )
 
+# ⚠️ **别在这里再抄一份名单**（2026-09-14）：这里原来是一张**手抄的**短名单，
+# 和硬地板（`scheduler/_sensitive.py`，所有执行器读写文件/跑命令都过它）**双向不一致** ——
+# 地板有 `id_rsa`/`*.pem`/`.netrc` 而这份没有（恰好被地板兜住，所以看不出来）；
+# 这份有 `rm -rf`（无空格版）而地板只拦 `rm -rf /`、`~`、`.`。
+# 而界面上"沙箱拦截了哪些"显示的**是这份** ⇒ 承诺 ≠ 实拦。
+# 现在 = **地板 ∪ profile 额外**：profile 只会比地板更严，不会再出现"更松"。
+from singularity.scheduler._sensitive import (        # noqa: E402
+    BLOCKED_PATH_PATTERNS as _FLOOR_PATHS,
+    BLOCKED_COMMANDS as _FLOOR_COMMANDS,
+)
+
 SANDBOXED = PermissionProfile(
     name="sandboxed",
     description="沙箱：代码操作受限，敏感文件拦截",
     allowed_tools=["read_file", "write_file", "run_command", "search_code"],
-    blocked_paths=[".env", ".env.*", "*.token", "*.key", ".qidian/*", ".git/*", "venv/*"],
+    blocked_paths=list(_FLOOR_PATHS),
     require_approval=["run_command"],
-    blocked_commands=["rm -rf", "sudo", "chmod 777", "curl", "wget"],
+    # 地板上**额外**加的这条：`rm -rf build/` 这类"看起来像清理、实际能删整棵树"
+    # 的命令。地板拦的是 `rm -rf /`、`~`、`.`（危险到不该出现在任何任务里），
+    # 这份拦得更宽是有意的 —— 沙箱就是"更严的那一档"。
+    blocked_commands=list(_FLOOR_COMMANDS) + ["rm -rf"],
 )
 
 BUILTIN_PROFILES = {

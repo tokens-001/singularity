@@ -1047,8 +1047,8 @@ def _sinks(fn):
                 dotted = f"{base}.{f.attr}" if base else f.attr
             elif isinstance(f, ast.Name):
                 dotted = f.id
-            if dotted in _SINK_CALLS or dotted.split(".")[-1] in
-               {"system", "popen"} and dotted.startswith("os"):
+            dotted_tail = dotted.split(".")[-1]
+            if dotted in _SINK_CALLS or (dotted == "os." + dotted_tail and dotted_tail in ("system", "popen")):
                 out.append(n)
     return out or None
 

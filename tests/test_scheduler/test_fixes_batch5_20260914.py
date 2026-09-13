@@ -196,6 +196,44 @@ def test_有工具面的执行器不走这条告警(monkeypatch):
     assert got == [], f"有工具面却被报成拦不住：{got}"
 
 
+# ═══════════════════════════════════════════════════════════════
+# ③ 敏感路径/危险命令：一张表，不是三张
+# ═══════════════════════════════════════════════════════════════
+# 同一件事原来写了两遍：`executors/base` 的**硬地板**（所有 agent 都过）和
+# `permission.SANDBOXED` 的**拦截承诺**（界面照着它显示）。两份**双向**不一致：
+# 地板有 `id_rsa`/`*.pem` 而 sandboxed 没有；sandboxed 有 `rm -rf` 而地板只拦 `rm -rf /`。
+
+def test_sandboxed_profile_不比硬地板松():
+    """profile 是"更严的那一档"，**不能比地板松** —— 松了就是界面承诺 ≠ 实拦。
+
+    变异：把 `blocked_paths` 换回手抄的那张短名单 → 红。
+    （`rm -rf` 那条是**有意的额外**：地板拦 `rm -rf /`/`~`/`.`，沙箱连 `rm -rf build/` 也拦。）
+    """
+    from singularity.scheduler import _sensitive as S, permission as P
+    assert set(S.BLOCKED_PATH_PATTERNS) <= set(P.SANDBOXED.blocked_paths), \
+        "地板拦的路径，sandboxed 的承诺里缺：" \
+        f"{sorted(set(S.BLOCKED_PATH_PATTERNS) - set(P.SANDBOXED.blocked_paths))}"
+    assert set(S.BLOCKED_COMMANDS) <= set(P.SANDBOXED.blocked_commands), \
+        f"{sorted(set(S.BLOCKED_COMMANDS) - set(P.SANDBOXED.blocked_commands))}"
+    # 两处**曾经不一致**的，各钉一条（双向都要钉，不然只防住一半）
+    assert "id_rsa" in P.SANDBOXED.blocked_paths, "地板有、承诺里没有过的那个"
+    assert "rm -rf" in P.SANDBOXED.blocked_commands, "承诺有、地板没有过的那个"
+
+
+def test_执行器的地板和_sensitive_是同一份():
+    """**同一个对象**，不是"内容碰巧一样" —— 内容一样的两份明天就会漂。
+    变异：把 base 里那张表改回手写列表 → 红。"""
+    from singularity.scheduler import _sensitive as S
+    from singularity.scheduler.executors import base as B
+    assert B._BLOCKED_PATTERNS is S.BLOCKED_PATH_PATTERNS
+    assert B._BLOCKED_COMMANDS is S.BLOCKED_COMMANDS
+    # 走一遍真入口，确认搬完家行为没变（`.ssh/id_rsa` 逐段比那一路）
+    assert B.is_blocked_path("/home/u/.ssh/id_rsa")[0] is True
+    assert B.is_blocked_path("src/main.py")[0] is False
+    assert B.is_dangerous_command("rm -rf /")[0] is True
+    assert B.is_dangerous_command("pytest -q")[0] is False
+
+
 def test_run_executor_真的调了这条告警(monkeypatch):
     """**接线**：上面几条测的是函数本体，"接线通不通"是另一回事
     —— 挪走/删掉 `_run_executor` 里那句调用，它们照样全绿。

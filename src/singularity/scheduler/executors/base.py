@@ -16,6 +16,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+# ⚠️ **敏感路径 / 危险命令这两张表搬到 `scheduler/_sensitive.py` 了**（2026-09-14）。
+# 它们原来**还抄了一份**在 `permission.SANDBOXED` 里当"profile 的拦截承诺"，
+# 两份已经不一致（`id_rsa` 只有这份有、`rm -rf` 只有那份有），而界面显示的是那份
+# ⇒ 承诺和实拦对不上。现在**一份表、两处 import**（见那个模块的 docstring）。
+# 名字保持不变：全仓有别的模块 `from ...executors.base import _BLOCKED_PATTERNS`。
+from singularity.scheduler._sensitive import (      # noqa: E402
+    BLOCKED_PATH_PATTERNS as _BLOCKED_PATTERNS,
+    BLOCKED_COMMANDS as _BLOCKED_COMMANDS,
+    is_blocked_path,
+    is_dangerous_command,
+)
+
 
 @dataclass
 class ExecutorResult:
@@ -33,70 +45,6 @@ class ExecutorResult:
 # ═══════════════════════════════════════════════════════════════
 # Shared constants & error classes (ponytail: unified from zhipu + openai)
 # ═══════════════════════════════════════════════════════════════
-
-_BLOCKED_PATTERNS = [
-    ".env", ".env.*", "*.token", "*.key", "*.pem", "*.p12", "*.pfx",
-    "*.secret", "*.password", "*.credential",
-    # ⚠️ **无后缀的私钥**（2026-09-14，外派 K 条6 / H 反7 / E'⑤ 三方独立撞上）：
-    # `*.key` / `*.pem` 罩不住 `id_rsa` 这一族 —— 模型一条 read_file 就能把私钥
-    # 整读进上下文随输出带走。`web/app.py:1358` 的 `_SENSITIVE_FILES` 早就补了
-    # 这几个、注释还点名了这个洞，**这张表当时没跟着改** —— 同一件事只修了一半。
-    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
-    ".netrc", ".flaskenv",
-    # ⚠️ **`.crt` 不拦**（2026-09-14，逆向审抓到、我认）：证书是**公开材料**，
-    # 拦它没有防泄露的价值，却会把"加 HTTPS / 配 mTLS"这类任务的显式读写**弄瘸**
-    # （任务读不到自己的证书就没法干活）。带私钥的那几种后缀
-    # （`*.key` / `*.pem` / `*.p12` / `*.pfx`）仍然拦着，覆盖了常规命名。
-    ".ssh/", ".ssh/*",
-    ".qidian/", ".qidian/*", ".git/", ".git/*", ".claude/",
-    "venv/", ".venv/", "__pycache__/", "*.pyc",
-    "users.json", "config.toml", "agents.toml",
-]
-
-_BLOCKED_COMMANDS = [
-    "rm -rf /", "rm -rf ~", "rm -rf .",
-    "curl", "wget",
-    "chmod 777", "chmod -R",
-    "sudo ", "su ",
-    "mkfs.", "dd if=",
-    ":(){ :|:& };:",
-    "> /dev/sda",
-    "shutdown", "reboot", "halt", "poweroff",
-    "iptables", "nc -l", "nc -e",
-    "python -c", "perl -e", "ruby -e", "bash -c",
-    "eval ", "exec ",
-]
-
-
-def is_blocked_path(path: str) -> tuple[bool, str]:
-    """敏感文件 blocklist 检查。返回 (blocked, reason)。
-
-    统一入口: openai/zhipu/anthropic 三个 executor 共用 (原各自复制一份)。
-    """
-    import fnmatch
-    normalized = path.replace("\\", "/")
-    for pattern in _BLOCKED_PATTERNS:
-        if fnmatch.fnmatch(normalized, pattern):
-            return True, f"敏感文件/目录: {pattern}"
-        if fnmatch.fnmatch(normalized, f"*/{pattern}"):
-            return True, f"敏感文件/目录: {pattern}"
-        parts = normalized.split("/")
-        for part in parts:
-            if fnmatch.fnmatch(part, pattern.rstrip("/*")):
-                return True, f"敏感文件/目录: {pattern}"
-    return False, ""
-
-
-def is_dangerous_command(command: str) -> tuple[bool, str]:
-    """危险命令检查。返回 (dangerous, reason)。"""
-    cmd = command.strip()
-    cmd_lower = cmd.lower()
-    for blocked in _BLOCKED_COMMANDS:
-        bl = blocked.lower()
-        if cmd_lower.startswith(bl) or bl in cmd_lower:
-            return True, f"危险命令被拦截: {blocked}"
-    return False, ""
-
 
 class ExecutorError(Exception):
     """Base executor error."""
