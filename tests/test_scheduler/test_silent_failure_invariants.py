@@ -134,6 +134,53 @@ class TestQaVerdictIsNotFailOpen:
         assert "qa_verdict_missing" in log.read_text(encoding="utf-8")
 
 
+class TestArchTasksMustBeOrdered:
+    """⑥ 架构拆了多个任务却**一条依赖都没排** —— 要出声。
+
+    2026-09-13 真机（项目 `1789300044340`）：架构把"实现"和"写测试"两个任务都留成
+    `depends_on: []` ⇒ 调度循环**同时派发**。写测试的等不来实现，**自己把实现写了**。
+    实现任务 900s 超时失败、零提交；写测试那笔提交里**同时带着实现和测试**
+    ⇒ 机械检查 9/9 全过，但它证明的只是"**它跟自己一致**"。
+    """
+
+    def test_two_tasks_zero_deps_is_flagged(self):
+        from singularity.scheduler import workflow as W
+        assert W._arch_tasks_are_unordered(
+            {"tasks": [{"id": "T1", "depends_on": []}, {"id": "T2", "depends_on": []}]})
+
+    def test_any_dependency_silences_it(self):
+        """只要有一条排了先后就不报 —— 判据是"**一条都没有**"，不是"排得不全"。"""
+        from singularity.scheduler import workflow as W
+        assert not W._arch_tasks_are_unordered(
+            {"tasks": [{"id": "T1"}, {"id": "T2", "depends_on": ["T1"]}]})
+
+    def test_depends_on_local_id_counts_too(self):
+        """执行器那条路用的是 `depends_on_local_id` —— 认它，别只看 `depends_on`。"""
+        from singularity.scheduler import workflow as W
+        assert not W._arch_tasks_are_unordered(
+            {"tasks": [{"id": "a"}, {"id": "b", "depends_on_local_id": [0]}]})
+
+    def test_single_task_or_empty_never_flagged(self):
+        from singularity.scheduler import workflow as W
+        for arch in ({}, {"tasks": []}, {"tasks": [{"id": "T1"}]}, None, "不是 dict", {"tasks": "?"}):
+            assert not W._arch_tasks_are_unordered(arch), f"{arch!r} 不该报"
+
+    def test_flag_leaves_both_traces(self):
+        """判据为真时**两件必做事**都得做：进 issues + 出声（同 QA 那条理由）。"""
+        from singularity.scheduler import workflow as W
+        from singularity.scheduler import config
+
+        p = P.ProjectState(id="ar1", name="t")
+        p.issues = []
+        W._flag_unordered_architecture(p, {"tasks": [{"id": "T1"}, {"id": "T2"}]})
+
+        assert "arch_no_dependency" in [i.get("type") for i in p.issues], \
+            "没进 issues ⇒ GATE2 人审页上看不见"
+        log = config.QIDIAN_DIR / "alerts.jsonl"
+        assert log.exists() and "arch_no_dependency" in log.read_text(encoding="utf-8"), \
+            "没出声 ⇒ 聚合视图里也看不见"
+
+
 class TestRatchetResetsOnHumanIntervention:
     """③ 人工批准 GATE2 = 人到场兜底，自动重试配额必须跟着恢复。"""
 

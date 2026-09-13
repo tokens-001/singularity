@@ -74,6 +74,14 @@ _ARCHITECT_CONTEXT = """项目需求: {description}
       "estimated_files": ["涉及文件路径"]
     }}
   ],
+
+⚠️ `depends_on` **必须认真填**（填同数组内其它任务的 `id`）：
+   · **测试任务必须依赖它要测的实现任务** —— 不排先后的话两者会**同时开跑**，
+     写测试的等不来实现就会**自己把实现写了**（真机案例 1789300044340：
+     结果实现任务超时失败、测试任务连实现一起交付 ⇒ 测试与实现出自同一轮，
+     检查全过也证明不了符合需求）；
+   · **两个任务会改同一批文件时必须排先后** —— 同时跑会产物互相看不见、争同一批文件；
+   · **排不出先后的，说明它们真的互不相干**，那才留空数组。
   "risks": [
     {{"risk": "风险描述", "impact": "high/medium/low", "mitigation": "缓解措施"}}
   ],
@@ -428,6 +436,58 @@ def run_test_fix_loop(project: ProjectState, agents: dict) -> str:
     project.set_phase(Phase.GATE3, "执行完成 → 验收报告完毕, 等人工审")
     save(project)
     return "\n".join(msgs) + "\n→ GATE3 等待人工审核"
+
+
+def _flag_unordered_architecture(project: ProjectState, arch) -> None:
+    """架构"多个任务、零依赖"时的**两件必做事**：出声 + 进 issues。
+
+    抽出来是为了能被测到 —— 只测 `_arch_tasks_are_unordered` 验的是"**判据对**"，
+    验不到"**判据为真时真的有人记**"（同 `_flag_missing_qa_verdict` 那条理由）。
+    """
+    n = len((arch or {}).get("tasks") or [])
+    try:
+        from singularity.scheduler import witness
+        witness.warn("workflow", f"arch_no_dependency:{project.id}"[:120],
+                     key="arch_no_dependency")
+    except Exception:
+        pass
+    project.issues.append({
+        "type": "arch_no_dependency",
+        "detail": (f"架构拆了 **{n} 个任务，却一条依赖都没排** —— 它们会被**同时派发**。"
+                   "确实互不相干就忽略；否则**请打回重规划**。"
+                   "真机案例（1789300044340）：测试任务与实现任务同时跑 ⇒ "
+                   "写测试的等不来实现、**自己把实现写了**，而实现任务超时失败、零提交 ⇒ "
+                   "「实现和测试出自同一个 agent」⇒ 机械检查全过也证明不了符合需求"),
+    })
+
+
+def _arch_tasks_are_unordered(arch) -> bool:
+    """架构里 **≥2 个任务、却一条依赖都没排** —— 可疑形状，返回 True。
+
+    **为什么要有这条**：2026-09-13 真机（项目 `1789300044340`）—— 架构拆出
+    "实现 `txtstat.py`" 和 "编写 `test_txtstat.py`" 两个任务，`depends_on` **都是空数组**
+    ⇒ 调度循环把它们**同时派出去**。写测试的那个等不来实现，**就自己写了一个实现**。
+    结局：实现任务 900s 超时失败、零提交；写测试那个的提交里**同时带着实现和测试**
+    （`git log --all -- txtstat.py` 只有它那一笔）。
+
+    ⇒ 后果不是"慢"，是**验证失去意义**：测试和实现出自同一个 agent 的同一轮，
+    机械检查 9/9 全过只说明"**它跟自己一致**"，证明不了"**它符合需求**"。
+    顺带也是"两个任务改同一批文件"的温床（`orchestrator` 那段注释自己点名过）。
+
+    ⚠️ **只判"一条都没有"，不判"排错了"** —— 后者需要语义，判据会变成猜。
+    也**不阻断**：GATE2 本来就是人审门，把可疑形状摆上去比卡死项目有用
+    （同 `_gate3_admission` 的规矩）。确实互不相干的多任务架构会误报，所以文案里
+    明说了"互不相干就忽略"。
+    """
+    tasks = (arch or {}).get("tasks") if isinstance(arch, dict) else None
+    if not isinstance(tasks, list) or len(tasks) < 2:
+        return False
+    for t in tasks:
+        if not isinstance(t, dict):
+            continue
+        if t.get("depends_on") or t.get("depends_on_local_id"):
+            return False
+    return True
 
 
 _QA_VERDICT_MISSING = "未产出"

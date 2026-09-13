@@ -14,6 +14,7 @@ from singularity.scheduler.workflow import (
     _safe_dispatch, _needs_research, _should_skip, _collect_changed_files,
     _phase_output_path, _save_phase_output, _read_phase_output,
     _ARCHITECT_CONTEXT, _RESEARCHER_CONTEXT,
+    _arch_tasks_are_unordered, _flag_unordered_architecture,
 )
 
 def _phase_selection(phase: str, project: ProjectState):
@@ -319,6 +320,14 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
         disp_result = disp_result2  # lineage 用重试结果
 
     project.architecture = arch
+
+    # ⚠️ 守卫放在**这里**（架构定稿、两条建任务的路的上游）是有意的：
+    # 建任务的路不止一条（`_run_execution` 和 `orchestrator._decompose_and_create_tasks`），
+    # 挂在任何一条上都会漏掉另一条 —— 那是 §60 那个坑的形状（同一件事两个入口，
+    # 必然有一条忘了做全套）。架构只有一个，挂在上游就不会漏。
+    if _arch_tasks_are_unordered(arch):
+        _flag_unordered_architecture(project, arch)
+
     # ponytail: 保存阶段产出文件供后续阶段复用
     _save_phase_output(project.id, "architecture.md", raw)
     # Step 2: 多模型碰撞 → 保存各模型原始输出。
