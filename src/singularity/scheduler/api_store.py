@@ -659,19 +659,22 @@ def save_custom_model(model_id: str, provider: str, display: str = "",
                       tiers: list[str] = None, speed: str = "", cost: str = "",
                       rating: str = "", strengths: list[str] = None, notes: str = "") -> dict:
     """保存一个扫描发现的模型到自定义注册表。已有条目保留原有字段。"""
-    from singularity.scheduler._io import is_quarantined
+    from singularity.scheduler._io import load_for_rewrite
     p = _custom_models_path()
-    if p.exists() and is_quarantined(p):
-        # 🔴 拒写：读侧已经把坏文件隔离出去了，拿手里这份（空表 + 这一个模型）
-        # 整份写回去 = 自定义模型表全没，而文件名一模一样。
+    # ⚠️ **读在前、判在后**：判据是「这次读出来的是什么」，不是 `is_quarantined` ——
+    # 后者要有人先读过才有，而第一次触碰坏文件时正是**这一读**才把标记置上的
+    # （2026-09-14 外派⑦ 实测复现；同族四处，见 `_io.load_for_rewrite` 的 docstring）。
+    custom, writable = load_for_rewrite(p)
+    if not writable:
+        # 🔴 拒写：拿手里这份（空表 + 这一个模型）整份写回去 = 自定义模型表全没，
+        # 而文件名一模一样。
         from singularity.scheduler import witness
         witness.warn("api_store",
-                     "save_skipped: models_custom.json 损坏已隔离(.corrupt)，拒绝整份重建",
+                     "save_skipped: models_custom.json 损坏，拒绝整份重建",
                      key="models_custom_corrupt")
         raise RuntimeError(
             "models_custom.json 损坏（已隔离到 .corrupt）—— 拒绝在读不出来的情况下写回整份。"
             "先人工恢复备份再重试。")
-    custom = load_custom_models()
     existing = custom.get(model_id, {})
     # ── 类型安全防护 ──
     def _safe_str(v, default=""): return v if isinstance(v, str) and v else default

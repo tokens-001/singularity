@@ -393,22 +393,22 @@ def set_projects_root(path: str) -> Path:
     然后只写 `{"projects_root": ...}` 回去 —— **settings.json 里别的用户设置全没了**，
     而文件看起来完好。
     """
-    from singularity.scheduler._io import is_quarantined, load_json_or_quarantine
+    from singularity.scheduler._io import load_for_rewrite
     root = Path(path).expanduser().resolve()
     p = _settings_path()
-    if p.exists() and is_quarantined(p):
+    # ⚠️ **读在前、判在后**：判据是「这次读出来的是什么」，不是 `is_quarantined` ——
+    # 后者要有人先读过才有，而第一次触碰坏文件时正是**这一读**才把标记置上的
+    # （2026-09-14 外派⑦ 实测复现：`user_theme` 等键全没，只剩 `projects_root`）。
+    data, writable = load_for_rewrite(p)
+    if not writable:
         from . import witness          # 本文件的约定：函数内懒导入
         witness.warn("project",
-                     "save_skipped: settings.json 损坏已隔离(.corrupt)，拒绝拿空表整份重建"
+                     "save_skipped: settings.json 损坏，拒绝拿空表整份重建"
                      "（会把别的用户设置一起抹掉）；人工恢复备份后重试",
                      key="settings_corrupt")
         raise RuntimeError(
             "settings.json 损坏（已隔离到 .corrupt）—— 拒绝在对它读不出来的情况下写回整份。"
             "先人工恢复备份再重试。")
-    data = {}
-    if p.exists():
-        got = load_json_or_quarantine(p)
-        data = got if got is not None else {}
     data["projects_root"] = str(root)
     config.QIDIAN_DIR.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

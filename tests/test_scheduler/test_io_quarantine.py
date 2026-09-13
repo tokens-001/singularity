@@ -459,6 +459,126 @@ def test_角色覆盖坏了不能只留一行_log(tmp_path, monkeypatch):
     assert (tmp_path / ".qidian" / "roles_custom.json.corrupt").exists(), "没留备份"
 
 
+# ═══════════════════════════════════════════════════════════════
+# ⑧ **第一次触碰**（2026-09-14 外派⑦ 抓到 —— 上面那批测试全体漏掉的那一格）
+# ═══════════════════════════════════════════════════════════════
+# 🔴 **上面每一条"写侧拒写"测试都先手动读了一次**（`MD.load()` / `load_custom_models()` /
+# `get_projects_root()` / `_load_custom_agents()`），注释里明写"置上损坏标记"。
+# 那一行**正是缺陷的前提** —— 于是"第一次触碰"这一格被整套测试漏掉了。
+#
+# 原来的写侧判据是 `is_quarantined(path)`，而**那个标记要有人先读过才有**；
+# 进程刚起来、坏文件还没人读时，是**写侧自己那次读**才把标记置上的 —— 太晚了。
+# 实测后果（⑦ 复现、我复核）：`model_discipline.json` 只剩新记的那一条、
+# `settings.json` 的 `user_theme` 等键全没 —— **文件还在、名字没变，内容换成了
+# "刚重建的空表 + 这一条"**。
+#
+# ⇒ 这组测试**一律不预读**，直接调写侧。判据是「我这次读出来的是什么」。
+
+def _干净环境(tmp_path, monkeypatch):
+    """把 `.qidian` 隔离到 tmp，并把"已隔离"标记清成进程刚起来的样子。"""
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path / ".qidian")
+    (tmp_path / ".qidian").mkdir(exist_ok=True)
+    monkeypatch.setattr(_io, "_QUARANTINED", set())
+    warns = []
+    monkeypatch.setattr("singularity.scheduler.witness.warn",
+                        lambda *a, **k: warns.append(str(a)))
+    return warns
+
+
+def test_第一次触碰_范围纪律表不许整份重建(tmp_path, monkeypatch):
+    """进程刚起来、坏文件还没人读过 ⇒ 写侧自己那次读不能成为"先读后写"的例外。"""
+    from singularity.scheduler import _model_discipline as MD
+    warns = _干净环境(tmp_path, monkeypatch)
+    p = MD._path()
+    raw = '{"deepseek": {"violations": 3, "audits": 10}, "坏":'
+    p.write_text(raw, encoding="utf-8")
+
+    assert MD.record("glm", 2) is False, "第一次触碰就照写了 —— 历史全没"
+
+    assert p.read_text(encoding="utf-8") == raw, "坏文件被整份重建了"
+    assert any("record_skip" in w for w in warns), f"拒写了却没出声：{warns}"
+
+
+def test_第一次触碰_设置文件不许整份重建(tmp_path, monkeypatch):
+    from singularity.scheduler import project as P
+    warns = _干净环境(tmp_path, monkeypatch)
+    p = P._settings_path()
+    raw = '{"projects_root": "/tmp/a", "user_theme": "dark", "坏":'
+    p.write_text(raw, encoding="utf-8")
+
+    import pytest as _pytest
+    with _pytest.raises(RuntimeError):
+        P.set_projects_root("/tmp/new")
+
+    assert p.read_text(encoding="utf-8") == raw, "user_theme 等别的设置全没"
+    assert warns, "拒写了却没出声"
+
+
+def test_第一次触碰_自定义模型表不许整份重建(tmp_path, monkeypatch):
+    from singularity.scheduler import api_store as A
+    warns = _干净环境(tmp_path, monkeypatch)
+    p = A._custom_models_path()
+    raw = '{"扫出来的模型": {"id": "扫出来的模型"}, "坏":'
+    p.write_text(raw, encoding="utf-8")
+
+    import pytest as _pytest
+    with _pytest.raises(RuntimeError):
+        A.save_custom_model("新模型", "厂商")
+
+    assert p.read_text(encoding="utf-8") == raw, "用户扫出来/手配的模型全没"
+    assert warns, "拒写了却没出声"
+
+
+def test_第一次触碰_agent技能绑定不许整份重建(tmp_path, monkeypatch):
+    """这个文件有**两个写者** —— 更该测。"""
+    from singularity.skills import skill_loader as S
+    warns = _干净环境(tmp_path, monkeypatch)
+    p = S._qidian_dir() / "agents_custom.json"
+    raw = '{"_skills": {"any": {"m1": ["code-review"]}}, "坏":'
+    p.write_text(raw, encoding="utf-8")
+
+    S.set_agent_skills("any", "m2", ["ddd"])       # 不预读，直接写
+
+    assert p.read_text(encoding="utf-8") == raw, "所有 agent 配置和 skill 绑定全没"
+    assert any("agents_custom" in w for w in warns), f"拒写了却没出声：{warns}"
+
+
+def test_第一次触碰的对照组_文件好的时候四处都照常写(tmp_path, monkeypatch):
+    """**别把闸门修成"什么都不动"** —— 文件好时，四条写路径都要真的写下去。"""
+    from singularity.scheduler import _model_discipline as MD, api_store as A, project as P
+    from singularity.skills import skill_loader as S
+    _干净环境(tmp_path, monkeypatch)
+    (tmp_path / ".qidian").mkdir(exist_ok=True)
+
+    assert MD.record("glm", 2) is True
+    assert json.loads(MD._path().read_text(encoding="utf-8"))["glm"]["violations"] == 2
+
+    P.set_projects_root("/tmp/new-root")
+    assert json.loads(P._settings_path().read_text(encoding="utf-8"))["projects_root"].endswith(
+        "/tmp/new-root")
+
+    A.save_custom_model("我的模型", "厂商", display="显示名")
+    assert A.load_custom_models()["我的模型"]["display"] == "显示名"
+
+    S.set_agent_skills("any", "m1", ["code-review"])
+    data = json.loads((tmp_path / ".qidian" / "agents_custom.json").read_text(encoding="utf-8"))
+    assert data["_skills"]["any"]["m1"] == ["code-review"]
+
+
+def test_第一次触碰的对照组_改完的文件仍保住别的键(tmp_path, monkeypatch):
+    """文件**好**的时候，读改写必须把别的键带过去（"读在前"没把数据弄丢）。"""
+    from singularity.scheduler import _model_discipline as MD
+    _干净环境(tmp_path, monkeypatch)
+    p = MD._path()
+    p.write_text(json.dumps({"deepseek": {"violations": 3, "audits": 10}}), encoding="utf-8")
+
+    assert MD.record("glm", 2) is True
+
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["deepseek"] == {"violations": 3, "audits": 10}, "老模型的历史被吃掉了"
+    assert data["glm"]["violations"] == 2
+
+
 def test_tmp_清扫只清陈旧的(tmp_path, monkeypatch):
     """**正在写的那个进程的 tmp 不许被清掉** —— 它只存在几毫秒，但那一刻是活的。"""
     import os as _os

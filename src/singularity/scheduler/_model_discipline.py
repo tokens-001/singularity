@@ -56,21 +56,24 @@ def record(model: str, violations: int) -> bool:
     model = (model or "").strip()
     if not model or violations is None or violations < 0:
         return False
-    from singularity.scheduler._io import is_quarantined
-    if is_quarantined(_path()):
-        # 🔴 **拒写**：读侧已把坏文件隔离出去，拿空表 + 这一次的计数整份写回去
-        # = 攒了很久的范围纪律历史全没，而文件名一模一样。
-        # ⚠️ 这里**返回 False 而不是抛** —— 本文件的铁律是"记账失败不能把任务带崩"
-        # （见 `record` 的 `except` 那句），改成抛等于把铁律破了。
-        from singularity.scheduler import witness
-        witness.warn("model_discipline",
-                     "record_skip: model_discipline.json 损坏已隔离(.corrupt)，本轮不记，"
-                     "拒绝整份重建",
-                     key="model_discipline_corrupt")
-        return False
+    from singularity.scheduler._io import load_for_rewrite
     try:
         with _LOCK:
-            disc = load()
+            disc, writable = load_for_rewrite(_path())
+            if not writable:
+                # 🔴 **拒写**：读出来是 None = 这个文件坏了（隔离 + 出声在
+                # `load_for_rewrite` 里已经做了）。拿空表 + 这一次的计数整份写回去
+                # = 攒了很久的范围纪律历史全没，而文件名一模一样。
+                # ⚠️ 判据是「**我这次读出来的是什么**」，**不是** `is_quarantined` ——
+                # 那个标记要有人先读过才有，而第一次触碰坏文件时它还是 False
+                # （2026-09-14 外派⑦ 实测复现：历史只剩新记的那一条）。
+                # ⚠️ 这里**返回 False 而不是抛** —— 本文件的铁律是"记账失败不能把任务带崩"
+                # （见下面的 `except`），改成抛等于把铁律破了。
+                from singularity.scheduler import witness
+                witness.warn("model_discipline",
+                             "record_skip: model_discipline.json 损坏，本轮不记，拒绝整份重建",
+                             key="model_discipline_corrupt")
+                return False
             d = disc.setdefault(model, {"violations": 0, "audits": 0, "last_ts": 0})
             d["violations"] = int(d.get("violations", 0)) + int(violations)
             d["audits"] = int(d.get("audits", 0)) + 1

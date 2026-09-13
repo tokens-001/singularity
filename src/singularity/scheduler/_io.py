@@ -418,6 +418,38 @@ def load_json_or_quarantine(path: Path, *, expect: type = dict):
     return data
 
 
+def load_for_rewrite(path: Path, *, expect: type = dict):
+    """读一个「**要改完再整份写回**」的文件。返回 `(data, writable)`。
+
+    🔴 **为什么需要这个函数**（2026-09-14 外派⑦实测复现的真洞，四个接入点全中）：
+
+    它们原来都是这个形状 ——
+
+        if is_quarantined(path): 拒写            # ← 查的时候，标记还是 False
+        got = load_json_or_quarantine(path)      # ← 第一次真正读：判坏、置标记、返回 None
+        data = got if got is not None else {}    # ← None 被吞成 {}
+        write(data)                              # ← 整份重建发生了
+
+    「已隔离」这个标记**要有人先读过才有**，而**第一次触碰**坏文件时，正是**你这次读**
+    才把它置上的 ⇒ **闸门在第一次触碰时形同虚设**。而"第一次触碰"恰恰是常态
+    （进程刚起来、那个坏文件还没人读过）。
+
+    实测后果：`model_discipline.json` 只剩新记的那一条（历史全没）、`settings.json` 的
+    `user_theme` 等键全没 —— **文件还在、名字没变，内容换成了"刚重建的空表 + 这一条"**。
+
+    ⇒ **判据必须是"我手里这份读出来是什么"，不是"有没有人来读过"。**
+    调用方拿到 `writable=False` 就**出声 + 拒写** —— 别再自己问 `is_quarantined`
+    （那就是把顺序要求又交回给调用方，而它已经错了四次）。
+    """
+    if not path.exists():
+        return expect(), True
+    got = load_json_or_quarantine(path, expect=expect)
+    if got is None:
+        return None, False
+    # 进程内已隔离过（粘住语义，见 `is_quarantined`）：手动修好也要重启才恢复写
+    return got, not is_quarantined(path)
+
+
 def load_toml_or_quarantine(path: Path) -> "dict | None":
     """`load_json_or_quarantine` 的 TOML 版。
 

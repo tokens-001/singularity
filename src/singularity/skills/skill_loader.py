@@ -317,24 +317,24 @@ def set_agent_skills(agent_level: str, agent_model: str, skill_names: list[str],
     import json
     from singularity.scheduler import _io
     custom_file = _qidian_dir() / "agents_custom.json"
-    if custom_file.exists() and _io.is_quarantined(custom_file):
-        # 🔴 **拒写**：这个文件坏了、已隔离 —— 拿 `{}` 写回去会把**所有 agent 配置和
+    # ⚠️ **读在前、判在后**：判据是「这次读出来的是什么」，不是 `_io.is_quarantined` ——
+    # 后者要有人先读过才有，而第一次触碰坏文件时正是**这一读**才把标记置上的
+    # （2026-09-14 外派⑦ 实测复现；同族四处，见 `_io.load_for_rewrite` 的 docstring）。
+    data, writable = _io.load_for_rewrite(custom_file)
+    if not writable:
+        # 🔴 **拒写**：这个文件坏了 —— 拿 `{}` 写回去会把**所有 agent 配置和
         # 别人设过的 skills** 一起盖掉，而文件名一模一样。标记记在路径上，
         # `_dispatch_crud._save_custom_agents` 问的是同一个（这文件**两个写者**）。
         try:
             from singularity.scheduler import witness
             witness.warn("skill_loader",
-                         "save_skipped: agents_custom.json 损坏已隔离(.corrupt)，拒绝整份重建",
+                         "save_skipped: agents_custom.json 损坏，拒绝整份重建",
                          key="agents_custom_corrupt")
         except Exception as e:      # noqa: BLE001
             # 第二通道没发出去也要留痕 —— 别让"告警没发出去"这件事本身静默
             logging.getLogger("skill_loader").error(
                 "agents_custom.json 的损坏告警没发出去: %s: %s", type(e).__name__, e)
         return
-    data = {}
-    if custom_file.exists():
-        got = _io.load_json_or_quarantine(custom_file)
-        data = got if got is not None else {}
     # ponytail: 两条轴共用一个 dict，靠"模型名不会叫 executing"区分。
     # 真要重名（模型 ID 恰好等于阶段名）就分不出 —— 那时改成 `_phase` 子字典。
     key = agent_model or phase
