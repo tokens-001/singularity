@@ -355,6 +355,41 @@ def _del_path(doc, keys) -> None:
 #   读改写路径 → **必须停**：拿到 None 就 raise / 拒写，宁可这次操作失败，
 #                不可拿默认值去重建整份文件（`or {}` 只许出现在没有任何写入的路径上）
 
+# 每个原文件最多留几份 `.corrupt` 备份。见 `_prune_corrupt_backups`。
+_CORRUPT_KEEP = 5
+
+
+def _prune_corrupt_backups(path: Path) -> None:
+    """只留**最近 `_CORRUPT_KEEP` 份**备份 —— 上限必须有，否则"加固"会变成慢性盘占用。
+
+    ⚠️ 为什么（2026-09-14 核 S1 草案时发现的缺口）：轮转规则只保证"**不毁旧证据**"，
+    而一个**每轮都被读坏**的文件（比如某个 agent 配置写坏了、而每轮都要读它）
+    会在 `.qidian/` 里**每轮堆一份**新备份、谁也不清。存量 S1 那批铺开之后，
+    "坏文件"第一次成了**常态**而不是事故，这条就从"罕见"变成"必然"。
+
+    **清掉的都是同一份坏文件的旧快照**（最新那份永远留着），所以证据没丢 ——
+    要的是"最近一次现场的原始字节"，不是它的编年史。
+    """
+    from .log import warn as _log_warn   # 函数体内 import，理由同 `_quarantine_corrupt`
+    try:
+        siblings = [p for p in path.parent.glob(f"{path.name}.corrupt*")
+                    if p.name == f"{path.name}.corrupt"
+                    or p.name[len(f"{path.name}.corrupt."):].isdigit()]
+        if len(siblings) <= _CORRUPT_KEEP:
+            return
+        # 按 mtime 排序（第 N 份是 `.corrupt.<秒>`，同秒会撞名 —— 那由 bak 的存在性判断兜住）
+        siblings.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in siblings[_CORRUPT_KEEP:]:
+            try:
+                old.unlink()
+                _log_warn("io", f"清理旧损坏备份 {old.name}（只留最近 {_CORRUPT_KEEP} 份）"[:200])
+            except OSError as e:
+                _log_warn("io", f"旧损坏备份清不掉 {old.name}: {type(e).__name__}"[:200])
+    except OSError as e:
+        # 清理失败**不抛、也不静默**：备份已经落盘了，这里失败只影响"盘会慢慢涨"
+        _log_warn("io", f"损坏备份清理失败 {path.name}: {type(e).__name__}: {e}"[:200])
+
+
 def _quarantine_corrupt(path: Path, reason: str) -> None:
     """读坏文件的统一处置：原样备份 + 双通道出声。
 
@@ -374,6 +409,7 @@ def _quarantine_corrupt(path: Path, reason: str) -> None:
     except OSError as e:
         _log_warn("io", f"{path.name} 的损坏备份没做成: {type(e).__name__}: {e}"[:200])
         note = "备份失败(原文件未动)"
+    _prune_corrupt_backups(path)
 
     _QUARANTINED.add(str(path))
     msg = f"{path.name} 损坏({reason}): {note}, 拒绝当空"[:200]

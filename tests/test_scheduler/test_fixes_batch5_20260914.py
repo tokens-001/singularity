@@ -615,6 +615,67 @@ def test_心跳清理的终态判据也跟着状态机走(monkeypatch):
     assert witness._cleanup_terminal_heartbeat(hb, "hb1") is True, "状态机说终态了就该清"
 
 
+# ═══════════════════════════════════════════════════════════════
+# ⑫ `.corrupt` 备份要有上限（否则"加固"变成慢性盘占用）
+# ═══════════════════════════════════════════════════════════════
+# 轮转规则只保证"不毁旧证据"。而一个**每轮都被读坏**的文件（S1 那批铺开之后
+# "坏文件"从事故变成常态）会在 `.qidian/` 里每轮堆一份新备份、谁也不清。
+
+def test_损坏备份只留最近几份(tmp_path, monkeypatch):
+    """**变异判据**：删掉 `_quarantine_corrupt` 里那句 `_prune_corrupt_backups(...)`
+    → 本用例红（备份一直涨）。
+
+    做法：让同一个文件**反复**被判坏。⚠️ 备份名用的是 `int(time.time())`，
+    **同一秒内会撞名并覆盖**（第一版用例就是这么假绿的：跑十轮只落了 1 份，
+    断言 `== 5` 反而红得莫名其妙）⇒ 必须把钟拨快，让每轮落在不同的秒。
+    """
+    import time as _t
+    from singularity.scheduler import _io
+
+    class _Clock:
+        def __init__(self):
+            self.t = 1_700_000_000.0
+
+        def __call__(self):
+            self.t += 1.0
+            return self.t
+
+    monkeypatch.setattr(_t, "time", _Clock())      # 每次取值 +1 秒
+
+    import os as _os
+
+    f = tmp_path / "settings.json"
+    total = _io._CORRUPT_KEEP + 4
+    for i in range(total):
+        body = f"{{ 坏的 {i}"
+        f.write_text(body, encoding="utf-8")
+        # `shutil.copy2` **会保留源文件的 mtime** ⇒ 把 mtime 钉成递增的，
+        # 判据才不靠"循环跑得够慢、系统给的时间戳刚好不同"（那是借运气）。
+        _os.utime(f, (1000 + i, 1000 + i))
+        assert _io.load_json_or_quarantine(f) is None, "这一步本该判坏"
+
+    got = tmp_path.glob("settings.json.corrupt*")
+    kept = sorted(p.read_text(encoding="utf-8") for p in got)
+    # **留的是最新的 N 份**（清旧快照，不是清最新现场）—— 内容各不相同才能验出这件事：
+    # 若只留了最旧的 N 份，这里拿到的是 `0..4` 而不是 `4..8`。
+    want = sorted(f"{{ 坏的 {i}" for i in range(total - _io._CORRUPT_KEEP, total))
+    assert kept == want, f"留下的不是最近 {_io._CORRUPT_KEEP} 份：{kept}"
+    # 原文件一字不动
+    assert f.read_text(encoding="utf-8") == f"{{ 坏的 {total - 1}"
+
+
+def test_损坏备份清理不误伤别的文件(tmp_path):
+    """反向保护：名字像但格式不对的（`settings.json.corrupt_backup`）不许被当备份清掉。"""
+    from singularity.scheduler import _io
+    keep = tmp_path / "settings.json.corrupt_backup"
+    keep.write_text("别人的东西", encoding="utf-8")
+    for i in range(_io._CORRUPT_KEEP + 2):
+        f = tmp_path / f"m{i}.json"
+        f.write_text("{ 坏的", encoding="utf-8")
+        _io.load_json_or_quarantine(f)
+    assert keep.read_text(encoding="utf-8") == "别人的东西", "误删了名字像的东西"
+
+
 def test_run_executor_真的调了这条告警(monkeypatch):
     """**接线**：上面几条测的是函数本体，"接线通不通"是另一回事
     —— 挪走/删掉 `_run_executor` 里那句调用，它们照样全绿。
