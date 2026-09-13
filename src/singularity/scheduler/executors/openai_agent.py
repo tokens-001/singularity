@@ -33,6 +33,27 @@ _RETRY_COEFF = float(os.environ.get("QIDIAN_RETRY_COEFF", "2.0"))          # 退
 _RETRY_MAX_INTERVAL = float(os.environ.get("QIDIAN_RETRY_MAX_INTERVAL", "60"))
 _RETRY_MAX_ATTEMPTS = int(os.environ.get("QIDIAN_RETRY_MAX_ATTEMPTS", "3"))
 
+# ── 子进程环境变量的脱敏 ────────────────────────────────────────
+# 模型跑 `run_command` 时，`os.environ` 要脱敏后再给（`_tool_run`）。
+_ENV_SENSITIVE_SUBSTR = ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH",
+                         "CREDENTIAL", "CERT")
+
+
+def _is_sensitive_env(name: str) -> bool:
+    """这个环境变量名算不算敏感（值不许给模型跑的命令看）。
+
+    **按键名分段判，不按子串** —— 裸子串 `KEY` 会把 `MONKEY` / `KEYBOARD` 一起滤掉，
+    那是**过度过滤**（会把模型跑的命令弄坏）。分段能抓住 `MY_KEY` / `SSH_KEY` /
+    `AWS_SECRET_KEY` —— 它们才是原来漏掉的那类（原来只用上面那七个子串做子串匹配，
+    `MY_KEY` 里没有 `API_KEY` ⇒ 直接放行）。
+    ⚠️ **已知漏网**：`MYAPIKEY` 这种不靠下划线分词的名字抓不到 —— 这是本判据的天花板。
+    """
+    up = name.upper()
+    if any(p in up for p in _ENV_SENSITIVE_SUBSTR):
+        return True
+    return "KEY" in up.split("_")
+
+
 # ── XML 形式的工具调用 ─────────────────────────────────────────
 # 有些模型不按 OpenAI 的 `tool_calls` 回，而是吐：
 #   <tool_calls><invoke name="write_file"><parameter name="path">x.py</parameter>…
@@ -661,12 +682,21 @@ class OpenAIAgentExecutor(BaseExecutor):
     # ── 工具执行 ──
 
     def _check_permission(self, tool_name: str, args: dict) -> tuple[bool, str]:
-        """Permission 检查。如注入 checker 则调用，否则默认允许。"""
+        """Permission 检查。如注入 checker 则调用，否则默认允许。
+
+        ⚠️ **检查器抛异常 = 拒绝（fail-closed）**。原来是 `except: pass`，然后落到下面的
+        `return True` —— **检查器一死，权限闸门整个失效，而且无声**。
+        上游 `_execute_tool` 本来就处理 `(False, reason)`，所以返回拒绝是安全的。
+        （配套的另一条 fail-open 在 `_dispatch_skills._make_permission_checker`：
+        它自己失败会返回 None，而 None 在这里 = "没注入" = 放行。那条也一起改成拒绝 + 出声。）
+        """
         if self._permission_checker:
             try:
                 return self._permission_checker(tool_name, args, self._agent_level, self.cfg.get("model", ""), self.task_id)
-            except Exception:
-                pass
+            except Exception as e:
+                witness.warn("permission",
+                             f"perm_checker_error:{tool_name}:{type(e).__name__}"[:160])
+                return False, f"权限检查器异常（{type(e).__name__}），按拒绝处理"
         return True, ""
 
     def _execute_tool(self, name: str, args: dict) -> str:
@@ -765,7 +795,7 @@ class OpenAIAgentExecutor(BaseExecutor):
             return "空命令"
         # ponytail: 合并 agent env 到局部环境, 不污染 os.environ
         merged = {**os.environ, **getattr(self, '_agent_env', {})}
-        safe_env = {k:v for k,v in merged.items() if not any(p in k.upper() for p in ("API_KEY","TOKEN","SECRET","PASSWORD","AUTH","CREDENTIAL","CERT"))}
+        safe_env = {k: v for k, v in merged.items() if not _is_sensitive_env(k)}
         try:
             # shell=True: 支持 && | source 等 shell 语法 (shell=False 会把 &&/source 当参数生成垃圾目录)。
             # 安全性靠 _is_dangerous_command 黑名单前置拦截 (rm -rf/curl/python -c/bash -c 等)

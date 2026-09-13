@@ -18,6 +18,39 @@ from singularity.scheduler._observer_tools import OBSERVER_SYSTEM_PROMPT, OBSERV
 
 _log = logging.getLogger("observer")
 
+# ── 人审门（GATE1/2/3）的回复判定 ────────────────────────────────
+# ⚠️ 两个坑都在这张词表上（2026-09-14 修）：
+#   ① **子串倒挂**：原先把批准分支放在前面，而 `"不通过"` **包含子串 `"通过"`**
+#      ⇒ 人在门里回"不通过"，走的是**批准**分支。**打回永远不生效。**
+#      ⇒ 所以判定顺序必须是 **先打回、后批准**（`_is_gate_reply` 里就是这么排的）。
+#   ② **单字词太松**："好"/"行"/"ok" 原来按子串算 ⇒ 聊天里顺口一句
+#      "这方案行不行？" 里的 "行" 就把门放过去了。⇒ 短词必须**整句就是它**。
+_REJECT_WORDS = ("修改", "改", "不对", "重来", "不通过")
+
+_APPROVE_PHRASES = ("通过", "继续", "确认", "同意")   # 多字，出现在句子里就算
+_APPROVE_BARE = ("ok", "yes", "好", "可以", "行", "是")  # 短词，必须整句（允许 ≤4 字的后缀）
+_BARE_MAX_LEN = 4
+
+
+def _is_gate_reply(question: str) -> str | None:
+    """把人审门里的一句话判成 `"rejected"` / `"approved"` / `None`（不是门回复）。
+
+    **先判打回** —— 见上面 ①。
+    """
+    q = question.strip().lower()
+    if not q:
+        return None
+    if any(w in q for w in _REJECT_WORDS):
+        return "rejected"
+    if any(w in q for w in _APPROVE_PHRASES):
+        return "approved"
+    # 短词：去掉标点空白后，整句就是那个词（或只多几个字，如"好的"/"行吧"）。
+    # "这方案行不行" 有 6 个字 ⇒ 不匹配 ⇒ 不会顺手把门放过去。
+    bare = "".join(ch for ch in q if ch not in " \t\r\n。，,.!！?？~、：:")
+    if len(bare) <= _BARE_MAX_LEN and any(bare.startswith(w) for w in _APPROVE_BARE):
+        return "approved"
+    return None
+
 
 def _record_observer_usage(model: str, usage: dict | None) -> None:
     """把观察者对话的用量记进 token 账。
@@ -128,8 +161,8 @@ def _answer_question_inner(question: str, project_id: str = "") -> str:
     if project_id:
         session = _get_definition_session(project_id)
         if session.get("phase") == "gate1_waiting":
-            q = question.strip().lower()
-            if any(w in q for w in ("通过", "继续", "确认", "同意", "ok", "yes", "好", "可以", "行")):
+            reply = _is_gate_reply(question)
+            if reply == "approved":
                 session["phase"] = "done"
                 try:
                     from singularity.scheduler.project import load as load_project, Phase, save as save_project
@@ -140,7 +173,7 @@ def _answer_question_inner(question: str, project_id: str = "") -> str:
                 except Exception:
                     pass
                 return "✅ GATE1 已通过。定义阶段完成，已进入架构规划阶段。请在项目页推进架构设计（多模型委员会出方案）。"
-            elif any(w in q for w in ("修改", "改", "不对", "重来", "不通过")):
+            elif reply == "rejected":
                 session["phase"] = "defining"
                 session["active_role"] = "product-manager"
                 return "已退回定义阶段。请描述需要修改的内容，我从产品经理角色重新开始。"
@@ -151,22 +184,22 @@ def _answer_question_inner(question: str, project_id: str = "") -> str:
             from singularity.scheduler.project import load as load_project, Phase, save as save_project
             proj = load_project(project_id)
             if proj:
-                q = question.strip().lower()
+                reply = _is_gate_reply(question)
                 if proj.phase == Phase.GATE2:
-                    if any(w in q for w in ("通过", "继续", "确认", "同意", "ok", "yes", "好", "可以", "行")):
+                    if reply == "approved":
                         proj.confirm_gate(Phase.GATE2, "approved")
                         save_project(proj)
                         return "✅ GATE2 已通过。进入实现阶段，前端/后端/数据/DevOps工程师将并行开发。"
-                    elif any(w in q for w in ("修改", "改", "不对", "重来", "不通过")):
+                    elif reply == "rejected":
                         proj.confirm_gate(Phase.GATE2, "rejected")
                         save_project(proj)
                         return "已退回架构阶段。请描述需要修改的内容，将重新生成架构方案。"
                 elif proj.phase == Phase.GATE3:
-                    if any(w in q for w in ("通过", "继续", "确认", "同意", "ok", "yes", "好", "可以", "行")):
+                    if reply == "approved":
                         proj.confirm_gate(Phase.GATE3, "approved")
                         save_project(proj)
                         return "✅ GATE3 已通过。进入交付阶段，DevOps工程师将打包归档。"
-                    elif any(w in q for w in ("修改", "改", "不对", "重来", "不通过")):
+                    elif reply == "rejected":
                         proj.confirm_gate(Phase.GATE3, "rejected")
                         save_project(proj)
                         return "已退回实现阶段。请描述需要修复的问题。"

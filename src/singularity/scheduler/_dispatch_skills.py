@@ -173,6 +173,16 @@ def _make_permission_checker() -> callable:
                     return False, why
             return True, ""
         return _check
-    except Exception:
-        return None
+    except Exception as e:
+        # ⚠️ **不能静默返回 None** —— 上游 `openai_agent._check_permission` 见 None 就直接放行
+        # （它的约定是"没注入 checker 就默认允许"），于是**权限模块一坏，闸门整个消失**，
+        # 而且盘上不留任何痕迹。权限是安全闸门：**判不了就不放行**（fail-closed），且必须出声。
+        witness.warn("permission", f"make_checker_failed:{type(e).__name__}:{e}"[:160])
+        # ⚠️ 异常名要先取出来 —— Python 在 except 块结束时会 `del e`，
+        # 闭包后面再引用 `e` 会 NameError（这个坑是本文件的测试当场抓到的）。
+        err = type(e).__name__
+
+        def _deny_all(tool_name, args, agent_level, agent_model, task_id):
+            return False, f"权限模块不可用（{err}），按拒绝处理"
+        return _deny_all
 

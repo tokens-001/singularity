@@ -754,7 +754,10 @@ def _is_local_origin(origin: str) -> bool:
         hostname = urlparse(origin).hostname
         if not hostname:
             return False
-        return hostname in ("localhost", "127.0.0.1", "0.0.0.0", "[::1]")
+        # ⚠️ IPv6 回环写成 `::1`（**不带方括号**）—— `urlparse("http://[::1]:5050").hostname`
+        # 返回的是 `::1`，方括号已经被剥掉了。原来这里写 `"[::1]"` ⇒ 永远匹配不上 ⇒
+        # 绑 `::` 时（flask run / 反代 / 手改 host）整个 UI 的写操作被 403 挡死。
+        return hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1")
     except Exception:
         return False
 
@@ -1336,7 +1339,12 @@ def api_project_files(project_id):
     except Exception as e:
         return jsonify({"files": [], "error": str(e)})
 
-_SENSITIVE_FILES = {".env", ".flaskenv"}
+# ⚠️ 名单要**兜住变体**：原来 `.env` 是**精确匹配 basename** ⇒ `.env.local` / `.env.production`
+# 全放行；`id_rsa` 这类**无后缀**的私钥也不在后缀表里 ⇒ 同样读全文。
+_SENSITIVE_FILES = {".env", ".flaskenv", ".netrc",
+                    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
+_SENSITIVE_PREFIXES = (".env",)  # .env.local / .env.production 也是
+# ponytail: 只列常见的；要更全就换成"名字像不像凭证"的判据，但那会误伤 legit 文件
 _SENSITIVE_SUFFIXES = (".key", ".pem", ".p12", ".pfx", ".crt")
 
 @app.route("/api/projects/<project_id>/files/<path:filepath>")
@@ -1354,7 +1362,8 @@ def api_project_file_content(project_id, filepath):
             return jsonify({"content": "", "error": "file not found"}), 404
         # 敏感文件黑名单（防泄露 API key / 证书）
         name = os.path.basename(fpath)
-        if name in _SENSITIVE_FILES or name.endswith(_SENSITIVE_SUFFIXES):
+        if (name in _SENSITIVE_FILES or name.startswith(_SENSITIVE_PREFIXES)
+                or name.endswith(_SENSITIVE_SUFFIXES)):
             return jsonify({"content": "", "error": "forbidden"}), 403
         if ".git" in os.path.relpath(fpath, root).split(os.sep):
             return jsonify({"content": "", "error": "forbidden"}), 403

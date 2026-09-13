@@ -41,8 +41,11 @@ def memory_query(query_text="", files_str="", beam_width=3, max_hops=3, max_dept
 
 def memory_chain(task_id):
     from . import memory as mem_mod
-    chain = mem_mod.get_task_chain(task_id)
-    return ({"error": "无记忆链"}, 404) if chain is None else (chain, 200)
+    # ⚠️ 原来调的是 `get_task_chain` —— 那个名字**全仓只有这一处调用、没有定义**，
+    # 所以这个端点**每次必 500**（AttributeError）。真名是 `find_causal_chain`
+    # （`_memory_graph.py` 的 `__all__` 里有，`memory` 门面星号导出；CLI 用的就是它）。
+    chain = mem_mod.find_causal_chain(task_id)
+    return ({"error": "无记忆链"}, 404) if not chain else (chain, 200)
 
 
 def memory_rebuild():
