@@ -20,8 +20,12 @@ const PHASES: [string,string][] = [
 export default function SkillsTab() {
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [agents, setAgents] = useState<AgentItem[]>([])
-  const [matrix, setMatrix] = useState<Record<string,string[]>>({})
-  const [phaseMatrix, setPhaseMatrix] = useState<Record<string,string[]>>({})
+  // ⚠️ 值的类型是 `string[] | null`，**`null` = "读不到，不知道现在绑了什么"**。
+  // 原来失败时落 `[]`，于是"读不到"和"一个都没绑"在界面上长得一模一样 ——
+  // 用户这时勾任意一个，`updateAgentSkills` 会把后端**原有绑定整体覆盖成签名的这一项**
+  // （2026-09-14，外派④扫前端抓出，我核过）。**不知道就不许写**。
+  const [matrix, setMatrix] = useState<Record<string,string[] | null>>({})
+  const [phaseMatrix, setPhaseMatrix] = useState<Record<string,string[] | null>>({})
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ name: '', description: '', type: 'prompt', content: '' })
   const run = useRun()
@@ -34,39 +38,46 @@ export default function SkillsTab() {
       (lst as AgentItem[]).forEach(ag => { if (!disabledSet.has(ag.model)) flat.push(ag) })
     }
     setAgents(flat)
-    const mx: Record<string,string[]> = {}
+    const mx: Record<string,string[] | null> = {}
     // 并发拉，别在循环里串行 await（N 个 agent 就是 N 次往返）
     await Promise.all(flat.map(async ag => {
-      try { mx[ag.model] = (await api.agentSkills(ag.model)).skills||[] } catch { mx[ag.model] = [] }
+      try { mx[ag.model] = (await api.agentSkills(ag.model)).skills||[] }
+      catch { mx[ag.model] = null }        // **不知道**，不是"没有"
     }))
     setMatrix({...mx})
-    // 阶段级绑定（跟岗位走）。同样并发拉，失败时留空而不是让整页挂掉。
-    const pm: Record<string,string[]> = {}
+    // 阶段级绑定（跟岗位走）。同样并发拉；读不到就记 null，别落空数组。
+    const pm: Record<string,string[] | null> = {}
     await Promise.all(PHASES.map(async ([k]) => {
-      try { pm[k] = (await api.phaseSkills(k)).skills||[] } catch { pm[k] = [] }
+      try { pm[k] = (await api.phaseSkills(k)).skills||[] }
+      catch { pm[k] = null }
     }))
     setPhaseMatrix({...pm})
-    if (flat.length === 1 && s.length > 0 && (mx[flat[0].model]||[]).length === 0) {
-      const allNames = s.map(sk=>sk.name)
-      try { await api.updateAgentSkills(flat[0].model, allNames); mx[flat[0].model] = allNames; setMatrix({...mx}) } catch {}
-    }
+    // 🔴 **删掉了"加载时自动写入全部技能"那段**（原来在 `flat.length === 1 && 空绑定` 时
+    // 直接 PUT 全部技能）。它是**加载路径上的写副作用**：用户把自己清空的绑定
+    // 一刷新就全回来了，而且它紧跟在"失败落空数组"之后 ——
+    // 单 agent + 一次网络抖动 ⇒ **自动把全部技能写上去**。
+    // 那个默认真要给，也该在后端的种子/默认值里给，不该在一次 GET 里偷偷写入。
   }
   useEffect(() => { fetch() }, [])
   const modelLabel = (id: string) => modelDisplay(id) || id
 
   const toggleSkill = async (model: string, skill: string) => {
-    const cur = matrix[model]||[]
+    const cur = matrix[model]
+    // **不知道就不写** —— 拿 `[]` 当底去 PUT = 把后端原有绑定覆盖成这一项
+    if (cur == null) return
     const next = cur.includes(skill) ? cur.filter(s=>s!==skill) : [...cur, skill]
     setMatrix(prev=>({...prev,[model]:next}))
     try { await api.updateAgentSkills(model, next) } catch { setMatrix(prev=>({...prev,[model]:cur})) }
   }
   const assignAll = async (model: string) => {
+    if (matrix[model] == null) return       // 同上：不知道当前绑了什么，不许全量覆盖
     const allSkillNames = skills.map(s=>s.name)
     setMatrix(prev=>({...prev,[model]:allSkillNames}))
     try { await api.updateAgentSkills(model, allSkillNames) } catch { fetch() }
   }
   const togglePhaseSkill = async (phase: string, skill: string) => {
-    const cur = phaseMatrix[phase]||[]
+    const cur = phaseMatrix[phase]
+    if (cur == null) return                 // 同上
     const next = cur.includes(skill) ? cur.filter(s=>s!==skill) : [...cur, skill]
     setPhaseMatrix(prev=>({...prev,[phase]:next}))
     try { await api.updatePhaseSkills(phase, next) } catch { setPhaseMatrix(prev=>({...prev,[phase]:cur})) }
@@ -103,16 +114,24 @@ export default function SkillsTab() {
             阶段默认（跟岗位走）
           </div>
           {PHASES.map(([key, label]) => {
-            const bound = phaseMatrix[key]||[]
+            const bound = phaseMatrix[key]
+            const unknown = bound == null      // 读不到 ⇒ 不许装成"一个都没绑"
             return (
               <div key={key} style={{ marginBottom: 8, padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius)' }}>
                 <div className="flex-center" style={{ marginBottom: 6 }}>
                   <span className="fw-600 fs-11 flex-1">{label}</span>
-                  <span className="fs-10 text-secondary">{bound.length}/{skills.length} 技能</span>
+                  <span className="fs-10 text-secondary">
+                    {unknown ? '读不到绑定' : `${bound!.length}/${skills.length} 技能`}
+                  </span>
                 </div>
-                <div className="flex-center gap-6 flex-wrap">
+                {unknown && (
+                  <div className="fs-10" style={{ marginBottom: 6, color: 'var(--warning, #d48806)' }}>
+                    ⚠ 读不到这个阶段的绑定 —— **不让改**（拿空表去写会把真实绑定覆盖掉），刷新重试
+                  </div>
+                )}
+                <div className="flex-center gap-6 flex-wrap" style={{ opacity: unknown ? 0.45 : 1 }}>
                   {skills.map(s => (
-                    <Tag.CheckableTag key={s.name} checked={bound.includes(s.name)}
+                    <Tag.CheckableTag key={s.name} checked={!unknown && bound!.includes(s.name)}
                       onChange={() => togglePhaseSkill(key, s.name)}
                       style={{ fontSize: 10, padding: '1px 8px', margin: 0 }}>
                       {SKILL_SHORT[s.name] || s.name}
@@ -126,10 +145,11 @@ export default function SkillsTab() {
             按模型（例外，覆盖阶段默认）
           </div>
           {agents.map(a => {
-            const bound = matrix[a.model]||[]
+            const bound = matrix[a.model]
+            const unknown = bound == null     // 同上：读不到 ≠ 没绑
             // 阶段默认优先：配了非空名单的阶段，这份模型绑定在那几个阶段**不生效**。
             // 不标出来就是新的静默失效 —— 界面看着绑了，跑起来用的是阶段那份。
-            const shadowed = PHASES.filter(([k]) => (phaseMatrix[k]||[]).length > 0)
+            const shadowed = PHASES.filter(([k]) => (phaseMatrix[k]?.length ?? 0) > 0)
             const shadowText = shadowed.length === 0 ? ''
               : shadowed.length === PHASES.length ? '已全部被阶段默认覆盖 —— 这份只在阶段留空时才用'
               : `在「${shadowed.map(([,l])=>l).join('、')}」被阶段默认覆盖`
@@ -137,17 +157,25 @@ export default function SkillsTab() {
               <div key={a.model} style={{ marginBottom: 10, padding: '10px 12px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius)' }}>
                 <div className="flex-center" style={{ marginBottom: 8 }}>
                   <span className="fw-600 fs-11 flex-1">{modelLabel(a.model)}</span>
-                  <span className="fs-10 text-secondary">{bound.length}/{skills.length} 技能</span>
-                  <button onClick={() => assignAll(a.model)} className="btn-sm" style={{ marginLeft: 8 }}>全选</button>
+                  <span className="fs-10 text-secondary">
+                    {unknown ? '读不到绑定' : `${bound!.length}/${skills.length} 技能`}
+                  </span>
+                  <button onClick={() => assignAll(a.model)} className="btn-sm" style={{ marginLeft: 8 }}
+                    disabled={unknown} title={unknown ? '读不到当前绑定，不能全量覆盖' : undefined}>全选</button>
                 </div>
                 {shadowText && (
                   <div className="fs-10" style={{ marginBottom: 6, color: 'var(--warning, #d48806)' }}>
                     ⚠ {shadowText}
                   </div>
                 )}
-                <div className="flex-center gap-6 flex-wrap">
+                {unknown && (
+                  <div className="fs-10" style={{ marginBottom: 6, color: 'var(--warning, #d48806)' }}>
+                    ⚠ 读不到这个模型的绑定 —— **不让改**（拿空表去写会把真实绑定覆盖掉），刷新重试
+                  </div>
+                )}
+                <div className="flex-center gap-6 flex-wrap" style={{ opacity: unknown ? 0.45 : 1 }}>
                   {skills.map(s => {
-                    const has = bound.includes(s.name)
+                    const has = !unknown && bound!.includes(s.name)
                     return (
                       <Tag.CheckableTag key={s.name} checked={has} onChange={() => toggleSkill(a.model, s.name)}
                         style={{ fontSize: 10, padding: '1px 8px', margin: 0 }}>
