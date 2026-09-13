@@ -42,15 +42,26 @@ export function useModal() {
  * 写进配置，同时回 warning「补不出 API 地址和 key → 这条 agent 是空壳，不会被调度」。
  * 只接 catch 的话这句就丢了，用户看到的是"点了没反应"，然后怎么查都查不出原因。
  */
+/**
+ * 跑一个会改状态的请求，统一报成功/失败。**把响应带回来。**
+ *
+ * ⚠️ 原来返回 `Promise<boolean>` —— **响应被丢掉了**，于是 `const res = await run(...)`
+ * 拿到的是 `true`，`res?.suggested_flow` **永远是 undefined**
+ * ⇒ 后端在 200 里回的"看着像小活，要不要走轻量流程"（§47 的人审建议）**是死功能**
+ * （2026-09-14，外派④扫前端时对比同仓两种写法抓出：`Chat.tsx` 直接 `await` 就是对的）。
+ *
+ * 返回值约定：**成功 → 响应本身**（没有响应体时退回 `true`）；**失败 → `false`**。
+ * ⇒ 既有的 `if (!(await run(...)))` 判断**一个字都不用改**（成功侧恒为真值）。
+ */
 export function useRun() {
   const toast = useToast()
-  return async (fn: () => Promise<unknown>, okMsg?: string): Promise<boolean> => {
+  return async (fn: () => Promise<unknown>, okMsg?: string): Promise<unknown> => {
     try {
       const r = await fn()
       const warn = (r as { warning?: string } | null | undefined)?.warning
       if (warn) toast(warn, 'info')            // 有 warning 就不报成功，免得两句话互相打架
       else if (okMsg) toast(okMsg, 'success')
-      return true
+      return r ?? true                         // ← 关键：把响应带出去（`?? true` 保住"成功即真值"）
     }
     catch (e) { toast(e instanceof Error ? e.message : String(e), 'error'); return false }
   }
