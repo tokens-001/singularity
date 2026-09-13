@@ -23,6 +23,10 @@ function _setConnected(v: boolean) {
   _statusSubs.forEach((f) => f(v))
 }
 
+/** CLOSED 之后的退避重连间隔。 */
+const _RETRY_MS = 5000
+let _retryTimer: ReturnType<typeof setTimeout> | undefined
+
 function _ensureEs(): EventSource {
   // CLOSED 的 EventSource 不会自愈：拿到非 2xx（比如撞上后端 20 连接上限的 503）
   // 或服务重启后，浏览器就放弃重连了。而这里原来只判 `if (_es) return _es` ——
@@ -40,7 +44,17 @@ function _ensureEs(): EventSource {
   }
   _es.onerror = () => {
     _setConnected(false)
-    // EventSource auto-reconnects
+    // ⚠️ `EventSource` **只在可重试的错误上**自动重连（网络抖动那种）；
+    // 拿到非 2xx（例如撞上后端 20 连接上限的 503）或服务重启之后，它会进 CLOSED
+    // **并放弃**。而 `_ensureEs()` 只在 `useSSE` 挂载时被调一次
+    // ⇒ **页面开着的时候断了就永远不回来**，`_connected` 恒 false、
+    // 静默退化成轮询（Chat 页连轮询都没有 ⇒ 卡片全冻结且无提示）。
+    // 2026-09-14，外派④扫前端抓出。补一个退避重连；重建由 `_ensureEs` 负责
+    // （它已经会 close 掉 CLOSED 的那条、另起一条）。
+    if (_es && _es.readyState === EventSource.CLOSED) {
+      if (_retryTimer) clearTimeout(_retryTimer)
+      _retryTimer = setTimeout(() => { _retryTimer = undefined; _ensureEs() }, _RETRY_MS)
+    }
   }
   return _es
 }

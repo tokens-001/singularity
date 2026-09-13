@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { Bubble, Sender } from '@ant-design/x'
 import { api } from '../lib/api'
-import { useSSE } from '../lib/useSSE'
+import { useSSE, useSSEConnected } from '../lib/useSSE'
 import { useAppStore, type ChatMsg } from '../stores/app'
 import { useToast, errText } from '../lib/toast'
 import { Loader2, CheckCircle2, AlertCircle, FolderOpen } from 'lucide-react'
@@ -118,6 +118,20 @@ export default function Chat() {
   const retryFailed = async (tid: string) => { try { await api.retryTask(tid); fetchTasks() } catch (e) { toast(errText(e, '重试失败'), 'error') } }
   // 带上 activePid：项目产出的文件在成品仓库里，不带项目 id 会拿奇点自己的根去找 → 必 404
   const revealFile = (f: string) => { api.revealFile(f, activePid).catch((e: any) => toast(errText(e, '定位失败'), 'error')) }
+
+  // ⚠️ **SSE 断了要有兜底，而且要看得见**（2026-09-14，外派④扫前端抓出）：
+  // Chat 页的任务卡片**全靠 SSE 事件**驱动（`fetchTasks` 只在挂载/切换时跑），
+  // 所以连接一死，卡片就**冻在最后一帧**、界面上**一点提示都没有** ——
+  // 用户只会以为"任务卡住了"，而实际上任务早跑完了。
+  // `Tasks.tsx` / `AppLayout.tsx` 早就有 `useSSEConnected` 开的轮询兜底，**这里漏了**。
+  const sseAlive = useSSEConnected()
+  const fetchTasksRef = useRef(fetchTasks)
+  fetchTasksRef.current = fetchTasks          // 用 ref 稳住：`fetchTasks` 每次渲染都是新函数
+  useEffect(() => {
+    if (sseAlive) return                      // SSE 活着 → 事件驱动，不轮询
+    const t = setInterval(() => { fetchTasksRef.current() }, 10000)
+    return () => clearInterval(t)
+  }, [sseAlive])
 
   useSSE((e: any) => {
     if (e.kind === 'task') {
@@ -238,6 +252,11 @@ export default function Chat() {
 
             {tasks.length > 0 && (
               <div className="chat-msg-row" style={{ marginBottom: 16 }}>
+                {!sseAlive && (
+                  <div className="fs-10" style={{ color: 'var(--warning, #d48806)', marginBottom: 4 }}>
+                    ⚠ 实时连接断开 —— 下面这份是**轮询拿的**（10 秒一次），可能比实际状态慢一拍；正在自动重连
+                  </div>
+                )}
                 <div className="flex-center gap-4" style={{ marginBottom: 6 }}>
                   {/* ⚠️ 判据原来是 `active > 0` —— **全失败时 active 也是 0**，于是亮一个绿勾：
                       绿✓ + 绿进度条 + 红字「2 失败」同框（2026-09-14，外派④抓出）。
