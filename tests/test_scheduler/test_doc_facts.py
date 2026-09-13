@@ -104,3 +104,44 @@ def test_run_queue_默认并发仍是_1():
         "（`orchestrator._get_merge_executor`，thread_name_prefix=\"integrate\"）——\n"
         "这两个数被混过一次，还进了 §46 / §67 的算术。真要改，请把那些推理一起核。"
     )
+
+
+# ── 2026-09-14 补：`docs/项目速查.md` 那张 API 表 / 配置表里的键名 ──
+# 起因：外派 F（`docs/文档核对-02-20260914.md`）核出 19 条「部分过期」，
+# 下面这四条是**按文档做会踩坑**的那种（照它写就静默不生效/静默 404）。
+
+def test_删除任务走的是_POST_子路径_不是_DELETE_方法():
+    """速查的 API 表原来写 `DELETE /api/tasks/<id>` —— **那条 route 上没有 DELETE**
+    （`/api/tasks/<task_id>` 只有 GET/PUT）。真实入口是 `POST /api/tasks/<id>/delete`。
+    照文档写 `DELETE` 的人拿到的是**落到 SPA 兜底**的东西，不像"路由写错了"。
+    """
+    src = (_REPO / "src" / "singularity" / "web" / "app.py").read_text(encoding="utf-8")
+    assert '@app.route("/api/tasks/<task_id>/delete", methods=["POST"])' in src, (
+        "删除任务的入口变了 —— 顺带看一眼 docs/项目速查.md 的 API 表有没有跟着改。")
+    import re
+    m = re.search(r'@app\.route\("/api/tasks/<task_id>"([^)]*)\)', src)
+    assert m and "DELETE" not in m.group(1), \
+        "`/api/tasks/<id>` 现在带 DELETE 了 —— 速查表要改回来（它写的是 GET/PUT）"
+
+
+def test_两个配置文件的键名没变():
+    """速查的配置表原来写 `roles.toml（name/persona/prompt）` 和
+    `models.toml（provider/model_id/api_base）` —— **四个键名里三个是错的**：
+    roles 的第三键叫 `system_prompt`；models 的键是 `id/provider/display/recommended_for`，
+    既没有 `model_id` 也没有 `api_base`（接入信息根本不在这个文件里）。
+    ⇒ 照文档写配置的人会**写进去一个没人读的键**，而且不报错。
+    """
+    import tomllib
+    sched = _REPO / "src" / "singularity" / "scheduler"
+
+    roles = tomllib.loads((sched / "roles.toml").read_text(encoding="utf-8"))
+    first = next(iter(roles.values()))
+    assert "system_prompt" in first, f"roles.toml 的提示词键名变了：{sorted(first)}"
+    assert "prompt" not in first, "roles.toml 又有 `prompt` 键了？先确认谁是现役的"
+
+    models = tomllib.loads((sched / "models.toml").read_text(encoding="utf-8"))["models"]
+    keys = set(models[0])
+    assert {"id", "provider", "display", "recommended_for"} <= keys, \
+        f"models.toml 的键变了：{sorted(keys)}"
+    assert not ({"model_id", "api_base"} & keys), \
+        "models.toml 里出现 model_id/api_base 了 —— 速查表要跟着改（它写的是这四个键）"
