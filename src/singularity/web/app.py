@@ -1413,24 +1413,36 @@ def api_project_traceability(project_id):
     if tp.exists():
         try:
             traceability = _json.loads(tp.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as e:
+            # ⚠️ 同族：**"读坏了" ≠ "没有追溯表"**（part-01 也点过这条）。
+            witness.warn("web", f"traceability_unreadable:{project_id}:{type(e).__name__}"[:160],
+                         key="traceability_unreadable")
+            traceability = [{"error": f"追溯表读不出来（{type(e).__name__}: {e}）"}]
     # 读测试方案
     testp = _projects_dir() / f"{project_id}.test-plan.md"
     test_plan = None
     if testp.exists():
         try:
             test_plan = testp.read_text(encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as e:
+            # ⚠️ **"读坏了" ≠ "没有"**（2026-09-13 外派分类抓到）：留 None 的话，
+            # 人审页上跟"这个项目压根没有测试方案"长得一模一样。
+            witness.warn("web", f"test_plan_unreadable:{project_id}:{type(e).__name__}"[:160],
+                         key="test_plan_unreadable")
+            test_plan = f"[读不出来: {type(e).__name__}: {e}]"
     # 读 QA 报告 —— GATE3 判断"这份交付物该不该过"的主要依据
     qap = _projects_dir() / f"{project_id}.qa_report.json"
     qa_report = None
     if qap.exists():
         try:
             qa_report = _json.loads(qap.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as e:
+            # ⚠️ **这份是 GATE3 判断"该不该过"的主要依据**（2026-09-13 外派分类抓到）。
+            # 读坏了留 None ⇒ 人看到的跟"没跑过 QA"一样 ⇒ 可能就这么放行了。
+            witness.warn("web", f"qa_report_unreadable:{project_id}:{type(e).__name__}"[:160],
+                         key="qa_report_unreadable")
+            qa_report = {"error": f"报告读不出来（{type(e).__name__}: {e}）—— "
+                                  "**不代表没跑过 QA**，先修好文件再看结论"}
     # 需求符合性
     req_check = check_requirement_conformance(project_id)
     return jsonify({
@@ -1807,8 +1819,15 @@ def _write_role_override(key: str, vals: dict, replace: bool = False) -> None:
     if path.exists():
         try:
             overrides = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            overrides = {}
+        except Exception as e:
+            # ⚠️ **读坏了绝不当"空"接着写回去**（2026-09-13 外派分类抓到）：
+            # 下面那句 `atomic_write_json(path, overrides)` 会把**整个文件**写成
+            # 只剩这一次改的这一个 key —— 其他所有角色覆盖**当场全丢**。
+            # 一次解析失败 = 一次静默的数据丢失。⇒ 读不动就**拒绝写**，并说出来。
+            witness.warn("web", f"role_override_unreadable:{type(e).__name__}:{e}"[:160],
+                         key="role_override_unreadable")
+            raise RuntimeError(f"{path} 读不动（{e}）—— 拒绝覆盖写："
+                               "那会把已有角色覆盖全丢掉。先修好它再改。") from e
     clean = {k: v for k, v in vals.items() if v is not None}
     overrides[key] = clean if replace else {**overrides.get(key, {}), **clean}
     atomic_write_json(path, overrides)
