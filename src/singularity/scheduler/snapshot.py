@@ -124,6 +124,18 @@ def _rollback_git(snap: Snapshot, root: Path) -> bool:
         ["git", "status", "--porcelain"],
         capture_output=True, text=True, cwd=str(root),
     ).stdout.strip()
+    if status and not snap.ref:
+        # 🔴 **没有快照 ref 就不许销毁工作区**（2026-09-14，外派逆向审抓到、我核过）。
+        # 本函数的语义是"用快照 ref **重建**工作区状态"；ref 是空的就重建不出任何东西，
+        # 照旧往下走 = `stash` + `checkout -- .` + `clean -fd` **把工作区销毁、然后什么都不恢复**，
+        # 而且**返回 True（成功）** —— 调用方以为回滚做好了，实际只是把东西弄没了。
+        # `_take_git` 保证 ref 非空（兜底 HEAD）⇒ 空 ref 只出现在异常路径上。
+        # ⇒ 宁可这次回滚不做：**不动，比动了回不来好。**
+        from . import witness
+        witness.warn("snapshot",
+                     f"rollback_skipped:no_snapshot_ref:{snap.id} —— 没有快照 ref，"
+                     f"拒绝销毁工作区（销毁了也恢复不回来）"[:200])
+        return False
     if status:
         r = subprocess.run(
             ["git", "stash", "push", "--include-untracked", "-m", f"rollback-protect:{snap.id}"],
