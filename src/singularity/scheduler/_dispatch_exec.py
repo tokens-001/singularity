@@ -69,6 +69,50 @@ def _committee_allowed(task: str, chain: list, route_role: str,
     )
 
 
+def _solo_tokens_budget() -> int:
+    """A 臂的 token 预算（P1 三臂实验用）。**0 = 关，默认关**。
+
+    做成环境变量是有意的 —— 跟 `QIDIAN_BATCH_TOOLS` 同一条路子：A/B 就是翻这个变量
+    跑两次，不用改代码。默认关时行为跟改动前**逐字一致**（照旧走委员会那条）。
+
+    口径是**按 token 等**（P1 方案摆出的三个口径之一，用户 2026-09-13 拍板）：
+    先跑 B 臂、从账上读出它花了多少 token，再把同一个数填进来跑 A 臂
+    ⇒ 预算**由调用方从 B 臂实测值填**，不在这里猜、也不按轮次折算。
+    """
+    raw = os.environ.get("QIDIAN_SOLO_TOKENS", "")
+    if not raw:
+        return 0
+    try:
+        n = int(raw)
+    except ValueError:
+        # 静默当 0 = 悄悄跑成委员会那条，实验白做还不知道
+        witness.warn("dispatcher", f"solo_tokens_not_a_number:{raw[:16]}"[:80])
+        return 0
+    if n < 0:
+        return 0
+    if n == 0:
+        witness.warn("dispatcher", "solo_tokens_is_zero")   # 设了 0 = 一轮都不跑，多半是填错
+    return n
+
+
+# A 臂的轮数硬上限。按 token 停那条判据有个洞：**拿不到 usage 时 token 恒报 0**
+# ⇒ `spent >= budget` 永远不成立 ⇒ 死循环烧钱。轮数是唯一兜得住的。
+_SOLO_MAX_ROUNDS = 8
+
+
+def _solo_revise_prompt(task: str, draft: str) -> str:
+    """A 臂第 2 轮起的提示词：把**自己上一轮的稿**喂回去，让它自查改一版。
+
+    ⚠️ 刻意**不**说"你是评审"、也不给视角 —— "同一个模型换个视角"那套已经证伪过
+    （`QIDIAN_COMMITTEE_PERSPECTIVE`：有视角 31 vs 无视角 32，略输 = 伪碰撞）。
+    A 臂问的是"**同一个模型多改几轮**"，不是"同一个模型装成两个人"。
+    """
+    return (f"{task}\n\n---\n[你上一轮的方案]\n{draft}\n\n"
+            "---\n[要求] 对上面这份方案做一次自查与修订：找出其中的漏洞、"
+            "没覆盖的边界情况、以及能更简单的写法，然后输出**改好的完整方案**"
+            "（是整份替换，不是修改说明）。")
+
+
 @timed(name="dispatcher")
 def dispatch(
     task: str,
@@ -124,6 +168,14 @@ def dispatch(
     #
     # 架构阶段自己不受影响：它走 `_safe_dispatch(...)`，**不带 route_role**（默认 ""）。
     # 用户手打的独立架构任务同理 —— 没有角色标，关键词判据照旧生效。
+    # ── A 臂（P1 三臂实验）: 单个模型 + 等预算多轮自修订 ──
+    # 闸门跟委员会**同一条**（`_committee_allowed`）是有意的：实验要的是"同一个任务上
+    # 只换这一段"，触发条件必须逐字相同 —— 否则两臂比的就不是同一个东西了。
+    _solo_budget = _solo_tokens_budget()
+    if _solo_budget and _committee_allowed(task, chain, route_role, allow_committee):
+        return _dispatch_solo(task, level, task_id, chain, _solo_budget,
+                              feedback, baseline_ref, cwd)
+
     if _committee_allowed(task, chain, route_role, allow_committee):
         return _dispatch_committee(task, level, task_id, agents, chain, feedback,
                                    baseline_ref, cwd, project_id=project_id)
@@ -474,6 +526,58 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
         return DispatchResult(level=level, agent_cfg=chain[0],
                               executor_result=ExecutorResult(success=True, raw_output=raw),
                               attempts=len(outputs))
+
+
+def _dispatch_solo(task: str, level: str, task_id: str, chain: list[dict],
+                   budget_tokens: int, feedback: str = "",
+                   baseline_ref: str = "", cwd: str = "") -> DispatchResult:
+    """A 臂：**单个**模型 + 等预算多轮自修订（P1 三臂实验）。
+
+    对照的是 B 臂 `_dispatch_committee`（两家各出初稿 → 融合）。两臂跑同一个任务、
+    同一份需求，**只换这一段**。
+
+    跑法：先出一轮初稿，然后把自己的稿子喂回去让它改一版，累加 token 到
+    `budget_tokens` 为止。预算由调用方从 **B 臂实测的总量**填进来（见 `_solo_tokens_budget`）。
+
+    为什么用 `chain[0]` 而不是写死模型名：链首就是"这一阶段的首选模型"
+    （`phase_models.selection()` 排的头，之后还可能被 strengths 重排）——
+    写死的话，用户换阵容时 A 臂不跟着走，实验比的就成了另一个东西。
+    """
+    cfg = _ensure_agent_type(chain[0])
+    model = cfg.get("model", "?")
+    base = task if not feedback else f"{task}\n\n---\n[上一轮校验反馈]\n{feedback}"
+
+    spent = 0
+    elapsed = 0.0
+    usage: list[dict] = []
+    draft = ""
+    for rnd in range(1, _SOLO_MAX_ROUNDS + 1):
+        prompt = base if rnd == 1 else _solo_revise_prompt(base, draft)
+        got = _run_no_tools(cfg, prompt, f"{task_id}_solo{rnd}", level,
+                            baseline_ref, cwd)
+        if not got:
+            # 单轮失败：手里已经有稿就拿它收尾，别把整条阶段带崩（跟委员会同一条口径）
+            witness.warn("dispatcher", f"solo_revise_fail:{task_id}:round{rnd}"[:80])
+            break
+        raw, tk, el = got
+        spent += int(tk or 0)
+        elapsed += float(el or 0.0)
+        usage.append({"model": model, "tokens": int(tk or 0), "elapsed": float(el or 0.0)})
+        draft = raw
+        if spent >= budget_tokens:
+            break
+
+    if not draft:
+        raise RuntimeError(f"A 臂（{model}）无产出")
+
+    from singularity.scheduler.executors.base import ExecutorResult
+    er = ExecutorResult(success=True, raw_output=draft,
+                        token_count=spent, elapsed=elapsed)
+    # **逐轮**记，而且按真实模型名 —— `workflow._record_phase_usage` 读的就是这个属性，
+    # 记成 `solo(a,b)` 这种合成名的话计价表查不到、整段算不出钱（同委员会那个坑）。
+    er.member_usage = usage
+    return DispatchResult(level=level, agent_cfg=cfg, executor_result=er,
+                          attempts=len(usage))
 
 
 def _build_synthesis_prompt(task: str, outputs: list[tuple]) -> str:
