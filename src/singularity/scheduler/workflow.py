@@ -430,6 +430,73 @@ def run_test_fix_loop(project: ProjectState, agents: dict) -> str:
     return "\n".join(msgs) + "\n→ GATE3 等待人工审核"
 
 
+_QA_VERDICT_MISSING = "未产出"
+
+
+def _qa_verdict_from_raw(qa_raw: str) -> tuple[dict, str, str]:
+    """从 QA 的**原始输出**里取出 `(qa_data, verdict, reason)`。
+
+    ⚠️ **这条不变量是本函数存在的全部理由**：
+    **"QA 没产出结论" 和 "QA 说没问题" 必须分得开，前者绝不能变 `"go"`。**
+
+    原来那两行是这么写的（在调用点内联）：
+
+        qa_data = json.loads(qa_raw) if qa_raw.strip().startswith("{") else {}
+        verdict = qa_data.get("verdict", "go" if not issues else "no_go")
+
+    QA 吐出非 JSON（模型把输出写成了工具调用）时 `qa_data` 是 `{}`、`issues` 也是 `[]`
+    ⇒ **默认值正好落到 `"go"`** ⇒ 空结论被当成放行。
+
+    2026-09-13 真机实测（项目 `1789300044340`）：`qa_report.json` =
+    `{total_checks: 0, passed: 0, failed: 0, verdict: "go"}` —— **一条检查没跑、结论"放行"**；
+    同轮 `qa-report.md` 里存的是**一段没解析的 `<tool_call>` 原文**
+    （模型想跑 pytest，输出成了工具调用）。而 GATE3 的准入标记照样写了"验收跑过"。
+
+    抽成纯函数是为了能单测（同 `_committee_allowed` 那条理由）——
+    这个不变量只能靠**喂各种畸形输出**来验，走完整路径太重。
+
+    ⚠️ **不改成硬拦**：GATE3 本来就是人审门，`_gate3_admission` 立的规矩是
+    "把缺证据摆到台面上，比卡死项目有用"。所以这里给**三态**
+    （`go` / `no_go` / `未产出`），由调用点负责让它出声、进 issues。
+    """
+    try:
+        qa_data = json.loads(qa_raw) if str(qa_raw).strip().startswith("{") else {}
+    except (ValueError, TypeError):
+        qa_data = {}
+    if not isinstance(qa_data, dict):
+        qa_data = {}
+
+    verdict = str(qa_data.get("verdict") or "").strip()
+    if verdict:
+        return qa_data, verdict, qa_data.get("summary", qa_data.get("verdict_reason", ""))
+
+    # 没给 verdict。**分两种，别混**：
+    #   · 报了 issues ⇒ 至少知道"有问题" ⇒ 按 fail-closed 判不通过（这是原来就有的分支，保留）
+    #   · 一条 issues 都没有 ⇒ **什么都不知道** ⇒ 这才是那个漏洞，必须叫"未产出"
+    if qa_data.get("issues"):
+        return qa_data, "no_go", "QA 没给 verdict，但报了问题 ⇒ 按不通过处理"
+    return qa_data, _QA_VERDICT_MISSING, "QA 没有产出可解析的结论（输出不是 JSON / 缺 verdict 字段）"
+
+
+def _flag_missing_qa_verdict(project: ProjectState) -> None:
+    """QA 没产出结论时的**两件必做事**：出声 + 进 issues。
+
+    单独抽出来是为了能被测到 —— 只测 `_qa_verdict_from_raw` 的话，
+    验的是"**判据对**"，验不到"**判据为真时真的有人记**"（这两件事分开，
+    2026-09-13 那天被咬过三次，见 `docs/防御模式.md` §65）。
+
+    - **出声**：进 `alerts.jsonl`（带 key，能被 `alert_summary` 聚合）
+    - **进 issues**：GATE3 的人审页读的就是 `project.issues`
+    """
+    from singularity.scheduler import witness
+    witness.warn("workflow", f"qa_verdict_missing:{project.id}"[:120],
+                 key="qa_verdict_missing")
+    project.issues.append({
+        "type": "qa_verdict_missing",
+        "detail": "验收里 **QA 那一维没有产出结论** —— 本页的『通过』不覆盖 QA 维度",
+    })
+
+
 def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     """Step 5: QA工程师 + 安全审计师并行出验收报告。
 
@@ -550,11 +617,12 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     try:
         from singularity.scheduler.validator import build_qa_report
         qa_raw = disp_result.executor_result.raw_output if disp_result and disp_result.executor_result else "{}"
-        qa_data = json.loads(qa_raw) if qa_raw.strip().startswith("{") else {}
+        qa_data, verdict, reason = _qa_verdict_from_raw(qa_raw)
         issues = qa_data.get("issues", [])
         passed = qa_data.get("passed", [])
-        verdict = qa_data.get("verdict", "go" if not issues else "no_go")
-        reason = qa_data.get("summary", qa_data.get("verdict_reason", ""))
+        if verdict == _QA_VERDICT_MISSING:
+            # 必须出声、必须进 issues —— 否则"QA 没产出"在人审页上跟"QA 说没问题"长得一样
+            _flag_missing_qa_verdict(project)
         qa_report = build_qa_report(passed, issues, verdict, reason)
         _save_phase_output(project.id, "qa_report.json",
                           json.dumps(qa_report, ensure_ascii=False, indent=2))

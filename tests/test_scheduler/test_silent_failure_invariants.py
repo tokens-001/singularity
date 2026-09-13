@@ -71,6 +71,69 @@ class TestGate3LeavesEvidence:
         assert "verification_skipped" in kinds
 
 
+class TestQaVerdictIsNotFailOpen:
+    """②·五 「QA 没产出结论」不许等于「QA 说没问题」。
+
+    2026-09-13 真机（项目 `1789300044340`）：`qa_report.json` 是
+    `{total_checks: 0, passed: 0, failed: 0, verdict: "go"}` —— **一条检查没跑、结论"放行"**；
+    而同轮 `qa-report.md` 里存的是一段**没解析的 `<tool_call>` 原文**（模型想跑 pytest）。
+
+    原因就一行：`qa_data.get("verdict", "go" if not issues else "no_go")` ——
+    输出不是 JSON 时 `qa_data` 是 `{}`、`issues` 也是 `[]`，**默认值正好落到 `go`**。
+    """
+
+    MALFORMED = [
+        ("", "完全空"),
+        ("{}", "空对象"),
+        ('{"passed": [], "issues": []}', "有结构但没结论"),
+        ("<tool_call>run_command<arg_key>command</arg_key>"
+         "<arg_value>python3 -m pytest -q</arg_value></tool_call>", "输出成了工具调用（真机现场）"),
+        ("这不是 JSON", "根本不是 JSON"),
+        ("[1, 2, 3]", "是 JSON，但是数组不是对象"),
+    ]
+
+    @pytest.mark.parametrize("raw,why", MALFORMED)
+    def test_malformed_never_becomes_go(self, raw, why):
+        from singularity.scheduler import workflow as W
+        _, verdict, reason = W._qa_verdict_from_raw(raw)
+        assert verdict != "go", f"【{why}】被当成了放行 —— 空结论不能算通过"
+        assert verdict == W._QA_VERDICT_MISSING
+        assert reason, "得说清它为什么没结论"
+
+    def test_real_go_is_still_go(self):
+        """真给了结论的照旧放行 —— 别顺手把正常路径卡死。"""
+        from singularity.scheduler import workflow as W
+        _, verdict, _ = W._qa_verdict_from_raw(
+            '{"verdict": "go", "summary": {"total_checks": 3}}')
+        assert verdict == "go"
+
+    def test_issues_without_verdict_still_no_go(self):
+        """报了问题却没给结论 ⇒ 按不通过（老的 fail-closed 分支，保留）。"""
+        from singularity.scheduler import workflow as W
+        _, verdict, _ = W._qa_verdict_from_raw('{"issues": [{"description": "挂了"}]}')
+        assert verdict == "no_go"
+
+    def test_flag_leaves_both_traces(self):
+        """判据为真时**两件必做事**都得做：进 issues + 出声。
+
+        ⚠️ 只测 `_qa_verdict_from_raw` 验的是"**判据对**"，验不到"**判据为真时真的有人记**"。
+        这两件事分开 —— 2026-09-13 一天被这个形状咬过三次（见 `docs/防御模式.md` §65）。
+        """
+        from singularity.scheduler import workflow as W
+        from singularity.scheduler import config
+
+        p = P.ProjectState(id="qa1", name="t")
+        p.issues = []
+        W._flag_missing_qa_verdict(p)
+
+        assert "qa_verdict_missing" in [i.get("type") for i in p.issues], \
+            "没进 issues ⇒ GATE3 人审页上看不见（那份报告是给人看的）"
+
+        log = config.QIDIAN_DIR / "alerts.jsonl"
+        assert log.exists(), "没出声 ⇒ 聚合视图里也看不见"
+        assert "qa_verdict_missing" in log.read_text(encoding="utf-8")
+
+
 class TestRatchetResetsOnHumanIntervention:
     """③ 人工批准 GATE2 = 人到场兜底，自动重试配额必须跟着恢复。"""
 
