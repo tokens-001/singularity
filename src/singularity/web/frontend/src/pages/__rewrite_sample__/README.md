@@ -27,6 +27,19 @@
 资源是复合对象时（本页 = `{servers, tools}` 两个列表），四态跟**主列表**走：把 `Loadable`
 切到主列表视角再交给边界（见 `McpTab.tsx` 里的 `listState`），相（loading/error/staleError）原样保留。
 
+### 并发的语义（`useResource` 里的请求序号）
+
+这个前端"挂载 / SSE 再取 / 轮询 / 手动刷新"三路并发是**常态**（dev 下 `<StrictMode>`
+每次挂载就真有两路）。所以 `load()` 内部记了 `seqRef`，**过期请求的结果一律作废**：
+
+- 慢的**成功**后到 → 不许盖掉新数据；
+- 慢的**失败**后到 → 不许往新数据上贴「刷新失败」——
+  ⚠️ 这条尤其要紧：那条横幅写着"下面还是最近一次成功加载的数据"，
+  而**旧失败后到时屏幕上恰恰就是最新数据** ⇒ 不作废的话，横幅本身在撒谎。
+
+同仓的标准答案就是 `Chat.fetchSeq` / `Projects.detailSeq`；这个原语第一版漏了它
+（2026-09-14 外派⑧反审抓到、我补的，`Async.test.tsx` 三条并发用例钉着）。
+
 ## 二、McpTab 字段判据表（缺什么显示什么，逐字段）
 
 后端契约出处：`scheduler/_api_admin.py:384` `mcp_server_list`（8 键恒给，但值可能是空串 ——
@@ -67,6 +80,15 @@
 3. `POST /api/mcp/refresh` 返回 `{ok, servers, tools}`，旧版把响应整个丢掉。样板把计数
    放进了成功 toast（用后端给的数，不自己数）。`ok:false` 理论上不该出现（后端恒 ok:true），
    出现时按 info toast，不谎报成功。
+4. **忘接线 = 永远转圈**：state 初值是 `{ phase: 'loading' }`，调用方若忘了写
+   `useEffect(() => { void load(true) }, [load])`，`AsyncBoundary` 就渲染一个**无超时**的
+   「正在加载…」—— 正是 #16（Alerts 永远转圈）那个形状被原语原样复活。
+   风险低（测试能抓），但铺开时**每接一个页面都得先确认这一句在**。
+5. **`load(true)` 与 `load(false)` 是"意图"不是"约束"**：落点由 `prev.phase` 决定，
+   交叉情形（如 prev=ready 时误用 `load(true)`）会把已渲染的数据吹回 loading。
+   样板自己用 `load(false)` 做刷新避开了，但这是**约定**。
+6. **没有 AbortController**：过期请求的结果会被丢弃（见上面的序号），但 **fetch 本身照跑到底**。
+   正确性上没问题（React 18+ 卸载后 setState 是 no-op），只是不省流量。
 
 ## 四、不新增依赖
 
@@ -85,7 +107,7 @@
 ```
 __rewrite_sample__/
   Async.tsx                 原语：Loadable 类型 + useResource + AsyncBoundary（四态边界）
-  Async.test.tsx            原语测试 ×7
+  Async.test.tsx            原语测试 ×10（含 3 条并发）
   McpTab.tsx                样板本体（默认导出，签名与原件一致）
   McpTab.test.tsx           样板测试 ×14（四态 + 字段判据逐条）
   tsconfig.sample.json      样板局部类型检查（根 tsconfig exclude 了本目录，见下）
@@ -112,14 +134,14 @@ __rewrite_sample__/
 ```bash
 npx tsc --noEmit                                              # 仓库本体（不含样板）→ 退出码 0
 npx tsc --noEmit -p src/pages/__rewrite_sample__/tsconfig.sample.json   # 样板本体 → 退出码 0
-npx vitest run                                                # 仓库默认收集（不含样板）→ 71 绿（12 文件）
+npx vitest run                                                # 仓库默认收集（不含样板）→ 73 绿（12 文件）
 npx vitest run --config src/pages/__rewrite_sample__/vitest.sample.config.ts __rewrite_sample__
-                                                              # 样板 → 21 绿（2 文件）
+                                                              # 样板 → 24 绿（2 文件）
 ```
 
 ⚠️ **末条那个 `__rewrite_sample__` 过滤参数不能省**（2026-09-14 复核时实测更正）：
 `vitest.sample.config.ts` 里的 `root` **不是**配置文件所在目录、仍是 `process.cwd()`（= `frontend/`），
-所以**不带过滤参数跑的是全量**：14 文件 / 92 用例（= 默认 71 + 样板 21），不是 21/2。
+所以**不带过滤参数跑的是全量**：14 文件 / 97 用例（= 默认 73 + 样板 24），不是 24/2。
 （配置文件的注释原先写反了，已一并更正。）
 
 ⚠️ **为什么样板要单独跑**：根配置把本目录 exclude 了（"还在迭代的东西挂进默认收集，
@@ -148,6 +170,6 @@ npx vitest run --config src/pages/__rewrite_sample__/vitest.sample.config.ts __r
 
 ## 七、实测记录（2026-09-14 05:2x，HEAD `814e1be` 附近，仓库正被并发提交）
 
-- 样板：`tsc -p tsconfig.sample.json` 退出码 0；vitest **21/21 绿**（2 文件）。
-- 仓库默认收集：**71/71 绿**（12 文件），`tsc --noEmit` 退出码 0 —— 样板对现有信号零影响。
+- 样板：`tsc -p tsconfig.sample.json` 退出码 0；vitest **24/24 绿**（2 文件）。
+- 仓库默认收集：**73/73 绿**（12 文件），`tsc --noEmit` 退出码 0 —— 样板对现有信号零影响。
 - 开发中曾被根配置的 exclude 藏过一条真类型错误（见第六节），已修并写进教训。

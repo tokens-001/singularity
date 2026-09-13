@@ -67,14 +67,27 @@ export function useResource<T>(
   const labelRef = useRef(opts.errorLabel)
   labelRef.current = opts.errorLabel
 
+  // ⚠️ **请求序号** —— 同仓的标准答案（`Chat.fetchSeq` / `Projects.detailSeq`），
+  // 这个原语第一版**漏了它**（2026-09-14 外派⑧反审抓到）。没有它，三路并发
+  // （挂载 / SSE / 轮询 / 手动刷新）下"后到说了算"，而且**两个方向都会错**：
+  //   · 慢的**成功**后到 → 整包盖掉新数据
+  //   · 慢的**失败**后到 → 往新成功的数据头上挂「刷新失败」琥珀条，
+  //     而那条横幅写着"下面还是最近一次成功加载的数据" —— **在旧失败后到时它就在撒谎**
+  //     （屏幕上恰恰就是最新的数据）。※ 这是铺开会**新增**的一种谎，不是原有洞的照旧。
+  const seqRef = useRef(0)
+
   const load = useCallback(async (initial = false) => {
+    const mySeq = ++seqRef.current
     if (initial) setState({ phase: 'loading' })
     else setReloading(true)
     try {
       const data = await fetcherRef.current()
+      if (mySeq !== seqRef.current) return   // 已有更新的请求发出 → 这次结果作废
       // 成功覆盖一切（清掉 staleError）：数据是新的，失败条就该消失
       setState({ phase: 'ready', data })
     } catch (e) {
+      // ⚠️ 过期的失败**同样要作废** —— 否则它会往新数据上贴一条假的"刷新失败"。
+      if (mySeq !== seqRef.current) return
       // error 相带 errorLabel 前缀（它独立成块，需要完整句子）；
       // staleError 存**原文** —— 琥珀条自己已经说了「刷新失败：」，再带前缀就叠两层。
       const raw = e instanceof Error ? e.message : String(e ?? '')
@@ -83,7 +96,8 @@ export function useResource<T>(
         prev.phase === 'ready' ? { ...prev, staleError: raw } : { phase: 'error', message: msg }
       )
     } finally {
-      setReloading(false)
+      // 只有"最新那次"结束才清 —— 否则先结束的旧请求会把还在飞的那次的状态抹掉
+      if (mySeq === seqRef.current) setReloading(false)
     }
   }, [])
 

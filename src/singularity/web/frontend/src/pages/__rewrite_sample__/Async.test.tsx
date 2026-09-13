@@ -126,3 +126,72 @@ describe('AsyncBoundary 四态', () => {
     expect(el.textContent).not.toContain('刷新失败')
   })
 })
+
+// ═══════════════════════════════════════════════════════════════
+// 并发（2026-09-14 外派⑧反审抓到的**地基裂缝**：原语第一版没有请求序号）
+// ═══════════════════════════════════════════════════════════════
+// 这个前端"挂载 / SSE 再取 / 轮询 / 手动刷新"三路并发是常态（dev 下 StrictMode
+// 每次挂载就真有两路）。没有序号时**两个方向都会错**，而且第二个方向是**新增的谎**：
+// 慢的失败后到 → 往新成功的数据头上挂「刷新失败」，而那条横幅写着
+// "下面还是最近一次成功加载的数据" —— 屏幕上恰恰就是最新数据。
+//
+// 这组用**可分辨先后**的 fetcher：每次调用把 (resolve, reject) 排进队列，
+// 于是能独立控制"第 1 个请求"和"第 2 个请求"。
+
+let pending: { resolve: (v: string[]) => void; reject: (e: unknown) => void }[] = []
+
+function ProbeSeq() {
+  const { state, load } = useResource<string[]>(
+    () => new Promise<string[]>((res, rej) => { pending.push({ resolve: res, reject: rej }) }),
+    { errorLabel: '加载失败' }
+  )
+  useEffect(() => { void load(true) }, [load])
+  return (
+    <div>
+      <button onClick={() => void load(false)}>reload</button>
+      <AsyncBoundary state={state} loadingText="加载中文字" emptyText="空态文字"
+        onRetry={() => void load(true)}>
+        {(data) => <div>数据 {data.join(',')}</div>}
+      </AsyncBoundary>
+    </div>
+  )
+}
+
+describe('并发：后到的不一定算数', () => {
+  it('慢的先发后到，不许盖掉新的', async () => {
+    pending = []
+    const el = await render(<ProbeSeq />)
+    await act(async () => { el.querySelectorAll('button')[0]!.click() })   // 第 2 个请求
+    expect(pending.length, '应该有两个在飞的请求').toBe(2)
+
+    await act(async () => { pending[1].resolve(['新']) })                  // 新的先回
+    await act(async () => { pending[0].resolve(['旧']) })                  // 旧的后回
+
+    expect(el.textContent).toContain('数据 新')
+    expect(el.textContent, '慢请求后到把新数据盖掉了 —— 缺请求序号').not.toContain('数据 旧')
+  })
+
+  it('旧的**失败**后到，不许往新数据上贴一条假的「刷新失败」', async () => {
+    pending = []
+    const el = await render(<ProbeSeq />)
+    await act(async () => { el.querySelectorAll('button')[0]!.click() })
+    await act(async () => { pending[1].resolve(['新']) })
+    await act(async () => { pending[0].reject(new Error('旧请求炸了')) })
+
+    expect(el.textContent).toContain('数据 新')
+    expect(el.textContent,
+      '过期的失败贴了「刷新失败」—— 那条横幅说"下面是最近一次成功加载的数据"，'
+      + '而屏幕上就是最新数据 ⇒ 这是新造出来的谎').not.toContain('刷新失败')
+  })
+
+  it('对照：最新那次失败，仍然要可见（别把序号修成"什么都不报"）', async () => {
+    pending = []
+    const el = await render(<ProbeSeq />)
+    await act(async () => { pending[0].resolve(['旧']) })
+    await act(async () => { el.querySelectorAll('button')[0]!.click() })
+    await act(async () => { pending[1].reject(new Error('真的断了')) })
+
+    expect(el.textContent).toContain('数据 旧')
+    expect(el.textContent).toContain('刷新失败：真的断了')
+  })
+})
