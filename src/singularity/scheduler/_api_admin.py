@@ -325,15 +325,35 @@ def agent_skill_list(level, model="", phase=""):
     返回实际生效的技能 —— 界面要显示的就是"这家伙现在真会什么"。
     传入 phase="" 时行为与旧版逐字节一致。
     """
-    from singularity.skills.skill_loader import get_agent_skills, load_skills
-    return {"skill_names": get_agent_skills(level, model, phase),
+    from singularity.skills.skill_loader import get_agent_skills, load_skills, _qidian_dir
+    names = get_agent_skills(level, model, phase)
+    # 🔴 **回 200 + 空表 = 撒谎**（2026-09-14 外派⑦ 抓到）：
+    # `agents_custom.json` 读不出来时 `get_agent_skills` 降级成 `[]`，端点照回 200 ——
+    # 而前端区分"**读不到**"和"**一个都没绑**"的判据是 `catch`（HTTP 错误），
+    # 200 永远不会触发它 ⇒ 那条三态路径**在它最该起作用的场景（文件损坏）里必然失效**，
+    # 界面显示"0/N 已绑"，用户一勾就把**真的绑定整份覆盖**（正是 SkillsTab 要防的事）。
+    # ⇒ 回 503，让前端既有的那条路真的走起来（`request()` 会把这里的 error 透出来）。
+    # ⚠️ 顺序：**先读、后判** —— 损坏标记正是上面那次读置上的（判在读之前就是本文档
+    #    开头那个"第一次触碰"的洞）。
+    from singularity.scheduler import _io
+    if _io.is_quarantined(_qidian_dir() / "agents_custom.json"):
+        return {"error": "agents_custom.json 读不出来（已隔离到 .corrupt）—— "
+                         "**绑定状态未知**，不是「一个都没绑」。先人工恢复备份再操作。"}, 503
+    return {"skill_names": names,
             "available": list(load_skills().keys())}, 200
 
 
 def agent_skill_update(level, model="", skill_names=None, phase=""):
     from singularity.skills.skill_loader import set_agent_skills
     from . import dispatcher as disp_mod
-    set_agent_skills(level, model, skill_names or [], phase)
+    # 🔴 `set_agent_skills` 拒写时返回 False，**必须看** —— 原来这个返回值被丢掉、
+    # 端点照回 `{"ok": True}`：界面高亮成功 → 刷新即回退 → 一个字都不报
+    # （2026-09-14 外派⑦ 抓到；同族的 `model_registry._save_custom` 是抛异常，
+    #  这里返回 503 更好 —— 前端能把中文原因原样透出来）。
+    if not set_agent_skills(level, model, skill_names or [], phase):
+        return {"error": "agents_custom.json 损坏（已隔离到 .corrupt）—— 拒绝写入："
+                         "会把全部 agent 配置和 skill 绑定整份覆盖掉。"
+                         "先人工恢复备份再重试。"}, 503
     # 传了 model 就清该模型所有阶段；只传 phase 时模型为空，清那一档全部 —— 阶段级
     # 绑定会影响该档**所有**没有模型级绑定的模型，只清一条会留下读旧缓存的。
     if model:

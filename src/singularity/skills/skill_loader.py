@@ -305,15 +305,19 @@ def get_agent_skills(agent_level: str, agent_model: str, phase: str = "") -> lis
 
 
 def set_agent_skills(agent_level: str, agent_model: str, skill_names: list[str],
-                     phase: str = "") -> None:
+                     phase: str = "") -> bool:
     """设置 agent 绑定的 skill 列表，写入 agents_custom.json。
 
     给 `agent_model` 就写模型轴；给 `phase` 就写阶段轴（**优先**，见 get_agent_skills）。
     两个都空 → 什么都不写（别造出一个没有键名的条目）。
     传空列表 = 删键，别留 `[]` —— 留空数组会让"恢复默认（回落到另一条轴）"回不去。
+
+    **返回 `True` = 真写了（或本来就无事可做）；`False` = 拒写**（文件损坏已隔离）。
+    ⚠️ 调用方**必须看这个返回值** —— 原来它什么都不返回，而端点照回 `{"ok": True}`
+    ⇒ 界面高亮成功、刷新即回退、一个字都不报（2026-09-14 外派⑦ 抓到）。
     """
     if not agent_model and not phase:
-        return
+        return True
     import json
     from singularity.scheduler import _io
     custom_file = _qidian_dir() / "agents_custom.json"
@@ -334,7 +338,7 @@ def set_agent_skills(agent_level: str, agent_model: str, skill_names: list[str],
             # 第二通道没发出去也要留痕 —— 别让"告警没发出去"这件事本身静默
             logging.getLogger("skill_loader").error(
                 "agents_custom.json 的损坏告警没发出去: %s: %s", type(e).__name__, e)
-        return
+        return False
     # ponytail: 两条轴共用一个 dict，靠"模型名不会叫 executing"区分。
     # 真要重名（模型 ID 恰好等于阶段名）就分不出 —— 那时改成 `_phase` 子字典。
     key = agent_model or phase
@@ -345,3 +349,4 @@ def set_agent_skills(agent_level: str, agent_model: str, skill_names: list[str],
         level_skills.pop(key, None)
     custom_file.parent.mkdir(parents=True, exist_ok=True)
     custom_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return True

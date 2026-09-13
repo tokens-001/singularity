@@ -140,3 +140,50 @@ class TestPathFollowsRuntimeConfig:
         monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
         sl.set_agent_skills("any", "m", ["x"])
         assert (tmp_path / "agents_custom.json").exists()
+
+
+# ── 文件坏了的时候，两个端点都不许**假装没事**（2026-09-14 外派⑦ 抓到）─────
+# 前端的 SkillsTab 有一条三态："**读不到绑定**" ≠ "**一个都没绑**" ——
+# 而它的判据是 `catch`（HTTP 错误）。所以端点回 **200 + 空表**时那条路**永远不触发**，
+# 界面显示"0/N 已绑"，用户一勾就把**真的绑定整份覆盖**（正是那条三态要防的事）。
+# 写侧同理：`set_agent_skills` 拒写，端点照回 `{"ok": True}` ⇒ 高亮成功、刷新即回退、零提示。
+
+class TestCorruptFileEndpoints:
+    @pytest.fixture
+    def 坏文件(self, custom_file, monkeypatch):
+        from singularity.scheduler import _io
+        # ⚠️ **不预读** —— 正是"第一次触碰"那一格（预读会把缺陷前提固化掉）
+        monkeypatch.setattr(_io, "_QUARANTINED", set())
+        monkeypatch.setattr("singularity.scheduler.witness.warn", lambda *a, **k: None)
+        custom_file.write_text('{"_skills": {"any": {"m1": ["code-review"]}}, "坏":',
+                               encoding="utf-8")
+        return custom_file
+
+    def test_读端点在坏文件上不许回200空表(self, 坏文件):
+        from singularity.scheduler import _api_admin as A
+        body, code = A.agent_skill_list("any", "m1")
+        assert code == 503, f"回 {code}+{body} ⇒ 前端判不出「读不到」，会显示 0/N"
+        assert "error" in body and "未知" in body["error"]
+
+    def test_写端点在坏文件上不许回ok(self, 坏文件):
+        from singularity.scheduler import _api_admin as A
+        raw = 坏文件.read_text(encoding="utf-8")
+        body, code = A.agent_skill_update("any", "m1", ["ddd"])
+        assert code == 503, f"回 {code}+{body} ⇒ 界面高亮成功、刷新即回退"
+        assert "error" in body
+        assert 坏文件.read_text(encoding="utf-8") == raw, "坏文件被整份重建了 —— 绑定全没"
+
+    def test_set_agent_skills_用返回值报拒写(self, 坏文件):
+        """端点靠这个 bool 判 —— 它原来是 `None`，调用方只能丢掉。"""
+        assert sl.set_agent_skills("any", "m1", ["ddd"]) is False
+
+    def test_对照组_文件好的时候两个端点都照常(self, custom_file):
+        from singularity.scheduler import _api_admin as A
+        assert A.agent_skill_update("any", "m1", ["code-review"]) == ({"ok": True}, 200)
+
+        body, code = A.agent_skill_list("any", "m1")
+        assert code == 200 and body["skill_names"] == ["code-review"]
+
+    def test_对照组_两个都空时不算失败(self, custom_file):
+        """无事可做 ≠ 拒写 —— 别把调用方逼成"任何 False 都报错"。"""
+        assert sl.set_agent_skills("any", "", []) is True
