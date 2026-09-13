@@ -180,7 +180,8 @@ def stop_ws_server():
 # ── Observer Server 集成 (T5) ─────────────────────────────────────────────
 
 def start_observer_server(
-    host: str = "0.0.0.0",
+    # 同 observer/config.py 的 DEFAULT_HOST：Observer WS 无鉴权，默认值不许往外绑
+    host: str = "127.0.0.1",
     port: int = 8765,
     use_thread: bool = True,
 ) -> None:

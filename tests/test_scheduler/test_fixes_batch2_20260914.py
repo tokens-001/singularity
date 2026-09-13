@@ -194,16 +194,41 @@ def test_删_MCP_服务器要把它从注册表摘掉(monkeypatch):
     assert dead.disconnected, "客户端没断开 —— 子进程/连接泄漏"
 
 
-def test_重连_MCP_还是先摘再连(monkeypatch):
-    """重连原来是自己手写那段摘除逻辑 —— 改走 `drop_server` 后行为必须一样。"""
+def test_重连_MCP_必须喂全量配置(monkeypatch):
+    """⚠️ **这条的判据 09-14 改过**（原来断言 `loaded == [["dead"]]`，那是错的）。
+
+    `MCPRegistry.load_configs` 是**整体原子换入**（`mcp.py:335` 直接把
+    `self._clients/_tools/_tool_index` 换成按入参重建的那一份），**不是增量加载**。
+    所以只喂被重连的那一个 ⇒ **其余服务器连同工具一起从注册表里消失**，
+    要等手动 refresh / 重启才回来 —— 跟 DELETE 那条要治的"删了还在"正好反方向，
+    而且更坏（静默地把好的也拿掉了）。
+    """
     from singularity.scheduler import _api_admin
-    reg, dead, _ = _registry_with(monkeypatch)
+    reg, _dead, _ = _registry_with(monkeypatch)
     loaded = []
     monkeypatch.setattr(type(reg), "load_configs",
                         lambda self, cfgs: loaded.append([c.name for c in cfgs]))
     data, code = _api_admin.mcp_server_reconnect("dead")
-    assert code == 200 and loaded == [["dead"]]
-    assert dead.disconnected
+    assert code == 200
+    assert loaded == [["dead", "alive"]], f"只喂了被重连的那个 ⇒ 别的服务器被抹了：{loaded}"
+
+
+def test_加_MCP_服务器要同步进注册表(monkeypatch):
+    """add 和 delete 是同一面镜子 —— delete 09-14 修了，add 当时漏了。
+
+    不喂注册表 ⇒ 接口回 `{"ok": True}` 而模型侧工具（来自 `_dispatch_skills` 读的
+    那个单例）一个新都没有，要等手动 refresh / 重启。**加成功了却调不到**。
+    """
+    from singularity.scheduler import _api_admin
+    reg, _dead, _saved = _registry_with(monkeypatch)
+    loaded = []
+    monkeypatch.setattr(type(reg), "load_configs",
+                        lambda self, cfgs: loaded.append([c.name for c in cfgs]))
+
+    data, code = _api_admin.mcp_server_add({"name": "newone", "command": "npx x"})
+
+    assert code == 200
+    assert loaded == [["dead", "alive", "newone"]], f"配置写了但注册表没喂 ⇒ 模型调不到：{loaded}"
 
 
 # ═══════════════════════════════════════════════════════════════

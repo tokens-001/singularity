@@ -37,6 +37,13 @@ class ExecutorResult:
 _BLOCKED_PATTERNS = [
     ".env", ".env.*", "*.token", "*.key", "*.pem", "*.p12", "*.pfx",
     "*.secret", "*.password", "*.credential",
+    # ⚠️ **无后缀的私钥**（2026-09-14，外派 K 条6 / H 反7 / E'⑤ 三方独立撞上）：
+    # `*.key` / `*.pem` 罩不住 `id_rsa` 这一族 —— 模型一条 read_file 就能把私钥
+    # 整读进上下文随输出带走。`web/app.py:1358` 的 `_SENSITIVE_FILES` 早就补了
+    # 这几个、注释还点名了这个洞，**这张表当时没跟着改** —— 同一件事只修了一半。
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+    ".netrc", ".flaskenv", "*.crt",
+    ".ssh/", ".ssh/*",
     ".qidian/", ".qidian/*", ".git/", ".git/*", ".claude/",
     "venv/", ".venv/", "__pycache__/", "*.pyc",
     "users.json", "config.toml", "agents.toml",

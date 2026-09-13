@@ -70,11 +70,24 @@ class AnthropicApiExecutor(BaseExecutor):
         # "这次 dispatch 还能花多少秒"（按任务死线倒推）。不理会它，单次请求的硬上限
         # 会越过任务死线 —— 外面那把 900s 的刀照样无声收割（同 §67）。取 min 保住原上限；
         # 下界 1.0s（预算跑光时不该再发请求）。
-        _tmo = config.CLAUDE_CLI_TIMEOUT
-        if self.budget_s is not None:
-            _tmo = max(1.0, min(_tmo, self.budget_s))
+        _tmo_base = config.CLAUDE_CLI_TIMEOUT
+        _deadline_at = (start + self.budget_s) if self.budget_s is not None else None
 
         for turn in range(1, max_turns + 1):
+            # 🔴 **必须逐轮算，不能在循环外算一次**（2026-09-14，外派 K 条4 / E'③）：
+            # 原来 `_tmo` 在循环外定死、每轮共用 ⇒ 最坏 `max_turns`（默认 10）倍预算，
+            # 照样撞穿任务死线被 900s 无声收割。zhipu（`zhipu_api.py:61` 每次尝试前看
+            # `_deadline`）和 openai_agent（`openai_agent.py:406/496` 每轮看表、
+            # `:960-966` 连单次调用都按剩余封顶）都防了这一手，只有这份没防。
+            _tmo = _tmo_base
+            if _deadline_at is not None:
+                left = _deadline_at - time.time()
+                if left <= 0:
+                    # 预算跑光就别再发请求了 —— 发了也是被外面那把刀砍，且时间已算在别人头上
+                    return ExecutorResult(success=False, error="budget exhausted",
+                                          error_kind="timeout")
+                _tmo = max(1.0, min(_tmo_base, left))
+
             body = {
                 "model": model,
                 "max_tokens": max_tokens,

@@ -1135,7 +1135,14 @@ def _write_file(args: dict, cwd, blocked_patterns) -> str:
     return f"已写入 {path} ({len(content)} 字符)"
 
 def _run_command(args: dict, cwd) -> str:
-    """模块级命令执行。"""
+    """模块级命令执行。
+
+    ⚠️ **要和类方法 `_tool_run` 一样脱敏 `os.environ`**（2026-09-14，外派 K 条3 / E'②）：
+    `anthropic_api.py:195` 把 `run_command` 工具**直接派到这个模块级函数**，
+    而它原来 `subprocess.run(...)` 没传 `env=` ⇒ 子进程继承**未脱敏的全量环境**
+    —— 模型随口一条 `env` 就能读走 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`。
+    openai 执行器自己走 `self._tool_run`（有 `env=safe_env`），所以**全仓只有这一条路不脱敏**。
+    """
     import subprocess, shlex
     cmd = args.get("command", "")
     if not cmd:
@@ -1145,7 +1152,9 @@ def _run_command(args: dict, cwd) -> str:
         return f"命令被拦截: {reason}"
     try:
         argv = shlex.split(cmd)
-        r = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=30, cwd=str(cwd))
+        safe_env = {k: v for k, v in os.environ.items() if not _is_sensitive_env(k)}
+        r = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=30,
+                           cwd=str(cwd), env=safe_env)
         out = r.stdout[-4000:] if r.stdout else ""
         err = r.stderr[-2000:] if r.stderr else ""
         return f"exit={r.returncode}\nstdout:\n{out}\nstderr:\n{err}"

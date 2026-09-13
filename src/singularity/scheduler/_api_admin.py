@@ -434,7 +434,16 @@ def mcp_server_add(data):
         configs.append(m.MCPServerConfig(name=data["name"], transport=data.get("transport","stdio"),
             command=data.get("command",""), url=data.get("url",""), enabled=data.get("enabled",True),
             timeout=data.get("timeout",30.0), env=data.get("env",{})))
-    m.save_mcp_configs(configs); return {"ok": True}, 200
+    # ⚠️ **光写配置文件不够**（2026-09-14，外派 K 条5 / E'④ / H 反7 三方撞上）——
+    # 和 delete 是同一面镜子：`get_registry()` 是全局单例，模型侧的工具来自它
+    # （`_dispatch_skills.py:105-108`），不喂进去就"接口回 ok、模型调不到任何新工具"，
+    # 要等手动 refresh / reconnect / 重启。⚠️ **触发面窄**：前端没有添加表单
+    # （`api.ts:123` 的 `addMcpServer` 是零调用死代码）⇒ 今天得直接调 API 才踩得到。
+    m.save_mcp_configs(configs)
+    # `load_configs` 是**整体原子换入**（不是增量），所以这里必须喂**全量** configs ——
+    # 喂单个会把别的服务器一起抹掉（reconnect 原来就是这么错的，见下）。
+    m.get_registry().load_configs(configs)
+    return {"ok": True}, 200
 
 
 def mcp_server_delete(name):
@@ -451,8 +460,14 @@ def mcp_server_reconnect(name):
     from . import mcp as m; configs = m.load_mcp_configs(); reg = m.get_registry()
     for c in configs:
         if c.name == name:
-            reg.drop_server(name)   # 先摘干净再连，否则旧客户端会留在注册表里
-            reg.load_configs([c]); return {"ok": True, "tool_count": len(reg._tools)}, 200
+            # 🔴 **必须喂全量 configs**（2026-09-14 我自己核出来的）：原来这里是
+            # `load_configs([c])`，而 `load_configs` 是**整体原子换入**
+            # （`mcp.py:335` 直接 `self._clients, ... = clients, tools, index`）
+            # ⇒ **重连一个服务器会把注册表里其他所有服务器连同它们的工具一起抹掉**，
+            # 直到手动 refresh / 重启才回来 —— 和要治的"删了还在"正好是反方向。
+            # 也不用再单独 `drop_server`：全量换入的尾巴会把旧客户端统一 disconnect。
+            reg.load_configs(configs)
+            return {"ok": True, "tool_count": len(reg._tools)}, 200
     return {"error": f"服务器 {name} 不存在"}, 404
 
 
