@@ -486,16 +486,10 @@ def query(
             "synthesis_model": "none",
         }
     else:
-        # Depth 1: 纯语义摘要，不做 traversal synthesis
-        narrative = {
-            "summary": f"语义检索命中 {len(semantic_only)} 条记录",
-            "nodes": [
-                {"task_id": s["task_id"], "description": s["description"][:120],
-                 "similarity": s["similarity"]}
-                for s in semantic_only[:3]
-            ],
-            "synthesis_model": "semantic_only",
-        }
+        # Depth 1: 纯语义摘要，不做 traversal synthesis。
+        # 内容**等下面的 mem_type 过滤之后再建**（见 `narrative is None` 那段）——
+        # 顺序反了的话，深度 1 的条目会绕过 mem_type 过滤。
+        narrative = None
 
     # ── 按记忆类型过滤 ──
     if mem_type:
@@ -504,6 +498,46 @@ def query(
             s for s in semantic_only
             if events.get(s["task_id"], EventNode("", "", 0)).attrs.get("mem_type", "") == mem_type
         ]
+
+    if narrative is None:
+        # 🔴 **深度 1 的返回值必须和深度 ≥2 同形状**（2026-09-14 核出）。
+        # `pre_search.py:131-137` 读的是 `traversal["narrative"|"intent"|"graph_coverage"]`
+        # —— 那是 `synthesize()` 的返回形状，深度 2/3 正好就是它。
+        # 而这里原来给的是 `{summary, nodes, synthesis_model}`：**三个键一个都读不到**
+        # ⇒ 最常见的那条路（`deep=False`，即 `retry_count == 0` 的首次尝试，
+        # 见 `_task_runner.py:179` / `orchestrator.py:94`）上，记忆信号**恒为空**：
+        #   · `mem.narrative` 空 ⇒ `apply_escalation` 那条"高分记忆 → routing hint"永不触发
+        #   · `mem.intent` 恒为默认的 `"semantic"` ⇒ trace 文案失真
+        # 而刚算出来的 `summary` / `nodes`（"命中 N 条 + top3"）**没有任何消费者**，白算。
+        # ⇒ 按 `synthesize()` 的键名补上 `narrative` / `intent` / `graph_coverage`；
+        # 旧键 `summary`/`nodes`/`synthesis_model` 保留（今天没读者，但别砸掉）。
+        # ⚠️ 深度 1 **没有走图遍历**，所以 `graph_coverage` 就该是空的
+        # （`pre_search` 那边 `if mem.graph_coverage:` 也就不会报一条假的覆盖信号）。
+        narrative = {
+            # ── 消费端真正读的（与 synthesize() 同形状）──
+            "narrative": [
+                {"task_id": s["task_id"],
+                 "description": s["description"],
+                 # 消费端按 `score` 过滤（`pre_search.py:225` `r.get("score", 0) >= 0.1`），
+                 # 而语义命中的字段叫 `similarity` —— 换个名字，别让信号死在键名上
+                 "score": s["similarity"],
+                 # 来源标清楚：这是语义命中，不是图遍历出来的
+                 "graph_sources": ["semantic"]}
+                for s in semantic_only[:5]
+            ],
+            "intent": detect_intent(description),
+            "graph_coverage": {},
+            "total_results": len(semantic_only),
+            "query": description,
+            # ── 旧键，保留 ──
+            "summary": f"语义检索命中 {len(semantic_only)} 条记录",
+            "nodes": [
+                {"task_id": s["task_id"], "description": s["description"][:120],
+                 "similarity": s["similarity"]}
+                for s in semantic_only[:3]
+            ],
+            "synthesis_model": "semantic_only",
+        }
 
     return {
         "traversal": narrative,
