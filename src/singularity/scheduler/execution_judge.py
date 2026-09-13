@@ -24,13 +24,16 @@ _log = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════
 
 def _load_fusion_config() -> dict:
-    """加载 fusion.toml 配置。"""
-    try:
-        from ._io import load_toml
-        path = config.SCHEDULER_DIR / "fusion.toml"
-        return load_toml(path)
-    except Exception:
-        return {}
+    """加载 fusion.toml 配置。
+
+    ⚠️ 读坏了降级成 `{}`（带告警 + `.corrupt` 备份）—— 但那是**带告警的降级**：
+    原来是 `except Exception: return {}`，"坏了"和"没配过"长得一样，
+    融合配置被无声忽略（2026-09-14，C 的 S1 草案 §3.13，我核过）。
+    只读路径，没有写回，所以这里不许升级成抛。
+    """
+    from ._io import load_toml_or_quarantine
+    path = config.SCHEDULER_DIR / "fusion.toml"
+    return load_toml_or_quarantine(path) or {}
 
 
 # 兜底表：只给「注册表里没有、但确实要调」的模型用。正常路径走 api_store。
@@ -508,11 +511,12 @@ def _model_discipline() -> dict:
     的超范围内容都收进来（ledger 23 + RabbitMQ 7），deepseek 当定稿人时连自己的
     RabbitMQ 都砍了（ledger 1 + RabbitMQ 1）。
     """
-    try:
-        p = config.QIDIAN_DIR / "model_discipline.json"
-        return json.loads(p.read_text()) if p.exists() else {}
-    except Exception:
+    from ._io import load_json_or_quarantine
+    p = config.QIDIAN_DIR / "model_discipline.json"
+    if not p.exists():
         return {}
+    # 同上：只读路径，坏了降级成空表（隔离+出声在 `_io` 里做了），不抛
+    return load_json_or_quarantine(p) or {}
 
 
 def _pick_writer(disagreements: list, members: list[str]) -> str:

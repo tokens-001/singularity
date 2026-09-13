@@ -367,3 +367,66 @@ def test_自定义模型表好的时候照常读写(tmp_path, monkeypatch):
 
     MR._save_custom({})
     assert MR._load_custom() == {}
+
+
+# ═══════════════════════════════════════════════════════════════
+# ⑦ 最后三处：fusion 配置（只读）+ 范围纪律表（读改写）
+# ═══════════════════════════════════════════════════════════════
+
+def test_范围纪律表坏了_不许整份重建(tmp_path, monkeypatch):
+    """`record()` 是读改写 —— 拿空表 + 这一次的计数写回 = **攒了很久的历史全没**。"""
+    from singularity.scheduler import _model_discipline as MD
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path / ".qidian")
+    (tmp_path / ".qidian").mkdir()
+    monkeypatch.setattr(_io, "_QUARANTINED", set())
+    warns = []
+    monkeypatch.setattr("singularity.scheduler.witness.warn",
+                        lambda *a, **k: warns.append(a))
+    p = MD._path()
+    raw = '{"deepseek": {"violations": 3, "audits": 10}, "坏":'
+    p.write_text(raw, encoding="utf-8")
+
+    assert MD.load() == {}, "读侧该降级成空表"
+    assert MD.record("glm", 2) is False, "损坏期间该拒写（返回 False，不抛）"
+
+    assert p.read_text(encoding="utf-8") == raw, "坏文件被整份重建了 —— 历史全没"
+    assert any("record_skip" in str(a) for a in warns), f"拒写了却没出声：{warns}"
+
+
+def test_范围纪律表好的时候照常记(tmp_path, monkeypatch):
+    from singularity.scheduler import _model_discipline as MD
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path / ".qidian")
+    (tmp_path / ".qidian").mkdir()
+    assert MD.record("m1", 2) is True
+    assert MD.record("m1", 1) is True
+    d = MD.load()["m1"]
+    assert d["violations"] == 3 and d["audits"] == 2, d
+
+
+def test_fusion_配置坏了降级成空表但出声(tmp_path, monkeypatch):
+    """只读路径：降级是对的（没有写回），但**不能一声不吭**。"""
+    from singularity.scheduler import execution_judge as EJ
+    monkeypatch.setattr(config, "SCHEDULER_DIR", tmp_path)
+    warns = []
+    monkeypatch.setattr("singularity.scheduler.witness.warn",
+                        lambda *a, **k: warns.append(a))
+    (tmp_path / "fusion.toml").write_text("这不是 = = toml", encoding="utf-8")
+
+    assert EJ._load_fusion_config() == {}
+    assert warns, "融合配置被无声忽略了"
+    assert (tmp_path / "fusion.toml.corrupt").exists()
+
+
+def test_范围纪律的只读那份坏了也出声(tmp_path, monkeypatch):
+    """`execution_judge._model_discipline` 是同一份文件的**另一个读者**（只读）。"""
+    from singularity.scheduler import execution_judge as EJ
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path / ".qidian")
+    (tmp_path / ".qidian").mkdir()
+    monkeypatch.setattr(_io, "_QUARANTINED", set())
+    warns = []
+    monkeypatch.setattr("singularity.scheduler.witness.warn",
+                        lambda *a, **k: warns.append(a))
+    (tmp_path / ".qidian" / "model_discipline.json").write_text("{坏", encoding="utf-8")
+
+    assert EJ._model_discipline() == {}
+    assert warns, "读坏了却没出声"

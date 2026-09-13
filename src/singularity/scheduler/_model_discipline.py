@@ -35,11 +35,15 @@ def _path():
 
 
 def load() -> dict:
-    try:
-        d = json.loads(_path().read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else {}
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return {}
+    """读纪律表。**损坏时降级成空表，但那是带告警的降级**（隔离 + 出声在 `_io` 里做了）。
+
+    ⚠️ 原来是裸 `json.loads` + `except: return {}` —— "坏了"和"还没有数据"长得一样，
+    而 `record()` 是**读改写** ⇒ 会拿空表 + 这一次的计数整份写回，
+    **把攒了很久的范围纪律历史全盖掉**（2026-09-14，C 的 S1 草案 §3.15，我核过）。
+    """
+    from singularity.scheduler._io import load_json_or_quarantine
+    data = load_json_or_quarantine(_path())
+    return data if data is not None else {}
 
 
 def record(model: str, violations: int) -> bool:
@@ -51,6 +55,18 @@ def record(model: str, violations: int) -> bool:
     """
     model = (model or "").strip()
     if not model or violations is None or violations < 0:
+        return False
+    from singularity.scheduler._io import is_quarantined
+    if is_quarantined(_path()):
+        # 🔴 **拒写**：读侧已把坏文件隔离出去，拿空表 + 这一次的计数整份写回去
+        # = 攒了很久的范围纪律历史全没，而文件名一模一样。
+        # ⚠️ 这里**返回 False 而不是抛** —— 本文件的铁律是"记账失败不能把任务带崩"
+        # （见 `record` 的 `except` 那句），改成抛等于把铁律破了。
+        from singularity.scheduler import witness
+        witness.warn("model_discipline",
+                     "record_skip: model_discipline.json 损坏已隔离(.corrupt)，本轮不记，"
+                     "拒绝整份重建",
+                     key="model_discipline_corrupt")
         return False
     try:
         with _LOCK:
