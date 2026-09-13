@@ -191,8 +191,14 @@ def run_project_tests(cwd=None):
             # pytest / unittest(3.14 是 "NO TESTS RAN" + rc=5) → "no tests ran"；
             # npm 没配 test 脚本 → "Missing script"；压根没有 package.json → ENOENT。
             # 不认这几句的话，**纯 Python 项目会被 npm 的报错判成"测试挂了"**。
-            if "no tests ran" in low or "missing script" in low or (
-                    name == "npm" and "enoent" in low and "package.json" in low):
+            # ⚠️ **unittest 在 <3.12 上说的是另一句**（`Ran 0 tests in 0.000s` + `OK`，
+            # **rc=0**）—— 退出码不是 5，"no tests ran" 也对不上 ⇒ 原来会一路落到
+            # 下面"rc==0 就当通过"，把**一个测试都没有**报成"**通过、0 个用例**"。
+            # 那时的门就废了：用户项目里测试文件被误删/没生成，QA 门照样放行。
+            # （`requires-python` 声明的是 3.11，所以这不是历史包袱，是活的口子。）
+            if ("no tests ran" in low or "ran 0 tests" in low
+                    or "missing script" in low or (
+                    name == "npm" and "enoent" in low and "package.json" in low)):
                 ran_but_empty.append(name)
                 continue
             # ⚠️ **npm 不再豁免**（原来这句是 `if r.returncode != 0 and name != "npm"`）。
