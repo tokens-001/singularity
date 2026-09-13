@@ -77,4 +77,11 @@ done
 for q in '如果只能做一件' '最大的误判可能是什么' '有没有第四条路' '默认怀疑' '直接批评它'; do
   grep -qF "$q" "$OUT" || { echo "⛔ 缺问题: $q" >&2; exit 1; }
 done
-echo "✅ 两节齐全 + 五个关键问题都在"
+# 源码位置那一节：至少要能看到几个**真的文件路径**
+for s in 'src/singularity/web/app.py' 'orchestrator.py:106-116' 'witness.py:52'; do
+  grep -qF "$s" "$OUT" || { echo "⛔ 源码位置那节缺: $s" >&2; exit 1; }
+done
+# 「要方案」那半边：不能只剩判断题
+grep -qF '改哪里' "$OUT" || { echo "⛔ 没要求对方给方案（缺「改哪里」）" >&2; exit 1; }
+grep -qF '可能引入什么新的静默失败' "$OUT" || { echo "⛔ 没要求自查新引入的静默" >&2; exit 1; }
+echo "✅ 两节齐全 + 五个关键问题 + 源码位置 + 要方案那半边，都在"
