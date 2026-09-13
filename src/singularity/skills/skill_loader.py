@@ -347,6 +347,6 @@ def set_agent_skills(agent_level: str, agent_model: str, skill_names: list[str],
         level_skills[key] = list(skill_names)
     else:
         level_skills.pop(key, None)
-    custom_file.parent.mkdir(parents=True, exist_ok=True)
-    custom_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # ⚠️ 原子写（原来裸 write_text：撕裂一次 → 损坏 → 新语义下**从此拒写到重启**）
+    _io.atomic_write_json(custom_file, data)
     return True

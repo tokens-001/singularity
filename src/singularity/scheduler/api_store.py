@@ -254,7 +254,7 @@ def remove(api_id: str) -> bool:
     if dropped:
         for mid in dropped:
             del custom[mid]
-        _custom_models_path().write_text(json.dumps(custom, ensure_ascii=False, indent=2))
+        atomic_write_json(_custom_models_path(), custom)
     return True
 
 
@@ -350,7 +350,7 @@ def note_api_success(model: str) -> None:
             changed = True
 
         if changed:
-            _store_path().write_text(json.dumps(live, ensure_ascii=False, indent=2))
+            atomic_write_json(_store_path(), live)
     except Exception as e:
         # 恢复状态失败不该影响调用本身，但也不能静默 —— 静默就等于又回到
         # "页面上挂着死的、没人知道为什么"
@@ -375,7 +375,7 @@ def record_alias(requested: str, actual: str) -> None:
         if aliases.get(requested) == actual:
             return
         aliases[requested] = actual
-        _store_path().write_text(json.dumps(data, ensure_ascii=False, indent=2))
+        atomic_write_json(_store_path(), data)
     except Exception:
         pass   # 记不上不该影响调用本身
 
@@ -442,7 +442,7 @@ def note_api_error(model: str, status_code: int, body: str = "") -> str:
         try:
             data = _load_raw()
             data.setdefault(_QUOTA_DEAD_KEY, {})[model] = time.time()
-            _store_path().write_text(json.dumps(data, ensure_ascii=False, indent=2))
+            atomic_write_json(_store_path(), data)
         except Exception as e:
             witness.warn("api_store", f"mark_quota_dead_failed:{model}:{e}"[:200])
     if api_id:
@@ -465,7 +465,7 @@ def set_observer_model(model_id: str) -> None:
         data["_observer"] = model_id
     else:
         data.pop("_observer", None)
-    _store_path().write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    atomic_write_json(_store_path(), data)
 
 
 def _is_major_model(model_id: str) -> bool:
@@ -695,7 +695,7 @@ def save_custom_model(model_id: str, provider: str, display: str = "",
         "notes": notes or _safe_str(existing.get("notes")),
     }
     _custom_models_path().parent.mkdir(parents=True, exist_ok=True)
-    _custom_models_path().write_text(json.dumps(custom, ensure_ascii=False, indent=2))
+    atomic_write_json(_custom_models_path(), custom)
     return custom[model_id]
 
 

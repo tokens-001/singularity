@@ -30,16 +30,19 @@ from pathlib import Path
 _WRITE_LOCK = threading.Lock()
 
 
-def atomic_write_json(path: Path, data) -> None:
+def atomic_write_json(path: Path, data, *, indent: int = 2) -> None:
     """原子写 JSON: 先写同目录 .tmp 再 os.replace, crash 不损坏正式文件。
 
     统一入口: api_store/tracker/_memory_core/_token_budget 共用 (原各自复制一份)。
     **跨进程 + 同进程线程都安全** —— 见上面 `_WRITE_LOCK` 那段说明。
+
+    `indent` 默认 2；`_process_ledger` 历史上用 1（人读的账本，一行省一点），
+    为它留个口子而不是让它继续裸写 —— **裸写一次撕裂 = 那个文件从此拒写**（见下）。
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     with _WRITE_LOCK:
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=indent), encoding="utf-8")
         os.replace(tmp, path)
     # 顺手清掉**别的进程崩溃时留下的**陈旧 tmp（自己那条刚被 `os.replace` 搬走，不在此列）。
     # ⚠️ 只清"够旧"的：同一时刻真可能有另一个进程在写，但它的 tmp 只存在**几毫秒**

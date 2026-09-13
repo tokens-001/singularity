@@ -410,8 +410,9 @@ def set_projects_root(path: str) -> Path:
             "settings.json 损坏（已隔离到 .corrupt）—— 拒绝在对它读不出来的情况下写回整份。"
             "先人工恢复备份再重试。")
     data["projects_root"] = str(root)
-    config.QIDIAN_DIR.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # ⚠️ 原子写（同上：裸写一次撕裂 = 这个文件从此拒写，因为 settings.json 也在 S1 的名单里）
+    from singularity.scheduler._io import atomic_write_json
+    atomic_write_json(p, data)
     return root
 
 

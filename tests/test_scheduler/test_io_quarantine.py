@@ -579,6 +579,44 @@ def test_第一次触碰的对照组_改完的文件仍保住别的键(tmp_path,
     assert data["glm"]["violations"] == 2
 
 
+# ═══════════════════════════════════════════════════════════════
+# ⑨ S1 覆盖的那几个文件，写 JSON **必须**走 `atomic_write_json`
+# ═══════════════════════════════════════════════════════════════
+# 为什么只有这几个文件受这条约束（别扩到全仓）：这套新语义下，
+# **裸写一次撕裂 → 文件损坏 → 那个文件从此拒写到重启**。
+# 非原子写把代价从"丢一轮"放大成"停摆"，所以诱因不能留在原地。
+# 而那 8 个不在 S1 名单里的文件（`witness` / `codegraph` / `snapshot` …）没这个放大效应，
+# 它们各自的写法有自己的理由 —— **这条闸门不是"全仓禁止裸写"**。
+
+_S1读写改写的文件 = [
+    "scheduler/_process_ledger.py",
+    "scheduler/api_store.py",          # 主库 + models_custom.json
+    "scheduler/project.py",            # settings.json
+    "scheduler/_model_discipline.py",
+    "scheduler/model_registry.py",
+    "scheduler/_dispatch_crud.py",     # agents_custom.json 的另一个写者
+    "skills/skill_loader.py",          # agents_custom.json
+]
+
+
+def test_S1那族里不许裸写JSON():
+    """07-14 外派⑦ 点名"改了一半"：同族的 `_dispatch_crud`/`model_registry` 换了原子写，
+    另外几处还在裸写 —— 等于把诱因留在原地、还加重了后果。"""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[2] / "src" / "singularity"
+    犯 = []
+    for rel in _S1读写改写的文件:
+        p = root / rel
+        assert p.exists(), f"文件挪了，闸门该跟着改：{rel}"
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            if "write_text(json.dumps" in line and not line.lstrip().startswith("#"):
+                犯.append(f"{rel}:{i}")
+    assert not 犯, (
+        "S1 覆盖的文件里有裸 JSON 写 —— 撕裂一次那个文件就**从此拒写到重启**：\n  "
+        + "\n  ".join(犯)
+        + "\n改用 `_io.atomic_write_json(path, data)`（缩进不是 2 就传 `indent=`）。")
+
+
 def test_tmp_清扫只清陈旧的(tmp_path, monkeypatch):
     """**正在写的那个进程的 tmp 不许被清掉** —— 它只存在几毫秒，但那一刻是活的。"""
     import os as _os

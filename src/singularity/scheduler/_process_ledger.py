@@ -121,9 +121,12 @@ def record(project, extra: dict | None = None) -> dict:
                      key="ledger_corrupt")
         return row
     try:
-        _path().parent.mkdir(parents=True, exist_ok=True)
-        _path().write_text(json.dumps(rows, ensure_ascii=False, indent=1),
-                           encoding="utf-8")
+        # ⚠️ **原子写**，不是裸 `write_text` —— 撕裂一次就把这个文件写坏了，
+        # 而上面那段"读坏就拒写"的新语义会让它**从此拒写到重启**：
+        # 非原子写把"丢一轮"放大成"停摆"，等于把诱因留在原地、还加重了后果
+        # （2026-09-14 外派⑦ 点名这条；`_dispatch_crud`/`model_registry` 早换了）。
+        from singularity.scheduler._io import atomic_write_json
+        atomic_write_json(_path(), rows, indent=1)   # 人读的账本，一直用 1 空格缩进
     except Exception:
         pass      # 记账失败不能把交付带崩
     return row
