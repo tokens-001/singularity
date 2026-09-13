@@ -49,9 +49,14 @@ def _tool_get_system_status() -> dict[str, Any]:
 
 def _tool_list_tasks(status: str | None = None, limit: int = 50,
                      project_id: str = "", active_only: bool = False) -> list[dict]:
-    """列出任务。active_only=True 时只返回非终态 (排除 DONE/FAILED/ROLLED_BACK)。"""
+    """列出任务。active_only=True 时只返回非终态 (排除 DONE/FAILED/ROLLED_BACK)。
+
+    ⚠️ 终态判据走 `tracker.is_terminal`，**不在这儿手写集合**（2026-09-14）：
+    同一份集合原来在仓里散着好几处，`task_timeline` 那处就因为**自己抄了一份、
+    还多抄了两个非终态**（decomposed / conflict_held）给没跑完的任务编造了终点。
+    这两处现在内容是对的，但"对"是靠人记得同步 —— 收成一份就没这个问题。
+    """
     tasks: list[dict] = []
-    terminal = {"done", "failed", "rolled_back"}
     for p in tracker.tasks_dir().glob("*.json"):
         try:
             t = tracker.Task.from_dict(json.loads(p.read_text(encoding="utf-8")))
@@ -59,7 +64,7 @@ def _tool_list_tasks(status: str | None = None, limit: int = 50,
             continue
         if status and t.status.value != status:
             continue
-        if active_only and t.status.value in terminal:
+        if active_only and tracker.is_terminal(t.status):
             continue
         if project_id and t.project_id != project_id:
             continue

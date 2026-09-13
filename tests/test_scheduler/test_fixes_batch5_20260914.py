@@ -560,6 +560,61 @@ def test_project_lineage_返回项目自己的血缘():
     assert mc == 404 and "不存在" in miss["error"], (mc, miss)
 
 
+# ═══════════════════════════════════════════════════════════════
+# ⑪ 「同族还有谁」：终态判据散着三处，其中一处已经漂过
+# ═══════════════════════════════════════════════════════════════
+# `task_timeline` 那个 bug 的形状是"**同一份集合自己抄了一份**、多抄了两个非终态"。
+# 按形状全仓扫，另外两处（`_observer_tools._tool_list_tasks` / `witness.
+# _cleanup_terminal_heartbeat`）当时**内容是对的** —— 但"对"靠的是人记得同步。
+# 现在都走 `tracker.is_terminal`。
+
+def test_观察者列任务时终态判据跟着状态机走(monkeypatch):
+    """**变异判据**：把那句 `tracker.is_terminal(t.status)` 换回手写的
+    `t.status.value in {"done","failed","rolled_back"}` → 本用例红
+    （`conflict_held` 会被当成终态排除掉）。
+
+    做法：把 `conflict_held` 临时塞进 `_TERMINAL`，看这个工具跟不跟着变 ——
+    "跟状态机走"这件事只有这样才验得出来（两边的**当前**内容本来就一样）。
+    """
+    import json as _json
+    from singularity.scheduler import _observer_tools as OT, tracker
+    monkeypatch.setattr(tracker, "_TERMINAL",
+                        set(tracker._TERMINAL) | {tracker.TaskStatus.CONFLICT_HELD})
+    assert tracker.is_terminal("conflict_held") is True   # 前提：状态机说它是终态了
+
+    d = tracker.tasks_dir()
+    (d / "obs1.json").write_text(_json.dumps({
+        "id": "obs1", "description": "x", "status": "conflict_held",
+        "created_at": 1, "updated_at": 2}), encoding="utf-8")
+    (d / "obs2.json").write_text(_json.dumps({
+        "id": "obs2", "description": "y", "status": "running",
+        "created_at": 1, "updated_at": 2}), encoding="utf-8")
+
+    got = [t["id"] for t in OT._tool_list_tasks(active_only=True)]
+    assert "obs2" in got and "obs1" not in got, f"active_only 没跟着状态机走：{got}"
+
+
+def test_心跳清理的终态判据也跟着状态机走(monkeypatch):
+    """同上，`witness._cleanup_terminal_heartbeat` 那处。
+    变异：换回手写集合 → 红。"""
+    import json as _json
+    from singularity.scheduler import witness, tracker
+
+    d = tracker.tasks_dir()
+    (d / "hb1.json").write_text(_json.dumps({
+        "id": "hb1", "description": "x", "status": "conflict_held",
+        "created_at": 1, "updated_at": 2}), encoding="utf-8")
+    hb = d / "hb1_ops.json"
+    hb.write_text("{}", encoding="utf-8")
+
+    assert witness._cleanup_terminal_heartbeat(hb, "hb1") is False, "非终态不该被清"
+    assert hb.exists()
+
+    monkeypatch.setattr(tracker, "_TERMINAL",
+                        set(tracker._TERMINAL) | {tracker.TaskStatus.CONFLICT_HELD})
+    assert witness._cleanup_terminal_heartbeat(hb, "hb1") is True, "状态机说终态了就该清"
+
+
 def test_run_executor_真的调了这条告警(monkeypatch):
     """**接线**：上面几条测的是函数本体，"接线通不通"是另一回事
     —— 挪走/删掉 `_run_executor` 里那句调用，它们照样全绿。
