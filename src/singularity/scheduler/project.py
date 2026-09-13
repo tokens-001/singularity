@@ -366,32 +366,49 @@ def _settings_path() -> Path:
 
 
 def get_projects_root() -> Path:
-    """项目成品根目录：settings.json 用户设置 > 环境变量 > 默认 ~/qidian-projects。"""
+    """项目成品根目录：settings.json 用户设置 > 环境变量 > 默认 ~/qidian-projects。
+
+    ⚠️ 读坏了**降级用默认值**（带告警 + `.corrupt` 备份，写侧另见 `set_projects_root`）——
+    原来是裸 `json.loads` + `except: pass`，"坏了"和"没有设置"长得一样
+    （2026-09-14，C 的 S1 草案 §3.6，我核过）。
+    """
+    from singularity.scheduler._io import load_json_or_quarantine
     p = _settings_path()
     root = None
     if p.exists():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
+        data = load_json_or_quarantine(p)
+        if data:                      # None（坏了）或空 dict 都落默认值
             r = data.get("projects_root", "")
             if r:
                 root = Path(r)
-        except (json.JSONDecodeError, KeyError):
-            pass
     root = root or config.PROJECTS_ROOT
     root.mkdir(parents=True, exist_ok=True)  # 确保根目录存在（目录选择器可浏览）
     return root
 
 
 def set_projects_root(path: str) -> Path:
-    """设置项目成品根目录，持久化到 settings.json。返回规范化后的绝对路径。"""
+    """设置项目成品根目录，持久化到 settings.json。返回规范化后的绝对路径。
+
+    ⚠️ **读坏了必须拒写**（2026-09-14，C 的 S1 草案 §3.7）：原来损坏时 `data = {}`，
+    然后只写 `{"projects_root": ...}` 回去 —— **settings.json 里别的用户设置全没了**，
+    而文件看起来完好。
+    """
+    from singularity.scheduler._io import is_quarantined, load_json_or_quarantine
     root = Path(path).expanduser().resolve()
     p = _settings_path()
+    if p.exists() and is_quarantined(p):
+        from . import witness          # 本文件的约定：函数内懒导入
+        witness.warn("project",
+                     "save_skipped: settings.json 损坏已隔离(.corrupt)，拒绝拿空表整份重建"
+                     "（会把别的用户设置一起抹掉）；人工恢复备份后重试",
+                     key="settings_corrupt")
+        raise RuntimeError(
+            "settings.json 损坏（已隔离到 .corrupt）—— 拒绝在对它读不出来的情况下写回整份。"
+            "先人工恢复备份再重试。")
     data = {}
     if p.exists():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, KeyError):
-            data = {}
+        got = load_json_or_quarantine(p)
+        data = got if got is not None else {}
     data["projects_root"] = str(root)
     config.QIDIAN_DIR.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

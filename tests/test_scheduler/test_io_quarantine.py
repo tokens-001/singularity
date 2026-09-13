@@ -264,3 +264,48 @@ def test_文件好的时候两个写者都照常(tmp_path, monkeypatch):
     data = json.loads(p.read_text(encoding="utf-8"))
     assert data["any"][0]["model"] == "m1", "agent 那半丢了"
     assert data["_skills"]["any"]["m1"] == ["skill_a"], "skills 那半丢了"
+
+
+# ═══════════════════════════════════════════════════════════════
+# ⑤ 第四个接入点：settings.json（项目成品根目录那份）
+# ═══════════════════════════════════════════════════════════════
+# 它坏了而写侧不拦：先读成 `{}`、再只写 `{"projects_root": ...}` 回去
+# ⇒ **settings.json 里别的用户设置全没了**，而文件看起来完好。
+# 另外读侧静默回落默认值 ⇒ "我配过"这件事**无声地消失**。
+
+def _settings_env(tmp_path, monkeypatch):
+    from singularity.scheduler import project as P
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path / ".qidian")
+    (tmp_path / ".qidian").mkdir()
+    monkeypatch.setattr(_io, "_QUARANTINED", set())
+    monkeypatch.setattr("singularity.scheduler.witness.warn", lambda *a, **k: None)
+    return P, tmp_path / ".qidian" / "settings.json"
+
+
+def test_设置文件坏了_写侧拒写并且抛(tmp_path, monkeypatch):
+    """**正题**：读不出来就不许写回整份 —— 否则别的用户设置被一起抹掉。"""
+    P, p = _settings_env(tmp_path, monkeypatch)
+    raw = '{"projects_root": "/tmp/my-projects", "别的设置": "要保住", "坏":'
+    p.write_text(raw, encoding="utf-8")
+
+    P.get_projects_root()                        # 读一次 → 置上损坏标记
+    import pytest as _pytest
+    with _pytest.raises(RuntimeError):
+        P.set_projects_root("/tmp/new")
+
+    assert p.read_text(encoding="utf-8") == raw, \
+        "坏文件被整份重建了 —— 别的用户设置全没，而文件名一模一样"
+    assert (p.parent / "settings.json.corrupt").exists(), "没留备份"
+
+
+def test_设置文件好的时候照常写且保住别的键(tmp_path, monkeypatch):
+    """对照：正常路径要把**别的设置保住**（这是"读改写"该有的样子）。"""
+    P, p = _settings_env(tmp_path, monkeypatch)
+    p.write_text(json.dumps({"projects_root": "/tmp/a", "别的设置": "要保住"}),
+                 encoding="utf-8")
+
+    P.set_projects_root("/tmp/b")
+
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["projects_root"].endswith("/tmp/b"), data
+    assert data["别的设置"] == "要保住", "读改写把别的键吃了"
