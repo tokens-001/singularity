@@ -66,6 +66,13 @@ class AnthropicApiExecutor(BaseExecutor):
 
         start = time.time()
         total_tokens = 0
+        # ⚠️ **消费调用方给的预算**（2026-09-14 核外派「改动审阅」）：`budget_s` 是
+        # "这次 dispatch 还能花多少秒"（按任务死线倒推）。不理会它，单次请求的硬上限
+        # 会越过任务死线 —— 外面那把 900s 的刀照样无声收割（同 §67）。取 min 保住原上限；
+        # 下界 1.0s（预算跑光时不该再发请求）。
+        _tmo = config.CLAUDE_CLI_TIMEOUT
+        if self.budget_s is not None:
+            _tmo = max(1.0, min(_tmo, self.budget_s))
 
         for turn in range(1, max_turns + 1):
             body = {
@@ -90,7 +97,7 @@ class AnthropicApiExecutor(BaseExecutor):
                         "anthropic-version": ANTHROPIC_VERSION,
                         "content-type": "application/json",
                     },
-                    timeout=config.CLAUDE_CLI_TIMEOUT,
+                    timeout=_tmo,
                 )
                 if resp.status_code == 429:
                     wait = 2 ** turn

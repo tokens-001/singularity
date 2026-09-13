@@ -364,3 +364,39 @@ class TestTaskRunnerExecute:
         events = [e for e in _pending_sse_events if e["kind"] == "system"]
         assert len(events) == 1
         assert "Goal循环" in events[0]["msg"]
+
+
+# ═══════════════════════════════════════════════════════════════
+# 死线（deadline_at）的**起点**（2026-09-14）
+# ═══════════════════════════════════════════════════════════════
+# 它是任务级**唯一那把尺**。原来在**本 worker 线程开头**起算 —— 但池子满时任务是先
+# 在队列里排队、worker 才起来的，两把尺差一个**排队时间**。并发默认 1、单任务可跑 810s
+# ⇒ 排队几分钟是常态，差 > 收尾余量(90s) 时执行器算出的"该收尾了"就**晚于**外面那把
+# 900s 的刀，自收尾照样赶不上收割（§67 那个病，换了更常见的触发条件）。
+# ⇒ 正常路径由 orchestrator 在 **submit 前**算好传进来，本处起算只作兜底。
+
+class TestDeadlineComesFromSubmit:
+    def _capture(self, monkeypatch, tr) -> dict:
+        seen = {}
+        monkeypatch.setattr(tr, "_run_with_retry",
+                            lambda t, ctx, agents: (seen.update(deadline_at=ctx.deadline_at),
+                                                    _make_batch_stub())[1])
+        return seen
+
+    def test_调用方给了死线就照用(self, monkeypatch):
+        tr, *_ = _setup(monkeypatch)
+        seen = self._capture(monkeypatch, tr)
+        tr.TaskRunner().execute(_make_task(), _make_agents(), None, 1782000123.0)
+        assert seen["deadline_at"] == 1782000123.0, \
+            "调用方（submit 前）算好的死线没被采用 —— 排队那段又落回两把尺之外了"
+
+    def test_没给死线才退回本线程起算(self, monkeypatch):
+        """兜底：测试 / 直接调用（`deadline_at=0.0`）时仍按老行为算。
+
+        `_setup` 把 `tr.time` 换成了常量 1782000000.0，所以这里能精确断言。
+        """
+        from singularity.scheduler import config
+        tr, *_ = _setup(monkeypatch)
+        seen = self._capture(monkeypatch, tr)
+        tr.TaskRunner().execute(_make_task(), _make_agents())
+        assert seen["deadline_at"] == 1782000000.0 + config.TASK_DEADLINE_S

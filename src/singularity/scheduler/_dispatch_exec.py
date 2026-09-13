@@ -187,6 +187,12 @@ def dispatch(
                                    baseline_ref, cwd, project_id=project_id)
 
     # ── 单模型 fallback 链 ──
+    # ⚠️ **同一个预算不能每次尝试都塞一遍**（2026-09-14 核外派「改动审阅」抓到的下一层）。
+    # `budget_s` 是调用方按任务死线倒推的"**现在**还能花多少秒"，而下面是个最多 3 次的
+    # fallback 链 —— 每轮都传原值 = 每轮把预算**重置**一次，最坏 3× 超时。
+    # 这就是 §67 那个"每 dispatch 归零"的病，只是又下了一层。
+    # 折成绝对时刻，每次尝试前重算；跑光了就是负数 ⇒ 执行器第 1 轮收尾（正是想要的）。
+    _budget_deadline = (time.time() + budget_s) if budget_s is not None else None
     last_error = ""
     for attempt, agent_cfg in enumerate(chain[:3]):
         agent_cfg = _ensure_agent_type(agent_cfg)
@@ -214,7 +220,7 @@ def dispatch(
             result = _run_executor(
                 executor_cls, agent_cfg, full_task, task_id, level,
                 baseline_ref=baseline_ref, cwd=cwd, phase=phase,
-                budget_s=budget_s,
+                budget_s=(_budget_deadline - time.time()) if _budget_deadline else None,
             )
             # ⚠️ **执行器自己撞总预算收尾 —— 这是终态，不是"这个模型空输出"。**
             # 必须挡在下面那道 `raw_output` 判据**前面**：收尾结果没有终答，raw_output

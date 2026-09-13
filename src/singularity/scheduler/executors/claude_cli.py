@@ -73,13 +73,21 @@ class ClaudeCliExecutor(BaseExecutor):
             env.pop(k, None)
 
         start = time.time()
+        # ⚠️ **消费调用方给的预算**（2026-09-14 核外派「改动审阅」）：
+        # `self.budget_s` = "这次 dispatch 还能花多少秒"（调用方按任务死线倒推）。
+        # 不理会它的话，300s 的硬上限会**越过**任务死线 —— 外面那把 900s 的刀照样
+        # 无声收割（同 §67）。取 min：既尊重任务尺，也保住原来那个上限。
+        # 下界 1.0s：预算已经跑光时不该再起一个子进程（负数会直接抛）。
+        _tmo = config.CLAUDE_CLI_TIMEOUT
+        if self.budget_s is not None:
+            _tmo = max(1.0, min(_tmo, self.budget_s))
         # cwd: worktree 沙箱优先, 否则项目根
         run_cwd = self.cwd if self.cwd else str(config.PROJECT_ROOT)
         try:
             proc = subprocess.run(
                 argv,
                 capture_output=True, text=True,
-                timeout=config.CLAUDE_CLI_TIMEOUT,
+                timeout=_tmo,
                 cwd=run_cwd,
                 env=env,
             )
@@ -92,9 +100,9 @@ class ClaudeCliExecutor(BaseExecutor):
         except subprocess.TimeoutExpired:
             return ExecutorResult(
                 success=False,
-                error=f"超时 {config.CLAUDE_CLI_TIMEOUT}s",
+                error=f"超时 {_tmo:.0f}s",
                 error_kind="timeout",
-                elapsed=config.CLAUDE_CLI_TIMEOUT,
+                elapsed=_tmo,
             )
 
         elapsed = time.time() - start

@@ -71,14 +71,20 @@ if not _secret_key:
         _secret_key = os.urandom(24).hex()
         _key_file.parent.mkdir(parents=True, exist_ok=True)
         _key_file.write_text(_secret_key)
-    # ⚠️ **只捕 FileNotFoundError，别的错让它抛**（2026-09-13 外派分类抓到的）。
-    # 原来是 `except Exception` 一把兜住 → 文件**在**但读不动（权限/损坏）时，
-    # 会走"生成新 key 并**覆盖原文件**"那条路 —— 老 key 当场被毁、所有已登录会话失效，
-    # 而且**再也回不去**。**宁可起不来（看得见），也别悄悄换钥（看不见）。**
+    except OSError as _e:
+        # 文件**在**、但读不动（权限 / 被目录占位 / IO 错）。
+        # ⚠️ 两条底线，缺一不可：
+        # ① **绝不覆盖** —— 覆盖 = 老 key 当场被毁 + 所有已登录会话失效，且再也回不去；
+        # ② **不因此挡住启动** —— 这个进程还跑着调度循环，起不来 = 整个平台（含界面）
+        #    一起黑。退回进程内随机 key 的代价只是"本次会话重启后失效"，
+        #    而告警照样看得见。（09-13 那版直接 `raise`，是把①做对了、②做过头了。）
+        witness.warn("web", f"secret_key_unreadable:{type(_e).__name__}"[:160])
+        _secret_key = os.urandom(24).hex()
     if not _secret_key:
-        raise RuntimeError(
-            f"{_key_file} 存在但内容是空的 —— 会话签名会是坏的。删掉它再重启会自动生成；"
-            "**绝不会自动覆盖**（见上面那条注释）。")
+        # 文件存在但是空的：老 key 已经没了（没什么可毁的），所以连①都不适用。
+        # 同样不挡启动，但这一条要吵一点 —— "空文件"通常意味着有人手工截断过它。
+        witness.warn("web", "secret_key_empty_file_used_ephemeral"[:160])
+        _secret_key = os.urandom(24).hex()
 app.secret_key = _secret_key
 
 _CSRF_TOKEN = os.environ.get("QIDIAN_CSRF_TOKEN") or os.urandom(16).hex()
@@ -439,6 +445,15 @@ _loop_events: deque = deque(maxlen=50)  # 最近 50 个事件
 _loop_running: bool = False
 _loop_lock = threading.Lock()
 _sse_clients: list = []  # SSE 连接的客户端队列
+# 回放缓冲区的写锁。**必须有**（2026-09-14 扫bug-03 + 我自己实测）：
+# `_sse_event_buffer` 被广播线程 append（满了还会 popleft），而回放侧在**迭代**它
+# ⇒ `RuntimeError: deque mutated during iteration`。包着回放的那层 try
+# **只有 finally、没有 except**，异常直接穿出去把连接打死。
+# ⚠️ 光改成 `list(_sse_event_buffer)` **不够** —— 实测 3.14 下它 40 万次没炸，
+# 但 `list()` 走的仍是 `deque.__iter__`（子类覆盖 `__iter__` 会被调用，验证过），
+# 只是 C 层 `list_extend` 那一段碰巧不让出 GIL ⇒ **靠的是实现细节，不是保证**。
+# 锁住两头才是结构上对。（实测对照：裸迭代 40 万次炸 71 次。）
+_SSE_BUF_LOCK = threading.Lock()
 _sse_pump_thread: threading.Thread | None = None  # 事件泵线程(实时广播工具事件)
 _sse_event_id = 0             # 全局递增事件 ID
 _sse_event_lock = threading.Lock()
@@ -689,7 +704,8 @@ def _sse_broadcast(kind: str, msg: str, ts: float = None, extra: dict = None):
     data = json.dumps({"kind": kind, "msg": msg, "ts": ts, **(extra or {})})
     # 回放缓冲区（心跳不入缓冲区，免浪费空间）
     if kind != "ping":
-        _sse_event_buffer.append((eid, data))
+        with _SSE_BUF_LOCK:          # 与回放侧的取快照配对，见那条注释
+            _sse_event_buffer.append((eid, data))
     payload = (eid, data)
     dead = []
     for q in _sse_clients:
@@ -1668,7 +1684,15 @@ def api_observer_model_set():
 
 @app.route("/api/auth/status")
 def api_auth_status():
-    data, code = _api_handler.auth_status()
+    # 这个端点在 `_PUBLIC_ENDPOINTS` 里（前端先要知道"要不要登录"，必须免认证）
+    # ⇒ `_guard_auth` 不会给它注入 `g.auth_user`。**用户清单是另一回事**：
+    # 原来无条件回全量用户清单，等于这个白名单端点绕过了自己。
+    # 认证没启用时本来就没有可保护的东西，照回。
+    _show_users = True
+    if _AUTH_ENABLED:
+        from singularity.scheduler._auth import require_auth
+        _show_users = require_auth(request)[1] is None
+    data, code = _api_handler.auth_status(include_users=_show_users)
     return jsonify(data), code
 
 @app.route("/api/auth/bootstrap", methods=["POST"])
@@ -2082,7 +2106,15 @@ def api_sse_events():
             if last_eid > 0:
                 replayed = 0
                 # 缓冲区按时间排序，找到所有 >last_eid 的事件
-                for eid, data in _sse_event_buffer:
+                # ⚠️ **在锁里取快照**（2026-09-14 扫bug-03）。`_sse_event_buffer` 是
+                # `deque`，广播线程随时 `append`（满了还要 popleft）⇒ 直接迭代会
+                # `RuntimeError: deque mutated during iteration`，而包着它的这层 try
+                # **只有 finally、没有 except** ⇒ 异常穿出去把连接打死
+                # （对照：下面 init 块是有 try/except 的）。
+                # 锁与 `_sse_broadcast` 的 append 侧是同一把 —— 光 `list()` 不够，见定义处。
+                with _SSE_BUF_LOCK:
+                    _replay = list(_sse_event_buffer)
+                for eid, data in _replay:
                     if eid > last_eid:
                         yield f"id: {eid}\ndata: {data}\n\n"
                         replayed += 1

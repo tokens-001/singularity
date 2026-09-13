@@ -167,10 +167,21 @@ def run_project_tests(cwd=None):
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=60, cwd=root)
             output = (r.stdout + "\n" + r.stderr)[:4000]
-            if "no tests ran" in output.lower():
+            low = output.lower()
+            # "没找到测试"有好几种说法，都得认成**没找到**、不能当失败：
+            # pytest / unittest(3.14 是 "NO TESTS RAN" + rc=5) → "no tests ran"；
+            # npm 没配 test 脚本 → "Missing script"；压根没有 package.json → ENOENT。
+            # 不认这几句的话，**纯 Python 项目会被 npm 的报错判成"测试挂了"**。
+            if "no tests ran" in low or "missing script" in low or (
+                    name == "npm" and "enoent" in low and "package.json" in low):
                 ran_but_empty.append(name)
                 continue
-            if r.returncode != 0 and name != "npm":
+            # ⚠️ **npm 不再豁免**（原来这句是 `if r.returncode != 0 and name != "npm"`）。
+            # 豁免的后果：npm 非零退出时两个分支都不进，`passed` 停在初值 True、
+            # `runner` 停在 "" ⇒ 最后被写成"no test runner found（三个都启动不了）"。
+            # py/unittest 在纯 JS 项目里必然"没找到测试" ⇒ **只剩 npm 这一票**，
+            # 于是"纯 JS 项目 npm 全红"被报成"没跑" —— 既不是"跑过了"也不是"跑挂了"。
+            if r.returncode != 0:
                 result["passed"] = False; result["failures"] = r.returncode
                 result["output"] = output; result["runner"] = name; return result
             if name == "pytest" and r.returncode == 0:

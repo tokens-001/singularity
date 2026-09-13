@@ -113,8 +113,16 @@ def _dispatch_ready(dispatched: set, pool, agents, runner: TaskRunner,
             # 2026-09-13 真机实测就是这么凭空少了一个任务（py-spy 栈：池子里没有工作线程、
             # 循环空转到 `time.sleep(3)`）。所以这一段必须兜住 ——
             # **抛了要把它转成 FAILED，不许留在 RUNNING**。
+            # ⚠️ **死线必须在 submit 之前定**（2026-09-14 核外派「改动审阅」）。
+            # `runner.execute` 原本是在 worker 线程**开头**才起表 —— 而池子满时
+            # 任务会在队列里等，于是两把尺差了一个**排队时间**。并发默认 1、单个任务
+            # 可跑 810s ⇒ 排队几分钟是常态，`W > 收尾余量(90s)` 时执行器算出的
+            # "该收尾了"**晚于**外面那把 900s 的刀 ⇒ 自收尾照样赶不上收割
+            # （就是 §67 那个病，换了个更常见的触发条件）。
+            # 从 submit 起算，排队时间会被 `_dispatch_budget_s` 每次 dispatch 自动扣掉。
+            deadline_at = time.time() + config.TASK_DEADLINE_S
             try:
-                fut = pool.submit(runner.execute, t, agents, mq)
+                fut = pool.submit(runner.execute, t, agents, mq, deadline_at)
             except Exception as _e:
                 # 走共用的兜底（§65）。**这里原来是自己手写一段**，跟 `_strand_guard`
                 # 只差一样东西：**改之前不重读盘上的状态**。当前路径上那段是对的

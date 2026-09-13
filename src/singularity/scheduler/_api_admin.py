@@ -439,17 +439,19 @@ def mcp_server_add(data):
 
 def mcp_server_delete(name):
     from . import mcp as m; configs = m.load_mcp_configs()
-    m.save_mcp_configs([c for c in configs if c.name != name]); return {"ok": True}, 200
+    m.save_mcp_configs([c for c in configs if c.name != name])
+    # ⚠️ **光删配置文件不够**（2026-09-14 扫bug-03）：`get_registry()` 是全局单例，
+    # 注册表里的客户端和工具**原样还在** ⇒ 下次装配 agent 时旧工具照旧回来，
+    # 界面上"删了"、模型还能调。必须把它从注册表里一起摘掉。
+    m.get_registry().drop_server(name)
+    return {"ok": True}, 200
 
 
 def mcp_server_reconnect(name):
     from . import mcp as m; configs = m.load_mcp_configs(); reg = m.get_registry()
     for c in configs:
         if c.name == name:
-            if name in reg._clients:
-                reg._clients[name].disconnect(); del reg._clients[name]
-                reg._tools = [t for t in reg._tools if t.server_name != name]
-                reg._tool_index = {k:v for k,v in reg._tool_index.items() if v.cfg.name != name}
+            reg.drop_server(name)   # 先摘干净再连，否则旧客户端会留在注册表里
             reg.load_configs([c]); return {"ok": True, "tool_count": len(reg._tools)}, 200
     return {"error": f"服务器 {name} 不存在"}, 404
 
@@ -469,15 +471,32 @@ def mcp_refresh():
 # 监控 / Auth / Health / 模板  (ex _api_monitor.py)
 # ═══════════════════════════════════════════════════════════════
 
-def auth_status():
+def auth_status(include_users: bool = False):
+    """认证状态。
+
+    ⚠️ `include_users` **默认 False（fail-closed）** —— 这个端点的路由挂在
+    `_PUBLIC_ENDPOINTS` 里（前端要先知道"要不要登录"，所以必须免认证），
+    于是它**拿不到 `_guard_auth` 注入的 `g.auth_user`**。原来无条件回
+    `list_users()` ⇒ **未认证就能拿到全量用户清单**，等于在自己的白名单里绕过了自己。
+    默认值取 False 是为了"下个调用方忘了传"时也**不会**泄漏，而不是靠每次记得传。
+    """
     from ._auth import get_auth
-    return {"enabled": os.environ.get("QIDIAN_AUTH") == "1", "users": get_auth().list_users()}, 200
+    data: dict = {"enabled": os.environ.get("QIDIAN_AUTH") == "1"}
+    if include_users:
+        data["users"] = get_auth().list_users()
+    return data, 200
 
 
 def auth_bootstrap():
     from ._auth import get_auth; a = get_auth()
     if a._users: return {"ok": False, "error": "已有用户"}, 403
-    admin = a.bootstrap(); return {"ok": True, "user": admin.to_dict(), "message": f"Admin token: {admin.token[:8]}..."}, 200
+    admin = a.bootstrap()
+    # ⚠️ 原来回的是 `f"Admin token: {admin.token[:8]}..."` —— **打前缀等于没给**：
+    # 盘上只存哈希、`to_dict()` 不含明文，这里是**唯一**一次能看到完整 token 的机会
+    # （同 `_auth.bootstrap` 里那句 print 的注释）。回 [:8] 的后果是"谁手里都没有能用的
+    # token ⇒ 一开 QIDIAN_AUTH 就全员 401，且没有任何自助恢复通道"。
+    return {"ok": True, "user": admin.to_dict(), "token": admin.token,
+            "message": "Admin token 仅此一次显示，请立刻保存"}, 200
 
 
 def auth_add_user(uid, name="", role="viewer"):

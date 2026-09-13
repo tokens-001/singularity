@@ -615,3 +615,40 @@ def test_dispatch_start_is_marked_before_dispatch_runs(monkeypatch, tmp_path):
 
     assert seen.get("started_at") is not None, (
         "dispatch 被调用时 sidecar 还不存在 —— 说明那个标记没接在 dispatch 前面")
+
+
+class _RecordingPool:
+    """记录每次 `submit` 的实参（第 1 个是 `runner.execute` 这个绑定方法本身）。"""
+    def __init__(self):
+        self.calls = []
+
+    def submit(self, *a, **k):
+        self.calls.append((a, k))
+        return object()
+
+
+def test_死线在_submit_那一刻就定好(monkeypatch, tmp_path):
+    """🔴 池子满时任务**先在队列里排队**，worker 才起来 —— 死线必须在 submit 前定。
+
+    `runner.execute` 原来是在 worker 线程开头才起表，两把尺差一个**排队时间**。
+    并发默认 1、单任务可跑 810s ⇒ 排队几分钟是常态，差超过收尾余量(90s) 时
+    执行器的自收尾就晚于外面那把 900s 的刀（§67 那个病换了个更常见的触发）。
+
+    删掉 orchestrator 里"submit 前先算 deadline_at、并按位置传第 4 个实参"那两行，
+    这条会红：第 4 个位置参数会变回 `mq`（不是 float）。
+    """
+    import time as _t
+    tr = _patch_dispatch_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(orch.witness, "warn", lambda *a, **k: None)
+    tr.create("死线要在 submit 前定")
+
+    pool = _RecordingPool()
+    orch._dispatch_ready(set(), pool, {}, _Runner(), {}, None)
+
+    assert pool.calls, "压根没派发出去（这条测试的前提没成立）"
+    args, _kw = pool.calls[0]
+    assert len(args) == 5, f"submit 的实参个数变了：{args}"
+    deadline = args[-1]
+    assert isinstance(deadline, float) and not isinstance(deadline, bool), \
+        f"第 4 个位置参数不是死线（拿到 {deadline!r}）—— 排队那段就落在两把尺之外了"
+    assert deadline > _t.time() + 800, f"死线算得不对：{deadline}"

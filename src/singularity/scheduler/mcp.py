@@ -339,6 +339,30 @@ class MCPRegistry:
             except Exception as e:  # noqa: BLE001
                 witness.warn("mcp", f"old_client_disconnect:{type(e).__name__}"[:80])
 
+    def drop_server(self, name: str) -> bool:
+        """把一个服务器**从注册表里摘掉**（客户端 + 它的全部工具），并断开连接。
+
+        为什么要有这个方法（2026-09-14）：删配置 ≠ 删掉已经连上的那一个。
+        `get_registry()` 是**全局单例**，`/api/mcp/servers/<name>` DELETE 过去只
+        `save_mcp_configs` + 清 `dispatcher._MCP_CACHE`，而注册表里那个服务器的
+        `_clients` / `_tools` / `_tool_index` **原样还在** ⇒ 下一次装配 agent 时旧工具
+        照旧回来：界面上"删了"，模型还能调。
+        同一段摘除逻辑原先只写在 `_api_admin.mcp_server_reconnect` 里（那里是
+        "先摘再重连"）—— 收在这里，免得下次再有人新增一个"动配置"的入口又漏掉。
+        """
+        with self._lock:
+            client = self._clients.pop(name, None)
+            if client is None:
+                return False
+            self._tools = [t for t in self._tools if t.server_name != name]
+            self._tool_index = {k: v for k, v in self._tool_index.items()
+                                if v.cfg.name != name}
+        try:                       # 锁外断开: disconnect 可能阻塞
+            client.disconnect()
+        except Exception as e:     # noqa: BLE001
+            witness.warn("mcp", f"drop_server_disconnect:{type(e).__name__}"[:80])
+        return True
+
     def get_all_tools(self) -> list[MCPTool]:
         """获取所有已发现的工具。"""
         with self._lock:

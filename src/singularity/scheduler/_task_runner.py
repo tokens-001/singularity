@@ -153,12 +153,16 @@ class TaskRunner:
     orchestrator 只需 import 这一个类。
     """
 
-    def execute(self, task, agents: dict, merge_queue=None):
+    def execute(self, task, agents: dict, merge_queue=None, deadline_at: float = 0.0):
         """执行单个任务: 路由→预检→Goal/委员会/普通→返回(batch, route, snap)。
 
         merge_queue: v3 并行时由 _run_queue_v3 传入, 使 _exec.run 走 v3 路径
           (commit_wt + 填 merge_request, 不直接 merge_back)。
           None → v2 路径 (直接 merge_back)。修复 reap bug 根因#1。
+
+        deadline_at: 任务死亡时刻的**绝对值**，由调用方在 **submit 那一刻**算好传进来
+          —— 池子排队那段也就算在同一把尺上了（见下面起表处那条注释）。
+          `0.0`（测试/直接调用）⇒ 退回"本线程开头起算"。
         """
         from singularity.scheduler.log import set_trace_id
         set_trace_id(task.id)  # 本任务生命周期内 log_event 都带 trace_id
@@ -189,12 +193,13 @@ class TaskRunner:
         from . import project as proj_mod
         snap = snap_mod.take(task.id, repo_root=proj_mod.repo_root_for(task))
         # 起表 —— 这是**任务级唯一那把尺**。orchestrator 的 900s 收割也是从"派发那一刻"
-        # 算的（`running_futures[fut] = (…, time.time())`），这里就在同一个 worker 线程的
-        # 开头、离派发只有线程调度那点差。执行器拿它倒推自己的提前量，
-        # 于是"跨多次 dispatch、跨重试、中间等人审"的时间都在同一把尺上（§67）。
+        # 算的（`running_futures[fut] = (…, time.time())`）。
+        # ⚠️ 但"本线程开头"**不等于**"派发那一刻"：池子满时任务先在队列里排队，
+        # worker 才起来（2026-09-14 核外派「改动审阅」）。所以正常路径下由 orchestrator
+        # 在 submit 前把死线**算好传进来**；`deadline_at=0`（测试/直接调用）才退回本行起算。
         ctx = RunContext(batch_id=task.id, snapshot_ref=snap.ref,
                          snapshot_method=snap.method, merge_queue=merge_queue,
-                         deadline_at=time.time() + config.TASK_DEADLINE_S)
+                         deadline_at=deadline_at or (time.time() + config.TASK_DEADLINE_S))
         # ── 代码上下文注入 (codegraph) ──
         if pre.code_context:
             task.description = f"{task.description}\n\n[代码结构上下文]\n{pre.code_context}"

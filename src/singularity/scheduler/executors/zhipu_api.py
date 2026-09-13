@@ -46,11 +46,25 @@ class ZhipuApiExecutor(BaseExecutor):
         url = self.cfg["entry"]
         body = self._render_body()
         start = time.time()
+        # ⚠️ **消费调用方给的预算**（2026-09-14 核外派「改动审阅」）：`budget_s` 是
+        # "这次 dispatch 还能花多少秒"（按任务死线倒推）。单次请求**和限流退避重试**
+        # 都从这份预算里出 —— 不理会它，光重试就能把任务死线甩到外面那把 900s 的刀上
+        # （同 §67）。下界 1.0s：预算跑光时不该再发请求。
+        _tmo = config.ZHIPU_API_TIMEOUT
+        _deadline = None
+        if self.budget_s is not None:
+            _tmo = max(1.0, min(_tmo, self.budget_s))
+            _deadline = start + self.budget_s
 
         # 限流重试 (审计 5.3): 指数退避, 不计入 max_turns
         for attempt in range(config.ZHIPU_MAX_RETRIES + 1):
+            if _deadline is not None and time.time() >= _deadline:
+                return ExecutorResult(
+                    success=False, error="预算跑光，不再重试",
+                    error_kind="timeout", elapsed=time.time() - start,
+                )
             try:
-                content, token_count = self._post(url, body, api_key)
+                content, token_count = self._post(url, body, api_key, _tmo)
                 elapsed = time.time() - start
                 return self._save_as_patch(content, elapsed, token_count)
             except RateLimitError:
@@ -78,7 +92,7 @@ class ZhipuApiExecutor(BaseExecutor):
             except TimeoutError:
                 return ExecutorResult(
                     success=False,
-                    error=f"超时 {config.ZHIPU_API_TIMEOUT}s",
+                    error=f"超时 {_tmo:.0f}s",
                     error_kind="timeout",
                     elapsed=time.time() - start,
                 )
@@ -91,7 +105,7 @@ class ZhipuApiExecutor(BaseExecutor):
         _render_recursive(body, {"prompt": self.task})
         return body
 
-    def _post(self, url: str, body: dict, api_key: str) -> str:
+    def _post(self, url: str, body: dict, api_key: str, timeout: float | None = None) -> str:
         data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(
             url, data=data, method="POST",
@@ -101,7 +115,8 @@ class ZhipuApiExecutor(BaseExecutor):
             },
         )
         try:
-            with urllib.request.urlopen(req, timeout=config.ZHIPU_API_TIMEOUT) as resp:
+            with urllib.request.urlopen(
+                    req, timeout=timeout or config.ZHIPU_API_TIMEOUT) as resp:
                 raw = resp.read().decode("utf-8")
         except urllib.error.HTTPError as e:
             if e.code == 429:
