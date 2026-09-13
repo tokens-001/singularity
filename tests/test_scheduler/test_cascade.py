@@ -84,40 +84,39 @@ class TestPickAgent:
     """dispatcher 选模型 + fallback 链。（原 pick_agent 是零调用的死函数，已删；
     实际在用的一直是 pick_agent_fallback_chain。）"""
 
-    def test_pick_returns_agent_for_level(self):
-        agents = load_agents()
-        for level in ("any",):
-            if level in agents and agents[level]:
-                # 检查该层级是否有可用的代理
-                available_agents = [agent for agent in agents[level] if agent_api_available(agent)]
-                if available_agents:
-                    # 如果有可用代理，则尝试获取一个
-                    try:
-                        chain = pick_agent_fallback_chain(agents, level)
-                        cfg = chain[0] if chain else None
-                        if cfg:  # 可能所有 agent 都 disabled
-                            assert "model" in cfg
-                            assert "type" in cfg
-                    except RuntimeError as e:
-                        # 如果抛出异常，确保它是预期的异常
-                        expected_msg = f"{level} 层所有 agent 的 API 均不可用"
-                        if expected_msg in str(e):
-                            continue  # 这是我们预期的情况
-                        else:
-                            raise  # 如果是其他异常，重新抛出
-                else:
-                    # 如果没有可用代理，应该抛出异常
-                    assert pick_agent_fallback_chain(agents, level) == [], \
-                        "没有可用 agent 时应当返回空链" 
-            else:
-                # 如果层级不存在代理配置，跳过测试
-                continue
+    def test_可用_agent_必须进链(self, monkeypatch):
+        """**无条件断言**：有可用 agent 就必须给出非空链。
 
-    def test_fallback_chain_returns_list(self):
+        ⚠️ 原来这两条的断言全埋在 `if available_agents:` / `if cfg:` / `try:` 里 ——
+        而「**有可用 agent 却返回空链**」（最该防的那条回归）走的是 `cfg = None` 那条路，
+        **零断言也能绿**（2026-09-14，外派⑤核出、我核过）。
+        也顺手改成**不依赖 `load_agents()` 的真实配置**（同文件 `test_breaker_*` 的写法）——
+        原来 `if level not in agents: continue` 会让它在没配 agent 的机器上**什么都不测**。
+        """
         from singularity.scheduler.dispatcher import pick_agent_fallback_chain
-        agents = load_agents()
+
+        monkeypatch.setattr(
+            "singularity.scheduler.dispatcher.agent_api_available", lambda a: True)
+        agents = {"any": [{"model": "__m_x__", "type": "claude-cli", "entry": "x"}]}
+
         chain = pick_agent_fallback_chain(agents, "any")
-        assert isinstance(chain, list)
+
+        assert chain, "有可用 agent 却返回空链 —— 这正是要防的回归"
+        assert chain[0]["model"] == "__m_x__"
+        assert "model" in chain[0] and "type" in chain[0]
+
+    def test_没有可用_agent_返回空链(self, monkeypatch):
+        """对照：一个可用 agent 都没有时必须是空链（别把上面的修法做成"永远非空"）。"""
+        from singularity.scheduler import _model_breaker as mb
+        from singularity.scheduler.dispatcher import pick_agent_fallback_chain
+
+        monkeypatch.setattr(
+            "singularity.scheduler.dispatcher.agent_api_available", lambda a: False)
+        monkeypatch.setattr(mb, "_breakers", {})
+        monkeypatch.setattr(mb, "_loaded", True)     # 别读真实 .qidian
+        agents = {"any": [{"model": "__m_x__", "type": "claude-cli", "entry": "x"}]}
+
+        assert pick_agent_fallback_chain(agents, "any") == []
 
     def test_breaker_filters_open_model_but_fails_open(self, monkeypatch, tmp_path):
         """熔断中的模型从链里剔除；全池熔断时 fail-open 原样返回，防调度停摆。"""

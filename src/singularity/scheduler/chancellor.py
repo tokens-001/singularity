@@ -74,7 +74,9 @@ def assess(task_desc: str, term_reason: str, changed_files: list[str] = None,
         )
 
     # ── alert: 升级链耗尽 ──
-    if "escalation_exhausted" in term_reason:
+    # ⚠️ 同 `_task_runner.py:273`：`escalation_exhausted` 已无写者，
+    # 现役词是 `no_escalation_path`（2026-09-14，外派⑤核出、我复核属实）。两个都收。
+    if "no_escalation_path" in term_reason or "escalation_exhausted" in term_reason:
         tried = ", ".join(agent_tried) if agent_tried else "全部 agent"
         return Report(
             severity="alert",

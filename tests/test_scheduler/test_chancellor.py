@@ -41,7 +41,7 @@ class TestAssess:
     def test_escalation_exhausted_alert(self):
         """升级链耗尽 → alert。"""
         from singularity.scheduler.chancellor import assess
-        r = assess("实现认证", "escalation_exhausted (level=E+)")
+        r = assess("实现认证", "no_escalation_path (level=E+)")
         assert r.severity == "alert"
         assert "全部 agent 都试了" in r.what
 
@@ -101,7 +101,7 @@ class TestAssess:
     def test_escalation_priority_over_retry(self):
         """escalation_exhausted 优先于 retry>=2（规则顺序）。"""
         from singularity.scheduler.chancellor import assess
-        r = assess("复杂任务", "escalation_exhausted (level=E+)",
+        r = assess("复杂任务", "no_escalation_path (level=E+)",
                    retry_count=5)
         assert r.severity == "alert"
         assert "全部 agent 都试了" in r.what  # escalation 消息，非 retry 消息
@@ -120,3 +120,14 @@ class TestAssess:
         r = assess("修复", "failed: 重复失败",
                    retry_count=2, agent_tried=["gpt-4", "claude"])
         assert "gpt-4" in r.what or "gpt-4" in r.why
+
+
+def test_升级链耗尽_新旧两个词都收():
+    """`escalation_exhausted` 已无写者（生产侧改名成 `no_escalation_path`），
+    但历史 trace / 旧数据里还会出现 ⇒ **两个词都收**，别把旧数据变成噪声。
+
+    ⚠️ 这条钉的是"消费者兼容"，**不是**"旧词还活着" —— 真实现役路径见上面那条。
+    """
+    from singularity.scheduler.chancellor import assess
+    for tr in ("no_escalation_path (level=E+)", "escalation_exhausted (level=E+)"):
+        assert assess("任务", tr).severity == "alert", f"{tr!r} 没被认出来"

@@ -484,7 +484,10 @@ class TestFinalizeResult:
         assert reason.startswith("rolled_back:")
         assert len(rollback_called) == 1
 
-    # ── 分支4: D方案 + escalation_exhausted → E+ 修复 ──
+    # ── 分支4: D方案 + 升级链耗尽 → E+ 修复 ──
+    # ⚠️ 输入词 2026-09-14 改过：生产侧 `_exec.py:755` 早就不写 `escalation_exhausted`
+    # 了（改成 `no_escalation_path`），而这条测试一直拿**旧词**当输入 —— 全绿地
+    # 给一个**永不触发**的分支作证（外派⑤核出、我复核属实）。改成现役词。
     def test_dplan_escalation_to_eplus(self, monkeypatch):
         val = type("V", (), {"action": "abort", "verdict": "阻断"})()
 
@@ -494,7 +497,7 @@ class TestFinalizeResult:
 
         reason, results, _ = self._call(
             monkeypatch,
-            batch=self._make_batch(ok=False, validation=val, term_reason="escalation_exhausted (level=any)"),
+            batch=self._make_batch(ok=False, validation=val, term_reason="no_escalation_path (level=any)"),
             **{
                 "_read_planner_patch": lambda tid: "规划方案内容",
                 "tracker.transition": record_transition,

@@ -270,7 +270,13 @@ class TaskRunner:
             reason = "cancelled"
         else:
             d_plan = _read_planner_patch(task.id)
-            if d_plan and "escalation_exhausted" in term_reason:
+            # ⚠️ **`escalation_exhausted` 已经没有任何写者**（2026-09-14，外派⑤核出、我复核属实）：
+            # 生产侧 `_exec.py:755` 早就把它改名成 `no_escalation_path`（为了把真实原因写进终态，
+            # 见那里的注释），而**消费侧没跟着改** ⇒ 这个"D 方案自动修复"分支**永远不触发**，
+            # 而三条测试一直拿旧词当输入、全绿地给死功能作证。
+            # 两个词都收：新词是现役，旧词只在历史 trace / 旧数据里出现。
+            if d_plan and ("no_escalation_path" in term_reason
+                           or "escalation_exhausted" in term_reason):
                 fix_task = tracker.create(
                     f"[D方案执行] {task.description[:80]}",
                     depends_on=[task.id], depth=task.depth)
