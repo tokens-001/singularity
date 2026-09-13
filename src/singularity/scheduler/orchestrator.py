@@ -116,17 +116,16 @@ def _dispatch_ready(dispatched: set, pool, agents, runner: TaskRunner,
             try:
                 fut = pool.submit(runner.execute, t, agents, mq)
             except Exception as _e:
-                try:
-                    tracker.transition(
-                        t.id, TaskStatus.FAILED,
-                        error=f"派发失败（future 没登记上）: {type(_e).__name__}: {_e}"[:200])
-                except Exception:
-                    pass
-                try:
-                    witness.warn("orch", f"dispatch_failed:{type(_e).__name__}: {_e}"[:200],
-                                 key="dispatch_failed")
-                except Exception:
-                    pass
+                # 走共用的兜底（§65）。**这里原来是自己手写一段**，跟 `_strand_guard`
+                # 只差一样东西：**改之前不重读盘上的状态**。当前路径上那段是对的
+                # （同线程、刚置完 RUNNING、submit 紧跟着抛 ⇒ 它确实还停在 RUNNING），
+                # 但**第二个写入者存在时就不成立** —— 而我们有
+                # `tests/integration/role_probe.py` 那个独立进程（见 `project.py` 的 `save()`）。
+                # 2026-09-13 核外派答卷时发现：`_strand_guard` 的 docstring 早写着
+                # "本文里同一形状有 5 处…这个是共用的兜底"，**而真机抓到的那一处恰恰没走它** ——
+                # 声称跑在行为前面。`where="dispatch"` 让告警 key 仍是 `dispatch_failed`
+                # （不劈开已有的常驻分组），`detail` 保住原来那句人话。
+                _strand_guard(t, _e, "dispatch", detail="派发失败：future 没登记上")
                 continue
             running_futures[fut] = (t, route, snap, pre, time.time())
             dispatched.add(t.id)
@@ -354,7 +353,7 @@ def _flag_killed_without_wrapup(tid: str) -> None:
         pass
 
 
-def _strand_guard(t, exc: BaseException, where: str) -> None:
+def _strand_guard(t, exc: BaseException, where: str, detail: str = "") -> None:
     """兜住"future/batch **已经消费掉**、后续那步却抛了"—— 别把任务留在 RUNNING 没人管。
 
     §65 那条形状：**先改状态、后做事，中间断了就出孤儿**；而孤儿的表现是"看起来在跑"
@@ -366,12 +365,23 @@ def _strand_guard(t, exc: BaseException, where: str) -> None:
     ⚠️ 为什么这里"自动改状态"是对的，而 `reconcile_projects` 那条规矩说自动纠正危险：
     那条说的是**猜**（"状态和磁盘对不上，谁对？"）；这里不猜 —— **没有 future 就是
     没在跑**，是确定的。留着 RUNNING 才是谎报。
+
+    `where` **同时决定告警 key**（`{where}_failed`，粒度要跨调用点稳定，别随手改 ——
+    `alert_summary` 按 key 归并，改了就等于把已有的常驻分组劈成两条）。
+    `detail` 是给人看的措辞，不给就用 `{where} 失败`。
+
+    ⚠️ **2026-09-13 的账**：这段 docstring 上面那句"同一形状有 5 处…共用的兜底"
+    **曾经是假的** —— 真机抓到的那处（`_dispatch_ready`）自己手写了一段、没走这里，
+    而它**恰恰缺的就是下面那个"只在还停在 RUNNING 时才改"的检查**。
+    已改成真走这里。**教训：`_strand_guard` 这种"统一兜底"的说法，要能一口气数出
+    调用点才算数**（当时只有 4 个）。
     """
     try:
         fresh = tracker.read_task(t.id)
         if fresh is not None and fresh.status == TaskStatus.RUNNING:
             tracker.transition(t.id, TaskStatus.FAILED,
-                               error=f"{where} 失败（任务没在跑）: {type(exc).__name__}: {exc}"[:200])
+                               error=f"{detail or where + ' 失败'}（任务没在跑）: "
+                                     f"{type(exc).__name__}: {exc}"[:200])
     except Exception:
         pass
     try:

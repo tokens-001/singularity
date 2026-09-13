@@ -209,7 +209,8 @@ def test_dispatch_failure_leaves_no_orphan_running_task(monkeypatch, tmp_path):
     """
     tr = _patch_dispatch_env(monkeypatch, tmp_path)
     warns = []
-    monkeypatch.setattr(orch.witness, "warn", lambda scope, msg, **kw: warns.append(msg))
+    monkeypatch.setattr(orch.witness, "warn",
+                        lambda scope, msg, **kw: warns.append((msg, kw.get("key"))))
 
     t = tr.create("孤儿测试：提交必炸")
     orch._dispatch_ready(set(), _BoomPool(), {}, _Runner(), {}, None)
@@ -218,13 +219,47 @@ def test_dispatch_failure_leaves_no_orphan_running_task(monkeypatch, tmp_path):
     assert fresh.status == tr.TaskStatus.FAILED, (
         f"任务被留在 {fresh.status} —— 没有 future，永远没人收割它")
     assert "派发失败" in (fresh.error or ""), fresh.error
-    assert any("dispatch_failed" in w for w in warns), warns
+    # **钉 key 而不是正文**：`alert_summary` 按 key 归并，key 才是有下游的那个；
+    # 正文（`dispatch:…`）只给人看。（2026-09-13 这处从手写段改走 `_strand_guard`，
+    # 正文前缀跟着统一成了 `dispatch:` —— 旧断言卡的是正文，卡错了地方。）
+    assert any(k == "dispatch_failed" for _, k in warns), warns
 
 
 class _OkPool:
     """提交成功的假池子：返回一个永不完成的假 future。"""
     def submit(self, *a, **k):
         return object()
+
+
+def test_dispatch_failure_does_not_clobber_a_state_someone_else_set(monkeypatch, tmp_path):
+    """派发那处现在也走 `_strand_guard` —— **改之前必须先看它现在是什么**。
+
+    钉的是 2026-09-13 发现的那处差：`_dispatch_ready` 原来是**自己手写**的一段、
+    不走 `_strand_guard`，而它少的**唯一**一样东西就是这道重读检查。
+
+    ⚠️ **别用"终态没被覆盖"当判据 —— 那是假绿**：`_TERMINAL_EXIT[DONE]` 是空集，
+    `done→failed` 本来就被状态机挡掉，跟本判据无关。
+    （`test_strand_guard_only_touches_running` 的第一版就是这么绿的，它自己的
+    docstring 记着这笔；2026-09-13 我在这里**又犯了一次**，也是变异验证抓出来的。）
+    ⇒ 这里挑一个**状态机不管**的中转态：`submit` 把任务挪回 **PENDING**
+    （`RUNNING→PENDING` 合法，`PENDING→FAILED` 也合法）—— 没有那道重读检查的话，
+    它会**照改不误**，把一个刚被重新排队的任务打成失败。
+    这就是有第二个写入者（`tests/integration/role_probe.py` 那个独立进程）时的真实风险。
+    """
+    tr = _patch_dispatch_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(orch.witness, "warn", lambda *a, **k: None)
+    t = tr.create("派发时被别人挪回 PENDING")
+
+    class _PoolThatRequeuesItFirst:
+        """`submit` 里先把任务挪回 PENDING（=第二个写入者重新排队），再抛。"""
+        def submit(self, *a, **k):
+            tr.transition(t.id, tr.TaskStatus.PENDING)
+            raise RuntimeError("boom")
+
+    orch._dispatch_ready(set(), _PoolThatRequeuesItFirst(), {}, _Runner(), {}, None)
+
+    assert tr.read_task(t.id).status == tr.TaskStatus.PENDING, (
+        "刚被别人重新排队的任务被打成了失败 —— 缺了'改之前先重读'那道检查")
 
 
 def test_dispatch_success_still_registers_and_runs(monkeypatch, tmp_path):
