@@ -249,7 +249,6 @@
  "skills/skill_loader.py::_parse_frontmatter": 1,
  "web/app.py::<module>": 8,
  "web/app.py::_graceful_shutdown": 2,
- "web/app.py::_is_local_origin": 1,
  "web/app.py::_is_safe_api_url": 2,
  "web/app.py::_loop_worker": 2,
  "web/app.py::_project_repo_root": 1,

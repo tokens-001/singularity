@@ -379,6 +379,69 @@ def test_框架不认识的任务类型要出声():
         assert not any("框架不认识" in u for u in rr.unverified), (t, rr.unverified)
 
 
+# ═══════════════════════════════════════════════════════════════
+# ⑧ 本机 origin：HTTP 门和 WS 门必须是**同一个判定**
+# ═══════════════════════════════════════════════════════════════
+# HTTP 门（CSRF 守卫 / CORS 头）原来自己写了一份 `web/app.py:_is_local_origin`，
+# WS 门用的是 `_auth` 里另一个正则 —— 两份内容不同（这份有 `0.0.0.0`、
+# `urlparse` 还会把主机名转小写；那份没有、且大小写敏感）。
+# 而"挡任意网页删任务"这条路**只靠 Origin 校验**（`QIDIAN_AUTH` 默认关）。
+
+# 两端都要判成"本机"、和"外来"的样本。`websockets` 用的是 **fullmatch**
+# （`server.py:340-345`），所以这里也按 fullmatch 比 —— 用 `match` 比会放过后缀绕行。
+_ORIGIN_ACCEPT = [
+    "http://localhost:5050", "http://127.0.0.1:8765", "https://127.0.0.1",
+    "http://0.0.0.0:5050", "http://[::1]:8765", "https://LOCALHOST:5050",
+]
+_ORIGIN_REJECT = [
+    "http://evil.com", "http://127.0.0.1.evil.com", "http://localhost.evil.com",
+    "http://192.168.1.5:5050", "http://127.0.0.1evil.com", "",
+]
+
+
+def test_http门和ws门对本机来源的判定必须一致():
+    """**变异判据**：把 WS 正则改回手写那份（没有 `0.0.0.0`、大小写敏感）→ 红；
+    把 HTTP 判定改回本地那份 → 也不会红（值一样）—— 所以钉的是"同一份"这件事，
+    靠的是两边**逐条样本比**，不是比实现。"""
+    from singularity.scheduler import _auth
+    assert _auth.LOCAL_HOSTNAMES, "主机名表空了"
+
+    def ws_accepts(origin: str) -> bool:
+        # 复刻 websockets 的判定：精确串相等 或 正则 fullmatch
+        return any(o == origin if not hasattr(o, "fullmatch")
+                   else (origin is not None and o.fullmatch(origin) is not None)
+                   for o in _auth.ws_allowed_origins() if o is not None)
+
+    for o in _ORIGIN_ACCEPT:
+        assert _auth.is_local_origin(o) is True, f"HTTP 门没认 {o}"
+        assert ws_accepts(o) is True, f"WS 门没认 {o} —— 两个门判定不同"
+    for o in _ORIGIN_REJECT:
+        assert _auth.is_local_origin(o) is False, f"HTTP 门误放 {o!r}"
+        assert ws_accepts(o) is False, f"WS 门误放 {o!r}"
+
+
+def test_畸形_origin_头不放行也不静默(monkeypatch):
+    """`Origin` 是**外部可控**的头，`urlparse` 对畸形 IPv6 会抛 —— 抛了不能 500、
+    也不能悄悄当成"没带 Origin"（那样日志里两种事长得一样）。
+    变异：去掉那句 `witness.warn` → 棘轮先红（静默 except）；去掉 `return False`
+    改成 `return True` → 本用例红。"""
+    from singularity.scheduler import _auth, witness
+    warned: list[str] = []
+    monkeypatch.setattr(witness, "warn", lambda scope, msg, key="": warned.append(msg))
+    assert _auth.is_local_origin("http://[::1") is False
+    assert warned and "bad_origin_header" in warned[0], warned
+
+
+def test_http门用的就是那一份判定():
+    """**同一个函数对象**，不是"另写一个行为一样的" —— 行为一样的两份明天就会漂，
+    而两边各写一份正是这个 bug 本身。变异：把 app.py 那行 import 换成任何本地实现 → 红。"""
+    from singularity.scheduler import _auth
+    import singularity.web.app as webapp
+    assert webapp._is_local_origin is _auth.is_local_origin, \
+        "HTTP 门又有了自己的第二份实现"
+    assert _auth.is_local_origin(None) is False   # 非字符串不许抛
+
+
 def test_run_executor_真的调了这条告警(monkeypatch):
     """**接线**：上面几条测的是函数本体，"接线通不通"是另一回事
     —— 挪走/删掉 `_run_executor` 里那句调用，它们照样全绿。

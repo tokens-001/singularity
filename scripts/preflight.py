@@ -815,6 +815,12 @@ def survey_strings(idx: Index) -> dict:
                         mark(f.attr, [n.args[0]], _channel_of(f.value), file, self.stack)
                 self.generic_visit(n)
 
+            def _nested(self, node):
+                """值表达式里嵌套的 Compare / startswith 调用也要走一遍匹配位标注。"""
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Compare) or _is_needle_call(sub):
+                        self.visit(sub)
+
             def visit_Assign(self, n):
                 if len(n.targets) == 1 and isinstance(n.targets[0], ast.Name) \
                         and isinstance(n.value, (ast.List, ast.Tuple, ast.Set)):
@@ -827,6 +833,7 @@ def survey_strings(idx: Index) -> dict:
                 chan = tgts[0] if tgts else ""
                 for c in value_consts(n.value):
                     value_sites[c].append(StrSite(file, sym(self.stack), "value", chan))
+                self._nested(n.value)
                 for t in n.targets:
                     self.visit(t)
 
@@ -835,17 +842,20 @@ def survey_strings(idx: Index) -> dict:
                     chan = n.target.id if isinstance(n.target, ast.Name) else ""
                     for c in value_consts(n.value):
                         value_sites[c].append(StrSite(file, sym(self.stack), "value", chan))
+                    self._nested(n.value)
                 self.visit(n.target)
 
             def visit_keyword(self, n):
                 for c in value_consts(n.value):
                     value_sites[c].append(StrSite(file, sym(self.stack), "value", n.arg or ""))
+                self._nested(n.value)
                 self.visit(n.value)
 
             def visit_Return(self, n):
                 if n.value is not None:
                     for c in value_consts(n.value):
                         value_sites[c].append(StrSite(file, sym(self.stack), "value", ""))
+                    self._nested(n.value)
                 self.visit(n.value)
 
             def visit_Dict(self, n):

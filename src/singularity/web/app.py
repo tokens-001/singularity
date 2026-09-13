@@ -55,6 +55,11 @@ from singularity.scheduler.project import Phase
 from singularity.scheduler.log import info as _log_info, warn as _log_warn, get_logger
 from singularity.scheduler import mcp as mcp_mod
 from singularity.scheduler import bridge as ws_bridge
+# ⚠️ **本机来源判定只有一份**（2026-09-14）：这个名字**就是** `_auth.is_local_origin`
+# 本身（不是"另写一个长得一样的"）。原来这里自己写了一份 urlparse 版本，
+# 而 WS 门（`_auth.ws_allowed_origins` 的正则）是另一份、内容不同 ⇒ 同一个来源
+# 在两个门上判定可以不同，而"挡任意网页删任务"只靠 Origin 校验（见 `_auth` 那段说明）。
+from singularity.scheduler._auth import is_local_origin as _is_local_origin
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
@@ -764,18 +769,10 @@ _hooks_mod.register_loop(start_loop, stop_loop,
 _hooks_mod.register_event_sink(_sse_broadcast)
 
 
-def _is_local_origin(origin: str) -> bool:
-    """精确检查 origin 是否为本地地址 (防 startswith 绕过)。"""
-    try:
-        hostname = urlparse(origin).hostname
-        if not hostname:
-            return False
-        # ⚠️ IPv6 回环写成 `::1`（**不带方括号**）—— `urlparse("http://[::1]:5050").hostname`
-        # 返回的是 `::1`，方括号已经被剥掉了。原来这里写 `"[::1]"` ⇒ 永远匹配不上 ⇒
-        # 绑 `::` 时（flask run / 反代 / 手改 host）整个 UI 的写操作被 403 挡死。
-        return hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1")
-    except Exception:
-        return False
+# `_is_local_origin` 现在是**从 `scheduler._auth` 直接 import 进来的**
+# （见文件上方那行 import）—— 判定只有那一份，这里不再有第二份实现。
+# 原来的本地版本：`hostname in ("localhost","127.0.0.1","0.0.0.0","::1")`，
+# 和 WS 门那个正则**内容不同**（正则没有 `0.0.0.0`、还大小写敏感）。
 
 
 _api_log = get_logger("api")

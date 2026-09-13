@@ -244,11 +244,50 @@ def require_write(request) -> tuple[Optional[User], Optional[str]]:
 # **能真正挡住这条路的只有 `Origin` 校验**。
 #
 # ⚠️ **必须把 `None` 放进允许列表**：`websockets` 的判定是
-# 「遍历允许项，`== origin` 则放行，否则 `raise InvalidOrigin`」（`server.py:339-350`）。
+# 「遍历允许项，`== origin` 则放行，否则 `raise InvalidOrigin`」（`server.py:339-350`，
+# 而且匹配用的是 **`fullmatch`**，不是 `match`）。
 # 没带 `Origin` 头的客户端（websocat / 脚本 / 自己写的客户端）origin 是 `None` ——
 # **不显式允许 `None` 就会被一起拒掉**。浏览器一定带 `Origin`，非浏览器一定不带，
 # 所以"允许 None"放行的正是非浏览器客户端，而它们不是这条攻击的载体。
-_LOCAL_ORIGIN_RE = re.compile(r"https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?")
+#
+# ⚠️ **本机来源的判定只有这一份**（2026-09-14）：`web/app.py` 的 HTTP 门
+# （CSRF 守卫 + CORS 头）原来自己又写了一份，**两份内容不同** ——
+# HTTP 那份有 `0.0.0.0`、且 `urlparse().hostname` 会把主机名**转小写**；
+# 这份正则没有 `0.0.0.0`、而且是**大小写敏感**的。同一个来源在两个门上
+# 判定可以不同，而"挡网页删任务"这条路**只靠 Origin**（见上），松一格就是绕行口。
+# 现在：主机名一份（`LOCAL_HOSTNAMES`），HTTP 门调 `is_local_origin()`，
+# WS 门用从**同一个主机名表**拼出来的正则（websockets 只认精确串或 `re.Pattern`，
+# 给不了它一个函数）。两边是否真一致，有测试逐条比。
+LOCAL_HOSTNAMES = ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+
+# 正则**从上面那张表拼**出来（不是再抄一遍名字）：IPv6 回环在 URL 里带方括号
+# （`http://[::1]:5050`），而 `urlparse().hostname` 给的、以及表里写的都是不带括号的
+# `::1` —— 这一处括号差就是 09-14 修过的那个"永远匹配不上"。
+_LOCAL_HOST_RE = "|".join(
+    re.escape(h) if ":" not in h else re.escape(f"[{h}]") for h in LOCAL_HOSTNAMES)
+_LOCAL_ORIGIN_RE = re.compile(
+    rf"https?://(?:{_LOCAL_HOST_RE})(?::\d+)?",
+    re.IGNORECASE)   # 浏览器会把 Origin 的主机名规范成小写，HTTP 那侧也是（urlparse），这里跟上
+
+
+def is_local_origin(origin: str) -> bool:
+    """`Origin`（或 `Referer`）是不是**本机 UI** 发出的。HTTP 门和 WS 门共用这一份。
+
+    精确比主机名，不做前缀匹配 —— `http://127.0.0.1.evil.com` 必须判 False
+    （那是 `startswith` 写法的经典绕过口）。
+    """
+    from urllib.parse import urlparse
+    if not origin:
+        return False
+    try:
+        hostname = urlparse(origin).hostname      # 会自动剥掉 `[::1]` 的方括号、转小写
+    except Exception as e:
+        # `Origin` 是**外部可控**的头，`urlparse` 对畸形 IPv6（`http://[::1`）会抛。
+        # 判不了 = 不放行（安全的一侧），但要出声：一个畸形 Origin 本身就是
+        # 值得看一眼的事件，静默吞掉会让它在日志里长得跟"没带 Origin"一样。
+        witness.warn("auth", f"bad_origin_header:{type(e).__name__}"[:120])
+        return False
+    return bool(hostname) and hostname in LOCAL_HOSTNAMES
 
 
 def ws_allowed_origins() -> list:
