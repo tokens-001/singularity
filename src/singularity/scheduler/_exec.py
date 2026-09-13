@@ -103,7 +103,8 @@ _PARTIAL_TOOL_EVENTS_CAP = 500
 
 
 def _persist_partial_usage(task_id: str, level: str, model: str, delta: int,
-                           tool_events: list | None = None) -> None:
+                           tool_events: list | None = None,
+                           elapsed: float | None = None) -> None:
     """把执行中**累计**的 token 落一盘，给超时路径用。
 
     为什么必须边跑边落：超时被杀的任务**走不到收尾记账**
@@ -121,26 +122,33 @@ def _persist_partial_usage(task_id: str, level: str, model: str, delta: int,
     try:
         config.ensure_dirs()
         p = config.PARTIAL_USAGE_DIR / f"{task_id}.json"
-        cur, cur_model = 0, model
+        cur, cur_model, _prev = 0, model, {}
         if p.exists():
             try:
-                d = json.loads(p.read_text(encoding="utf-8"))
-                cur = int(d.get("tokens", 0) or 0)
-                cur_model = d.get("model") or model
+                _prev = json.loads(p.read_text(encoding="utf-8")) or {}
+                cur = int(_prev.get("tokens", 0) or 0)
+                cur_model = _prev.get("model") or model
             except Exception:
-                cur, cur_model = 0, model
+                cur, cur_model, _prev = 0, model, {}
         payload = {
             "task_id": task_id, "level": level, "model": cur_model,
             "tokens": cur + max(0, int(delta or 0)), "updated_at": time.time(),
         }
         # `started_at` 是 `_mark_dispatch_started` 在 dispatch 开头落的 —— 这里必须
         # **带着它一起写回去**，否则一次正常的累加落盘就把"进过 dispatch"这个事实抹了。
-        try:
-            _prev_started = json.loads(p.read_text(encoding="utf-8")).get("started_at")
-        except Exception:
-            _prev_started = None
-        if _prev_started is not None:
-            payload["started_at"] = _prev_started
+        if _prev.get("started_at") is not None:
+            payload["started_at"] = _prev["started_at"]
+        # ── 每次 dispatch 花了多久（量尺，2026-09-13）──
+        # 为什么要记：执行器的 810s 自收尾预算**每次 dispatch 都重置**
+        # （`_dispatch_exec._run_executor` 每次新建 executor，`openai_agent.run()` 里
+        # `start = time.time()`），而 orchestrator 的 900s 是**任务级**的、且
+        # `_exec.run` 外层循环一圈表都不看。⇒ 任务只要跑过 ≥2 次 dispatch、
+        # 每次都没到 810s，自收尾就永远不触发，人却早被 900s 无声收割了。
+        # 超时任务走不到收尾 ⇒ 这份只能落盘（跟 token 一个理由，见函数头）。
+        if elapsed is not None:
+            _disp = list(_prev.get("dispatches") or [])
+            _disp.append({"at": round(time.time(), 1), "elapsed": round(float(elapsed), 1)})
+            payload["dispatches"] = _disp[-20:]
         if tool_events is not None:
             # tool_events 平时只在内存和 SSE 里过一遍、**从来不落盘**
             # ⇒ 超时任务的 trace 里 tool_batches 的 turns 恒为 0
@@ -545,6 +553,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                         task.id, level, agent_cfg.get("model", "") if isinstance(agent_cfg, dict) else "",
                         getattr(exec_result, "token_count", 0) or 0,
                         tool_events=all_tool_events,
+                        elapsed=getattr(exec_result, "elapsed", 0.0),
                     )
 
                 # 收尾前**再查一次取消**。原来只在每轮开头查，于是超时（或人工取消）

@@ -110,6 +110,29 @@ def test_tool_events_survive_the_timeout(tmp_path, monkeypatch):
     assert bs == {"turns": 3, "per_turn": [1, 2, 1], "total_calls": 4, "batched_turns": 1}, bs
 
 
+def test_dispatches_accumulate_not_overwrite(tmp_path, monkeypatch):
+    """每次 dispatch 的耗时按序累加 —— 量尺要在**被砍**之后还读得到。
+
+    这条钉的是"多次 dispatch"这个形状本身：执行器的 810s 预算是**每次重置**的，
+    所以"每次多久"是判定自收尾为什么没生效的唯一证据。整份重写 payload 的写法
+    最容易把上一批抹掉（§59 的 `started_at` 就踩过），所以单独钉一条。
+    """
+    _isolate(tmp_path, monkeypatch)
+    _exec._persist_partial_usage("d1", "any", "m", 10, elapsed=812.5)
+    _exec._persist_partial_usage("d1", "any", "m", 10, elapsed=44.0)
+    assert _exec.read_partial_usage("d1") == (20, "m"), "累加被写坏了"
+
+    import json
+    got = json.loads((config.PARTIAL_USAGE_DIR / "d1.json").read_text())
+    assert [d["elapsed"] for d in got["dispatches"]] == [812.5, 44.0], got["dispatches"]
+    # 和 token 落盘共用同一份文件 ⇒ 不能互相抹
+    _exec._mark_dispatch_started("d1")
+    _exec._persist_partial_usage("d1", "any", "m", 5, elapsed=1.0)
+    got = json.loads((config.PARTIAL_USAGE_DIR / "d1.json").read_text())
+    assert [d["elapsed"] for d in got["dispatches"]] == [812.5, 44.0, 1.0]
+    assert got["started_at"], "started_at 被 elapsed 那次落盘抹了"
+
+
 def test_tool_events_absent_stays_empty_not_crash(tmp_path, monkeypatch):
     """一次都没落（第一轮就超时）→ 空列表，别抛。"""
     _isolate(tmp_path, monkeypatch)
