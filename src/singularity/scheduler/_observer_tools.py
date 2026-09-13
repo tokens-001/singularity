@@ -30,7 +30,7 @@ def _tool_get_system_status() -> dict[str, Any]:
     loads = witness._heartbeat_task_levels()
     pending_waits, done_durations = witness._timing_stats()
     token_totals = witness._token_stats()
-    stalled = witness.check_stalled(timeout_seconds=600)
+    stalled = witness.check_stalled()   # 用默认阈值，见 witness.STALLED_AFTER_S
     return {
         "task_counts": counts,
         "running_by_level": loads,
@@ -86,7 +86,7 @@ def _tool_get_task_details(task_id: str) -> dict[str, Any]:
     return {"task": task.to_dict(), "trace": trace}
 
 
-def _tool_list_stalled_tasks(timeout_seconds: float = 600) -> list[str]:
+def _tool_list_stalled_tasks(timeout_seconds: float = witness.STALLED_AFTER_S) -> list[str]:
     return witness.check_stalled(timeout_seconds=timeout_seconds)
 
 

@@ -185,7 +185,22 @@ def force_cleanup_heartbeats() -> tuple[int, int]:
     return n_hb, n_tasks
 
 
-def check_stalled(timeout_seconds: float = 600) -> list[str]:
+# 「心跳陈旧」的默认阈值（秒）。
+#
+# ⚠️ **它必须大于「一次 dispatch 的合法上限」，否则会把正常的长任务报成卡住。**
+# `witness.heartbeat` 全仓**只有一个调用点**（`_exec.run` 的外层 turn 循环），
+# 也就是**每派发一次才更新一次**；而一次 dispatch 现在合法能跑满
+# `TASK_DEADLINE_S − TASK_WRAPUP_MARGIN_S = 810` 秒（执行器自己的预算，见 §67），
+# 两次心跳之间还夹着校验 / 审查 / 反馈拼装。
+#
+# 原来的 **600 秒低于这个上限** ⇒ 任何跑过一次长 dispatch 的任务都会被报成 stalled。
+# 而它的三个消费方（admin 的 `status_overview`、observer 的 `_get_system_status` /
+# `_list_stalled_tasks`）会把这句**直接讲给用户听** —— observer 是个模型，
+# 它会照着念"有任务卡住了"。**假警报比晚报更坏**，所以这里取宽不取紧。
+STALLED_AFTER_S = config.TASK_DEADLINE_S + 300.0     # = 1200s
+
+
+def check_stalled(timeout_seconds: float = STALLED_AFTER_S) -> list[str]:
     now = time.time()
     stalled: list[str] = []
     for p in _heartbeat_dir().glob("*.json"):

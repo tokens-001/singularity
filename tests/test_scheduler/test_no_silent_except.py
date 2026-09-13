@@ -194,6 +194,51 @@ def test_baseline_keys_are_wellformed():
     assert not bad, f"基线里有写坏的键（它们永远不会命中）: {bad[:5]}"
 
 
+# ═══════════════════════════════════════════════════════════════
+# 「心跳陈旧」的阈值必须大于「一次 dispatch 的合法上限」（2026-09-13）
+# ═══════════════════════════════════════════════════════════════
+# 放在这个文件里是因为它守的是同一类毛病：**判据定得比现实紧 ⇒ 假警报**。
+# `witness.heartbeat` 全仓只有一个调用点（`_exec.run` 的外层 turn 循环），
+# 所以两次心跳之间**正好夹着一次完整的 dispatch**。
+
+def test_stalled_threshold_exceeds_one_legitimate_dispatch():
+    """`check_stalled` 的默认阈值必须大于一次 dispatch 能合法跑的时间。
+
+    钉的是 2026-09-13 量出来的一个**真 bug**：默认原本是 **600 秒**，
+    而一次 dispatch 合法能跑满 `TASK_DEADLINE_S − TASK_WRAPUP_MARGIN_S`（=810s）
+    —— 于是任何跑过一次长 dispatch 的任务都被报成 `stalled`，
+    而 admin 接口和 observer 的 `_list_stalled_tasks` 会把这句**直接讲给用户听**。
+    判据取宽不取紧：**假警报比晚报更坏**。
+    """
+    from singularity.scheduler import config, witness
+    one_dispatch = config.TASK_DEADLINE_S - config.TASK_WRAPUP_MARGIN_S
+    assert witness.STALLED_AFTER_S > one_dispatch, (
+        f"STALLED_AFTER_S={witness.STALLED_AFTER_S} ≤ 一次 dispatch 的上限 {one_dispatch}"
+        f" ⇒ 正常的长任务会被报成卡住")
+    # 也别宽到没边：超过两倍死线就说明这个判据实际上永远不会响了
+    assert witness.STALLED_AFTER_S < 2 * config.TASK_DEADLINE_S, \
+        "阈值宽到 2 倍死线以上 —— 它实际上永远不会命中，等于没有这个判据"
+
+
+def test_no_caller_hardcodes_a_tighter_stalled_threshold():
+    """调用方**不许再各写一份更紧的值** —— 四个调用点原来都硬编码了 600。
+
+    这是个纯文本检查（不改运行时代码），防的是"改了一处、别处又写回 600"。
+    """
+    import re
+    src = Path(__file__).resolve().parents[2] / "src" / "singularity"
+    bad = []
+    for p in src.rglob("*.py"):
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            if "check_stalled(" not in line or "def check_stalled" in line:
+                continue
+            m = re.search(r"check_stalled\(\s*(?:timeout_seconds\s*=\s*)?(\d[\d_]*\.?\d*)", line)
+            if m and float(m.group(1).replace("_", "")) < 900:
+                bad.append(f"{p.relative_to(src)}:{i}  {line.strip()}")
+    assert not bad, ("这些地方又把 stalled 阈值写紧了（会比一次 dispatch 的上限还小）：\n"
+                     + "\n".join("  " + b for b in bad))
+
+
 if __name__ == "__main__":
     if "--write" in sys.argv:
         _write_baseline()

@@ -64,7 +64,7 @@ def _check_anomalies() -> list[dict]:
 
     # 停滞任务
     try:
-        stalled = witness.check_stalled(timeout_seconds=600)
+        stalled = witness.check_stalled()   # 用默认阈值，见 witness.STALLED_AFTER_S
         for tid in stalled:
             key = f"stalled:{tid}"
             with _alert_lock:

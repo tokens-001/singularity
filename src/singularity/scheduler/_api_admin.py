@@ -495,7 +495,7 @@ def status_overview():
     config.ensure_dirs()
     counts = witness._count_by_status(); loads = witness._heartbeat_task_levels()
     pw, dd = witness._timing_stats(); tt = witness._token_stats()
-    stalled = witness.check_stalled(600)
+    stalled = witness.check_stalled()   # 用默认阈值，见 witness.STALLED_AFTER_S
     agents = {}
     try:
         for level, cfgs in disp_mod.load_agents().items():
