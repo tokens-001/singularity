@@ -292,3 +292,96 @@ def _del_path(doc, keys) -> None:
         cur.pop(last)
 
 
+
+
+# ═══════════════════════════════════════════════════════════════
+# S1：损坏的 JSON/TOML 不许被当成"空"（2026-09-14，C 的草案 + 我核过）
+# ═══════════════════════════════════════════════════════════════
+# **形状**：`json.loads 失败 → 返回 {}` 这种写法，会把"文件坏了"和"文件是空的"
+# 变成同一条路。下游拿到 `{}` 照常跑、照常 **写回整份** —— 于是一次撕裂写
+# 在下一次读取时把真数据全盖掉（`api_store` 那条自毁链就是这个形状里最狠的一例）。
+#
+# **契约（三态，先说死）**：
+#   文件不存在                          → `{}` / `[]`（`expect` 决定）—— 这才是"真的空"
+#   存在、可解析、顶层类型对            → 解析结果
+#   存在但读不了 / 解析不了 / 类型不对  → **None**（返回前已完成三件事，见下）
+#
+# **返回 None 之前本函数已经做完**：
+#   ① 原样字节备份 `<名>.corrupt`（已存在则时间戳轮转，**不毁旧证据**）
+#   ② 双通道出声（`log` + `witness`）
+#   ③ 原文件一字不动
+#
+# ⚠️ **调用方纪律**（写在这，但靠每个调用点自觉）：
+#   只读路径   → 可以降级：`load_json_or_quarantine(p) or {}`
+#   读改写路径 → **必须停**：拿到 None 就 raise / 拒写，宁可这次操作失败，
+#                不可拿默认值去重建整份文件（`or {}` 只许出现在没有任何写入的路径上）
+
+def _quarantine_corrupt(path: Path, reason: str) -> None:
+    """读坏文件的统一处置：原样备份 + 双通道出声。
+
+    备份失败**不抛** —— 但也不能不吭声：消息里如实写"没备上"，
+    而且备份失败本身也单独出一条，免得"没备上"被后来的告警淹没。
+    """
+    import shutil
+    import time as _time
+    from .log import warn as _log_warn   # 函数体内 import：witness→tracker→_io 是现成的环
+
+    try:
+        bak = path.with_suffix(path.suffix + ".corrupt")
+        if bak.exists():
+            bak = path.with_suffix(path.suffix + f".corrupt.{int(_time.time())}")
+        shutil.copy2(path, bak)          # 原始字节 + mtime，不经过任何解析
+        note = f"已备份 {bak.name}"
+    except OSError as e:
+        _log_warn("io", f"{path.name} 的损坏备份没做成: {type(e).__name__}: {e}"[:200])
+        note = "备份失败(原文件未动)"
+
+    msg = f"{path.name} 损坏({reason}): {note}, 拒绝当空"[:200]
+    _log_warn("io", msg)
+    try:
+        from . import witness
+        witness.warn("io", msg, key=f"json_corrupt:{path.name}")
+    except Exception as e:               # noqa: BLE001
+        # log 通道已经写过一次了，这里别二次抛；但要说清"只有一条通道出去了"
+        _log_warn("io", f"损坏告警的第二通道(witness)没发出去: {type(e).__name__}"[:200])
+
+
+def load_json_or_quarantine(path: Path, *, expect: type = dict):
+    """读 JSON 状态/配置文件。**三态，不吞** —— 契约见上面那段。"""
+    if not path.exists():
+        return expect()
+    try:
+        data = json.loads(path.read_bytes())
+    except OSError as e:
+        _quarantine_corrupt(path, f"读失败 {type(e).__name__}")   # 读不了多半也备不了，函数会如实说
+        return None
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        _quarantine_corrupt(path, f"{type(e).__name__}: {e}"[:80])
+        return None
+    if not isinstance(data, expect):
+        _quarantine_corrupt(path,
+                            f"类型不对: 期望 {expect.__name__}, 实得 {type(data).__name__}")
+        return None
+    return data
+
+
+def load_toml_or_quarantine(path: Path) -> "dict | None":
+    """`load_json_or_quarantine` 的 TOML 版。
+
+    ⚠️ 既有的 `load_toml`（损坏 = 原样抛）**保留不动** —— `web/app.py` 的 fusion 读写靠它自己兜。
+    """
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+    except OSError as e:
+        _quarantine_corrupt(path, f"读失败 {type(e).__name__}")
+        return None
+    except tomllib.TOMLDecodeError as e:
+        _quarantine_corrupt(path, f"TOMLDecodeError: {e}"[:80])
+        return None
+    if not isinstance(data, dict):
+        _quarantine_corrupt(path, f"类型不对: 期望 dict, 实得 {type(data).__name__}")
+        return None
+    return data

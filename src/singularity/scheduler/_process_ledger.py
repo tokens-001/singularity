@@ -38,11 +38,14 @@ def _status_str(task) -> str:
 
 
 def load() -> list[dict]:
-    try:
-        d = json.loads(_path().read_text(encoding="utf-8"))
-        return d if isinstance(d, list) else []
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return []
+    """读账本。**损坏时返回空表 —— 但那是"带告警的降级"**（隔离 + 双通道出声在 `_io` 里做了）。
+
+    ⚠️ 原来是裸 `json.loads` + `except (FileNotFoundError, JSONDecodeError, OSError): return []`
+    —— "文件坏了"和"还没有账本"长得一模一样，**读侧分不出来**（2026-09-14，C 的 S1 草案，我核过）。
+    """
+    from singularity.scheduler._io import load_json_or_quarantine
+    data = load_json_or_quarantine(_path(), expect=list)
+    return data if data is not None else []
 
 
 def record(project, extra: dict | None = None) -> dict:
@@ -51,7 +54,14 @@ def record(project, extra: dict | None = None) -> dict:
     **只记账，不下结论。** 各项失败计数（fix_round / review_failures /
     integrate_failures）与 issues 的**条数**照实记；成本取现有累计口径。
     """
-    rows = load()
+    # 这里**绕过 `load()` 直取三态** —— 它要知道"坏"和"空"的区别（读侧可以降级，
+    # 写侧不行）。本文件的铁律是"记账失败不能把交付带崩"，所以**不 raise**，
+    # 改成：损坏期间**拒写**（见下面落盘那段），本轮照常返回 row。
+    from singularity.scheduler._io import load_json_or_quarantine
+    rows = load_json_or_quarantine(_path(), expect=list)
+    rows_corrupt = rows is None
+    if rows_corrupt:
+        rows = []          # 本轮照常算这一行，但**落盘前拒写**（见下）
     ids = list(getattr(project, "task_ids", []) or [])
     done = 0
     try:
@@ -101,6 +111,15 @@ def record(project, extra: dict | None = None) -> dict:
     rows.append(row)
     if len(rows) > _MAX_ROWS:
         rows = rows[-_MAX_ROWS:]
+    if rows_corrupt:
+        # 🔴 **拒写**：账本坏了、已经隔离到 `.corrupt`，这轮**不许**拿这行去整份重建 ——
+        # 重建出来的"账本"只剩今天这一行，历史全没了，而外表和正常账本一模一样。
+        # 模块自己的规矩是"宁可表小，不可表假"；这里是它第一次真兑现。
+        from singularity.scheduler import witness
+        witness.warn("process_ledger",
+                     "record_skip: 账本损坏已隔离(.corrupt), 本轮不落账, 拒绝整份重建",
+                     key="ledger_corrupt")
+        return row
     try:
         _path().parent.mkdir(parents=True, exist_ok=True)
         _path().write_text(json.dumps(rows, ensure_ascii=False, indent=1),

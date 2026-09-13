@@ -85,6 +85,22 @@ def _noisy_roots(tree: ast.Module) -> frozenset[str]:
     return frozenset(roots)
 
 
+def _call_is_noisy(node: ast.Call, roots: frozenset[str]) -> bool:
+    """这个调用算不算"出声"。**只认直接调 `witness` / `logging` / `log`（含 import 别名）。**
+
+    ⚠️ **刻意不跟本地 helper**（2026-09-14 试过、又撤了）：把"调了一个碰巧会出声的helper"
+    当成"这个 handler 自己出声了"，实测在 `orchestrator._reap_futures` 上造出**假阴性** ——
+    那个外层 handler 的出声其实在**嵌套** handler 里（守卫 docstring 专门记过这条），
+    它只是因为调了 `_save_trace` 才算数的。**"调了个会出声的函数" ≠ "报了自己的失败"。**
+    代价：出声收在 helper 里的 handler 会被记成静默（虚增），那类按
+    "确实无害才更新基线"处理，别为了让尺子好过而改代码。
+    """
+    f = node.func
+    if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
+        return f.value.id in roots
+    return isinstance(f, ast.Name) and f.id in roots
+
+
 def _is_noisy(handler: ast.ExceptHandler, roots: frozenset[str] = NOISY_ROOTS) -> bool:
     """这个 handler **自己**有没有出声 / 上抛。
 
@@ -96,10 +112,7 @@ def _is_noisy(handler: ast.ExceptHandler, roots: frozenset[str] = NOISY_ROOTS) -
     等于没修也记了功。**量尺不准，所有棘轮数字都是假的。**
     """
     def _calls_noisy(node) -> bool:
-        f = node.func
-        if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
-            return f.value.id in roots
-        return isinstance(f, ast.Name) and f.id in roots
+        return _call_is_noisy(node, roots)
 
     def _walk(node) -> bool:
         for child in ast.iter_child_nodes(node):
