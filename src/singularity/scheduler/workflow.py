@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 import json
+import re
 # `Path` 只出现在 `_phase_output_path`/`_save_phase_output` 的**返回注解**里。
 # 文件有 `from __future__ import annotations`，注解运行时不求值 —— 所以它一直没炸，
 # 但名字确实不在本模块作用域里（2026-09-13 被星号 import 盲区补丁抓出来的）。
@@ -691,12 +692,100 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
 
     # 本轮有没有任务是在"上游失败、降级运行"下跑完的 —— 必须在人审页上看得见
     _flag_degraded_tasks(project)
+    # 有没有任务越界改了**兄弟任务的产出文件** —— 同样必须在人审页上看得见
+    _flag_file_overlap(project)
 
     # 验收入门票：走到这儿才算"验收真的跑过"。放在**最后**、而不是开头 ——
     # 中途抛异常时不该留下"跑过了"的假证据。GATE3 靠这个标记识别
     # "验收整段没跑就被推进来了"（见 ProjectState._gate3_admission）。
     project.issues.append({"type": "verification_ran", "detail": "QA + 安全审计已执行"})
     return msgs
+
+
+# 描述里"像个文件名"的 token：带点 + 扩展名，且**扩展名以字母开头**。
+# ⚠️ 扩展名必须字母开头 —— 不然 `0.55` 这种小数会被当成"文件名 .55"，
+# 而架构描述里到处都是小数（置信度、阈值）。
+_FILE_TOKEN_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z][A-Za-z0-9]{0,5}\b")
+
+
+def _files_named_in(text: str) -> set[str]:
+    """一段文本里点名的文件名（**只取 basename** —— 路径前缀不该影响判断）。"""
+    return {m.group(0).rsplit("/", 1)[-1] for m in _FILE_TOKEN_RE.finditer(text or "")}
+
+
+def _changed_files_of(tid: str) -> set[str]:
+    """读这个任务的 trace，取它改过的文件（basename）。读不到就是空集。"""
+    from . import neijinglu
+    try:
+        d = json.loads(neijinglu.config_trace_path(tid).read_text(encoding="utf-8"))
+        return {str(f).rsplit("/", 1)[-1] for f in (d.get("changed_files") or [])}
+    except Exception:
+        return set()
+
+
+def _flag_file_overlap(project: ProjectState) -> None:
+    """任务改了**只有兄弟任务点名、自己没点名**的文件 → 进 issues + 出声。
+
+    ⚠️ **为什么要有这条**（2026-09-13 轮 5 真机）：实现任务**顺手把测试也写了**
+    （`changed_files = ['txtstat.py', 'test_txtstat.py']`），于是**写测试的那个任务空手**
+    —— 零文件改动 → `QA:fail: [completeness] 无文件改动` → 项目 `all_tasks_failed`、卡在 GATE2。
+    **门禁判得对，但人审页上看不出"它其实是被兄弟任务抢了活"。**
+
+    判据只认**确定的那一种**（低误报）：
+    - 这个文件**在兄弟任务的描述里被点名**（= 那本来是它的产出），**且**
+    - **在本任务自己的描述里没被点名**（= 不是它自己的活）。
+    两条都满足才算越界。**自己描述里点过的文件，改多少都不算** —— 那正是它的活。
+
+    ⚠️ **不改变行为**（不改状态、不拦合并），只让它在人审页上**看得见** ——
+    同 `_flag_degraded_tasks` 立的规矩。**提示词那条是"防"，这条是"报"** ——
+    防不住的（模型不听）至少报得出来。
+
+    ⚠️ **本函数里那几处 `except Exception` 有意静默**（读盘/读 trace/告警自己）：
+    它们是"尽力而为"的，失败不该把**整段验收**带崩 —— 与兄弟 `_flag_degraded_tasks`
+    同一取舍。所以它们进了 `silent_except` 守卫的基线（2026-09-13）。
+    """
+    try:
+        from singularity.scheduler import tracker, witness
+    except Exception:
+        return
+    tasks = []
+    for tid in (project.task_ids or []):
+        try:
+            t = tracker.read_task(tid)
+        except Exception:
+            continue
+        if t is not None:
+            tasks.append((tid, t))
+    mine = {tid: _files_named_in(getattr(t, "description", "")) for tid, t in tasks}
+    overlaps = []
+    for tid, t in tasks:
+        changed = _changed_files_of(tid)
+        if not changed:
+            continue
+        for other_tid, _ in tasks:
+            if other_tid == tid:
+                continue
+            stolen = (changed & mine[other_tid]) - mine[tid]
+            if stolen:
+                overlaps.append((tid, other_tid, sorted(stolen)))
+    if not overlaps:
+        return
+
+    try:
+        witness.warn("workflow",
+                     f"task_file_overlap:{project.id}:{len(overlaps)}"[:120],
+                     key="task_file_overlap")
+    except Exception:
+        pass
+    detail = "；".join(
+        f"{a[:8]} 改了本属 {b[:8]} 的文件 {'、'.join(f)}"
+        for a, b, f in overlaps)
+    project.issues.append({
+        "type": "task_file_overlap",
+        "detail": (f"**任务越界改了别人的产出文件**（{detail}）—— "
+                   "被抢活的那个任务会因为『零文件改动』被判失败，"
+                   "而本页的『通过』看不出这件事。"),
+    })
 
 
 def _flag_degraded_tasks(project: ProjectState) -> None:

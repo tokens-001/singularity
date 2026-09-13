@@ -286,6 +286,94 @@ class TestDegradedDependencyIsVisible:
         assert "degraded_dependency" not in [i.get("type") for i in p.issues]
 
 
+class TestFileOverlapIsVisible:
+    """⑨ 任务越界改了**兄弟任务的产出文件** —— 人审时必须看得见。
+
+    2026-09-13 轮 5 真机（项目 `1789303369052`）：实现任务**顺手把测试也写了**
+    （`changed_files = ['txtstat.py', 'test_txtstat.py']`）⇒ **写测试的那个任务空手**
+    ⇒ 零文件改动 ⇒ `QA:fail: [completeness] 无文件改动` ⇒ 项目 `all_tasks_failed`、卡在 GATE2。
+    **门禁判得对**，但它判的是"你没干活"，**真正的原因（活被兄弟抢了）当时没有出口**。
+
+    ⚠️ **这是"报"不是"防"** —— 提示词那条（别替别的任务干活）是防，防不住的至少报得出来。
+    """
+
+    def _mk(self, desc: str, files: list[str] | None):
+        from singularity.scheduler import tracker, neijinglu
+        t = tracker.create(desc, project_id="p1")
+        if files is not None:
+            sql = neijinglu.config_trace_path(t.id)
+            sql.parent.mkdir(parents=True, exist_ok=True)
+            sql.write_text(json.dumps({"changed_files": files}), encoding="utf-8")
+        return t.id
+
+    def _proj(self, tids):
+        p = P.ProjectState(id="p1", name="t")
+        p.task_ids = list(tids)
+        p.issues = []
+        return p
+
+    def test_stealing_a_siblings_file_is_flagged(self):
+        """实现任务改了**只有测试任务点名**的文件 ⇒ 必须进 issues + 出声。"""
+        from singularity.scheduler import workflow as W
+        from singularity.scheduler import config
+        t_impl = self._mk("实现 txtstat.py：流式计数核心", ["txtstat.py", "test_txtstat.py"])
+        t_test = self._mk("编写 test_txtstat.py：口径与回归", [])
+        p = self._proj([t_impl, t_test])
+        W._flag_file_overlap(p)
+
+        assert "task_file_overlap" in [i.get("type") for i in p.issues], \
+            "没进 issues ⇒ 人审页上看不出『它其实是被兄弟抢了活』"
+        log = config.QIDIAN_DIR / "alerts.jsonl"
+        assert log.exists() and "task_file_overlap" in log.read_text(encoding="utf-8"), \
+            "没出声 ⇒ 聚合视图里也看不见"
+
+    def test_own_files_are_never_flagged(self):
+        """**反例**：自己描述里点过名的文件，改多少都不算越界 —— 那正是它的活。
+
+        ⚠️ **这条第一版是假绿**（变异验证抓的）：我原来的场景里 T2 描述**没点名**
+        T1 的文件，于是"减不减自己点过的"结果一样 ⇒ 把 `- mine[tid]` 删掉它照样绿。
+        **真场景是"两个任务的描述都点名了同一个文件"** —— 写测试的任务描述里
+        几乎必然提到"测 `txtstat.py`"。这时没有那一减，T1 改自己的产出也会被误报。
+        """
+        from singularity.scheduler import workflow as W
+        t1 = self._mk("实现 txtstat.py：流式计数核心", ["txtstat.py"])
+        t2 = self._mk("编写 test_txtstat.py：直测 txtstat.py 的 count_stats", [])
+        p = self._proj([t1, t2])
+        W._flag_file_overlap(p)
+        assert "task_file_overlap" not in [i.get("type") for i in p.issues], \
+            "自己的产出被兄弟描述提了一嘴就误报 —— 这判据会立刻变噪声源"
+
+    def test_single_task_project_is_never_flagged(self):
+        """**反例**：单任务项目没有"兄弟"，谈不上越界（也防住误报）。"""
+        from singularity.scheduler import workflow as W
+        t1 = self._mk("实现 txtstat.py", ["txtstat.py", "test_txtstat.py"])
+        p = self._proj([t1])
+        W._flag_file_overlap(p)
+        assert "task_file_overlap" not in [i.get("type") for i in p.issues]
+
+    def test_no_changed_files_is_never_flagged(self):
+        """**反例**：没有 trace / 没改文件 ⇒ 无从判断，不报（fail-quiet，不是 fail-loud）。"""
+        from singularity.scheduler import workflow as W
+        t1 = self._mk("实现 txtstat.py", None)
+        t2 = self._mk("编写 test_txtstat.py", [])
+        p = self._proj([t1, t2])
+        W._flag_file_overlap(p)
+        assert "task_file_overlap" not in [i.get("type") for i in p.issues]
+
+    def test_decimal_numbers_are_not_files(self):
+        """**反例**：描述里的 `0.55` 不是文件名 —— 判据窄一寸，误报就少一片。"""
+        from singularity.scheduler import workflow as W
+        assert W._files_named_in("置信度 0.55，阈值 0.85") == set()
+
+    def test_wired_into_the_verification_path(self):
+        """**接线**：它必须真的挂在验收那条路上 —— 函数对 ≠ 接线通。"""
+        import inspect
+        from singularity.scheduler import workflow as W
+        src = inspect.getsource(W._run_verification)
+        assert "_flag_file_overlap(project)" in src, \
+            "没接进验收 ⇒ 人审页上永远不会出现这条 issue"
+
+
 class TestKilledTaskIsNotSelfWrapup:
     """⑨ "被砍" ≠ "自己收尾" —— 后者是修复生效，前者是它没生效。
 
