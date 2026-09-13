@@ -41,6 +41,20 @@ class TaskStatus(Enum):
 _INFLIGHT = {TaskStatus.ROUTED, TaskStatus.DISPATCHED, TaskStatus.RUNNING, TaskStatus.VALIDATING}
 _TERMINAL = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.ROLLED_BACK}
 
+
+def is_terminal(status: "str | TaskStatus") -> bool:
+    """这个状态是不是**走到头了**（不会再回调度循环）。
+
+    读侧（时间线 / 统计 / 列表）**一律用这个**，别再手打状态名 —— 2026-09-14 实测：
+    `_api_tasks.task_timeline` 自己抄了一份集合，把 `decomposed` / `conflict_held`
+    和 `done/failed/rolled_back` 并列 ⇒ 对**没跑完、还会回调度**的任务
+    编造出"dispatched → running → 终态"的完整历程。
+    这两个状态在这份表里**从来就不是终态**：`decomposed` 等子任务聚合、
+    `conflict_held` 等人解决 merge 冲突，之后都要继续走。
+    """
+    s = status.value if isinstance(status, TaskStatus) else str(status or "")
+    return s in {t.value for t in _TERMINAL}
+
 # ready_tasks 扫描的状态: 等待调度的入口态
 _SCHEDULABLE = {TaskStatus.PENDING, TaskStatus.ROUTED, TaskStatus.BLOCKED, TaskStatus.PAUSED}
 

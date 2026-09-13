@@ -178,8 +178,29 @@ def task_trace(task_id: str, section: str = "", fmt: str = "") -> tuple:
     return data, 200
 
 
+# "已经派出去过"的状态 —— 从状态机**推**出来，不手抄：
+#   `_INFLIGHT` 去掉 `routed`（routed 是"等着被派"，不是"派过了"）
+#   ∪ 终态 ∪ 两个**非终态**的中间态（派过之后才可能进）。
+_POST_DISPATCH = (
+    {s.value for s in tracker._INFLIGHT} - {tracker.TaskStatus.ROUTED.value}
+) | {s.value for s in tracker._TERMINAL} | {
+    tracker.TaskStatus.DECOMPOSED.value, tracker.TaskStatus.CONFLICT_HELD.value,
+}
+# 派过之后、但**不是终态**的两个：时间线要如实画成"当前停在哪儿"，
+# 不许画成终点（见 tracker.is_terminal 的 docstring）。
+_NOT_TERMINAL_ENDS = {
+    tracker.TaskStatus.DECOMPOSED.value, tracker.TaskStatus.CONFLICT_HELD.value,
+}
+
+
 def task_timeline(task_id: str) -> tuple[dict, int]:
-    """GET /api/tasks/<id>/timeline"""
+    """GET /api/tasks/<id>/timeline
+
+    ⚠️ 这是**从任务文件的当前状态反推**出来的时间线，不是一份事件日志
+    （没有逐步落盘的状态转移记录）⇒ 节点是"重建"的，中间跳过的状态看不见。
+    所以规矩有两条：① 只对**真终态**画终点（`tracker.is_terminal`）；
+    ② 其它状态画的节点都带 `terminal: False`，别让读的人以为它跑完了。
+    """
     task_path = tracker.tasks_dir() / f"{task_id}.json"
     if not task_path.exists():
         return {"error": "任务不存在"}, 404
@@ -199,12 +220,12 @@ def task_timeline(task_id: str) -> tuple[dict, int]:
             "meta": {"route_level": route_level, "route_gate": task_data.get("route_gate", False),
                      "route_type": task_data.get("route_type", "default")},
         })
-    if status in ("dispatched", "running", "validating", "done", "failed", "rolled_back", "decomposed", "conflict_held"):
+    if status in _POST_DISPATCH:
         timeline.append({"from": "routed", "to": "dispatched", "timestamp": updated_at, "meta": {}})
     if task_data.get("snapshot_id"):
         timeline.append({"from": "dispatched", "to": "running", "timestamp": updated_at,
                          "meta": {"snapshot_id": task_data.get("snapshot_id", "")}})
-    if status in ("done", "failed", "rolled_back", "decomposed", "conflict_held"):
+    if tracker.is_terminal(status):
         prev = "validating" if status in ("done", "failed") else "running"
         meta = {}
         if status == "failed":
@@ -212,6 +233,14 @@ def task_timeline(task_id: str) -> tuple[dict, int]:
         if status == "rolled_back":
             meta["rolled_back"] = True
         timeline.append({"from": prev, "to": status, "timestamp": updated_at, "meta": meta})
+    elif status in _NOT_TERMINAL_ENDS:
+        # ⚠️ 这两个**不是终态**（`tracker._TERMINAL` 里没有）：decomposed 等子任务聚合、
+        # conflict_held 等人解决冲突，之后**都要回调度循环**。原来它们和
+        # done/failed/rolled_back 并列在同一个 `if` 里 ⇒ 时间线给一个**还没跑完**的任务
+        # 画出了"dispatched → running → 终态"的完整历程，读的人会以为它结束了。
+        timeline.append({"from": "running", "to": status, "timestamp": updated_at,
+                         "meta": {"terminal": False,
+                                  "note": "非终态：还会回到调度循环"}})
     trace_path = config.TRACE_DIR / f"{task_id}.json"
     if trace_path.exists():
         try:

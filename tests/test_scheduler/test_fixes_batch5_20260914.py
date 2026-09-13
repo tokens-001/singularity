@@ -234,6 +234,58 @@ def test_执行器的地板和_sensitive_是同一份():
     assert B.is_dangerous_command("pytest -q")[0] is False
 
 
+# ═══════════════════════════════════════════════════════════════
+# ④ 任务时间线：不许给"还没跑完"的任务画终点
+# ═══════════════════════════════════════════════════════════════
+# `tracker._TERMINAL = {done, failed, rolled_back}`，而 `task_timeline` 自己抄了一份
+# 集合、把 `decomposed` / `conflict_held` 也当终点 —— 那两个**都要回调度循环**
+# （decomposed 等子任务聚合、conflict_held 等人解决 merge 冲突）。
+# 后果：排障时"任务卡在哪"会被画成一条"跑完了"的完整历程。
+
+def _write_task(tid, **fields):
+    import json
+    from singularity.scheduler import tracker
+    fields.setdefault("created_at", 1000)
+    fields.setdefault("updated_at", 2000)
+    (tracker.tasks_dir() / f"{tid}.json").write_text(
+        json.dumps(fields, ensure_ascii=False), encoding="utf-8")
+
+
+def test_时间线不给没跑完的任务画终点():
+    """**变异判据**：把 `tracker.is_terminal(status)` 换回原来那个硬编码元组
+    （含 `decomposed`），本用例必须红 —— 它会给 decomposed 画一个终点节点。"""
+    from singularity.scheduler import _api_tasks
+    _write_task("tl-decomposed", status="decomposed", route_level="any",
+                snapshot_id="snap-1", route_type="default")
+    data, code = _api_tasks.task_timeline("tl-decomposed")
+    assert code == 200
+    ends = [n for n in data["timeline"] if n["to"] in ("done", "failed", "rolled_back")]
+    assert ends == [], f"给没跑完的任务画了终点：{ends}"
+    last = data["timeline"][-1]
+    assert last["to"] == "decomposed", data["timeline"]
+    assert last["meta"].get("terminal") is False, f"节点没说清它不是终点：{last}"
+
+
+def test_时间线对真终态照旧画终点():
+    """反向保护：别为了不撒谎把真终态也吞了。"""
+    from singularity.scheduler import _api_tasks
+    _write_task("tl-done", status="done", route_level="any", snapshot_id="snap-1")
+    data, _ = _api_tasks.task_timeline("tl-done")
+    assert any(n["to"] == "done" for n in data["timeline"]), data["timeline"]
+    assert data["timeline"][-1]["to"] == "done"
+
+
+def test_is_terminal_和状态机同源():
+    """`decomposed` / `conflict_held` 在**状态机那张表**里就不是终态
+    —— 时间线要用的是那张表，不是自己抄的一份。"""
+    from singularity.scheduler import tracker as T
+    assert T.is_terminal("done") and T.is_terminal(T.TaskStatus.FAILED)
+    assert not T.is_terminal("decomposed")
+    assert not T.is_terminal("conflict_held")
+    assert not T.is_terminal("running")
+    assert not T.is_terminal("") and not T.is_terminal(None)
+
+
 def test_run_executor_真的调了这条告警(monkeypatch):
     """**接线**：上面几条测的是函数本体，"接线通不通"是另一回事
     —— 挪走/删掉 `_run_executor` 里那句调用，它们照样全绿。
