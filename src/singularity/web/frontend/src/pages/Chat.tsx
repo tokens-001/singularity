@@ -4,10 +4,10 @@ import { api } from '../lib/api'
 import { useSSE } from '../lib/useSSE'
 import { useAppStore, type ChatMsg } from '../stores/app'
 import { useToast, errText } from '../lib/toast'
-import { Loader2, CheckCircle2, FolderOpen } from 'lucide-react'
+import { Loader2, CheckCircle2, AlertCircle, FolderOpen } from 'lucide-react'
 import FilePanel from '../components/FilePanel'
 import { MessageBubble } from '../components/chat/MessageBubble'
-import { TaskCard, type ProgressItem, type ToolLog } from '../components/chat/TaskCard'
+import { TaskCard, taskStateKind, type ProgressItem, type ToolLog } from '../components/chat/TaskCard'
 import { GatePanel } from '../components/chat/GatePanel'
 import { ChatOptions, type ExecMode } from '../components/chat/ChatOptions'
 
@@ -198,9 +198,14 @@ export default function Chat() {
   const { completed, failed, active } = useMemo(() => {
     let c = 0, f = 0, a = 0
     for (const t of tasks) {
-      if (t.status === 'done') c++
-      else if (t.status === 'failed' || t.status === 'cancelled') f++
-      else a++
+      // ⚠️ **判据只有一份**（`TaskCard.tsx` 的 `taskStateKind`）。
+      // 原来这里自己写了一遍 `failed || cancelled` —— 而后端**根本没有 `cancelled`**
+      // （取消走 `rolled_back`）⇒ `rolled_back`（终态）被算进"执行中"，
+      // 于是**有任务已经回滚了，顶上还显示在跑**（2026-09-14，外派④抓出）。
+      const k = taskStateKind(t.status)
+      if (k === 'done') c++
+      else if (k === 'failed') f++
+      else a++      // running / waiting 都还没结束
     }
     return { completed: c, failed: f, active: a }
   }, [tasks])
@@ -234,7 +239,12 @@ export default function Chat() {
             {tasks.length > 0 && (
               <div className="chat-msg-row" style={{ marginBottom: 16 }}>
                 <div className="flex-center gap-4" style={{ marginBottom: 6 }}>
-                  {active > 0 ? <Loader2 size={10} style={{animation:'spin 1s linear infinite'}}/> : <CheckCircle2 size={10} style={{color:'#16a34a'}}/>}
+                  {/* ⚠️ 判据原来是 `active > 0` —— **全失败时 active 也是 0**，于是亮一个绿勾：
+                      绿✓ + 绿进度条 + 红字「2 失败」同框（2026-09-14，外派④抓出）。
+                      绿勾只能给"真的没失败"那一侧。 */}
+                  {active > 0 ? <Loader2 size={10} style={{animation:'spin 1s linear infinite'}}/>
+                    : failed > 0 ? <AlertCircle size={10} style={{color:'#b45309'}}/>
+                    : <CheckCircle2 size={10} style={{color:'#16a34a'}}/>}
                   <span className="fw-600 fs-11 text-muted">
                     {active > 0 ? `${active} 个执行中` : completed === tasks.length ? '全部完成' : `进度 ${completed}/${tasks.length}`}
                     {failed > 0 && <span style={{ color: '#dc2626', marginLeft: 4 }}>{failed} 失败</span>}

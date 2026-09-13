@@ -14,7 +14,7 @@
 import { describe, it, expect } from 'vitest'
 import { act, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { TaskCard } from './TaskCard'
+import { TaskCard, taskStateKind } from './TaskCard'
 
 function render(node: ReactNode): string {
   const el = document.createElement('div')
@@ -31,6 +31,11 @@ const noop = () => {}
 
 function card(verdict: string) {
   return render(<TaskCard t={{ ...base, verdict }} onRetry={noop} onReveal={noop} />)
+}
+
+/** 按**状态**渲染（上面的 `card` 传的是 verdict，别混）。 */
+function cardWithStatus(status: string) {
+  return render(<TaskCard t={{ ...base, status }} onRetry={noop} onReveal={noop} />)
 }
 
 describe('验收结论的三态渲染', () => {
@@ -61,5 +66,41 @@ describe('验收结论的三态渲染', () => {
     const text = card('')
     expect(text).not.toContain('✓')
     expect(text).not.toContain('✕')
+  })
+})
+
+
+describe('任务状态的十二个取值', () => {
+  it('终态 rolled_back 不许画成"在跑"', () => {
+    // 后端 TaskStatus 12 个值里 `rolled_back` 是**终态**，
+    // 而卡片原来只认 done/failed/cancelled ⇒ 它落进"执行中"+永转的圈。
+    expect(taskStateKind('rolled_back')).toBe('failed')
+  })
+
+  it('等人的三个状态都不算"在跑"', () => {
+    for (const st of ['paused', 'conflict_held', 'blocked']) {
+      expect(taskStateKind(st), st).toBe('waiting')
+    }
+  })
+
+  it('真正进行中的六个仍是 running', () => {
+    for (const st of ['pending', 'routed', 'dispatched', 'running', 'validating', 'decomposed']) {
+      expect(taskStateKind(st), st).toBe('running')
+    }
+  })
+
+  it('**不认识的新状态一律落"停"，不许落"在跑"**', () => {
+    // 后端加了状态而前端没跟上时，把停住的东西画成还在转比画错颜色坏得多
+    expect(taskStateKind('某个以后才有的状态')).toBe('waiting')
+  })
+
+  it('渲染出来的标签也跟档位走（退回旧实现会红）', () => {
+    expect(cardWithStatus('rolled_back')).toContain('失败')
+    expect(cardWithStatus('rolled_back')).not.toContain('执行中')
+    expect(cardWithStatus('paused')).toContain('暂停/等待')
+    expect(cardWithStatus('paused')).not.toContain('执行中')
+    // 对照：真在跑的还是"执行中"（别把闸门修成"什么都不动"）
+    expect(cardWithStatus('running')).toContain('执行中')
+    expect(cardWithStatus('done')).toContain('完成')
   })
 })
