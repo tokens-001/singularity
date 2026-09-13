@@ -165,6 +165,26 @@ def _persist_partial_usage(task_id: str, level: str, model: str, delta: int,
         pass    # 落盘失败不该把任务带崩 —— 记不记成账是次要的
 
 
+def _dispatch_budget_s(ctx) -> float | None:
+    """这次 dispatch **还能花多少秒** —— 从任务那把唯一的尺倒推。
+
+    = `ctx.deadline_at`（任务死亡时刻的绝对值）− 现在 − 收尾余量。
+    每次 dispatch 都重算，所以**上几次 dispatch、重试、中间等人审花掉的时间全扣掉了**。
+
+    为什么不能像原来那样让执行器用自己 `run()` 里的 `start` 起算：
+    执行器是 `_dispatch_exec._run_executor` **每次 dispatch 新建**的，
+    用 `start` 等于每 dispatch 把预算清零 ⇒ 只要任务跑过 ≥2 次 dispatch
+    （模型每轮几十秒时是常态）自收尾就**永远不触发**，而人早被外面那 900s 无声收割。
+    2026-09-13 查明，见 `docs/防御模式.md` §67。
+
+    `ctx.deadline_at == 0`（goal_loop / 阶段级那条路没给）⇒ `None` = 执行器退回老行为，
+    **不是"立即到期"**。
+    """
+    if not ctx.deadline_at:
+        return None
+    return ctx.deadline_at - time.time() - config.TASK_WRAPUP_MARGIN_S
+
+
 def _mark_dispatch_started(task_id: str) -> None:
     """dispatch **开始**时落一个时间戳 —— 只为让两种"没账"分得开。
 
@@ -533,6 +553,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 disp_result = disp_mod.dispatch(
                     effective_task, level, task.id, agents,
                     feedback=feedback, baseline_ref=ctx.snapshot_ref, cwd=cwd,
+                    budget_s=_dispatch_budget_s(ctx),
                     project_lineup=exec_lineup, restrict_to_lineup=exec_restrict,
                     # 角色标：planner 拆的子任务带"执行阶段角色"，dispatch 靠它
                     # 把实现任务挡在委员会外面（描述里带架构词汇不等于要出架构）。

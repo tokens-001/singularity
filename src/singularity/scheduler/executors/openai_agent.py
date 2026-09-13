@@ -362,8 +362,16 @@ class OpenAIAgentExecutor(BaseExecutor):
         last_tool_calls = ""     # 上一轮工具调用指纹 (去重)
         max_tool_turns = self.cfg.get("max_tool_turns", 3)
         _force_at = force_output_at(self._max_turns, max_tool_turns)
-        # 自查总预算（轮间看表 + 单次调用封顶都用它，见 _EXEC_BUDGET）
-        self._deadline_at = start + _EXEC_BUDGET
+        # 自查总预算（轮间看表 + 单次调用封顶都用它，见 _EXEC_BUDGET）。
+        # **从调用方给的"还剩多久"倒推**，不是从自己这个 `start` 算 ——
+        # 执行器是 `_run_executor` 每次 dispatch 新建的，用 `start` 等于每 dispatch
+        # 把预算清零 ⇒ 跑过 ≥2 次 dispatch 就永远不收尾（2026-09-13 查明的真根因，
+        # 见 `docs/防御模式.md` §67）。
+        # `budget_s is None` = 调用方不管（阶段级那条路）⇒ 退回老行为；
+        # 取 `min` 是为了**保住 `QIDIAN_EXEC_BUDGET` 这个真机验证开关**（小值优先）。
+        # ≤0 时 `_deadline_at` 落在过去 ⇒ 第 1 轮就看表、立刻收尾，正是想要的。
+        _budget = _EXEC_BUDGET if self.budget_s is None else min(_EXEC_BUDGET, self.budget_s)
+        self._deadline_at = start + _budget
         _wrapped = False
 
         for turn in range(1, self._max_turns + 1):

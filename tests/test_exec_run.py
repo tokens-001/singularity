@@ -13,7 +13,7 @@
 绿 = 重构没破坏 run() 行为。红 = 立刻停手, 看哪条路径断了。
 不依赖 pytest。退出码 0=全过, 1=有失败。
 """
-import os, sys, tempfile
+import os, sys, tempfile, time
 os.environ["QIDIAN_SKIP_EMBED"] = "1"
 
 from pathlib import Path
@@ -143,9 +143,11 @@ def make_task():
         "status": None,
     })()
 
-def make_ctx(v3=True):
+def make_ctx(v3=True, deadline_in=None):
+    """`deadline_in` = 任务那把尺还剩多少秒（不给 = 0 = "调用方没给"，走老行为）。"""
     return RunContext(batch_id="b", snapshot_ref="snapref",
-                      merge_queue=object() if v3 else None)
+                      merge_queue=object() if v3 else None,
+                      deadline_at=(time.time() + deadline_in) if deadline_in else 0.0)
 
 def run_case(v3=True):
     S.task = make_task()
@@ -343,6 +345,38 @@ if __name__ == "__main__":
     check("建链处 lineup 是那份名单", chain_kw.get("project_lineup") == {"any": ["m1"]}, str(chain_kw))
     check("dispatch 处 restrict=True", disp_kw.get("restrict_to_lineup") is True, str(disp_kw))
     check("dispatch 处 lineup 是那份名单", disp_kw.get("project_lineup") == {"any": ["m1"]}, str(disp_kw))
+
+    # ── 13: 任务级死线 → dispatch 收到"倒推出来的预算"（§67 那把尺）──
+    # 执行器是 `_run_executor` **每次 dispatch 新建**的，用自己 `start` 起算等于
+    # 每 dispatch 把预算清零 ⇒ 任务跑过 ≥2 次 dispatch 就**永远不收尾**，
+    # 人却被外面 900s 无声收割（2026-09-13 查明的真根因）。
+    # 所以预算必须从**任务那把唯一的尺**倒推后传进去。
+    # 判据只有一种解释：给 400 秒死线，收到的必须 ≈ 400 − 90（余量），
+    # 明显小于 400。传 `None` / 压根不传这个 kwarg 都会红。
+    print("── 路径13: 任务级死线 → dispatch 收到倒推的预算 ──")
+    from singularity.scheduler import config as _cfg
+    reset_wt()
+    S.task = make_task()
+    S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2}]
+    S.last_dispatch_kw = None
+    S.dispatch_queue = [("ok", FakeExec(success=True))]
+    S.validate_queue = [FakeVal(action="pass")]
+    _exec.run(S.task, make_ctx(deadline_in=400.0), {"any": list(S.chain)})
+    got = S.last_dispatch_kw.get("budget_s")
+    _expect = 400.0 - _cfg.TASK_WRAPUP_MARGIN_S
+    check("dispatch 收到倒推的预算",
+          got is not None and _expect - 60 < got <= _expect + 1,
+          f"实际 {got!r}（应 ≈ 400 − {_cfg.TASK_WRAPUP_MARGIN_S:g} = {_expect:g}）")
+
+    # 没给死线时必须回 `None`（不是 0 —— 0 会让执行器一轮都不跑就直接判死）
+    reset_wt()
+    S.last_dispatch_kw = None
+    S.dispatch_queue = [("ok", FakeExec(success=True))]
+    S.validate_queue = [FakeVal(action="pass")]
+    _exec.run(S.task, make_ctx(), {"any": list(S.chain)})
+    check("没给死线 → budget_s 是 None 不是 0",
+          S.last_dispatch_kw.get("budget_s") is None,
+          f"实际 {S.last_dispatch_kw.get('budget_s')!r}")
 
     print("\n" + "=" * 48)
     total = PASS + FAIL

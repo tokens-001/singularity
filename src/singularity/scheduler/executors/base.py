@@ -121,6 +121,12 @@ class BaseExecutor:
     # 等于禁不掉（如 claude-cli 自带工具），调用方据此告警，而不是假装禁住了。
     honors_no_tools = False
 
+    # 这次执行**还能花多少秒**（调用方按任务级死线倒推后传进来，见 `_run_executor`）。
+    # 由 `_dispatch_exec._run_executor` 构造后赋值，所以放在**类属性**上而不是
+    # `__init__` 参数里 —— 各执行器的签名不一（有的不吃 `**kwargs`），改构造签名
+    # 会波及测试里的直接构造。`None` = 调用方不管 ⇒ 子类退回各自的老行为。
+    budget_s: "float | None" = None
+
     def __init__(self, agent_cfg: dict, task: str, task_id: str,
                  baseline_ref: str = "", cwd: str = "",
                  agent_level: str = "", **kwargs):

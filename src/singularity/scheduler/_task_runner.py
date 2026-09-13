@@ -188,8 +188,13 @@ class TaskRunner:
         # 快照 (修复 #1: 项目任务快照项目 repo)
         from . import project as proj_mod
         snap = snap_mod.take(task.id, repo_root=proj_mod.repo_root_for(task))
+        # 起表 —— 这是**任务级唯一那把尺**。orchestrator 的 900s 收割也是从"派发那一刻"
+        # 算的（`running_futures[fut] = (…, time.time())`），这里就在同一个 worker 线程的
+        # 开头、离派发只有线程调度那点差。执行器拿它倒推自己的提前量，
+        # 于是"跨多次 dispatch、跨重试、中间等人审"的时间都在同一把尺上（§67）。
         ctx = RunContext(batch_id=task.id, snapshot_ref=snap.ref,
-                         snapshot_method=snap.method, merge_queue=merge_queue)
+                         snapshot_method=snap.method, merge_queue=merge_queue,
+                         deadline_at=time.time() + config.TASK_DEADLINE_S)
         # ── 代码上下文注入 (codegraph) ──
         if pre.code_context:
             task.description = f"{task.description}\n\n[代码结构上下文]\n{pre.code_context}"

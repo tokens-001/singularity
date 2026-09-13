@@ -1385,6 +1385,71 @@ class TestExecutorBudgetWrapup:
         assert r.token_count == 7, "收尾把已烧的 token 丢了 —— 那和被砍没区别"
         assert r.tool_events, "收尾把跑过的轮次丢了"
 
+    def test_budget_comes_from_caller_not_own_start(self, monkeypatch):
+        """**接线**：执行器用调用方给的"还剩多久"，不是自己那个 `start`。
+
+        钉的是 2026-09-13 查明的真根因（`docs/防御模式.md` §67）：执行器是
+        `_run_executor` **每次 dispatch 新建**的，用 `start` 起算等于每 dispatch 归零
+        ⇒ 任务跑过 ≥2 次 dispatch 就永远不收尾，人却被外面 900s 无声收割。
+
+        判据只有一种解释：给一个**比 `_EXEC_BUDGET` 小得多**的 budget，
+        `_deadline_at` 必须落在它上面。接线断了就会落在 600 上 ⇒ 红。
+        """
+        oa, ex = self._ex(monkeypatch, budget=600.0)
+        ex.budget_s = 12.0
+        before = time.time()
+        monkeypatch.setattr(ex, "_api_call", lambda b: self._tool_reply(b))
+        ex.run()
+        assert ex._deadline_at <= before + 12.5, (
+            f"budget_s=12 没生效 —— _deadline_at 落在 {ex._deadline_at - before:.0f}s 后，"
+            f"说明还是按自己的 start + _EXEC_BUDGET(600) 算的")
+        assert ex._deadline_at >= before, "死线不该早于起跑时刻"
+
+    def test_zero_budget_wraps_up_immediately(self, monkeypatch):
+        """`budget_s <= 0`（任务那把尺已经用完）⇒ 第 1 轮就收尾，一个调用都别再发。
+
+        这是"两层预算同源"的**兑现点**：外面马上要砍了，执行器必须立刻交出已知事实，
+        否则又回到"跑到被砍、砍完无账"。
+        """
+        oa, ex = self._ex(monkeypatch, budget=600.0)
+        ex.budget_s = -5.0
+        calls = []
+        monkeypatch.setattr(ex, "_api_call",
+                            lambda b: (calls.append(b), self._tool_reply(b))[1])
+        r = ex.run()
+        assert calls == [], "预算已经用完了还在发模型调用"
+        assert r.error_kind == "deadline"
+
+    def test_env_knob_still_wins_over_a_bigger_task_budget(self, monkeypatch):
+        """`budget_s` 比 `QIDIAN_EXEC_BUDGET` 大时，**开关必须仍然优先**。
+
+        否则这次改动会把 §63 那套真机验法**悄悄废掉** —— 那套是
+        "设 `QIDIAN_EXEC_BUDGET=15` 起后端，看它自己在 15 秒收尾"，
+        靠的就是"小值优先"。判据只有一种解释：任务尺给 800，开关给 15，
+        收尾必须落在 15 上；写成 `max` 就会落在 800 上 ⇒ 红。
+        """
+        oa, ex = self._ex(monkeypatch, budget=15.0)
+        ex.budget_s = 800.0
+        before = time.time()
+        monkeypatch.setattr(ex, "_api_call", lambda b: self._tool_reply(b))
+        ex.run()
+        assert ex._deadline_at <= before + 16.0, (
+            f"QIDIAN_EXEC_BUDGET=15 被任务预算盖掉了 "
+            f"（_deadline_at 落在 {ex._deadline_at - before:.0f}s 后）⇒ 真机验法失效")
+
+    def test_none_budget_keeps_old_behaviour(self, monkeypatch):
+        """`budget_s=None` = 调用方不管（goal_loop / 阶段级那条路）⇒ 退回老行为。
+
+        没有这条，`None` 会等价于 0 ⇒ 那两条路**一次模型调用都不发**、任务直接判死。
+        """
+        oa, ex = self._ex(monkeypatch, budget=600.0)
+        ex.budget_s = None
+        calls = []
+        monkeypatch.setattr(ex, "_api_call",
+                            lambda b: (calls.append(b), self._tool_reply(b))[1])
+        ex.run()
+        assert calls, "budget_s=None 被当成'预算已到'了 —— 那两条路会被饿死"
+
     def test_wrapup_is_not_retried(self, monkeypatch):
         """收尾结果**不许再重试** —— 重试就是把剩下的时间再烧一遍。"""
         from singularity.scheduler._exec import _run_with_retry
@@ -1407,6 +1472,77 @@ class TestExecutorBudgetWrapup:
         out = _run_with_retry(task, MagicMock(retry_count=0, merge_queue=None), {})
         assert out is batch
         assert len(attempts) == 1, f"撞预算收尾被重试了 {len(attempts)} 次"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 「一把尺」的接线（2026-09-13 补，§67）
+#
+# 上面那组测的是**执行器内部**认不认 budget_s。这里测的是**外面那两段线**：
+#   ① `_exec.run` 从 `ctx.deadline_at` 倒推出 budget_s（每次重算）
+#   ② `_run_executor` 把它真的挂到执行器上
+# 少了任何一段，执行器内部再对也没用 —— 它还是会退回"按自己 start 起算"，
+# 也就是每 dispatch 归零、永远不收尾。**"函数对"≠"接线通"。**
+# ═══════════════════════════════════════════════════════════════
+
+class TestBudgetWiring:
+
+    def test_derives_from_ctx_deadline_and_a_clock_keeps_ticking(self):
+        """`_dispatch_budget_s` 从任务那把尺倒推，且**每次调用都重算**。
+
+        重算是要害：不然"第二次 dispatch 拿到的是第一次那一刻的剩余量"，
+        多轮任务照样晚收尾。
+        """
+        from singularity.scheduler._exec import _dispatch_budget_s
+        from singularity.scheduler import config
+
+        ctx = RunContext(batch_id="t", snapshot_ref="r",
+                         deadline_at=time.time() + config.TASK_DEADLINE_S)
+        first = _dispatch_budget_s(ctx)
+        assert first is not None
+        # 起点：900 − 90 = 810 上下（扣掉这行代码自己花的时间）
+        assert 800 < first <= config.TASK_DEADLINE_S - config.TASK_WRAPUP_MARGIN_S
+
+        ctx.deadline_at -= 300          # 模拟"已经花掉 300 秒"
+        assert _dispatch_budget_s(ctx) < first - 250, "没有重算 —— 还在用上一次的剩余量"
+
+    def test_no_deadline_means_none_not_zero(self):
+        """`deadline_at == 0`（没给）⇒ `None`。**不是 0** —— 0 会让执行器立刻收尾。"""
+        from singularity.scheduler._exec import _dispatch_budget_s
+        assert _dispatch_budget_s(RunContext(batch_id="t", snapshot_ref="r")) is None
+
+    def test_budget_already_blown_goes_negative(self):
+        """任务那把尺已经过点 ⇒ 负数（执行器据此立刻收尾），不是 `None`。"""
+        from singularity.scheduler._exec import _dispatch_budget_s
+        from singularity.scheduler import config
+        ctx = RunContext(batch_id="t", snapshot_ref="r",
+                         deadline_at=time.time() - config.TASK_DEADLINE_S)
+        got = _dispatch_budget_s(ctx)
+        assert got is not None and got < 0
+
+    def test_run_executor_hangs_budget_on_the_executor(self, monkeypatch):
+        """`_run_executor` 把 budget_s 挂到执行器实例上 —— 这是唯一的接头。
+
+        用真 `BaseExecutor` 子类，顺便钉住"默认值是 `None`"（不设时不能是 0）。
+        """
+        from singularity.scheduler import dispatcher      # 先导它绕开循环 import
+        from singularity.scheduler import _dispatch_exec as dx
+        from singularity.scheduler.executors.base import BaseExecutor, ExecutorResult
+
+        monkeypatch.setattr(dx, "_load_skills_for_agent", lambda *a, **k: ({}, [], {}))
+        monkeypatch.setattr(dx, "_load_mcp_for_agent", lambda *a, **k: ([], None))
+        monkeypatch.setattr(dx, "_make_permission_checker", lambda *a, **k: None)
+
+        assert BaseExecutor.budget_s is None, "类属性默认值被改了 —— 不设时会变成'立即到期'"
+
+        seen = {}
+
+        class _Ex(BaseExecutor):
+            def run(self):
+                seen["budget_s"] = self.budget_s
+                return ExecutorResult(success=True)
+
+        dx._run_executor(_Ex, {}, "任务", "tid", "any", budget_s=42.5)
+        assert seen["budget_s"] == 42.5, "budget_s 没接到执行器上 —— 它还会按自己 start 起算"
 
 
 # ═══════════════════════════════════════════════════════════════

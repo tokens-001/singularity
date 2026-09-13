@@ -30,6 +30,12 @@ class RunContext:
     snapshot_method: str = "git"
     worktree_base: str = ""
     merge_queue: "Optional[MergeQueue]" = None
+    # 任务级"死亡时刻"（墙钟绝对值）。**这是唯一的那把尺** —— orchestrator 到点砍人
+    # （`_reap_futures` 的 `now - submitted_at > TASK_DEADLINE_S`）用的也是这个原点，
+    # 所以执行器的提前收尾余量必须从**同一个绝对值**倒推，不能各自 `time.time()` 起算。
+    # 0 = 不知道（goal_loop / 阶段级那条路）⇒ 调用方退回老行为，不是"立即到期"。
+    # 见 `docs/防御模式.md` §67。
+    deadline_at: float = 0.0
 
 
 @dataclass

@@ -129,6 +129,7 @@ def dispatch(
     no_tools: bool = False,
     project_id: str = "",
     allow_committee: bool = True,
+    budget_s: float | None = None,
 ) -> DispatchResult:
     """选 executor 并执行。架构任务: 委员会并行→合成; 其他: 单模型 fallback 链。
 
@@ -146,6 +147,11 @@ def dispatch(
 
     ``allow_committee`` 默认 True = **拿不准就开委员会**（防御模式 §47 fail-closed）。
     只有项目被判为轻量（`project.resolve_flow`）时才传 False，见 `_committee_allowed`。
+
+    ``budget_s`` = 这次执行**还能花多少秒**（调用方按任务级的死线倒推）。
+    执行器拿它提前收尾，免得被外面那把 900s 的刀无声砍掉（§67）。
+    ``None`` = 调用方不管（阶段级的 planning/researching 那条路）⇒ 执行器退回"用自己
+    起跑算"的老行为。
     """
     chain = pick_agent_fallback_chain(agents, level, project_lineup=project_lineup,
                                       restrict_to_lineup=restrict_to_lineup)
@@ -208,6 +214,7 @@ def dispatch(
             result = _run_executor(
                 executor_cls, agent_cfg, full_task, task_id, level,
                 baseline_ref=baseline_ref, cwd=cwd, phase=phase,
+                budget_s=budget_s,
             )
             # ⚠️ **执行器自己撞总预算收尾 —— 这是终态，不是"这个模型空输出"。**
             # 必须挡在下面那道 `raw_output` 判据**前面**：收尾结果没有终答，raw_output
@@ -238,8 +245,14 @@ def dispatch(
 
 
 def _run_executor(executor_cls, agent_cfg: dict, full_task: str, task_id: str,
-                  level: str, baseline_ref: str = "", cwd: str = "", phase: str = ""):
-    """构建 executor 并执行。"""
+                  level: str, baseline_ref: str = "", cwd: str = "", phase: str = "",
+                  budget_s: float | None = None):
+    """构建 executor 并执行。
+
+    `budget_s` 是**调用方算好的"还能花多久"**（任务级死线倒推），执行器据此提前收尾。
+    这里是唯一把执行器和那个数接上的地方 —— 执行器**不再自己 `time.time()` 起算**，
+    否则每次 dispatch 新建一个实例就等于把预算清零（§67）。
+    """
     skill_tools, skill_prompt, skills = _load_skills_for_agent(
         level, agent_cfg.get("model", ""), task_desc=full_task, phase=phase)
     mcp_tools, mcp_executor = _load_mcp_for_agent()
@@ -252,6 +265,9 @@ def _run_executor(executor_cls, agent_cfg: dict, full_task: str, task_id: str,
         mcp_tools=mcp_tools, mcp_executor=mcp_executor,
         permission_checker=perm_checker,
     )
+    # 构造后再挂：不动各执行器的 `__init__` 签名（它们有的不吃 **kwargs），
+    # 也不往 `**kwargs` 里塞（那会变成 `_budget_s`，名字对不上）。
+    executor.budget_s = budget_s
     return executor.run()
 
 
