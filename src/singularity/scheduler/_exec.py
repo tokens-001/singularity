@@ -655,8 +655,15 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     quality = val_mod.post_execution_hook(exec_result, snap)
                     validation.confidence = quality.get("confidence", 0.5)
                     validation.quality_signals = quality.get("quality_signals", {})
-                except Exception:
-                    quality = {"warnings": [], "failure_kind": "ok", "confidence": 0.5}
+                except Exception as e:
+                    # ⚠️ 原来这里写死 `{"warnings": [], "failure_kind": "ok", ...}` ——
+                    # 把"质量钩子自己炸了"伪装成"没问题"：下游 398 行按
+                    # `failure_kind != "ok"` 决定要不要给模型加失败反馈，这个假 ok
+                    # 让钩子崩溃在整条链路上不留痕（D 核外派点名叫它编造的 0.5）。
+                    witness.warn("exec", f"post_exec_hook_failed:{type(e).__name__}:{e}"[:200])
+                    quality = {"warnings": [f"质量钩子异常（不得当通过处理）: {e}"],
+                               "failure_kind": "hook_error",
+                               "quality_signals": {}, "confidence": 0.5}
 
                 # ── v2: independent tests + multi-model review ──
                 changed = getattr(exec_result, 'changed_files', []) or []
@@ -794,6 +801,11 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
         if batch.ok or batch.planner_decomposed:
             return batch
         if batch.term_reason.startswith(("merge_conflict", "soft_quality_gate")):
+            return batch
+        if batch.term_reason.startswith("cancelled_by_user"):
+            # 人工取消不是"失败可重试"：`_check_cancelled` 命中标记时**已经把标记删了**，
+            # 于是重试那一轮 `_check_cancelled` 查不到东西、任务照常跑满 3 轮
+            # （用户点了取消，token 继续烧）。取消是终态意图，早退，交给 finalize 收尾。
             return batch
         if getattr(batch, "deadline_wrapup", False):
             # 撞总预算收尾。重试 = 把剩下的时间再烧一遍，而且下次多半是被 orchestrator

@@ -675,6 +675,8 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
             pass
 
     # D3: 构建结构化 QA 报告 (fix_route 分级)
+    # ⚠️ 只有报告**真落盘**了才算数，见下面那段标记的说明。
+    qa_saved = False
     try:
         from singularity.scheduler.validator import build_qa_report
         qa_raw = disp_result.executor_result.raw_output if disp_result and disp_result.executor_result else "{}"
@@ -687,8 +689,11 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
         qa_report = build_qa_report(passed, issues, verdict, reason)
         _save_phase_output(project.id, "qa_report.json",
                           json.dumps(qa_report, ensure_ascii=False, indent=2))
-    except Exception:
-        pass
+        qa_saved = True
+    except Exception as e:
+        # 原来是裸 `pass` —— 报告没落盘、GATE3 却照样看到"验收跑过"。
+        from singularity.scheduler import witness
+        witness.warn("workflow", f"qa_report_save_failed:{type(e).__name__}:{e}"[:120])
 
     # 本轮有没有任务是在"上游失败、降级运行"下跑完的 —— 必须在人审页上看得见
     _flag_degraded_tasks(project)
@@ -698,7 +703,15 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     # 验收入门票：走到这儿才算"验收真的跑过"。放在**最后**、而不是开头 ——
     # 中途抛异常时不该留下"跑过了"的假证据。GATE3 靠这个标记识别
     # "验收整段没跑就被推进来了"（见 ProjectState._gate3_admission）。
-    project.issues.append({"type": "verification_ran", "detail": "QA + 安全审计已执行"})
+    # ⚠️ **撒标记要跟产出对账**（2026-09-14，D/E 两轮外派独立撞上同一条）：
+    # 原先是无条件 append —— 上面那条 `except` 一吞，QA 报告根本没落盘，
+    # 标记却照样撒 ⇒ `_gate3_admission` 看到的是"验收跑过"，进 GATE3 零告警。
+    # 标记的语义是"验收有产出"，不是"代码走到这一行"。没产出就让 admission 去报缺证据。
+    if qa_saved:
+        project.issues.append({"type": "verification_ran", "detail": "QA + 安全审计已执行"})
+    else:
+        from singularity.scheduler import witness
+        witness.warn("workflow", f"verification_ran_withheld:{project.id}"[:120])
     return msgs
 
 

@@ -19,36 +19,59 @@ from singularity.scheduler._observer_tools import OBSERVER_SYSTEM_PROMPT, OBSERV
 _log = logging.getLogger("observer")
 
 # ── 人审门（GATE1/2/3）的回复判定 ────────────────────────────────
-# ⚠️ 两个坑都在这张词表上（2026-09-14 修）：
+# ⚠️ 三个坑都在这张词表上（2026-09-14 修两轮）：
 #   ① **子串倒挂**：原先把批准分支放在前面，而 `"不通过"` **包含子串 `"通过"`**
 #      ⇒ 人在门里回"不通过"，走的是**批准**分支。**打回永远不生效。**
 #      ⇒ 所以判定顺序必须是 **先打回、后批准**（`_is_gate_reply` 里就是这么排的）。
 #   ② **单字词太松**："好"/"行"/"ok" 原来按子串算 ⇒ 聊天里顺口一句
 #      "这方案行不行？" 里的 "行" 就把门放过去了。⇒ 短词必须**整句就是它**。
+#   ③ **①只修了一半**："不通过"进词表了，可"不"+ **其它**批准词照样倒挂 ——
+#      "不同意"里含"同意"⇒ 判批准。⇒ 得在**批准词前面找否定词**，不能只加特例。
+#      找"前面"而不是拼串：`"不"+"同意"` 拼串匹配拦不住插了字的 `"不太同意"`。
 _REJECT_WORDS = ("修改", "改", "不对", "重来", "不通过")
 
+# 中文否定词：出现**在批准词之前**就算打回（"不同意"/"不太同意"/"不用确认了"）。
+_NEGATIONS = ("不", "别", "否")
+# 光杆否定：**只认整句、只认这张闭表**，不做前缀匹配。
+# 前缀匹配会误伤 —— `"不错的方案"`（这是夸、该算批准方向）以 "不" 开头，
+# 和 `"nothing works"` 以 "no" 开头是同一种假阳性。闭表宁可漏，不可错杀。
+_BARE_REJECT = ("不", "不行", "不好", "不可以", "不要", "不用", "不了", "不是",
+                "别", "否", "no", "n", "nope")
+
 _APPROVE_PHRASES = ("通过", "继续", "确认", "同意")   # 多字，出现在句子里就算
-_APPROVE_BARE = ("ok", "yes", "好", "可以", "行", "是")  # 短词，必须整句（允许 ≤4 字的后缀）
-_BARE_MAX_LEN = 4
+_APPROVE_BARE = ("ok", "yes", "好", "可以", "行", "是")  # 短词，必须整句就是它
+# 允许挂在短词尾巴上的语气词： "好的"/"行吧"/"OK 了" 都算整句。
+_BARE_TAILS = "了的吧啊哈呀哦嗯嘛"
 
 
 def _is_gate_reply(question: str) -> str | None:
     """把人审门里的一句话判成 `"rejected"` / `"approved"` / `None`（不是门回复）。
 
-    **先判打回** —— 见上面 ①。
+    **先判打回** —— 见上面 ①②③。
     """
     q = question.strip().lower()
     if not q:
         return None
     if any(w in q for w in _REJECT_WORDS):
         return "rejected"
+    # ③ 批准词**前面**有否定词 ⇒ 打回。子串匹配下"不同意"含"同意"，不先拦就是批准。
+    #    去前缀找（而不是拼 `否定+词`）是为了拦住中间插字的"不太同意"。
+    #    宁可错杀：打回只是让项目退回上一层，误批准是会推进阶段的。
+    for w in _APPROVE_PHRASES:
+        i = q.find(w)
+        if i >= 0 and any(n in q[:i] for n in _NEGATIONS):
+            return "rejected"
     if any(w in q for w in _APPROVE_PHRASES):
         return "approved"
-    # 短词：去掉标点空白后，整句就是那个词（或只多几个字，如"好的"/"行吧"）。
-    # "这方案行不行" 有 6 个字 ⇒ 不匹配 ⇒ 不会顺手把门放过去。
-    bare = "".join(ch for ch in q if ch not in " \t\r\n。，,.!！?？~、：:")
-    if len(bare) <= _BARE_MAX_LEN and any(bare.startswith(w) for w in _APPROVE_BARE):
+    # 短词：去掉标点空白、剥掉尾语气词后，**必须整句就是那个词**。
+    # 用 startswith 会让"行不行"/"可以吗"这类疑问句过门（它们的开头就是批准短词）；
+    # 剥尾后再比相等，疑问句的"不行"/"吗"都不在 `_BARE_TAILS` 里 ⇒ 自然落空。
+    bare = "".join(ch for ch in q if ch not in " \t\r\n。，,.!！?？~、：:").rstrip(_BARE_TAILS)
+    if bare in _APPROVE_BARE:
         return "approved"
+    # "不了"/"不行"/"不要"/"no" 这类光杆否定。
+    if bare in _BARE_REJECT:
+        return "rejected"
     return None
 
 

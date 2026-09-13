@@ -244,6 +244,8 @@ class TaskRunner:
         validation = batch.validation
         term_reason = batch.term_reason
         disp_result = batch.dispatch_result
+        # 人工取消：终态意图，不再拆分、不再跑 QA。见下面的 `elif cancelled` / QA 那段。
+        cancelled = term_reason.startswith("cancelled_by_user")
         if batch.planner_decomposed:
             try:
                 _materialize_in_main(batch, task)
@@ -259,6 +261,11 @@ class TaskRunner:
             tracker.transition(task.id, TaskStatus.ROLLED_BACK,
                              error=f"{validation.verdict}: {term_reason}")
             reason = f"rolled_back: {term_reason}"
+        elif cancelled:
+            # 用户点过取消 ⇒ 收 FAILED。**不能落进下面那条 else**：它带"重试耗尽 →
+            # 自动拆分再提交"的分支，那会在用户已经叫停之后再派一批子任务出去花钱。
+            tracker.transition(task.id, TaskStatus.FAILED, error="用户手动取消")
+            reason = "cancelled"
         else:
             d_plan = _read_planner_patch(task.id)
             if d_plan and "escalation_exhausted" in term_reason:
@@ -313,7 +320,9 @@ class TaskRunner:
         # worker 里跑过门禁 (有 merge_request 的任务) 就复用它的判定, 不重复跑 supervise
         qa_verdict = getattr(batch, "qa_verdict", "") or ""
         qa_issues = list(getattr(batch, "qa_issues", []) or [])
-        if not qa_verdict:
+        # 取消的任务不跑 QA —— `supervise()` 是一次真模型调用，对已经叫停的任务
+        # 再花这笔钱纯属浪费，结论也没人会看。
+        if not qa_verdict and not cancelled:
             try:
                 from .supervisor import supervise, qa_context
                 from .project import repo_root_for
