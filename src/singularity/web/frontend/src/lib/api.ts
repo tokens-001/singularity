@@ -13,12 +13,35 @@ async function request<T>(url: string, opts?: RequestInit): Promise<T> {
   return res.json()
 }
 
+/**
+ * 后端有一类形状是「**200 + `{error: "..."}` 占位符**」——
+ * 请求成功了，但内容其实是"这个读不到"（例：`/api/files/diff` 拿不到 diff 时）。
+ *
+ * ⚠️ 而下面几处归一化是 `(d?.tasks||d)` / `Object.values(d||{})`：
+ * **占位符对象是真值**，于是它会当成正常数据往下走 ——
+ * 前者让调用方 `.filter()` 直接崩，后者把**一句错误文案渲染成一条数据**
+ * （一个叫"加载失败：xxx"的模型）。今天后端 200 的形状恒正确所以没发作，
+ * 但只要哪个 handler 学 `/api/files/diff` 回 200+占位符，这里就是**潜伏雷**
+ * （2026-09-14，外派④扫前端抓出）。
+ *
+ * ⇒ 在这一层统一把它**变成失败**（抛），交给调用方既有的 catch / 报错路径 ——
+ * 报错信息跟非 2xx 那条路完全一致（中文原因直接透出来）。
+ */
+export function rejectErrorPlaceholder<T>(d: T): T {
+  const o = d as unknown as { error?: unknown } | null
+  if (o && typeof o === 'object' && !Array.isArray(o)
+      && typeof o.error === 'string' && o.error) {
+    throw new Error(o.error)
+  }
+  return d
+}
+
 export interface Task { id: string; description: string; status: string; route_type: string; route_gate: string; route_role: string; project_id: string; execution_mode?: string; updated_at: number; created_at: number }
 export interface TaskDetail extends Task { trace?: any; timeline?: any }
 
 export const api = {
   status: () => request<any>('/api/status'),
-  tasks: async (p?: string) => { const d = await request<any>(`/api/tasks${p||''}`); return (d?.tasks||d) as any[] },
+  tasks: async (p?: string) => { const d = rejectErrorPlaceholder(await request<any>(`/api/tasks${p||''}`)); return (d?.tasks||d) as any[] },
   task: (id: string) => request<any>(`/api/tasks/${id}`),
   taskTrace: (id: string, section?: string) => request<any>(`/api/tasks/${id}/trace${section ? `?section=${section}` : ''}`),
   revealFile: (path: string, projectId?: string) => request('/api/files/reveal', { method: 'POST', body: JSON.stringify({ path, project_id: projectId || '' }) }),
@@ -59,7 +82,7 @@ export const api = {
   updateAgent: (model: string, data: any) => request(`/api/agents/any/${model}`,{method:'PUT',body:JSON.stringify(data)}),
   addAgent: (data: any) => request('/api/agents',{method:'POST',body:JSON.stringify(data)}),
 
-  models: async () => { const d = await request<any>('/api/models'); return Object.values(d||{}) as any[] },
+  models: async () => { const d = rejectErrorPlaceholder(await request<any>('/api/models')); return Object.values(d||{}) as any[] },
   addModel: (data: any) => request('/api/models',{method:'POST',body:JSON.stringify(data)}),
   updateModel: (id: string, data: any) => request(`/api/models/${id}`,{method:'PUT',body:JSON.stringify(data)}),
   deleteModel: (id: string) => request(`/api/models/${id}`,{method:'DELETE'}),
@@ -70,7 +93,7 @@ export const api = {
   setModelPrice: (id: string, price: number | null) =>
     request(`/api/model-price/${id}`,{method:'PUT',body:JSON.stringify({price_per_m: price})}),
 
-  apiStore: async () => { const d = await request<any>('/api/api-store'); return Object.values(d||{}) as any[] },
+  apiStore: async () => { const d = rejectErrorPlaceholder(await request<any>('/api/api-store')); return Object.values(d||{}) as any[] },
   addApiStore: (data: any) => request('/api/api-store',{method:'POST',body:JSON.stringify(data)}),
   deleteApiStore: (id: string) => request(`/api/api-store/${id}`,{method:'DELETE'}),
   scanApiStore: (id: string) => request(`/api/api-store/${id}/scan`,{method:'POST'}),
