@@ -440,9 +440,19 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
             # （`_persist_partial_usage` 每 dispatch 一次落一盘），只是没人读。
             # 2026-09-13 跟超时并成一条路（见 `_account_salvaged`）。
             _elapsed = time.time() - submitted_at
-            _salvaged = _salvage_timed_out(t, _elapsed, snap)
-            _save_trace(t, route, snap, _salvaged, None, False)
-            _account_salvaged(t, _salvaged, _elapsed)
+            # ⚠️ **要和下面超时那条一个形状**（2026-09-13 外派 E 抓到，2026-09-14 补）：
+            # 抢救段原来**裸着**—— 里面任何一步抛都会**中断整个 reap 循环**，
+            # 后面那些同样已经完成的 future 这一轮就不再处理（白等一轮）。
+            # 超时那条早就包了 `_strand_guard`，两条路做的是**同一件事**，只包了一条。
+            # （任务在上面的 `tracker.transition(FAILED)` 已经落终态，所以这里抛
+            # 不会出孤儿；`_strand_guard` 的意义是**出声** + 那个"只在还停在 RUNNING
+            # 时才改"的兜底。）
+            try:
+                _salvaged = _salvage_timed_out(t, _elapsed, snap)
+                _save_trace(t, route, snap, _salvaged, None, False)
+                _account_salvaged(t, _salvaged, _elapsed)
+            except Exception as _e:
+                _strand_guard(t, _e, "salvage_worker_error")
             try:
                 from singularity.scheduler.project import repo_root_for
                 cleanup_task_artifacts(t.id, repo_root_for(t))

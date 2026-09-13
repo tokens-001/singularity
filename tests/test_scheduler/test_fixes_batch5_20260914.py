@@ -442,6 +442,62 @@ def test_http门用的就是那一份判定():
     assert _auth.is_local_origin(None) is False   # 非字符串不许抛
 
 
+# ═══════════════════════════════════════════════════════════════
+# ⑨ worker 异常分支的抢救段原来裸着（超时那条包了兜底）
+# ═══════════════════════════════════════════════════════════════
+# 两条路做的是**同一件事**（抢救已知事实再落 trace），却只给超时那条包了
+# `_strand_guard`。worker 异常那条裸着 ⇒ 抢救里任何一步抛都会**中断整个 reap 循环**，
+# 后面已经完成的 future 这一轮不再处理。
+
+class _BoomFuture:
+    """`done()` 为真、`result()` 抛 —— 就是 worker 异常那一支。"""
+    def done(self):
+        return True
+
+    def result(self):
+        raise RuntimeError("worker 炸了")
+
+    def cancel(self):
+        return True
+
+
+def test_worker异常分支的抢救段不许带崩回收循环(monkeypatch, tmp_path):
+    """**变异判据**：把新加的 try/except 去掉（回到裸着的三行）→ 本用例红
+    （异常穿出去，第二个 future 这轮收不到 ⇒ `results` 只有 1 条）。
+
+    两个 future **都是** worker 异常：`results` 的长度就是"循环走完了没有"的判据。
+    """
+    from singularity.scheduler import orchestrator as orch
+
+    monkeypatch.setattr(orch, "wait", lambda *a, **k: None)          # 别白等 10s
+    monkeypatch.setattr(orch.config, "CANCEL_DIR", tmp_path)
+    monkeypatch.setattr(orch.config, "ensure_dirs", lambda: None)
+    monkeypatch.setattr(orch.tracker, "transition", lambda *a, **k: None)
+    monkeypatch.setattr(orch, "cleanup_task_artifacts", lambda *a, **k: 0)
+    monkeypatch.setattr(orch, "_save_trace", lambda *a, **k: None)
+    monkeypatch.setattr(orch, "_account_salvaged", lambda *a, **k: None)
+
+    def _boom(*a, **k):
+        raise RuntimeError("抢救自己炸了")
+    monkeypatch.setattr(orch, "_salvage_timed_out", _boom)
+
+    warns: list[str] = []
+    monkeypatch.setattr(orch.witness, "warn",
+                        lambda scope, msg, key="": warns.append(f"{key}|{msg}"))
+
+    def _t(i):
+        return type("T", (), {"id": f"t{i}", "description": "x", "depends_on": [],
+                              "created_at": 1.0, "route_type": "default"})()
+
+    running = {_BoomFuture(): (_t(1), None, None, None, 0.0),
+               _BoomFuture(): (_t(2), None, None, None, 0.0)}
+    results: list = []
+    orch._reap_futures(running, {}, None, None, results)
+
+    assert len(results) == 2, f"循环被抢救段的异常打断了，只收了 {len(results)} 个"
+    assert any("salvage_worker_error" in w for w in warns), f"抢救失败没出声：{warns}"
+
+
 def test_run_executor_真的调了这条告警(monkeypatch):
     """**接线**：上面几条测的是函数本体，"接线通不通"是另一回事
     —— 挪走/删掉 `_run_executor` 里那句调用，它们照样全绿。
