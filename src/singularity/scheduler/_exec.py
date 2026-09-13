@@ -802,10 +802,13 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
             return batch
         if batch.term_reason.startswith(("merge_conflict", "soft_quality_gate")):
             return batch
-        if batch.term_reason.startswith("cancelled_by_user"):
+        if batch.term_reason.startswith("cancelled"):
             # 人工取消不是"失败可重试"：`_check_cancelled` 命中标记时**已经把标记删了**，
             # 于是重试那一轮 `_check_cancelled` 查不到东西、任务照常跑满 3 轮
             # （用户点了取消，token 继续烧）。取消是终态意图，早退，交给 finalize 收尾。
+            # ⚠️ 前缀是 `"cancelled"` 不是 `"cancelled_by_user"` —— 还有
+            # `cancelled_during_pause`（`:540`）那一族，漏了它等于同一个洞换个字符串
+            # （2026-09-14，逆向审抓到、我核过）。
             return batch
         if getattr(batch, "deadline_wrapup", False):
             # 撞总预算收尾。重试 = 把剩下的时间再烧一遍，而且下次多半是被 orchestrator

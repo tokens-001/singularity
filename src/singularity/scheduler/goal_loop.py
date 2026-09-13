@@ -66,6 +66,15 @@ class GoalLoop:
             ctx = RunContext(batch_id=f"goal_{task.id}_{i}", snapshot_ref="", merge_queue=None)
             batch = _run_with_retry(task, ctx, self._agents)
 
+            # 🔴 **用户叫停了就别进下一轮**（2026-09-14，逆向审抓到、我核过）：
+            # goal 循环每轮都是一次**完整 dispatch**，不在这里断的话，取消要等到
+            # `max_iter` 跑完才生效 —— 而用户点下取消那一刻起，每一轮都是白烧的钱。
+            # ⚠️ 前缀用 `"cancelled"` 而不是 `"cancelled_by_user"`：还有
+            # `cancelled_during_pause`（`_exec.py:540`）这一族，它们都是"用户叫停"。
+            if str(getattr(batch, "term_reason", "") or "").startswith("cancelled"):
+                return GoalResult(success=False, iterations=i, final_output=last_output,
+                                  history=history, error="用户取消")
+
             if not batch.ok or not batch.dispatch_result:
                 history.append({"iter": i, "output": "", "goal_met": False, "reason": batch.term_reason})
                 continue

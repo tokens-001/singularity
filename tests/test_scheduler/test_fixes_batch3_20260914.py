@@ -239,3 +239,81 @@ def test_质量钩子异常不许报_ok(monkeypatch):
            and any(isinstance(v, ast.Constant) and v.value == "ok" for v in n.values)]
     assert not bad, "except 分支里又把钩子异常写成 failure_kind=ok 了（行号见上）"
     assert "post_exec_hook_failed" in src, "钩子炸了却没告警"
+
+
+# ═══════════════════════════════════════════════════════════════
+# ③ 取消是**一整族**，不是 `cancelled_by_user` 一个字符串
+# ═══════════════════════════════════════════════════════════════
+# 2026-09-14 逆向审抓到、我核过：我第一版把判据写成 `startswith("cancelled_by_user")`，
+# 而 `_exec.py:540` 还会造 `cancelled_during_pause`（暂停期间被取消）——
+# 同一个洞换了个字符串，照样重试。下面三条把**整族**钉住。
+
+def test_暂停期间取消也要早退(monkeypatch):
+    from types import SimpleNamespace as NS
+    from singularity.scheduler import _exec
+    from singularity.scheduler import snapshot as _snap
+
+    # ⚠️ **这条测试故意把代码推进"没有早退"的分支**，而那条路的尽头是
+    # `_run_with_retry` 里的回滚 —— 它会对 `repo_root_for(task)` 下手，而假任务
+    # 没有 project_id ⇒ 解析到**引擎本仓** ⇒ `stash push -u` + `clean -fd`
+    # 把开发者的工作区整个 stash 走。**我因此丢过两次工作区**（两次都从 stash 捞回来了）。
+    # ⇒ 在这里把回滚打桩，测的是"跑了没跑"，不是"真去动我的文件"。
+    monkeypatch.setattr(_snap, "rollback", lambda *a, **k: None)
+
+    calls = []
+
+    def fake_run(task, ctx, agents):
+        calls.append(1)
+        return NS(ok=False, planner_decomposed=False,
+                  term_reason="cancelled_during_pause", dispatch_result=None)
+
+    monkeypatch.setattr(_exec, "run", fake_run)
+    task = NS(id="t_p", max_retries=3, description="x")
+    ctx = NS(retry_count=0, merge_queue=None, snapshot_ref="", batch_id="b")
+
+    out = _exec._run_with_retry(task, ctx, agents={})
+    assert len(calls) == 1, f"暂停期间取消之后又跑了 {len(calls) - 1} 轮"
+    assert out.term_reason == "cancelled_during_pause"
+
+
+def test_暂停期间取消也收_FAILED_不拆分(monkeypatch):
+    """`finalize` 的取消分支也要认这一族，否则一样会落进"重试耗尽→自动拆分"。"""
+    from singularity.scheduler._types import _pending_sse_events
+    _pending_sse_events.clear()
+    decomposed = []
+    transitions = []
+
+    reason, _results, _ = TestFinalizeResult._call(
+        TestFinalizeResult(), monkeypatch,
+        task=TestFinalizeResult._make_task(retry_count=3, max_retries=3, depth=0),
+        batch=TestFinalizeResult._make_batch(
+            ok=False, term_reason="cancelled_during_pause",
+            validation=type("V", (), {"action": "abort", "verdict": "阻断", "evidence": {}})(),
+        ),
+        **{"decompose": lambda d: decomposed.append(d) or [{"desc": "a"}, {"desc": "b"}],
+           "tracker.transition": lambda tid, st, **kw: transitions.append(
+               (tid, getattr(st, "name", str(st))))},
+    )
+    assert decomposed == [], "暂停期间取消的任务还是被拆分了"
+    assert any(s == "FAILED" for _, s in transitions), transitions
+
+
+def test_goal_循环里取消要立刻停(monkeypatch):
+    """goal 循环每轮都是一次**完整 dispatch** —— 不在这里断，取消要等 `max_iter` 跑完，
+    而用户点下取消那一刻起每一轮都是白烧的钱。"""
+    from types import SimpleNamespace as NS
+    from singularity.scheduler import goal_loop as GL
+
+    dispatches = []
+
+    def fake_retry(task, ctx, agents):
+        dispatches.append(ctx.batch_id)
+        return NS(ok=False, planner_decomposed=False,
+                  term_reason="cancelled_by_user", dispatch_result=None)
+
+    monkeypatch.setattr(GL, "_run_with_retry", fake_retry)
+    task = NS(id="t_goal", description="d", max_retries=0)
+    res = GL.GoalLoop(agents={}).run(task, "把这个做完", max_iter=5)
+
+    assert len(dispatches) == 1, f"取消之后 goal 循环又派了 {len(dispatches) - 1} 轮"
+    assert res.success is False

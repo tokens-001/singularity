@@ -245,7 +245,9 @@ class TaskRunner:
         term_reason = batch.term_reason
         disp_result = batch.dispatch_result
         # 人工取消：终态意图，不再拆分、不再跑 QA。见下面的 `elif cancelled` / QA 那段。
-        cancelled = term_reason.startswith("cancelled_by_user")
+        # ⚠️ 前缀 `"cancelled"` 而不是 `"cancelled_by_user"` —— 还有 `cancelled_during_pause`
+        # 那一族（`_exec.py:540`），漏了它等于同一个洞换个字符串（2026-09-14，逆向审抓到）。
+        cancelled = term_reason.startswith("cancelled")
         if batch.planner_decomposed:
             try:
                 _materialize_in_main(batch, task)

@@ -139,6 +139,19 @@ def _rollback_git(snap: Snapshot, root: Path) -> bool:
             witness.warn("snapshot",
                          f"rollback_aborted:stash_failed:{r.stderr[:120]}"[:200])
             return False
+        # 🔴 **stash 成功了也必须出声**（2026-09-14，同一晚被这条咬了两次）：
+        # 上面那段保护是好的（先 stash 再销毁 ⇒ 可恢复），但它**一句话都不说** ——
+        # 于是"开发者正在改的文件忽然从工作区消失、未跟踪文件被 clean 掉"这件事
+        # 在日志里**零痕迹**，只能靠 `git stash list` 自己发现。
+        # 两次都是跑测试时造的假任务（没有 project_id ⇒ `repo_root_for` 返回
+        # **引擎本仓**）触发的；生产上任何解析到引擎本仓的独立任务同样可达。
+        # 消息里带上 stash 的名字，好让人一条命令就能捞回来。
+        from . import witness
+        witness.warn("snapshot",
+                     f"rollback_stashed_working_tree:{snap.id}: 已把你的未提交改动"
+                     f"（含未跟踪文件）stash 成 rollback-protect:{snap.id}，"
+                     f"要捞回来: git stash apply stash^{{/rollback-protect:{snap.id}}}"
+                     [:300])
     # 丢弃当前未提交改动 ("--" 和 "." 是两个独立 arg, 不是 "-- .")
     subprocess.run(
         ["git", "checkout", "--", "."],
