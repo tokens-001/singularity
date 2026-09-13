@@ -498,6 +498,68 @@ def test_worker异常分支的抢救段不许带崩回收循环(monkeypatch, tmp
     assert any("salvage_worker_error" in w for w in warns), f"抢救失败没出声：{warns}"
 
 
+# ═══════════════════════════════════════════════════════════════
+# ⑩ 三条"静默错"（外派 ⑩ 抓到）
+# ═══════════════════════════════════════════════════════════════
+
+def test_task_list_的_level_filter_比的是_route_level():
+    """公开 API 的 `?level=` 原来比的是 `route_type` —— **错得静默**（不报错、
+    返回一批看起来合理的任务）。变异：把 `route_level` 改回 `route_type` → 红。"""
+    from singularity.scheduler import _api_tasks
+    all_tasks = [
+        {"id": "a", "_filename": "a.json", "route_level": "ops", "route_type": "bugfix"},
+        {"id": "b", "_filename": "b.json", "route_level": "any", "route_type": "ops"},
+    ]
+    orig = _api_tasks._list_all_tasks
+    _api_tasks._list_all_tasks = lambda: all_tasks
+    try:
+        got = [t["id"] for t in _api_tasks.task_list(level_filter="ops")[0]["tasks"]]
+    finally:
+        _api_tasks._list_all_tasks = orig
+    assert got == ["a"], f"按 level 过滤拿到了 {got}（那是按 type 过滤的结果）"
+
+
+def test_roles_端点拒写时把原因透出来(monkeypatch, tmp_path):
+    """`_write_role_override` 读不动坏文件时**拒绝写**（顺序对），但三个 roles 端点
+    原来都不接 ⇒ 500 ⇒ 前端只看到 generic 错误，中文原因丢了。
+    变异：把 try/except 去掉 → 异常穿出去 → 本用例红（Flask 测试客户端会抛，
+    或返回 500 而不是 503）。"""
+    import singularity.web.app as webapp
+    from singularity.scheduler import config as sched_config
+
+    monkeypatch.setattr(sched_config, "QIDIAN_DIR", tmp_path)
+    bad = tmp_path / "roles_custom.json"
+    bad.write_text("{ 这不是 JSON", encoding="utf-8")   # 读不动 ⇒ 必须拒写
+
+    webapp.app.config["TESTING"] = True
+    c = webapp.app.test_client()
+    r = c.patch("/api/roles/implementer", json={"label": "x"})
+    assert r.status_code == 503, f"应 503（带原因的拒绝），实际 {r.status_code}"
+    body = r.get_json()
+    assert "拒绝写入" in body["error"] and "读不动" in body["error"], body
+    assert bad.read_text(encoding="utf-8") == "{ 这不是 JSON", "拒写了还是把文件覆盖了"
+
+
+def test_project_lineage_返回项目自己的血缘():
+    """这个端点叫 lineage，原来拿 project_id 去**任务模板表**里查
+    （模板名是 bugfix/feature 这种，项目 id 是数字）⇒ 恒不命中 ⇒ 永远返回
+    "这个项目的任务列表"，而项目自己那份 `ProjectState.lineage` **没人读**。
+    变异：改回模板表那支 → 红。"""
+    from singularity.scheduler import _api_projects
+    from singularity.scheduler import project as proj_mod
+    # 真项目：造一个再读
+    p = proj_mod.create("血缘测试项目")
+    # `add_lineage` 是**纯内存追加**（落盘由调用方负责），所以这里要自己 save
+    p.add_lineage({"action": "phase", "from": "planning", "to": "executing"})
+    proj_mod.save(p)
+    data, code = _api_projects.project_lineage(p.id)
+    assert code == 200
+    assert data["lineage"] and data["lineage"][-1]["action"] == "phase", data
+    # 不存在的项目：明说，而不是回一份看起来合理的东西
+    miss, mc = _api_projects.project_lineage("9900000000001")
+    assert mc == 404 and "不存在" in miss["error"], (mc, miss)
+
+
 def test_run_executor_真的调了这条告警(monkeypatch):
     """**接线**：上面几条测的是函数本体，"接线通不通"是另一回事
     —— 挪走/删掉 `_run_executor` 里那句调用，它们照样全绿。

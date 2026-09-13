@@ -1846,6 +1846,23 @@ def api_roles():
     return jsonify({"roles": roles, "personas": personas}), 200
 
 
+def _role_write_rejected(e: Exception):
+    """`_write_role_override` 拒写 → 503 + 原样的中文原因（**三个端点共用**）。
+
+    2026-09-14：`_write_role_override` 读不动坏文件时**故意 raise 拒写**（顺序是对的
+    —— 覆盖写会把别的角色全丢），但三个 roles 端点**都不接** ⇒ 500 ⇒ 前端只看到
+    一个 generic 错误，而那段精心写的原因（"先修好它再改"）**一个字都传不到人眼前**。
+    和刚修过的技能端点同一族（`agent_skill_update` 回 503 + 原因）。
+
+    ⚠️ **出声那句写在三个调用点的 except 里，不放这儿**：静默 except 棘轮
+    只认 handler **自己**body 里的 `witness.warn`（尺子刻意不跟本地 helper ——
+    "调了个会出声的函数 ≠ 报了自己的失败"，那是实测造假阴性后收回去的规矩）。
+    放这儿会让那三处被记成静默 except、平白涨基线，而"每次拒写都留痕"这件事
+    本来也该在**调用点**看得见。
+    """
+    return jsonify({"error": f"拒绝写入：{e}"}), 503
+
+
 def _write_role_override(key: str, vals: dict, replace: bool = False) -> None:
     """写 roles_custom.json 并重新加载角色。roles.toml 是出厂默认，不动。"""
     from singularity.scheduler._io import atomic_write_json
@@ -1877,7 +1894,12 @@ def api_roles_update(key):
     from singularity.scheduler.roles import ROLES
     if key not in ROLES:
         return jsonify({"error": f"角色 {key} 不存在"}), 404
-    _write_role_override(key, data)
+    try:
+        _write_role_override(key, data)
+    except Exception as e:
+        witness.warn("web", f"role_write_rejected:{type(e).__name__}"[:160],
+                     key="role_write_rejected")
+        return _role_write_rejected(e)
     return jsonify({"ok": True, "key": key, "updated": list(data.keys())}), 200
 
 
@@ -1893,7 +1915,12 @@ def api_roles_create():
     from singularity.scheduler.roles import ROLES
     if key in ROLES:
         return jsonify({"error": f"角色 {key} 已存在"}), 409
-    _write_role_override(key, data, replace=True)
+    try:
+        _write_role_override(key, data, replace=True)
+    except Exception as e:
+        witness.warn("web", f"role_write_rejected:{type(e).__name__}"[:160],
+                     key="role_write_rejected")
+        return _role_write_rejected(e)
     return jsonify({"ok": True, "key": key}), 200
 
 
@@ -1984,7 +2011,12 @@ def api_roles_delete(key):
     from singularity.scheduler.roles import ROLES
     if key not in ROLES:
         return jsonify({"error": f"角色 {key} 不存在"}), 404
-    _write_role_override(key, {"deleted": True}, replace=True)
+    try:
+        _write_role_override(key, {"deleted": True}, replace=True)
+    except Exception as e:
+        witness.warn("web", f"role_write_rejected:{type(e).__name__}"[:160],
+                     key="role_write_rejected")
+        return _role_write_rejected(e)
     return jsonify({"ok": True, "key": key}), 200
 
 

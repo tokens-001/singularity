@@ -608,10 +608,6 @@ def detect_guard_before_read(idx: Index, summ: Summarizer) -> list[Finding]:
         if m.is_test:
             continue
         for qual, fi in sorted(m.funcs.items()):
-            s = summ.summary(m.modname, qual)
-            if not (s.writes_uncond or s.writes_cond):
-                # 形状定义是"读改写"函数：本身（或其调用链）得有写盘动作。
-                pass
             for node in ast.walk(fi.node):
                 if not isinstance(node, ast.If):
                     continue
@@ -638,7 +634,6 @@ def detect_guard_before_read(idx: Index, summ: Summarizer) -> list[Finding]:
                     # 读之后要有写盘动作（"读改写"的写那一半）
                     if not _has_write_after(fi, cs):
                         continue
-                    pred_sym = f"{res[1].rsplit('.', 0)[0] if False else res[1]}.{res[2]}"
                     gname = summ.cells.get(cell, str(cell))
                     key = (m.relpath, qual, cell, res[1], res[2])
                     if key in seen:
@@ -647,7 +642,7 @@ def detect_guard_before_read(idx: Index, summ: Summarizer) -> list[Finding]:
                     ev = [
                         f"守卫: {ast.unparse(node.test)[:100]} （判定函数读 {gname}）",
                         f"守卫之后的读: {_calls_desc(cs, idx)} —— 其内部仅在失败路径写 {gname}",
-                        f"读后写盘: {(_find_write_after(fi, cs) or 'write')}（函数 {qual}）",
+                        f"读后写盘: {_find_write_after(fi, cs)}（函数 {qual}）",
                     ]
                     out.append(Finding(
                         shape="A-guard-before-read",
@@ -917,6 +912,11 @@ def _norm_item(s: str) -> str:
     return n
 
 
+def _fileish(s: str) -> bool:
+    """条目长得像文件名/路径模式（有点、星或斜杠）—— 用来排除环境变量子串表
+    之类的非文件名单混进同一族。"""
+    return any(ch in s for ch in ".*")
+
 def detect_b1(survey) -> list[Finding]:
     out = []
     deny = [(f, v, items) for (f, v, items, named) in survey["collections"] if named]
@@ -927,10 +927,21 @@ def detect_b1(survey) -> list[Finding]:
             f2, v2, items2 = deny[j]
             if f1 == f2 and v1 == v2:
                 continue
+            # 共享条目里，至少 2 条在"两边原文"都像文件模式 —— 同类名单的硬门槛
+            n2map = defaultdict(list)
+            for x in items2:
+                n2map[_norm_item(x)].append(x)
+            shared_pairs = []
+            for x in items1:
+                for y in n2map.get(_norm_item(x), ()):
+                    if _fileish(x) and _fileish(y):
+                        shared_pairs.append((x, y))
+            uniq = {(a, b) for a, b in shared_pairs}
+            if len(uniq) < 2:
+                continue
             n1 = {_norm_item(x) for x in items1}
-            n2 = {_norm_item(x) for x in items2}
-            shared = n1 & n2
-            if len(shared) < 2 or n1 == n2:
+            n2 = set(n2map)
+            if n1 == n2:
                 continue
             key = tuple(sorted((f"{f1}:{v1}", f"{f2}:{v2}")))
             if key in seen:
@@ -941,8 +952,8 @@ def detect_b1(survey) -> list[Finding]:
             out.append(Finding(
                 shape="B1-denylist-family-divergence",
                 file=f1, symbol=v1,
-                message=f"与 {f2}::{v2} 是同一族名单（归一化后共享条目 "
-                        f"{sorted(shared)[:5]}），但条目已经不一致。",
+                message=f"与 {f2}::{v2} 是同一族名单（两侧都是文件模式的共享条目: "
+                        f"{sorted(uniq)[:4]}），但条目已经不一致。",
                 evidence=[
                     f"{v1} 独有: {only1[:8]}",
                     f"{v2} 独有: {only2[:8]}",
@@ -954,38 +965,55 @@ def detect_b1(survey) -> list[Finding]:
 # B2a：死词；B2b：窄前缀判据
 # ═══════════════════════════════════════════════════════════════
 
+def _token_overlap(L: str, P: str) -> set:
+    return {t for t in _tokens(L) & _tokens(P) if len(t) >= 4}
+
+
 def detect_b2a(survey) -> list[Finding]:
+    """死词：只出现在匹配位、没有生产者；且要有一条**同通道**的同族现役词作见证。
+
+    通道 = 匹配位"草垛"侧的变量/字段名 == 生产位的赋值目标/关键字名。
+    没有通道见证的死词不报（CLI 旗标、HTTP 方法、外部产出物全在这里挡掉）。
+    """
     match, value = survey["match"], survey["value"]
     out = []
-    produced = {p for p in value}
-    prod_tokens = defaultdict(set)   # token -> {P...}
-    for p in produced:
-        for t in _tokens(p):
-            if len(t) >= 4:
-                prod_tokens[t].add(p)
+    prod_by_channel: dict[str, dict[str, StrSite]] = defaultdict(dict)
+    for p, sites in value.items():
+        for s in sites:
+            if s.channel and len(p) <= 80 and "\n" not in p:
+                prod_by_channel[s.channel].setdefault(p, s)
     for L, sites in sorted(match.items()):
         if L in value or len(L) < 5:
             continue
-        toks = {t for t in _tokens(L) if len(t) >= 4}
-        witnesses = set()
-        for t in toks:
-            witnesses |= {p for p in prod_tokens.get(t, set()) if p != L}
-        if not witnesses:
+        by_chan = defaultdict(list)
+        for s in sites:
+            if s.channel:
+                by_chan[s.channel].append(s)
+        best = None   # (channel, witness, sites)
+        for chan, ss in by_chan.items():
+            for P, psite in prod_by_channel.get(chan, {}).items():
+                if P == L or not _token_overlap(L, P):
+                    continue
+                if best is None or len(P) < len(best[1]):
+                    best = (chan, P, psite)
+        if best is None:
             continue
-        w = sorted(witnesses)[0]
+        chan, w, wsite = best
+        hit_sites = by_chan[chan]
         out.append(Finding(
             shape="B2a-dead-word",
-            file=sites[0].file, symbol=sites[0].symbol,
-            message=f"字面量 {L!r} 全仓只在匹配位出现、没有任何生产者"
-                    f"（同族现役词 {w!r} 有生产者）—— 消费侧在等一个不会再来的词。",
-            evidence=[f"匹配位: {s.file}::{s.symbol}（通道 {s.channel or '?'}）"
-                      for s in sites[:6]] +
-                     [f"同族现役词的生产位: {value[w][0].file}::{value[w][0].symbol}"
-                      f"（通道 {value[w][0].channel or '?'}）"]))
+            file=hit_sites[0].file, symbol=hit_sites[0].symbol,
+            message=f"字面量 {L!r} 全仓只在匹配位出现、没有任何生产者 —— "
+                    f"消费侧在等一个不会再来的词（同通道的现役词是 {w!r}）。",
+            evidence=[f"匹配位: {s.file}::{s.symbol}（通道 {chan}）" for s in hit_sites[:6]] +
+                     [f"同通道现役词的生产位: {wsite.file}::{wsite.symbol}"
+                      f"（通道 {wsite.channel}）"]))
     return out
 
 
 def detect_b2b(survey) -> list[Finding]:
+    """窄判据：匹配位字面量 L 有生产者，但同族词 P（首 token 相同）也有生产者，
+    且按该匹配位的语义 P 接不住。"""
     match, value = survey["match"], survey["value"]
     out = []
     seen = set()
@@ -1075,16 +1103,17 @@ def detect_b3(idx: Index, threshold: float) -> list[Finding]:
                 if key in seen:
                     continue
                 seen.add(key)
-                s1, s2 = _sinks(f1.node), _sinks(f2.node)
-                diffs = _sink_kwarg_diffs(s1, s2)
+                a, b = key
+                sa, sb = (s1, s2) if q1 == a else (s2, s1)
+                diffs = _sink_kwarg_diffs(sa, sb, a, b)
                 out.append(Finding(
                     shape="B3-duplicated-wrapper",
-                    file=m.relpath, symbol=f"{q1} / {q2}",
+                    file=m.relpath, symbol=f"{a} / {b}",
                     message=f"同一件事的两份实现（归一化相似度 {sim:.2f}）——"
-                            f"列出两份在 subprocess 实参上的差：{diffs or '（无 kwarg 差，看常量差）'}",
+                            f"subprocess 实参差：{diffs or '（kwarg 无差，见证据里的常量/调用差）'}",
                     evidence=[f"similarity={sim:.2f}",
-                              f"{q1} sinks: {_sink_brief(s1)}",
-                              f"{q2} sinks: {_sink_brief(s2)}"]))
+                              f"{a} sinks: {_sink_brief(sa)}",
+                              f"{b} sinks: {_sink_brief(sb)}"]))
     return out
 
 
@@ -1116,21 +1145,22 @@ def _sink_brief(sinks) -> str:
     return "; ".join(parts)
 
 
-def _sink_kwarg_diffs(s1, s2) -> str:
+def _sink_kwarg_diffs(s1, s2, n1, n2) -> str:
     if not s1 or not s2:
         return ""
     msgs = []
     k1 = {k.arg for k in s1[0].keywords if k.arg}
     k2 = {k.arg for k in s2[0].keywords if k.arg}
-    for miss, have, q_have in ((k2 - k1, k1, "前者"), (k1 - k2, k2, "后者")):
-        if miss:
-            msgs.append(f"{q_have}传了 {sorted(miss)}、另一份没传")
+    if k1 - k2:
+        msgs.append(f"{n1} 传了 {sorted(k1 - k2)}、{n2} 没传")
+    if k2 - k1:
+        msgs.append(f"{n2} 传了 {sorted(k2 - k1)}、{n1} 没传")
     c1 = {ast.unparse(k.value) for k in s1[0].keywords if k.arg}
     c2 = {ast.unparse(k.value) for k in s2[0].keywords if k.arg}
     if c1 - c2:
-        msgs.append(f"前者实参值多出 {sorted(c1 - c2)[:4]}")
+        msgs.append(f"{n1} 实参值多出 {sorted(c1 - c2)[:4]}")
     if c2 - c1:
-        msgs.append(f"后者实参值多出 {sorted(c2 - c1)[:4]}")
+        msgs.append(f"{n2} 实参值多出 {sorted(c2 - c1)[:4]}")
     return "；".join(msgs)
 
 

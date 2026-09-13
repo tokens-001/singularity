@@ -57,14 +57,20 @@ def _read_task_file(path: Path) -> Optional[dict]:
 # ═══════════════════════════════════════════════════════════════
 
 def task_list(status_filter: str = "", level_filter: str = "") -> tuple[dict, int]:
-    """GET /api/tasks"""
+    """GET /api/tasks?status=&level=
+
+    ⚠️ `level` 比的**是 `route_level`**（2026-09-14 改正）：这里原来比的是 `route_type`
+    —— 公开 API 的语义错了，而且**静默错**（不报错、返回一批看起来合理的任务）。
+    前端从不传这个参数（它在自己那边过滤），所以一直没人踩；但任何脚本按
+    `?level=` 过滤都会拿到"按类型过滤"的结果。
+    """
     all_tasks = _list_all_tasks()
     result = []
     now = time.time()
     for t in all_tasks:
         if status_filter and t.get("status") != status_filter:
             continue
-        if level_filter and t.get("route_type") != level_filter:
+        if level_filter and t.get("route_level") != level_filter:
             continue
         created = t.get("created_at", 0)
         updated = t.get("updated_at", created)

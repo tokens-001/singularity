@@ -353,17 +353,23 @@ def project_cost(project_id: str) -> tuple[dict, int]:
 
 
 def project_lineage(project_id: str) -> tuple[dict, int]:
-    """GET /api/projects/<id>/lineage"""
-    from .task_templates import get as _get_template, TEMPLATES
-    # 原来写 `tpl = _get_template(project_id); if tpl:` —— 而 get() 对未知 id 返回
-    # DEFAULT_TEMPLATE（恒为真）→ **永远**走这一支，下面"按项目列任务"的
-    # 正确分支是死代码，任何项目拿到的都是一份通用模板。
-    if project_id in TEMPLATES:
-        return {"lineage": _get_template(project_id)}, 200
-    from ._api_tasks import _list_all_tasks
-    all_tasks = _list_all_tasks()
-    proj_tasks = [t for t in all_tasks if t.get("project_id") == project_id]
-    return {"tasks": proj_tasks, "total": len(proj_tasks)}, 200
+    """GET /api/projects/<id>/lineage —— 项目的**血缘日志**。
+
+    ⚠️ 2026-09-14 改正（外派 ⑩ 抓到、我核过）：这个端点叫 lineage，**却从来没返回过
+    项目的 lineage**。它原来拿 `project_id` 去**任务模板表**里查
+    （`task_templates.TEMPLATES` 里是 `bugfix` / `feature` 这种任务类型名），
+    而项目 id 是纯数字 ⇒ 那一支恒不命中；落到的另一支返回的是"这个项目下的任务列表"。
+    而项目自己那份 `ProjectState.lineage`（`add_lineage` 一直在写：phase 流转 /
+    权重调整 / 打回…）**没有任何地方读**。
+
+    ⇒ 现在返回真血缘。**响应的键是 `lineage`**，前端那条（`api.ts` 里没有任何地方调
+    `/lineage`，纯死功能）哪天真接上时，拿到的就是该拿的东西。
+    """
+    from . import project as proj_mod
+    proj = proj_mod.load(project_id)
+    if proj is None:
+        return {"error": f"项目不存在: {project_id}"}, 404
+    return {"project_id": project_id, "lineage": list(proj.lineage or [])}, 200
 
 
 def project_snapshot(project_id: str) -> tuple[dict, int]:
