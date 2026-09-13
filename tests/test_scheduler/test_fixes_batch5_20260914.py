@@ -338,6 +338,47 @@ def test_模型库查不动时放行但出声(monkeypatch):
     assert warned and "model_available_lookup_failed" in warned[0], warned
 
 
+# ═══════════════════════════════════════════════════════════════
+# ⑦ route_type 词表：三处不一致（web 6 / router 5 / validator 3）
+# ═══════════════════════════════════════════════════════════════
+# `web/app.py` 的门口手写了 6 个值（多一个 `fusion`），而 `fusion` **全仓没有生产者**：
+# 分类器产不出、下游也没有任何判据认识它 ⇒ 能过门、落库、进统计，
+# 而 `validator._annotate_unverified` 对它整段静默不发生。
+
+def test_route_type_门口只收分类器认得的值():
+    """走**真的 HTTP 端点**，不是读源码 —— 钉的是"门口到底收不收"。
+
+    变异：把 web 门口改回本地那份含 `fusion` 的手写集合 → 本用例红（`fusion` 会变 200）。
+    """
+    import singularity.web.app as webapp
+    from singularity.scheduler import router
+    webapp.app.config["TESTING"] = True
+    c = webapp.app.test_client()
+
+    r = c.post("/api/tasks", json={"description": "x", "route_type": "fusion"})
+    assert r.status_code == 400, f"`fusion` 全仓没有生产者，不该从门口进来: {r.status_code}"
+    assert "route_type" in str(r.data)
+    # 正向：分类器认得的值得照样能进（别为了拦一个 fusion 把整条门关了）
+    ok = c.post("/api/tasks", json={"description": "x", "route_type": "bugfix"})
+    assert ok.status_code == 200, f"正常类型被误拦: {ok.status_code} {ok.data[:120]}"
+    assert "fusion" not in router.VALID_TASK_TYPES
+
+
+def test_框架不认识的任务类型要出声():
+    """`route_type` 数据流是闭合的 —— 门口放进来的新值都会走到这儿。
+    这里一个字不说，就是"少做几件事、不报错"（防御模式 §44）。
+    变异：去掉那段 else 分支 → 红。"""
+    from singularity.scheduler.validator import ValidationReport, _annotate_unverified
+    r = ValidationReport()
+    _annotate_unverified(r, "fusion", ["a.py"])
+    assert any("框架不认识这个任务类型" in u for u in r.unverified), r.unverified
+    # 认识的类型不许被误伤
+    for t in ("bugfix", "refactor", "feature", "docs", "default"):
+        rr = ValidationReport()
+        _annotate_unverified(rr, t, ["a.py"])
+        assert not any("框架不认识" in u for u in rr.unverified), (t, rr.unverified)
+
+
 def test_run_executor_真的调了这条告警(monkeypatch):
     """**接线**：上面几条测的是函数本体，"接线通不通"是另一回事
     —— 挪走/删掉 `_run_executor` 里那句调用，它们照样全绿。

@@ -1155,7 +1155,12 @@ def api_task_submit():
     if route_level and route_level not in _VALID_LEVELS:
         return jsonify({"error": f"route_level 必须是 any"}), 400
     route_type = data.get("route_type", "")
-    _VALID_TYPES = frozenset({"default", "bugfix", "feature", "refactor", "docs", "fusion"})
+    # ⚠️ **词表从分类器那边引，别在这儿再抄一份**（2026-09-14）：这里原来手写着
+    # 6 个值，比 `router.VALID_TASK_TYPES` 多一个 `fusion` —— 而 `fusion`
+    # **全仓没有生产者、下游也没有任何判据认识它** ⇒ 它能从门口塞进来、落库、进统计，
+    # 而 validator 的未验证标注对它整段静默不发生（"少做几件事、不报错"的坏法）。
+    # 分类器产不出它，就不该有人从门口塞进来；真要支持，得先有下游判据认它。
+    from singularity.scheduler.router import VALID_TASK_TYPES as _VALID_TYPES
     if route_type and route_type not in _VALID_TYPES:
         return jsonify({"error": f"route_type 无效，允许: {','.join(sorted(_VALID_TYPES))}"}), 400
     project_id = data.get("project_id", "")

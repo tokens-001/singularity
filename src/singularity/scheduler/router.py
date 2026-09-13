@@ -48,7 +48,12 @@ core.py, tokenizer.py, graph.py, search.py, config.py
 # 会被**原样存下**，下游 `validator._annotate_unverified` 按字面比 `== "bugfix"` 就全不命中，
 # 那三条"未验证"标注**静默消失且不报错**。这就是本仓最典型的那种坏法
 # （防御模式 §44：承诺类字段的"没发生"必须能被查出来，不能是悄悄少做一件事）。
-_VALID_TASK_TYPES = frozenset({"bugfix", "feature", "refactor", "docs", "default"})
+VALID_TASK_TYPES = frozenset({"bugfix", "feature", "refactor", "docs", "default"})
+# ⚠️ **这是 route_type 的唯一定义处**（2026-09-14）：`web/app.py` 的 API 门口原来是
+# **本地又抄了一份**，还比这里多一个 `fusion`。而 `fusion` **全仓没有生产者**
+# （分类器产不出、也没有任何下游判据认识它）⇒ 它能从门口塞进来、落库、进统计，
+# 而 validator 的"未验证"标注对它**整段静默不发生**。词表收到这一份，门口引它。
+_VALID_TASK_TYPES = VALID_TASK_TYPES      # 旧名保留：本文件里几处还在用
 
 
 def _parse_classify_reply(content: str) -> RouteResult:

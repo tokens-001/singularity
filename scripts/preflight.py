@@ -412,9 +412,16 @@ class Index:
                 return ("func", m.modname, nm)
             imp = fi.local_imports.get(nm) or m.imports.get(nm)
             if imp and imp[0] == "module":
+                # from mod import fn  →  imp[1] = "mod.fn"，fn 不是模块；
+                # 先按整体试模块，失败就剥掉末段按"父模块里的函数"解。
                 tm = self.resolve_module(imp[1])
+                base = imp[1].split(".")[-1]
+                if tm is None and "." in imp[1]:
+                    parent = imp[1].rsplit(".", 1)[0]
+                    tm = self.resolve_module(parent)
+                    if tm and base in tm.funcs:
+                        return ("func", tm.modname, base)
                 if tm:
-                    base = imp[1].split(".")[-1]
                     if base in tm.funcs:
                         return ("func", tm.modname, base)
                     # from pkg import mod 形式：mod.func
@@ -704,111 +711,147 @@ class StrSite:
 
 
 def survey_strings(idx: Index) -> dict:
-    """prod 代码里每个字符串字面量的出现位置分类。"""
+    """prod 代码里每个字符串字面量的出现位置分类。
+
+    匹配位（kind: eq/ne/in/startswith/endswith）只标"针"那一侧的字面量，
+    通道记的是"草垛"那一侧的变量/字段名；取值位（value）剪掉嵌套在
+    Compare / startswith 里的部分（那是匹配位的领地，不算生产）。
+    """
     match_sites: dict[str, list[StrSite]] = defaultdict(list)
     value_sites: dict[str, list[StrSite]] = defaultdict(list)
     collections: list[tuple[str, str, list[str], bool]] = []   # (file, var, items, deny_named)
 
-    def enclosing_symbol(stack):
+    def sym(stack):
         return ".".join(reversed(stack)) if stack else "<module>"
 
-    def mark_match(node, file, stack, channel):
-        for c in _str_consts_in(node):
-            match_sites[c].append(StrSite(file, enclosing_symbol(stack), "match", channel))
+    def mark(kind: str, needle_nodes, channel: str, file: str, stack):
+        for nd in needle_nodes:
+            for c in _str_consts_in(nd):
+                match_sites[c].append(StrSite(file, sym(stack), kind, channel))
+
+    def _is_needle_call(n) -> bool:
+        return isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
+            and n.func.attr in ("startswith", "endswith")
+
+    def value_consts(node):
+        """取值位字面量：不下钻 Compare 和 startswith/endswith 调用。"""
+        out = []
+
+        def go(n):
+            if isinstance(n, ast.Compare) or _is_needle_call(n):
+                return
+            if isinstance(n, ast.Constant) and isinstance(n.value, str):
+                out.append(n.value)
+                return
+            if isinstance(n, ast.JoinedStr):
+                for v in n.values:
+                    if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                        out.append(v.value)
+                return
+            for ch in ast.iter_child_nodes(n):
+                go(ch)
+
+        go(node)
+        return out
 
     for m in idx.modules.values():
         if m.is_test:
             continue
+        file = m.relpath
 
         class V(ast.NodeVisitor):
             def __init__(self):
                 self.stack = []
 
+            def _body(self, n):
+                if n.body and isinstance(n.body[0], ast.Expr) \
+                        and isinstance(n.body[0].value, ast.Constant) \
+                        and isinstance(n.body[0].value.value, str):
+                    for st in n.body[1:]:
+                        self.visit(st)
+                else:
+                    for st in n.body:
+                        self.visit(st)
+
             def visit_FunctionDef(self, n):
                 self.stack.append(n.name)
-                # docstring
-                self._skip_doc(n)
-                for st in n.body:
-                    self.visit(st)
+                self._body(n)
                 self.stack.pop()
 
             visit_AsyncFunctionDef = visit_FunctionDef
 
             def visit_ClassDef(self, n):
                 self.stack.append(n.name)
-                self._skip_doc(n)
-                for st in n.body:
-                    self.visit(st)
+                self._body(n)
                 self.stack.pop()
 
-            def _skip_doc(self, n):
-                if n.body and isinstance(n.body[0], ast.Expr) and \
-                        isinstance(n.body[0].value, ast.Constant):
-                    pass  # docstring：不算取值位
-                # 但 body[0] 之后的照常
-            def generic_visit(self, node):
-                # 模块/类体里的裸字符串表达式 = docstring 性质，不算
-                if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) \
-                        and isinstance(node.value.value, str):
-                    return
-                super().generic_visit(node)
-
             def visit_Compare(self, n):
-                ops = {type(o) for o in n.ops}
-                kind = "eq" if ast.Eq in ops else ("ne" if ast.NotEq in ops else
-                       ("in" if (ast.In in ops or ast.NotIn in ops) else "other"))
-                if kind in MATCH_KINDS:
-                    chan = _channel_of(n.left)
-                    mark_match(n.left, m.relpath, self.stack, chan)
-                    for comp in n.comparators:
-                        mark_match(comp, m.relpath, self.stack, chan)
-                        for c in _str_consts_in(comp):
-                            pass
-                    # 比较符另一侧的纯字符串不算匹配位（x == "a" 里 "a" 算）
-                    # —— 上面 mark_match 已把两侧都标了，这里收窄：只标"被匹配的字面量"
-                else:
-                    self.generic_visit(n)
+                sides = [n.left] + list(n.comparators)
+                for i, op in enumerate(n.ops):
+                    left, right = sides[i], sides[i + 1]
+                    if isinstance(op, (ast.Eq, ast.NotEq)):
+                        kind = "eq" if isinstance(op, ast.Eq) else "ne"
+                        lc, rc = _str_consts_in(left), _str_consts_in(right)
+                        if lc and not rc:
+                            mark(kind, [left], _channel_of(right), file, self.stack)
+                        elif rc and not lc:
+                            mark(kind, [right], _channel_of(left), file, self.stack)
+                        elif lc and rc:
+                            mark(kind, [left, right], "", file, self.stack)
+                    elif isinstance(op, (ast.In, ast.NotIn)):
+                        # "针 in 草垛"：针在左；草垛是元组/列表时元素是针
+                        if _str_consts_in(left) and not isinstance(right, (ast.List, ast.Tuple, ast.Set)):
+                            mark("in", [left], _channel_of(right), file, self.stack)
+                        if isinstance(right, (ast.List, ast.Tuple, ast.Set)) \
+                                and all(isinstance(e, ast.Constant) for e in right.elts):
+                            mark("in", [right], _channel_of(left), file, self.stack)
+                for s in sides:
+                    self.visit(s)
 
             def visit_Call(self, n):
                 f = n.func
                 if isinstance(f, ast.Attribute) and f.attr in ("startswith", "endswith"):
                     if n.args:
-                        mark_match(n.args[0], m.relpath, self.stack, _channel_of(f))
+                        mark(f.attr, [n.args[0]], _channel_of(f.value), file, self.stack)
                 self.generic_visit(n)
 
             def visit_Assign(self, n):
-                # 集合字面量收集（B1 用）
                 if len(n.targets) == 1 and isinstance(n.targets[0], ast.Name) \
                         and isinstance(n.value, (ast.List, ast.Tuple, ast.Set)):
                     items = [e.value for e in n.value.elts
                              if isinstance(e, ast.Constant) and isinstance(e.value, str)]
                     if len(items) >= 3 and len(items) == len(n.value.elts):
-                        collections.append((m.relpath, n.targets[0].id, items,
+                        collections.append((file, n.targets[0].id, items,
                                             bool(DENYLIST_NAME_RE.search(n.targets[0].id))))
                 tgts = [t.id for t in n.targets if isinstance(t, ast.Name)]
-                for sub in _str_consts_in(n.value):
-                    value_sites[sub].append(StrSite(
-                        m.relpath, enclosing_symbol(self.stack), "value",
-                        tgts[0] if tgts else ""))
-                self.generic_visit(n)
+                chan = tgts[0] if tgts else ""
+                for c in value_consts(n.value):
+                    value_sites[c].append(StrSite(file, sym(self.stack), "value", chan))
+                for t in n.targets:
+                    self.visit(t)
+
+            def visit_AnnAssign(self, n):
+                if n.value is not None:
+                    chan = n.target.id if isinstance(n.target, ast.Name) else ""
+                    for c in value_consts(n.value):
+                        value_sites[c].append(StrSite(file, sym(self.stack), "value", chan))
+                self.visit(n.target)
 
             def visit_keyword(self, n):
-                for c in _str_consts_in(n.value):
-                    value_sites[c].append(StrSite(m.relpath, enclosing_symbol(self.stack),
-                                                  "value", n.arg or ""))
-                self.generic_visit(n)
+                for c in value_consts(n.value):
+                    value_sites[c].append(StrSite(file, sym(self.stack), "value", n.arg or ""))
+                self.visit(n.value)
 
             def visit_Return(self, n):
                 if n.value is not None:
-                    for c in _str_consts_in(n.value):
-                        value_sites[c].append(StrSite(m.relpath, enclosing_symbol(self.stack),
-                                                      "value", "return"))
-                self.generic_visit(n)
+                    for c in value_consts(n.value):
+                        value_sites[c].append(StrSite(file, sym(self.stack), "value", ""))
+                self.visit(n.value)
 
             def visit_Dict(self, n):
                 for k in n.keys:
                     if isinstance(k, ast.Constant) and isinstance(k.value, str):
-                        value_sites[k.value].append(StrSite(m.relpath, enclosing_symbol(self.stack),
+                        value_sites[k.value].append(StrSite(file, sym(self.stack),
                                                             "value", "dictkey"))
                 self.generic_visit(n)
 

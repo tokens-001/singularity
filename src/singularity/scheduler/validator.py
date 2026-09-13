@@ -112,10 +112,24 @@ def _gate_check_by_files(changed_files):
         if f.rsplit("/",1)[-1] in config.GATE_TRIGGER_FILES: return True
     return False
 
+# 有专门"未验证"标注的三类（下面那三条 if），以及**明确不需要标注**的两类。
+# 剩下的任何值都是"框架不认识的任务类型" —— 那件事**必须说出来**，不能静默少做
+# （2026-09-14）：`route_type` 这条数据流是闭合的（web 收下 → `task.route_type` →
+# `_exec` 读回 → 这里），所以门口放进来的任何新值都会**走到这儿**而这里一个字不说。
+# 实测就这么漏过一个：`fusion` 曾是 web 独有、下游无人认识的值。
+_ANNOTATED_TYPES = {"bugfix", "refactor", "feature"}
+_NO_ANNOTATION_NEEDED = {"docs", "default"}
+
+
 def _annotate_unverified(report, task_type, changed_files):
-    if task_type == "bugfix": report.unverified.append("bugfix: no regression test")
-    if task_type == "refactor": report.unverified.append("refactor: impact analysis skipped")
-    if task_type == "feature": report.unverified.append("feature: diff_review v2 enabled")
+    t = (task_type or "").strip()
+    if t == "bugfix": report.unverified.append("bugfix: no regression test")
+    if t == "refactor": report.unverified.append("refactor: impact analysis skipped")
+    if t == "feature": report.unverified.append("feature: diff_review v2 enabled")
+    if t and t not in _ANNOTATED_TYPES and t not in _NO_ANNOTATION_NEEDED:
+        # 防御模式 §44：承诺类字段的"没发生"必须能被查出来。
+        report.unverified.append(
+            f"route_type={t}: 框架不认识这个任务类型，本类型的未验证标注一条都没发生")
     if not changed_files: report.unverified.append("no changed files")
 
 def pre_execution_hook(task, snap): return []
