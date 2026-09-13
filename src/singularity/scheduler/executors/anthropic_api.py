@@ -83,9 +83,17 @@ class AnthropicApiExecutor(BaseExecutor):
             if _deadline_at is not None:
                 left = _deadline_at - time.time()
                 if left <= 0:
-                    # 预算跑光就别再发请求了 —— 发了也是被外面那把刀砍，且时间已算在别人头上
-                    return ExecutorResult(success=False, error="budget exhausted",
-                                          error_kind="timeout")
+                    # 预算跑光就别再发请求了 —— 发了也是被外面那把刀砍，且时间已算在别人头上。
+                    # ⚠️ **`error_kind` 必须是 `"deadline"`，不是 `"timeout"`**（2026-09-14，
+                    # 逆向审抓到、我核过）：`_exec.py:589` 只对 `=="deadline"` 置
+                    # `deadline_wrapup`（"别换模型，直接收，把已经拿到手的账留下"）；
+                    # 返回 `"timeout"` 会落进"换 agent 容灾 + 重试满轮 → FAILED"，
+                    # 而换一个模型只是把剩下的时间再烧一遍。
+                    # `openai_agent.py:664` 的预算收尾用的就是 `"deadline"`（同一个信号）。
+                    # **httpx 真超时那条仍然保持 `"timeout"`**（见下面 `except httpx.TimeoutException`）。
+                    return ExecutorResult(success=False,
+                                          error="到达执行预算，主动收尾（budget exhausted）",
+                                          error_kind="deadline")
                 _tmo = max(1.0, min(_tmo_base, left))
 
             body = {

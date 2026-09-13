@@ -50,6 +50,32 @@ def test_真批准还是批准(q):
     assert _is_gate_reply(q) == "approved"
 
 
+@pytest.mark.parametrize("q", [
+    "特别同意",            # "别"是**构词成分**，不是否定
+    "我特别同意这个方案",
+    "是否继续？",          # "否"在"是否"里，不是否定
+    "这个不错，继续",       # "不错"是夸
+    "别急，继续",          # "别急"否定的是"急"，不是"继续"
+])
+def test_构词成分里的别和否不算否定(q):
+    """**这条是逆向审抓出来的回归**（2026-09-14，我复现属实）。
+
+    我第一版写的是"批准词**前面**出现过否定就算" —— 于是「特别同意」「是否继续？」
+    都被判**打回**：用户说"我特别同意"，系统把项目**退回上一层**。
+    根因：「别/否」当**构词成分**太常见（特别/是否/识别/区别/告别/个别），
+    当单字否定反而罕见。⇒ 只认**紧挨着**的「不」+ 批准词，中间最多夹程度词。
+    """
+    from singularity.scheduler._observer_answer import _is_gate_reply
+    assert _is_gate_reply(q) == "approved", f"{q!r} 被误打回了 —— 用户的批准被当成否决"
+
+
+@pytest.mark.parametrize("q", ["不同意", "不太同意", "不是很同意", "不确认", "不继续"])
+def test_紧挨着的否定仍要打回(q):
+    """对照：真否定必须照样拦住（别为了修误打回把这一族也放了）。"""
+    from singularity.scheduler._observer_answer import _is_gate_reply
+    assert _is_gate_reply(q) == "rejected", f"{q!r} 该拦没拦住"
+
+
 @pytest.mark.parametrize("q", ["不错的方案", "nothing works", "这个方案不行吗"])
 def test_不能误伤(q):
     """前缀匹配的假阳性：「不错的方案」是夸、「nothing works」是抱怨，都不是门回复。

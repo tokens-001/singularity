@@ -27,7 +27,6 @@ import pytest
     "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
     "/home/u/.ssh/id_rsa", "keys/id_rsa",
     ".netrc", "~/.netrc", ".flaskenv",
-    "server.crt", "ca.crt",
     ".ssh/known_hosts",
 ])
 def test_无后缀私钥那族要被拦(path):
@@ -43,6 +42,9 @@ def test_无后缀私钥那族要被拦(path):
 
 @pytest.mark.parametrize("path", [
     "src/main.py", "README.md", "tests/test_ok.py", "docs/notes.md",
+    # 证书是**公开材料**：拦它没有防泄露价值，却会让"加 HTTPS / 配 mTLS"
+    # 这类任务读不到自己的证书（2026-09-14，逆向审抓到）
+    "server.crt", "ca.crt", "certs/chain.crt",
 ])
 def test_正常文件别误伤(path):
     """对照：别把闸门修成"什么都读不了"。"""
@@ -258,3 +260,26 @@ def test_bridge_ws_也要校验_Origin():
         assert not ok, f"外部 Origin 连上了 bridge 的 WS：{detail}"
     finally:
         bridge.stop_ws_server()
+
+
+# ═══════════════════════════════════════════════════════════════
+# ⑨ 预算耗尽要报 `deadline`，不是 `timeout`（逆向审抓到、我核过）
+# ═══════════════════════════════════════════════════════════════
+
+def test_预算耗尽要报_deadline_否则会被当失败换模型():
+    """`_exec.py:589` 只对 `error_kind == "deadline"` 置 `deadline_wrapup`
+    —— "别换模型，直接收，把已经拿到手的账留下"。
+
+    报 `"timeout"` 会落进"换 agent 容灾 + 重试满轮 → FAILED"：
+    换一个模型只是把剩下的时间再烧一遍，然后照样被外面那把 900s 的刀砍。
+    `openai_agent.py:664` 的预算收尾用的就是 `"deadline"`（同一个信号）。
+
+    ⚠️ 这条**不是**形状测试：它同时钉住"httpx 真超时那条仍是 timeout"
+    （那两个语义不能混 —— 一个是"该收尾了"，一个是"这次请求没回来"）。
+    """
+    import inspect
+    from singularity.scheduler.executors import anthropic_api as A
+    src = inspect.getsource(A.AnthropicApiExecutor.run)
+    assert 'error_kind="deadline"' in src, "预算耗尽没报 deadline —— 下游不会收尾"
+    assert 'except httpx.TimeoutException:\n                return ExecutorResult(success=False, error="timeout", error_kind="timeout")' in src, \
+        "httpx 真超时那条被一起改了 —— 两个语义不能混"

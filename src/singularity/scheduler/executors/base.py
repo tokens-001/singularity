@@ -42,7 +42,11 @@ _BLOCKED_PATTERNS = [
     # 整读进上下文随输出带走。`web/app.py:1358` 的 `_SENSITIVE_FILES` 早就补了
     # 这几个、注释还点名了这个洞，**这张表当时没跟着改** —— 同一件事只修了一半。
     "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
-    ".netrc", ".flaskenv", "*.crt",
+    ".netrc", ".flaskenv",
+    # ⚠️ **`.crt` 不拦**（2026-09-14，逆向审抓到、我认）：证书是**公开材料**，
+    # 拦它没有防泄露的价值，却会把"加 HTTPS / 配 mTLS"这类任务的显式读写**弄瘸**
+    # （任务读不到自己的证书就没法干活）。带私钥的那几种后缀
+    # （`*.key` / `*.pem` / `*.p12` / `*.pfx`）仍然拦着，覆盖了常规命名。
     ".ssh/", ".ssh/*",
     ".qidian/", ".qidian/*", ".git/", ".git/*", ".claude/",
     "venv/", ".venv/", "__pycache__/", "*.pyc",
