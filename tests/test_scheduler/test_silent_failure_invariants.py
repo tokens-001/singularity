@@ -181,6 +181,68 @@ class TestArchTasksMustBeOrdered:
             "没出声 ⇒ 聚合视图里也看不见"
 
 
+class TestAbstractionBacklog:
+    """⑦ 待补的抽象**不能只挑最新的** —— 否则老账永远排不上。
+
+    2026-09-13 真机量化：原来 `sort(-timestamp)` 取前 `limit` 条 + `limit=3`，
+    等于每次大扫除只处理**刚产生的那 3 条**。实测：待补 25 条里
+    **09-12 积压的 22 条一条没动**，覆盖率停在 8/33 = 24%，
+    而且**补的速度 ≈ 新增的速度** ⇒ 老账永远排不上。
+    """
+
+    @staticmethod
+    def _nodes(n: int):
+        """**用真类型**（`EventNode.from_dict`），不手搭替身 ——
+        替身不跟着真实类型长大，加个字段就 AttributeError（2026-09-13 踩过）。"""
+        from singularity.scheduler._memory_core import EventNode
+        return [EventNode.from_dict({
+            "task_id": f"t{i}", "content": "x", "timestamp": 1000 + i,
+            "emb": [], "attrs": {}, "trajectory": "t" * 20,
+        }) for i in range(n)]
+
+    def test_oldest_gets_a_slot(self):
+        """**这一条就是那个 bug 的形状**：只挑最新的 ⇒ 最旧的永远轮不上。"""
+        from singularity.scheduler import _memory_consolidator as C
+        todo = self._nodes(10)                      # 已按"最新在前"排好
+        picked = [n.task_id for n in C._pick_backfill_targets(todo, 3)]
+        assert todo[-1].task_id in picked, \
+            "最旧的那条没被轮到 —— 老账会永远排不上（这正是原来的毛病）"
+        assert len(picked) == 3, "一次别多补，条数是要花钱的"
+
+    def test_no_duplicate_picks(self):
+        from singularity.scheduler import _memory_consolidator as C
+        for limit in (2, 3, 4, 5):
+            ids = [n.task_id for n in C._pick_backfill_targets(self._nodes(20), limit)]
+            assert len(ids) == len(set(ids)), f"limit={limit} 挑重了：{ids}"
+
+    def test_short_list_returns_everything(self):
+        from singularity.scheduler import _memory_consolidator as C
+        for n in (0, 1, 3):
+            assert len(C._pick_backfill_targets(self._nodes(n), 3)) == n
+
+    def test_backlog_warns_when_over_threshold(self, monkeypatch):
+        from singularity.scheduler import _memory_consolidator as C
+        from singularity.scheduler import config
+        nodes = self._nodes(C._ABSTRACTION_BACKLOG_WARN_AT)
+        monkeypatch.setattr(C, "_load_events", lambda: {n.task_id: n for n in nodes})
+        monkeypatch.setattr(C, "abstract_trajectory", lambda *a, **k: None)  # 别真调模型
+        C.backfill_abstractions(limit=3)
+        log = config.QIDIAN_DIR / "alerts.jsonl"
+        assert log.exists() and "abstraction_backlog" in log.read_text(encoding="utf-8"), \
+            "欠账到阈值却没出声 —— 积压只有翻盘才看得见"
+
+    def test_no_warn_below_threshold(self, monkeypatch):
+        from singularity.scheduler import _memory_consolidator as C
+        from singularity.scheduler import config
+        nodes = self._nodes(3)
+        monkeypatch.setattr(C, "_load_events", lambda: {n.task_id: n for n in nodes})
+        monkeypatch.setattr(C, "abstract_trajectory", lambda *a, **k: None)
+        C.backfill_abstractions(limit=3)
+        log = config.QIDIAN_DIR / "alerts.jsonl"
+        assert not (log.exists() and "abstraction_backlog" in log.read_text(encoding="utf-8")), \
+            "欠账不多却也报警 ⇒ 又变成噪声源"
+
+
 class TestRatchetResetsOnHumanIntervention:
     """③ 人工批准 GATE2 = 人到场兜底，自动重试配额必须跟着恢复。"""
 

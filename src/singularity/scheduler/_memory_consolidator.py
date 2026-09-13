@@ -341,17 +341,54 @@ def adapt_experience(task: str, items: list[dict], max_chars: int = 2500) -> str
         return ""
 
 
+# 待补积压到多少条就出声。**常驻是正常的** —— 它就是"长期欠账"的信号，
+# 本来就该待在 `alert_summary` 的常驻栏里，而不是淹在事件流里（见 §3.3 那条）。
+_ABSTRACTION_BACKLOG_WARN_AT = 20
+
+
+def _pick_backfill_targets(todo: list, limit: int) -> list:
+    """从待补清单里挑这一轮要处理的 node —— **新旧兼顾**，不是清一色最新的。
+
+    ⚠️ **为什么不能只挑最新的**（2026-09-13 真机量化）：原实现是
+    `todo.sort(key=lambda n: -n.timestamp)` 然后取前 `limit` 条，配合 `limit=3`，
+    等于**每次大扫除都只处理刚产生的那 3 条**。实测后果：
+    待补 25 条里 **09-12 积压的 22 条一条没动**，覆盖率停在 8/33 = 24%，
+    而且**补的速度 ≈ 新增的速度** ⇒ **老账永远排不上**。
+
+    改成一半给最新的、一半给最旧的（limit 为奇数时偏向新的）。
+    **不改变一次处理几条**（那要花钱，是另一个决定），只改"挑哪几条"。
+    """
+    if len(todo) <= limit:
+        return list(todo)
+    oldest = limit // 2
+    newest = limit - oldest
+    return todo[:newest] + (todo[-oldest:] if oldest else [])
+
+
 def backfill_abstractions(limit: int = 3) -> int:
     """给**还没抽象过**、但有轨迹的节点补上。一次最多 limit 条。
 
     有上限，而且调用方能看到返回几条 —— 别静默截断。失败一条不影响后面的。
+
+    ⚠️ **挑哪几条**见 `_pick_backfill_targets`（新旧兼顾）；
+    **欠账太多会出声**（`abstraction_backlog`）—— 积压是常驻状态，
+    不该只有翻盘才看得见。
     """
     events = _load_events()
     todo = [n for n in events.values()
             if (n.trajectory or "").strip() and not (n.attrs or {}).get("abstraction")]
     todo.sort(key=lambda n: -n.timestamp)
+
+    if len(todo) >= _ABSTRACTION_BACKLOG_WARN_AT:
+        try:
+            from . import witness
+            witness.warn("memory", f"abstraction_backlog:{len(todo)}"[:120],
+                         key="abstraction_backlog")
+        except Exception:
+            pass
+
     done = 0
-    for node in todo[:limit]:
+    for node in _pick_backfill_targets(todo, limit):
         got = abstract_trajectory(node.trajectory, task=node.content,
                                   tool_seq=(node.attrs or {}).get("tool_seq"))
         if not got:
