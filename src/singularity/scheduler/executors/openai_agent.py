@@ -313,6 +313,7 @@ class OpenAIAgentExecutor(BaseExecutor):
     """通用 Agent Executor — 给任何 OpenAI 兼容模型装上工具。"""
 
     honors_no_tools = True
+    has_tool_surface = True      # 每次工具调用都经 `_execute_tool` ⇒ 权限闸门在这儿
 
     def __init__(self, cfg: dict, task: str, task_id: str,
                  baseline_ref: str = "", cwd: str = "",
@@ -324,7 +325,11 @@ class OpenAIAgentExecutor(BaseExecutor):
                  mcp_tools: list = None,
                  mcp_executor: callable = None,
                  permission_checker: callable = None):
-        super().__init__(cfg, task, task_id, baseline_ref=baseline_ref, cwd=cwd)
+        # ⚠️ `agent_level` 必须传给父类：权限闸门收进 `BaseExecutor._check_permission`
+        # 之后，它读的是 `self.agent_level`（原来这份自己存 `self._agent_level`，
+        # 父类那份是空的 ⇒ 不传的话 profile 查表会按 "" 去查、永远查成 full-access）。
+        super().__init__(cfg, task, task_id, baseline_ref=baseline_ref, cwd=cwd,
+                         agent_level=agent_level or cfg.get("_level", ""))
         self._api_key = os.environ.get(cfg.get("api_key_env", ""), "")
         # ponytail: 存为实例属性, 不写全局 os.environ (防并发 Agent 竞态)
         self._agent_env = dict(cfg.get("env", {}))
@@ -337,7 +342,9 @@ class OpenAIAgentExecutor(BaseExecutor):
         self._tool_events: list[dict] = []
         # body 每轮重建，被 API 拒过的思考参数要记住，否则下一轮又加回来、又撞一次 400
         self._rejected_think_keys: set[str] = set()
-        self._agent_level = agent_level or cfg.get("_level", "")
+        # `_agent_level` 删了（2026-09-14）：闸门收进基类后它一个读者都没有，
+        # 而同一件事存两份正是本仓反复吃亏的形状（改一处漏一处）。现在只有
+        # `self.agent_level` 一份，由上面的 super() 赋值。
 
         # ── 注入的依赖 ──
         self._skills = skills or {}
@@ -681,23 +688,9 @@ class OpenAIAgentExecutor(BaseExecutor):
 
     # ── 工具执行 ──
 
-    def _check_permission(self, tool_name: str, args: dict) -> tuple[bool, str]:
-        """Permission 检查。如注入 checker 则调用，否则默认允许。
-
-        ⚠️ **检查器抛异常 = 拒绝（fail-closed）**。原来是 `except: pass`，然后落到下面的
-        `return True` —— **检查器一死，权限闸门整个失效，而且无声**。
-        上游 `_execute_tool` 本来就处理 `(False, reason)`，所以返回拒绝是安全的。
-        （配套的另一条 fail-open 在 `_dispatch_skills._make_permission_checker`：
-        它自己失败会返回 None，而 None 在这里 = "没注入" = 放行。那条也一起改成拒绝 + 出声。）
-        """
-        if self._permission_checker:
-            try:
-                return self._permission_checker(tool_name, args, self._agent_level, self.cfg.get("model", ""), self.task_id)
-            except Exception as e:
-                witness.warn("permission",
-                             f"perm_checker_error:{tool_name}:{type(e).__name__}"[:160])
-                return False, f"权限检查器异常（{type(e).__name__}），按拒绝处理"
-        return True, ""
+    # `_check_permission` 已收进 `BaseExecutor`（2026-09-14）—— 原来只有这一份，
+    # 另外三个执行器一个 permission 引用都没有，等于"换个 type 就绕过闸门"。
+    # 语义（注入则调、异常则拒、未注入则放行但出声）都在基类那份的 docstring 里。
 
     def _execute_tool(self, name: str, args: dict) -> str:
         try:

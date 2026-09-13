@@ -125,12 +125,46 @@ class ExecError(ExecutorError):
         super().__init__(msg, kind="exec")
 
 
+_NO_CHECKER_WARNED: set[str] = set()
+
+
+def _warn_no_checker_once(cls_name: str) -> None:
+    """"这次运行没有权限闸门"——**每个执行器类只报一次**（不是每次工具调用）。
+
+    报一次不是嫌吵：`witness.warn` 写的是 `config.QIDIAN_DIR/alerts.jsonl`，
+    即**生产告警通道**，而直接构造执行器的还有测试和 `run_benchmark`。
+    按调用报会把这条通道冲成噪音，而噪音的代价是**真事故被淹掉**。
+    """
+    if cls_name in _NO_CHECKER_WARNED:
+        return
+    _NO_CHECKER_WARNED.add(cls_name)
+    # 局部 import 是为了让 base.py 保持"叶子模块"（它被各执行器导，别在这儿拉进整张图）。
+    # 不用 try 包：`witness.warn` 自己的契约就是"记告警失败不再抛"（见它的 except 注释），
+    # 多包一层只会变成**新的静默 except**（静默 except 棘轮当场就报了这两处）。
+    from .. import witness as _w
+    _w.warn("permission", f"no_permission_checker:{cls_name}"[:160])
+
+
 class BaseExecutor:
     """所有 executor 的基类。子类实现 run()。"""
 
     # 是否真能执行 cfg["no_tools"]（禁工具）。默认 False —— 没显式实现的执行器
     # 等于禁不掉（如 claude-cli 自带工具），调用方据此告警，而不是假装禁住了。
     honors_no_tools = False
+
+    # **本执行器有没有"本地工具面"** —— 即模型的每一次工具调用是不是都经本进程分发。
+    # True 的执行器**必须**在分发处调 `self._check_permission()`；
+    # False 的（claude-cli 自带工具、zhipu 只产 patch）**本进程没有可拦的地方** ——
+    # 调用方必须**出声**，而不是让界面上的 profile 看起来生效了（同 `honors_no_tools` 的规矩）。
+    # ⚠️ 2026-09-14：这之前只有 openai_agent 调权限检查，另外三个执行器
+    # **一个 permission 引用都没有** ⇒ 绑了 read-only / sandboxed 的 agent
+    # 换个执行器类型就能写盘、跑命令，白名单 + 审批通道 + profile 拦截**整层静默消失**。
+    has_tool_surface = False
+
+    # 权限检查回调。由 `_dispatch_exec._run_executor` 注入（见那里的注释）；
+    # 类属性而不是构造参数，理由同 `budget_s`：各执行器签名不一。
+    # `None` = 没人注入 ⇒ `_check_permission` 放行，但会**出声**（见下）。
+    _permission_checker: "callable | None" = None
 
     # 这次执行**还能花多少秒**（调用方按任务级死线倒推后传进来，见 `_run_executor`）。
     # 由 `_dispatch_exec._run_executor` 构造后赋值，所以放在**类属性**上而不是
@@ -153,3 +187,36 @@ class BaseExecutor:
 
     def run(self) -> ExecutorResult:
         raise NotImplementedError
+
+    def _check_permission(self, tool_name: str, args: dict) -> tuple[bool, str]:
+        """工具级权限闸门。**所有有本地工具面的执行器共用这一份**。
+
+        原来它只长在 `openai_agent` 上（`grep -c permission` 其它三个执行器全是 0），
+        于是同一个 agent 换个 `type` 就能绕开白名单 / 审批通道 / profile 黑名单。
+        现在收进基类，谁有工具面谁在分发处调一次。
+
+        两条 fail-closed（都是 2026-09-14 修的，之前是反的）：
+          · 检查器**抛异常** → 拒绝（原来 `except: pass` → 落到下面的 `return True`）；
+          · 检查器是 `_make_permission_checker` 失败时的产物 → 它返回的是 `_deny_all`，
+            不是 `None`（那条也一起改过）。
+
+        ⚠️ **`None` 仍然是放行**，这条**没改成拒绝**，因为改了会误伤：
+        直接构造执行器的地方（测试、`_benchmark.run_benchmark`）本来就不注入 checker，
+        而它们的 agent 没有绑 profile（`get_agent_profile` 默认返回 full-access）
+        ⇒ 把 `None` 改成拒绝，是把"没绑 profile"错当成"绑了限制 profile"。
+        **但降级必须出声**：没人注入 = 这次运行**没有权限那一道闸门**，盘上要留痕。
+        （`_run_executor` 一定会注入，`_make_permission_checker` 失败时注入的是
+        `_deny_all` 而不是 `None` ⇒ 正常调度**走不到**这一支，这只防"以后有人漏注入"。）
+        """
+        checker = getattr(self, "_permission_checker", None)
+        if checker is None:
+            _warn_no_checker_once(type(self).__name__)
+            return True, ""
+        try:
+            return checker(tool_name, args, self.agent_level,
+                           self.cfg.get("model", ""), self.task_id)
+        except Exception as e:
+            from .. import witness as _w
+            _w.warn("permission",
+                    f"perm_checker_error:{tool_name}:{type(e).__name__}"[:160])
+            return False, f"权限检查器异常（{type(e).__name__}），按拒绝处理"

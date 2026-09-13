@@ -250,6 +250,34 @@ def dispatch(
     raise RuntimeError(f"{level} 层所有 agent 均失败: {last_error}")
 
 
+def _warn_if_profile_not_enforceable(executor_cls, level: str, model: str) -> None:
+    """绑了**限制性 profile**、但执行器**没有本地工具面** ⇒ 出声。
+
+    这里不是"拦"（拦不了），是**别假装拦住了**（同 `honors_no_tools` 的规矩）。
+    `claude-cli` 的工具在它自己的子进程里、`zhipu` 只产 patch 再由 `apply_patch` 落盘 ——
+    本进程**没有可拦的地方**，`allowed_tools` / `require_approval` / profile 黑名单
+    一条都落不了地，而 `/api/permissions/profiles` 界面上照样显示"已绑定"。
+
+    `full-access` 不出声：那是"没绑"的等价物（`get_agent_profile` 的默认值），
+    为它报一条只会把真信号淹掉。
+    """
+    if getattr(executor_cls, "has_tool_surface", False):
+        return
+    try:
+        from .permission import get_store
+        prof = get_store().get_agent_profile(level, model)
+    except Exception as e:
+        # 查不动就**别拿它当结论**：这里唯一能说的是"没查到"，不是"没事"。
+        witness.warn("permission",
+                     f"profile_lookup_failed:{type(e).__name__}:{e}"[:160])
+        return
+    if prof.name == "full-access":
+        return
+    witness.warn("permission",
+                 f"profile_not_enforceable:{executor_cls.__name__}:{prof.name}"
+                 f":{level}/{model}"[:200])
+
+
 def _run_executor(executor_cls, agent_cfg: dict, full_task: str, task_id: str,
                   level: str, baseline_ref: str = "", cwd: str = "", phase: str = "",
                   budget_s: float | None = None):
@@ -263,6 +291,10 @@ def _run_executor(executor_cls, agent_cfg: dict, full_task: str, task_id: str,
         level, agent_cfg.get("model", ""), task_desc=full_task, phase=phase)
     mcp_tools, mcp_executor = _load_mcp_for_agent()
     perm_checker = _make_permission_checker()
+    # 拦不住的执行器要出声（2026-09-14）：权限闸门收进 `BaseExecutor` 之后，
+    # 有工具面的执行器真的会拦；没有工具面的**拦不了**，但不能让界面上的
+    # "已绑定" 变成一句空话。见该函数的 docstring。
+    _warn_if_profile_not_enforceable(executor_cls, level, agent_cfg.get("model", ""))
 
     executor: BaseExecutor = executor_cls(
         agent_cfg, full_task, task_id, baseline_ref=baseline_ref, cwd=cwd,

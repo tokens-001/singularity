@@ -22,6 +22,7 @@ class AnthropicApiExecutor(BaseExecutor):
     """Anthropic Messages API executor with tool use support."""
 
     honors_no_tools = True
+    has_tool_surface = True      # `_execute_tool` 是本进程分发的 ⇒ 权限闸门在这儿
 
     def run(self) -> ExecutorResult:
         import subprocess as _sp
@@ -216,6 +217,14 @@ class AnthropicApiExecutor(BaseExecutor):
             _read_file, _read_files, _write_file, _run_command, _search_code,
         )
         try:
+            # ── 权限闸门（2026-09-14 补）──
+            # 这里原来是**自己重写的分发**、整个文件一个 `permission` 都没有：
+            # 绑了 read-only / sandboxed 的 agent，只要 type 写成 anthropic-api，
+            # 白名单 + 审批通道 + profile 拦截**整层静默消失**（界面照样显示"已绑定"）。
+            # openai_agent 的分发早就有这一步，两套方法独立撞上同一处 → 实锤。
+            allowed, reason = self._check_permission(name, args)
+            if not allowed:
+                return f"操作被拒绝: {reason}"
             if name == "read_file":
                 # 支持批量读 (paths参数)
                 if args.get("paths"):

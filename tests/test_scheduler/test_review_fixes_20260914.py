@@ -155,9 +155,15 @@ def test_敏感文件名单兜住变体():
 # 防的是：**检查器自己坏了 = 放行**（两条路都堵在这儿）。
 
 class _StubExec:
-    """只够跑 _check_permission 的最小替身。"""
+    """只够跑 _check_permission 的最小替身。
+
+    ⚠️ 属性名 2026-09-14 跟着实现改过一次：闸门从 `openai_agent` 收进了
+    `BaseExecutor`，读的是**基类那个 `agent_level`**（原来这份自己存 `_agent_level`，
+    而它**没往父类传** ⇒ 基类拿到 ""、profile 永远查成 full-access）。
+    替身跟着改成新契约，别两边各记一套。
+    """
     task_id = "t-1"
-    _agent_level = "any"
+    agent_level = "any"
     cfg = {"model": "m"}
 
 
@@ -178,10 +184,26 @@ def test_权限检查器抛异常时拒绝():
     assert "拒绝" in reason
 
 
-def test_没注入检查器时仍默认允许():
-    """这条是**有意的默认**（没配权限就不拦），不是 fail-open —— 别一起改掉。"""
+def test_没注入检查器时仍默认允许但会出声(monkeypatch):
+    """这条是**有意的默认**（没配权限就不拦），不是 fail-open —— 别一起改掉。
+
+    2026-09-14 补上"但要出声"：没注入 = **这次运行没有权限那一道闸门**，
+    而盘上原来一个字都没有（"放行"和"闸门在、判过了"在排查时长得一模一样）。
+    出声**每个执行器类只报一次**，不是一个工具调用一条 —— 报多了会把告警通道冲成噪音。
+    """
+    from singularity.scheduler.executors import base as _base
+    from singularity.scheduler import witness
+
+    warned: list[str] = []
+    monkeypatch.setattr(witness, "warn", lambda scope, msg, key="": warned.append(msg))
+    monkeypatch.setattr(_base, "_NO_CHECKER_WARNED", set())   # 别受别的用例影响
+
     bare = _StubExec(); bare._permission_checker = None
     assert OpenAIAgentExecutor._check_permission(bare, "read_file", {}) == (True, "")
+    assert len(warned) == 1 and "no_permission_checker" in warned[0], warned
+    # 第二次不再报（同一个类只报一次）
+    OpenAIAgentExecutor._check_permission(bare, "write_file", {})
+    assert len(warned) == 1, f"同一类报了多次：{warned}"
 
 
 def test_权限模块坏掉时不静默放行():
