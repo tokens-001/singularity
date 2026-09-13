@@ -71,27 +71,47 @@ class TestCriticalFixes:
 
 
 class TestPropertyTaskStatus:
-    """任务状态转换不变量。"""
+    """任务状态转换不变量 —— **测真实现**。
 
-    def test_terminal_states_never_retry(self):
-        for ts in _TERMINAL:
-            assert ts in {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.ROLLED_BACK}
+    ⚠️ 这一批原来叫"property 测试"，但断言全落在**测试自己手写的字面量**上：
+    `_TERMINAL ⊆ {...}` 里那个 `_TERMINAL` 就是本文件定义的，`assert tgt is not None`
+    更是恒真（2026-09-14 外派⑤核出、我复核属实）。
+    ⇒ 照 `tracker` 的真实现重写：**这些不变量是真的，只是原来没测到实现**。
+    """
 
-    def test_valid_transitions(self):
-        valid = {
-            TaskStatus.PENDING: {TaskStatus.ROUTED, TaskStatus.FAILED},
-            TaskStatus.ROUTED: {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.ROLLED_BACK},
-            TaskStatus.BLOCKED: {TaskStatus.ROUTED, TaskStatus.FAILED},
-        }
-        for src, targets in valid.items():
-            for tgt in targets:
-                assert tgt is not None
+    def test_终态只许走白名单出口(self, tmp_path, monkeypatch):
+        """`tracker.transition` 对终态改判有白名单（`_TERMINAL_EXIT`）—— 测它真拦得住。
+
+        `DONE` 的出口是**空集**：改判会造出"代码已合入却显示失败"，或把它转回 PENDING
+        导致重复执行。
+        """
+        monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path / ".qidian")
+        t = tracker.create("终态出口测试")
+        tracker.transition(t.id, TaskStatus.DONE)
+        assert tracker.read_task(t.id).status == TaskStatus.DONE
+
+        assert tracker.transition(t.id, TaskStatus.PENDING) is None, \
+            "DONE 被改判成 PENDING 了 —— 白名单没拦住"
+        assert tracker.read_task(t.id).status == TaskStatus.DONE, "状态被改了"
+
+    def test_失败的任务允许回到_PENDING(self, tmp_path, monkeypatch):
+        """对照：`FAILED` 的出口白名单里有 `PENDING`（重排是合法操作），别把闸门焊死。"""
+        monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path / ".qidian")
+        t = tracker.create("重排测试")
+        tracker.transition(t.id, TaskStatus.FAILED)
+        assert tracker.transition(t.id, TaskStatus.PENDING) is not None, \
+            "FAILED → PENDING 被拦了 —— 任务永远重排不了"
+        assert tracker.read_task(t.id).status == TaskStatus.PENDING
 
 
 class TestPropertyHeartbeat:
     """心跳不变量。"""
 
-    def test_heartbeat_staleness_monotonic(self):
+    def test_心跳能写进盘(self):
+        """⚠️ 原来叫 `test_heartbeat_staleness_monotonic`，可**内容里没有任何 staleness 判断**
+        （只写了一次心跳、断言文件在、再删掉）—— 名字与内容不符（2026-09-14 外派⑤核出）。
+        改成名字说的事：**心跳确实落了盘**。
+        """
         from singularity.scheduler.witness import _hb_path, heartbeat
         heartbeat("old_task", "any", "running")
         hb_file = _hb_path("old_task", "any")
@@ -116,40 +136,40 @@ class TestPropertyHeartbeat:
 
 
 class TestPropertySnapshot:
-    """Snapshot 不变量。"""
+    """快照 id 格式 —— **测真正的生成方 `snapshot.take()`**。
 
-    def test_snapshot_id_format(self):
-        from singularity.scheduler.snapshot import Snapshot
-        s = Snapshot(id="1782000000_t123", method="git", ref="abc123", created_at=1782000000.0)
-        assert "_" in s.id
-        assert len(s.id.split("_")) == 2
+    ⚠️ 原来那两条是构造一个手写字面量的 `Snapshot`、再断言这个字面量里有 "_" / "batch" ——
+    测的是**测试自己写的字符串**（2026-09-14 外派⑤核出、我复核属实）。
+    """
 
-    def test_batch_snapshot_id_format(self):
-        from singularity.scheduler.snapshot import Snapshot
-        s = Snapshot(id="1782000000_batch_b001", method="copy", ref="/tmp/x", created_at=1782000000.0)
-        assert "batch" in s.id
+    def test_快照_id_由_take_生成且带时间戳前缀(self, tmp_path):
+        import subprocess
+        from singularity.scheduler import snapshot as snap_mod
+
+        config.ensure_dirs()      # `take()` 要往 SNAPSHOT_DIR 写，目录得先在
+        root = tmp_path / "repo"
+        root.mkdir()
+        for cmd in (["git", "init", "-q", "-b", "main"],
+                    ["git", "config", "user.email", "t@t"],
+                    ["git", "config", "user.name", "t"]):
+            subprocess.run(cmd, cwd=root, check=True, capture_output=True)
+        (root / "a.txt").write_text("x", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=root, check=True, capture_output=True)
+
+        snap = snap_mod.take("t123", repo_root=root)
+
+        head, _, tail = snap.id.partition("_")
+        assert head.isdigit(), f"id 前缀不是时间戳：{snap.id}"
+        assert tail == "t123", f"id 没带 task_id：{snap.id}"
+        assert snap.ref, "git 快照没记 ref —— 回滚时无处可回"
 
 
-class TestPropertyWorktree:
-    """Worktree 不变量。"""
-
-    def test_dir_naming_pattern(self):
-        import re
-        tid, lvl = "1782000001", "any"
-        name = f"{tid}_{lvl}"
-        assert re.match(r"^\d+_\w+$", name)
-
-
-class TestPropertyTokenBudget:
-    """Token 预算不变量。"""
-
-    def test_spent_never_exceeds_total(self):
-        total, spent = 500000, 123000
-        remaining = total - spent
-        assert remaining >= 0
-        assert spent <= total
-
-    def test_default_unlimited(self):
-        total, spent = None, 100
-        remaining = float("inf") if total is None else total - spent
-        assert remaining == float("inf")
+# ═══════════════════════════════════════════════════════════════
+# 删掉的两条（2026-09-14，外派⑤核出、我复核属实）
+# ═══════════════════════════════════════════════════════════════
+# `TestPropertyWorktree.test_dir_naming_pattern` 和 `TestPropertyTokenBudget` 那两条
+# **没有可测的真实现**：前者自己拼 `f"{tid}_{lvl}"` 再拿正则匹配自己拼的串；
+# 后者在两个字面量上做减法（`total, spent = 500000, 123000; assert spent <= total`）。
+# 它们的"不变量"**在代码里没有对应物** ⇒ 留着只会给虚假的安心。
+# ⚠️ 如果哪天有了真的 worktree 命名生成 / 预算 clamp 实现，**在这里重写**，别恢复旧写法。
