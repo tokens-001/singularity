@@ -251,10 +251,18 @@ class ObserverServer:
 
     async def start(self) -> None:
         """启动 WebSocket 服务。"""
+        from singularity.scheduler._auth import ws_allowed_origins
         self._server = await serve(
             lambda ws: _handler(ws, self.manager),
             self.host,
             self.port,
+            # ⚠️ **回环绑定挡不住浏览器**：任何网页都能 `new WebSocket("ws://127.0.0.1:8765")`，
+            # WS 不受 CORS 预检限制，而本服务原来**完全不看 `Origin`**。它认识的 action 里有
+            # `chat`，观察者的工具箱里有 `create_task` / `delete_task` / `control_loop`
+            # ⇒ 随手打开的一个网页就能删任务、停调度循环。
+            # `QIDIAN_AUTH` 默认关着（`app.py:228`），所以 token 那一路在默认配置下不咬人
+            # —— **Origin 校验才是真挡住这条路的**。允许项的含义见 `ws_allowed_origins`。
+            origins=ws_allowed_origins(),
             max_size=MAX_MESSAGE_SIZE,
             ping_interval=HEARTBEAT_INTERVAL,
             ping_timeout=HEARTBEAT_TIMEOUT,

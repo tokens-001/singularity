@@ -7,6 +7,7 @@ Token-based auth + 三级角色 (admin/operator/viewer)。
 from __future__ import annotations
 
 import hashlib
+import re
 import json
 import secrets
 import time
@@ -228,3 +229,28 @@ def require_write(request) -> tuple[Optional[User], Optional[str]]:
     if not user.can_write:
         return None, "权限不足: 需要 operator 或 admin"
     return user, None
+
+
+# ═══════════════════════════════════════════════════════════════
+# WebSocket 的来源校验策略（2026-09-14）
+# ═══════════════════════════════════════════════════════════════
+# **为什么需要**：两个 WS 服务（`bridge` 的 5051 和 `observer` 的 8765）都绑在回环地址上，
+# 但**回环挡不住浏览器** —— 用户访问的任何一个网页都能 `new WebSocket("ws://127.0.0.1:8765")`，
+# 浏览器会把请求发出去（WS 不受 CORS 预检限制），而服务端原来**完全不看 `Origin`**。
+# observer 那条尤其重：它认识的 action 里有 `chat`，而观察者的工具箱里有
+# `create_task` / `delete_task` / `delete_failed_tasks` / `control_loop`
+# ⇒ **随手打开的一个网页就能删任务、停调度循环**。
+# `QIDIAN_AUTH` 默认是关的（`app.py:228`），所以 token 那一路在默认配置下不咬人；
+# **能真正挡住这条路的只有 `Origin` 校验**。
+#
+# ⚠️ **必须把 `None` 放进允许列表**：`websockets` 的判定是
+# 「遍历允许项，`== origin` 则放行，否则 `raise InvalidOrigin`」（`server.py:339-350`）。
+# 没带 `Origin` 头的客户端（websocat / 脚本 / 自己写的客户端）origin 是 `None` ——
+# **不显式允许 `None` 就会被一起拒掉**。浏览器一定带 `Origin`，非浏览器一定不带，
+# 所以"允许 None"放行的正是非浏览器客户端，而它们不是这条攻击的载体。
+_LOCAL_ORIGIN_RE = re.compile(r"https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?")
+
+
+def ws_allowed_origins() -> list:
+    """两个 WS 服务共用的 `origins=` 参数值。见上面那段说明。"""
+    return [_LOCAL_ORIGIN_RE, None]

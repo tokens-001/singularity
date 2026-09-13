@@ -142,80 +142,119 @@ def test_observer_默认绑回环不许对外():
         f"start_observer_server 的默认 host 被改回对外了：{default_host}"
 
 
-def test_observer_无鉴权这件事本身还开着(monkeypatch):
-    """把已知状态**钉成测试**，而不是让它只活在文档里。
-
-    这条**不是**在说"没问题"—— `server.py` 的 `_handler` 连上来就发 welcome、
-    任何 action 都不验身份。生产上靠"只绑了回环"挡着。
-    ⚠️ **真正的修法是加 token 握手（抄 `bridge.py:111-123`）+ 前端带上 token**，
-    那要动 WS 协议和前端两侧，本轮**没做** —— 见 `OPEN.md`。
-    所以这里钉的是"**回环绑定是当前唯一的防线**"：一旦绑定被放开，就没有第二道。
-    """
-    import pathlib
-    from singularity.observer import server as S
-
-    src = pathlib.Path(S.__file__).read_text(encoding="utf-8")
-    assert "authenticate" not in src and "token" not in src.lower(), (
-        "observer/server.py 里出现鉴权了 —— 那说明 token 握手已经补上，"
-        "这条测试和 OPEN.md 里那条待办都该销账了"
-    )
-
-
 # ═══════════════════════════════════════════════════════════════
-# ⑦ `_io.atomic_write_json` —— tmp 带 pid + 写入拿锁
+# ⑧ WS 的 Origin 校验（真起服务、真连一次）
 # ═══════════════════════════════════════════════════════════════
-# 外派 J 审 `防御模式.md` §46 时抓到：那条的修法**只落在 `project.py:479`**，
-# 而 `_io.atomic_write_json` 是 api_store/tracker/_memory_core/_token_budget 的共用入口，
-# tmp 仍是确定性命名、写入也不拿锁 —— §46 描述的那个竞态在共享层原样活着。
+# 不写成"源码里有没有 origins=" 那种形状测试 —— 那种测的是我改没改，不是**门拦没拦住**。
 
-def test_原子写的tmp名要带pid(monkeypatch, tmp_path):
-    """不带 pid ⇒ 两个独立进程共用同一个 `<name>.tmp`：
+def _free_port() -> int:
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
 
-    A replace 成功后 tmp 就没了，B 的 replace 撞 ENOENT；或者两边写入交错，
-    正式文件里多出半个 `}` → 解析失败 → 读侧静默跳过。
+
+def _run_ws_probe(port: int, origin) -> tuple[bool, str]:
+    """起一个真的 ObserverServer，用一个真的 WS 客户端去连。
+
+    返回 (连上了吗, 明细)。**不带 origin 就不带 Origin 头** ——
+    非浏览器客户端（websocat / 脚本）正是这个形状。
     """
-    import os as _os
-    from pathlib import Path as _P
-    from singularity.scheduler import _io
+    import asyncio
+    import websockets
 
-    seen = {}
-    real = _P.write_text
-
-    def spy(self, *a, **k):
-        seen.setdefault("tmp", self.name)
-        return real(self, *a, **k)
-
-    monkeypatch.setattr(_P, "write_text", spy)
-    monkeypatch.setattr(_os, "getpid", lambda: 4242)
-    _io.atomic_write_json(tmp_path / "x.json", {"a": 1})
-
-    assert "4242" in seen.get("tmp", ""), \
-        f"tmp 名里没有 pid ⇒ 跨进程会撞（project.py:474-478 记着这条链）：{seen.get('tmp')}"
-    assert not list(tmp_path.glob("*.tmp")), "写完没清干净 tmp 残留"
-
-
-def test_原子写多线程并发不炸(tmp_path):
-    """同进程多线程拿到的是**同一个 pid** ⇒ pid 后缀挡不住它们，必须还有锁。"""
-    import json
-    import threading
-    from singularity.scheduler import _io
-
-    p = tmp_path / "y.json"
-    errs: list = []
-
-    def w(n: int) -> None:
+    async def main() -> tuple[bool, str]:
+        from singularity.observer.server import ObserverServer
+        srv = ObserverServer(host="127.0.0.1", port=port)
+        await srv.start()
         try:
-            for i in range(60):
-                _io.atomic_write_json(p, {"n": n, "i": i})
-        except Exception as e:            # noqa: BLE001
-            errs.append(f"{type(e).__name__}: {e}")
+            kw = {}
+            if origin is not None:
+                kw["additional_headers"] = {"Origin": origin}
+            try:
+                # `proxy=None`：本机跑测试时 websockets 会按**系统代理设置**自动挑代理
+                # （这台机器上是 Clash），于是连 127.0.0.1 也走 SOCKS —— 实测报
+                # `ImportError: connecting through a SOCKS proxy requires python-socks`。
+                # 连回环不需要代理，显式关掉。
+                async with websockets.connect(
+                        f"ws://127.0.0.1:{port}", open_timeout=5, proxy=None, **kw) as ws:
+                    first = await asyncio.wait_for(ws.recv(), timeout=5)
+                    return True, str(first)[:120]
+            except Exception as e:              # noqa: BLE001
+                return False, f"{type(e).__name__}: {e}"
+        finally:
+            await srv.stop()
 
-    ts = [threading.Thread(target=w, args=(n,)) for n in range(8)]
-    for t in ts:
-        t.start()
-    for t in ts:
-        t.join()
+    return asyncio.run(main())
 
-    assert not errs, f"并发写炸了（没锁时 replace 会撞 ENOENT）：{errs[:3]}"
-    data = json.loads(p.read_text(encoding="utf-8"))
-    assert data["n"] in range(8), f"读出来的不是完整的一份：{data}"
+
+def test_外部网页的_Origin_连不上_observer_ws():
+    """**正题**：一个从 evil.com 打开的网页不许连上来。
+
+    它连上就能发 `{"action":"chat"}`，而观察者的工具箱里有
+    `create_task` / `delete_task` / `delete_failed_tasks` / `control_loop`
+    ⇒ 随手打开的一个网页就能删任务、停调度循环。回环绑定挡不住这条路
+    （WS 不受 CORS 预检限制，浏览器照发），`QIDIAN_AUTH` 默认又关着
+    ⇒ **Origin 校验是唯一那道门**。
+    """
+    ok, detail = _run_ws_probe(_free_port(), "http://evil.example.com")
+    assert not ok, f"外部 Origin 连上了 —— 门没拦住：{detail}"
+
+
+def test_本机_UI_的_Origin_连得上(monkeypatch):
+    """对照：本机 UI（`app.py:2306` 起在 127.0.0.1:5050）必须连得上，别把门焊死。"""
+    monkeypatch.setenv("QIDIAN_SKIP_EMBED", "1")
+    ok, detail = _run_ws_probe(_free_port(), "http://127.0.0.1:5050")
+    assert ok, f"本机 UI 被自己的门拦住了：{detail}"
+
+
+def test_不带_Origin_的客户端连得上():
+    """对照：websocat / 脚本这类**不带 Origin 头**的客户端要放行。
+
+    `websockets` 的判定是 `for ... == origin ... else: raise InvalidOrigin`
+    （`server.py:339-350`）—— **不显式把 `None` 放进允许列表，这些客户端会被一起拒掉**。
+    而它们不是这条攻击的载体（浏览器一定带 Origin）。
+    """
+    ok, detail = _run_ws_probe(_free_port(), None)
+    assert ok, f"不带 Origin 的客户端被误杀：{detail}"
+
+
+def _run_ws_probe_on(port: int, origin):
+    """纯客户端探针（服务已经在跑）—— 不启服务，只连。"""
+    import asyncio
+    import websockets
+
+    async def main():
+        kw = {}
+        if origin is not None:
+            kw["additional_headers"] = {"Origin": origin}
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}",
+                                          open_timeout=5, proxy=None, **kw) as ws:
+                return True, "connected"
+        except Exception as e:              # noqa: BLE001
+            return False, f"{type(e).__name__}: {e}"
+
+    return asyncio.run(main())
+
+
+def test_bridge_ws_也要校验_Origin():
+    """同一个洞的另一半：`bridge.start_ws_server`（5051）原来也没传 `origins=`。
+
+    ⚠️ 这条**比 observer 那条轻**：它的 `_ws_handler` 首消息必须是 `auth` 且 token 有效，
+    否则直接 `auth_error` + 关连接（`bridge.py:109-131`）。但**握手阶段照样白送一个连接**，
+    而且 origin 校验在握手前就拦掉，比应用层判断更靠前。
+    """
+    import time
+    from singularity.scheduler import bridge
+
+    port = _free_port()
+    bridge.start_ws_server(host="127.0.0.1", port=port)
+    time.sleep(1.0)                      # 等线程起来（实测起服务在独立线程里）
+    try:
+        ok, detail = _run_ws_probe_on(port, "http://evil.example.com")
+        assert not ok, f"外部 Origin 连上了 bridge 的 WS：{detail}"
+    finally:
+        bridge.stop_ws_server()

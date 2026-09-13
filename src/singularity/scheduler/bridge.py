@@ -88,6 +88,8 @@ def broadcast_json(data: dict) -> int:
 
 _WS_LOOP: asyncio.AbstractEventLoop | None = None
 _WS_THREAD: threading.Thread | None = None
+# 停服信号（见 start_ws_server 里那段说明：原来用 `await asyncio.Future()`，永不完成）
+_WS_STOP: asyncio.Event | None = None
 
 
 def _get_loop() -> asyncio.AbstractEventLoop:
@@ -142,14 +144,26 @@ async def _ws_handler(ws):
 
 def start_ws_server(host: str = "127.0.0.1", port: int = 5051):
     """在独立线程启动 WebSocket 服务器。"""
-    global _WS_THREAD, _WS_LOOP
+    global _WS_THREAD, _WS_LOOP, _WS_STOP
 
     async def _serve():
         import websockets
+        from singularity.scheduler._auth import ws_allowed_origins
+        global _WS_STOP
         _WS_LOOP = asyncio.get_event_loop()
-        async with websockets.serve(_ws_handler, host, port):
+        _WS_STOP = asyncio.Event()
+        # 同 observer 那条：回环绑定挡不住浏览器，`Origin` 才是那道门。允许项见
+        # `ws_allowed_origins`（含 `None`，否则不带 Origin 的非浏览器客户端会被一起拒）。
+        async with websockets.serve(_ws_handler, host, port,
+                                    origins=ws_allowed_origins()):
             _log.info("WebSocket server on ws://%s:%d", host, port)
-            await asyncio.Future()
+            # ⚠️ **等一个能被 set 的事件，不是 `await asyncio.Future()`**
+            # （2026-09-14 改）。原来那个 Future 永远不完成 ⇒ `async with` 从不退出
+            # ⇒ **server 对象从来没被 close 过**，stop 只是把 loop 停了，
+            # 于是退出时抛 "Event loop stopped before Future completed" +
+            # "Task was destroyed but it is pending" + `Server._close` 从未 await。
+            # 症状是**测试绿了但吐一屏红字**，下一个读的人会当成 flaky 而绕开它。
+            await _WS_STOP.wait()
 
     def _run():
         loop = _get_loop()
@@ -162,7 +176,7 @@ def start_ws_server(host: str = "127.0.0.1", port: int = 5051):
 
 
 def stop_ws_server():
-    global _WS_LOOP
+    global _WS_LOOP, _WS_STOP
     with _ws_lock:
         for c in list(_ws_clients):
             try:
@@ -170,11 +184,15 @@ def stop_ws_server():
             except Exception:
                 pass
         _ws_clients.clear()
-    if _WS_LOOP:
+    if _WS_LOOP and _WS_STOP is not None:
         try:
-            _WS_LOOP.call_soon_threadsafe(_WS_LOOP.stop)
+            # 让 `_serve` 正常退出 `async with` ⇒ server 被 close、端口放掉、线程自然结束。
+            # **不要**再 `call_soon_threadsafe(_WS_LOOP.stop)` —— 那正是上面那串红字的来源。
+            _WS_LOOP.call_soon_threadsafe(_WS_STOP.set)
         except Exception:
             pass
+    if _WS_THREAD is not None and _WS_THREAD.is_alive():
+        _WS_THREAD.join(timeout=5)
 
 
 # ── Observer Server 集成 (T5) ─────────────────────────────────────────────
