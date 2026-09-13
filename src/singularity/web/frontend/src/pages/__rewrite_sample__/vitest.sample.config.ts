@@ -15,7 +15,10 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   test: {
-    // root 是本目录（配置文件所在处），所以这里只收本目录自己的测试
+    // ⚠️ `root` **不是**配置文件所在目录，仍是 `process.cwd()`（= frontend/），
+    // 所以这条命令实际收的是**全量**：14 文件 / 92 用例 = 默认的 71 + 样板的 21。
+    // （写这份配置时的注释说"只收本目录自己的测试"，是错的 —— 2026-09-14 复核时实测更正。）
+    // 只想跑样板：`npx vitest run --config <本文件> __rewrite_sample__`
     include: ['**/*.test.{ts,tsx}'],
     exclude: ['**/node_modules/**', '**/dist/**'],
   },
