@@ -531,53 +531,65 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
     # 上面 `if not exec_tasks: return` 已保证这里不会是空批次清空。
     project.task_ids = []
     id_map = {}  # 本地任务 id (T1..Tn) → tracker task_id
-    for idx, tdef in enumerate(exec_tasks):
-        # 实现层角色：默认 implementer（可在 .qidian/phases.json 改）
-        role_key = get_phase_role(Phase.EXECUTING) or "implementer"
+    # ⚠️ **回滚集合要在 `create` 成功那一刻就记下来**（2026-09-14）：下面三步是
+    #   create → transition(PENDING) → append 进 task_ids，
+    # `transition` 抛的话任务**还没进 task_ids** —— 只回滚 `task_ids` 会漏掉它。
+    new_ids: list[str] = []
+    try:
+        for idx, tdef in enumerate(exec_tasks):
+            # 实现层角色：默认 implementer（可在 .qidian/phases.json 改）
+            role_key = get_phase_role(Phase.EXECUTING) or "implementer"
 
-        # 本地任务 id = T{idx+1} (拆解器不产 id 字段，depends_on_local_id 引用此 id)
-        tid = tdef.get("id", "") or f"T{idx+1}"
+            # 本地任务 id = T{idx+1} (拆解器不产 id 字段，depends_on_local_id 引用此 id)
+            tid = tdef.get("id", "") or f"T{idx+1}"
 
-        # 解析依赖 (拆解器用 depends_on_local_id 引用本地 id)
-        arch_deps = tdef.get("depends_on", []) or tdef.get("depends_on_local_id", [])
-        dep_ids = [id_map[d] for d in arch_deps if d in id_map]
+            # 解析依赖 (拆解器用 depends_on_local_id 引用本地 id)
+            arch_deps = tdef.get("depends_on", []) or tdef.get("depends_on_local_id", [])
+            dep_ids = [id_map[d] for d in arch_deps if d in id_map]
 
-        # 拆解器用 desc 存描述 (拆成 title + description)
-        desc = tdef.get("description", "") or tdef.get("desc", "")
-        title = tdef.get("title", "")
-        if not title and ":" in desc:
-            title, desc = desc.split(":", 1)
-            title, desc = title.strip(), desc.strip()
+            # 拆解器用 desc 存描述 (拆成 title + description)
+            desc = tdef.get("description", "") or tdef.get("desc", "")
+            title = tdef.get("title", "")
+            if not title and ":" in desc:
+                title, desc = desc.split(":", 1)
+                title, desc = title.strip(), desc.strip()
 
-        # 注入项目上下文 + 角色信息 + 拆解器上下文片段
-        ctx_snippet = tdef.get("context_snippet", "")
-        acceptance = tdef.get("acceptance", "") or tdef.get("acceptance_criteria", "")
-        task_desc = (
-            f"[{tid}] {title}\n"
-            f"{desc}\n"
-            f"验收标准: {acceptance or '代码可运行，功能完整'}\n"
-            + (f"相关上下文:\n{ctx_snippet}\n" if ctx_snippet else "")
-            + f"角色: {role_key}\n"
-            f"项目背景: {project.description[:200]}\n"
-            f"约束: {'; '.join([c.get('rule', c.get('text','')) for c in constraints[:3]]) if constraints else '无'}"
-        )
-        child = tracker.create(
-            task_desc,
-            depends_on=dep_ids,
-            depth=2,
-        )
-        tracker.transition(child.id, TaskStatus.PENDING,
-                           route_level="any", route_locked=True,
-                           route_role=role_key,  # 绑定角色
-                           project_id=project.id)
-        project.task_ids.append(child.id)
-        id_map[tid] = child.id
-        created += 1
+            # 注入项目上下文 + 角色信息 + 拆解器上下文片段
+            ctx_snippet = tdef.get("context_snippet", "")
+            acceptance = tdef.get("acceptance", "") or tdef.get("acceptance_criteria", "")
+            task_desc = (
+                f"[{tid}] {title}\n"
+                f"{desc}\n"
+                f"验收标准: {acceptance or '代码可运行，功能完整'}\n"
+                + (f"相关上下文:\n{ctx_snippet}\n" if ctx_snippet else "")
+                + f"角色: {role_key}\n"
+                f"项目背景: {project.description[:200]}\n"
+                f"约束: {'; '.join([c.get('rule', c.get('text','')) for c in constraints[:3]]) if constraints else '无'}"
+            )
+            child = tracker.create(
+                task_desc,
+                depends_on=dep_ids,
+                depth=2,
+            )
+            new_ids.append(child.id)
+            tracker.transition(child.id, TaskStatus.PENDING,
+                               route_level="any", route_locked=True,
+                               route_role=role_key,  # 绑定角色
+                               project_id=project.id)
+            project.task_ids.append(child.id)
+            id_map[tid] = child.id
+            created += 1
 
-    project.fix_round = 0
-    project.constraints_checklist = constraints
-    project.set_phase(Phase.EXECUTING, "架构确认 → 建任务进执行")
-    save(project)
+        project.fix_round = 0
+        project.constraints_checklist = constraints
+        project.set_phase(Phase.EXECUTING, "架构确认 → 建任务进执行")
+        save(project)
+    except Exception:
+        # 建了任务却没登记进项目 = 它**永远不会被派发**（项目页数不到它、
+        # orchestrator 只认 `task_ids`），可从界面看它就是一条正常的 pending。
+        # 撤销这一批，再把原异常抛出去（调用方该看到的还是原来那个错）。
+        tracker.rollback_create(new_ids, why="_run_execution 建任务后登记失败")
+        raise
     # ── 探针（临时，定案后删）：防御模式 §60 ────────────────────────
     # 症状：这里明明赋了值，走到验收时 project.constraints_checklist 却是空的，
     # 于是机械检查一条都跑不了。文档里给的下一步就是打这两条。

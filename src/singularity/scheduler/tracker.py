@@ -208,6 +208,48 @@ def create(
     return task
 
 
+def rollback_create(task_ids: "list[str]", why: str = "") -> int:
+    """把**刚建出来、还没挂进项目**的任务撤回去。返回真撤掉的条数。
+
+    为什么需要（2026-09-14）：本仓有**三处**「先 `create`、后登记进 `project.task_ids`」
+    的写法 —— `_api_tasks.task_submit` / `_workflow_phases._run_execution` /
+    `orchestrator._decompose_and_create_tasks`。中间那步一抛，任务就落在盘上、
+    而**项目不认识它**（项目页数不到、orchestrator 也只认 `task_ids`）
+    ⇒ **它永远不会被派发**，可从界面上看它就是一条正常的 pending。
+    是 §65 那个"状态说有、其实没人管"的同族，只是这次孤立的是任务、不是 RUNNING 标记。
+
+    ⚠️ **撤不干净不许算了**：连删文件都可能失败（权限 / 占用）。那种情况下退化成
+    `transition(FAILED)` 并把原因写进 `error` —— 一条**显式的失败**远好过一条
+    "看着像待办、实际没人管"的任务（同 `_warn_orphan_running` 的理由：只报不改可以，
+    但不能什么都不说）。
+
+    ⚠️ **只给"刚建出来、还没有任何人引用"的任务用** —— 它**不做反引用清理**
+    （父任务 `children` / 项目 `task_ids` 那些）。要删一条已经在用的任务，
+    走 `_api_tasks` 的删除路径。
+    """
+    from singularity.scheduler import witness      # 函数体内 import：witness→tracker 是现成的环
+
+    done = 0
+    for tid in task_ids or []:
+        try:
+            _path(tid).unlink(missing_ok=True)
+            _invalidate_scan_cache()
+            done += 1
+        except OSError as e:
+            witness.warn("tracker", f"rollback_unlink_failed:{tid}:{type(e).__name__}"[:160],
+                         key="rollback_unlink_failed")
+            try:
+                transition(tid, TaskStatus.FAILED,
+                           error=f"建完任务后登记进项目失败，且撤回也没成功: {why}"[:200])
+            except Exception as e2:                    # 连兜底都失败，也只能出声了
+                witness.warn("tracker", f"rollback_mark_failed:{tid}:{type(e2).__name__}"[:160],
+                             key="rollback_mark_failed")
+    if done:
+        witness.warn("tracker", f"created_task_rolled_back:{done}:{why}"[:160],
+                     key="created_task_rolled_back")
+    return done
+
+
 def _apply_attrs(task: Task, kwargs: dict, task_id: str, caller: str) -> None:
     """把 transition/cas 的 kwargs 落到 Task 上；**Task 不认的键必须留痕**。
 

@@ -535,10 +535,24 @@ def task_submit(desc: str, priority: int = 0, depends_on: list = None,
         # 只写 task.project_id 不够：项目页的任务数读的是 project.task_ids，
         # orchestrator 也只认 task_ids 里的任务
         from . import project as proj_mod
-        proj = proj_mod.load(project_id)
-        if proj is not None:
-            proj.task_ids.append(task.id)
-            proj_mod.save(proj)
+        try:
+            proj = proj_mod.load(project_id)
+            if proj is not None:
+                proj.task_ids.append(task.id)
+                proj_mod.save(proj)
+        except Exception as e:
+            # ⚠️ **建了任务却没登记进项目 = 它永远不会被派发**（项目页数不到它、
+            # orchestrator 只认 `task_ids`），可从界面上看它就是一条正常的 pending。
+            # 撤回，并且**如实告诉调用方没建成** —— 别让人以为建好了（静默成功是这类
+            # 事故最坏的形状，见 tracker.rollback_create 的说明）。
+            # ⚠️ 出声写在**这里**、不靠 `rollback_create` 里那句：静默 except 那把尺子
+            # 看不见 helper 里的出声（本仓记过的盲区），会平白涨基线。
+            # 两个 key 各司其职：这条是**原因**，helper 那条是**动作**（撤了几条）。
+            witness.warn("_api", f"task_attach_failed:{project_id}:{type(e).__name__}"[:160],
+                         key="task_attach_failed")
+            tracker.rollback_create([task.id],
+                                    why=f"task_submit 登记进项目失败: {type(e).__name__}")
+            return {"error": f"任务创建失败（未建成功，已撤回）: {type(e).__name__}: {e}"[:300]}, 500
     if route_level or route_type:
         kwargs = {}
         if route_level:

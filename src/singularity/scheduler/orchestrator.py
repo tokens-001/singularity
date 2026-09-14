@@ -940,6 +940,9 @@ def _decompose_and_create_tasks(proj, agents: dict) -> None:
     真流水线实测：卡了 13 分钟、零日志）。
     改成读 `proj.architecture` —— 跟 `_run_execution` 同源。
     """
+    # ⚠️ 定义在 `try` **外面**：下面的 `except` 要用它做回滚，而异常可能发生在
+    # 它被赋值之前（那样 handler 里引用它会变成 NameError、把原异常盖掉）。
+    new_ids: list[str] = []
     try:
         arch_json = proj.architecture or {}
         if not isinstance(arch_json, dict):
@@ -970,6 +973,7 @@ def _decompose_and_create_tasks(proj, agents: dict) -> None:
             arch_deps = t.get("depends_on", []) or t.get("depends_on_local_id", [])
             dep_ids = [id_map[d] for d in arch_deps if d in id_map]
             task = tracker.create(t["desc"], project_id=proj.id, depends_on=dep_ids)
+            new_ids.append(task.id)      # 回滚集合：create 成功就记下（transition 抛时还没 append）
             tracker.transition(task.id, tracker.TaskStatus.PENDING,
                              route_level="any",
                              route_locked=True,
@@ -989,6 +993,9 @@ def _decompose_and_create_tasks(proj, agents: dict) -> None:
             "ts": time.time(), "project_id": proj.id,
         })
     except Exception as e:
+        # 建了任务却没登记进项目 = 它**永远不会被派发**（项目页数不到它、orchestrator
+        # 只认 `task_ids`），可从界面看它就是一条正常的 pending ⇒ 撤销这一批。
+        tracker.rollback_create(new_ids, why="_decompose_and_create_tasks 建任务后登记失败")
         try:
             witness.warn('orch', f'decompose:{e}')
         except Exception:
