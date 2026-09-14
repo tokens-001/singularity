@@ -154,6 +154,14 @@ def start_ws_server(host: str = "127.0.0.1", port: int = 5051):
         _WS_STOP = asyncio.Event()
         # 同 observer 那条：回环绑定挡不住浏览器，`Origin` 才是那道门。允许项见
         # `ws_allowed_origins`（含 `None`，否则不带 Origin 的非浏览器客户端会被一起拒）。
+        #
+        # ⚠️ **这个服务不再加 `process_request` 鉴权**（2026-09-14 特意撤掉）：
+        # 它**本来就有连接级鉴权** —— `_ws_handler` 要求首条消息必须是
+        # `{"method":"auth","params":{"token":…}}`，token 不对就直接关连接。
+        # 那是**无条件**的（不看 `QIDIAN_AUTH`），比 HTTP 那侧还严。
+        # 我一开始按"两个 WS 零鉴权"的说法给它也加了一层 —— 那会让**按它自己协议
+        # 认证过的客户端在握手阶段就被拒**（除非再塞个 `?token=`），是多余的、
+        # 还可能弄坏已有客户端。**"要改的东西已经改过了" —— 改前先读一遍那个文件。**
         async with websockets.serve(_ws_handler, host, port,
                                     origins=ws_allowed_origins()):
             _log.info("WebSocket server on ws://%s:%d", host, port)

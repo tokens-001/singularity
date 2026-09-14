@@ -251,7 +251,7 @@ class ObserverServer:
 
     async def start(self) -> None:
         """启动 WebSocket 服务。"""
-        from singularity.scheduler._auth import ws_allowed_origins
+        from singularity.scheduler._auth import ws_allowed_origins, ws_authorize
         self._server = await serve(
             lambda ws: _handler(ws, self.manager),
             self.host,
@@ -263,6 +263,9 @@ class ObserverServer:
             # `QIDIAN_AUTH` 默认关着（`app.py:228`），所以 token 那一路在默认配置下不咬人
             # —— **Origin 校验才是真挡住这条路的**。允许项的含义见 `ws_allowed_origins`。
             origins=ws_allowed_origins(),
+            # 逐连接鉴权（2026-09-14）：`QIDIAN_AUTH=1` 时才要求 `?token=` /
+            # `Authorization: Bearer`，默认关 ⇒ 行为与之前逐字相同。
+            process_request=ws_authorize,
             max_size=MAX_MESSAGE_SIZE,
             ping_interval=HEARTBEAT_INTERVAL,
             ping_timeout=HEARTBEAT_TIMEOUT,

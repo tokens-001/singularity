@@ -60,6 +60,7 @@ from singularity.scheduler import bridge as ws_bridge
 # 而 WS 门（`_auth.ws_allowed_origins` 的正则）是另一份、内容不同 ⇒ 同一个来源
 # 在两个门上判定可以不同，而"挡任意网页删任务"只靠 Origin 校验（见 `_auth` 那段说明）。
 from singularity.scheduler._auth import is_local_origin as _is_local_origin
+from singularity.scheduler._auth import auth_enabled as _auth_enabled
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
@@ -229,8 +230,10 @@ def _guard_project_id():
             return jsonify({"error": "非法的 project_id 格式"}), 400
 
 
-# 可选认证: QIDIAN_AUTH=1 时启用
-_AUTH_ENABLED = os.environ.get("QIDIAN_AUTH") == "1"
+# 可选认证: QIDIAN_AUTH=1 时启用。
+# ⚠️ 判据**只有一份**（`_auth.auth_enabled`）—— 两个 WS 服务也要看同一个开关，
+# 各读一遍环境变量就是"同一件事写两处"（2026-09-14 修 WS 逐连接鉴权时收的）。
+_AUTH_ENABLED = _auth_enabled()
 if _AUTH_ENABLED:
     from singularity.scheduler._auth import get_auth, require_auth, require_write
     _admin = get_auth().bootstrap()

@@ -7,6 +7,7 @@ Token-based auth + 三级角色 (admin/operator/viewer)。
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import json
 import secrets
@@ -293,3 +294,56 @@ def is_local_origin(origin: str) -> bool:
 def ws_allowed_origins() -> list:
     """两个 WS 服务共用的 `origins=` 参数值。见上面那段说明。"""
     return [_LOCAL_ORIGIN_RE, None]
+
+
+# ═══════════════════════════════════════════════════════════════
+# WebSocket 的**逐连接鉴权**（2026-09-14）
+# ═══════════════════════════════════════════════════════════════
+# 上面那段 Origin 校验挡的是**浏览器**（任何网页都能 new WebSocket 连回环，
+# WS 不受 CORS 预检限制）。但两个 WS 服务**全文没有任何 token 判定** ——
+# 也就是说：`QIDIAN_AUTH=1` 时 HTTP 那侧全员要 token，**WS 这侧一个都不问**
+# （配置说的"要鉴权"在 WS 上不成立）。这里补上，并且**和 HTTP 共用同一个开关**。
+
+def auth_enabled() -> bool:
+    """`QIDIAN_AUTH=1` 才要求鉴权 —— HTTP / WS 两个门**共用这一个判据**。
+
+    ⚠️ 之前只有 `web/app.py` 里读了一遍环境变量（`_AUTH_ENABLED`），
+    WS 那侧压根不读 ⇒ "同一个开关"只对一半的门成立。谁要判"开没开"都调这里。
+    """
+    return os.environ.get("QIDIAN_AUTH") == "1"
+
+
+def _bearer_or_query_token(request) -> str:
+    """从 WS 握手请求里取 token：优先 `Authorization: Bearer`，其次 `?token=`。
+
+    两个都收是因为客户端有两种：**浏览器不能给 `new WebSocket()` 设自定义头**
+    （只能挂 query），而脚本/websocat 用头更自然。
+    """
+    auth = request.headers.get("Authorization", "") or ""
+    if auth.startswith("Bearer "):
+        return auth[7:].strip()
+    path = getattr(request, "path", "") or ""
+    if "?" in path:
+        from urllib.parse import parse_qs, urlparse
+        return (parse_qs(urlparse(path).query).get("token") or [""])[0]
+    return ""
+
+
+def ws_authorize(connection, request):
+    """WS 握手鉴权，给 `websockets.serve(process_request=...)` 用。
+
+    返回 `None` = 放行；返回一个 HTTP 响应 = 拒绝。
+    `QIDIAN_AUTH` 没开（默认）⇒ 不要求 token，**行为与今天逐字相同**
+    （真挡住浏览器的那道仍是 Origin 校验，见上面那段）。
+
+    ⚠️ **这里不 catch 任何异常**是有意的：`websockets` 对 `process_request` 抛出的
+    异常会**拒绝握手（500）**（`asyncio/server.py:148-157`）⇒ 抛 = 拒。
+    反过来若在这里 `except: return None`，那就是"鉴权自己坏了就放行" —— fail-open。
+    """
+    if not auth_enabled():
+        return None
+    token = _bearer_or_query_token(request)
+    if token and get_auth().authenticate(token):
+        return None
+    # 拒得**说清楚**：客户端要能一眼看出"是鉴权没过"而不是"服务端坏了"
+    return connection.respond(401, "unauthorized: 需要 ?token=<token> 或 Authorization: Bearer\n")
