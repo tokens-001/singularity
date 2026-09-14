@@ -95,3 +95,36 @@ class TestRollbackStashGuard:
         assert ok is True
         assert (r / "f.txt").read_text() == "base\n", "没回到快照状态"
         assert not (r / "extra.txt").exists(), "agent 新建的文件该被清掉"
+
+    def test_stash_成功也必须出声(self, tmp_path, monkeypatch):
+        """stash **成功**了也得出声 —— 否则"工作区被 stash 走"这件事零痕迹。
+
+        ⚠️ 这道守卫原来**一条用例都没有**：把它整句废掉，本文件其余三条全绿
+        （2026-09-14 变异实测坐实）。它守的是真出过的事故 ——
+        `repo_root_for` 对**没有 project 的任务**返回**引擎本仓**，于是"开发者正在改的文件
+        忽然从工作区消失、未跟踪文件被 clean 掉"在日志里一个字都没有，
+        只能靠 `git stash list` 自己发现（两次都是这么发现的）。
+        保护动作是对的（先 stash 再销毁 ⇒ 可恢复），缺的只是**说出来**。
+        """
+        r = tmp_path / "clean2"
+        r.mkdir()
+        _git(r, "init", "-q")
+        _git(r, "config", "user.email", "t@t")
+        _git(r, "config", "user.name", "t")
+        (r / "f.txt").write_text("base\n")
+        _git(r, "add", "-A")
+        _git(r, "commit", "-qm", "base")
+
+        base_ref = _git(r, "rev-parse", "HEAD").stdout.strip()
+        (r / "f.txt").write_text("我正在改的东西\n")     # 未提交 ⇒ 会被 stash 走
+
+        warns: list[str] = []
+        monkeypatch.setattr("singularity.scheduler.witness.warn",
+                            lambda scope, msg, **kw: warns.append(msg))
+
+        snap = snap_mod.Snapshot(id="s3", method="git", ref=base_ref,
+                                 created_at=0, repo_root=str(r))
+        snap_mod._rollback_git(snap, r)
+
+        assert any("rollback_stashed_working_tree" in w for w in warns), \
+            f"stash 走了工作区却零痕迹 —— 只能靠 git stash list 自己发现: {warns}"

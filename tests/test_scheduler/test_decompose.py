@@ -42,9 +42,12 @@ class TestDecompose:
 ```'''
         result = decompose(raw)
         assert len(result) == 2
-        # The second task doesn't have depends_on set because local_id=0
-        # hasn't been created yet (task IDs are UUIDs generated later)
-        assert "depends_on" not in result[0]
+        # 本地 id → 真实 id 的映射在下一层做，这里要**原样带出来**
+        # ⚠️ 原来断言 `assert "depends_on" not in result[0]` —— 而 `decompose` 的输出字典
+        # **从来不产 `depends_on` 这个键**（只有 desc / suggested_level / depends_on_local_id）
+        # ⇒ **恒真，什么都没钉住**（2026-09-14 审计读到即坐实）。改成钉真产出的那个键。
+        assert result[0].get("depends_on_local_id") == []      # 第一条没有依赖
+        assert result[1].get("depends_on_local_id") == [0]     # 第二条依赖本地 0 号
 
 
 class TestDAGMetrics:

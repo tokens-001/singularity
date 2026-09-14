@@ -152,7 +152,9 @@ if __name__ == "__main__":
     t.test_retry_low_confidence_upgrades()
     t.test_abort_terminal()
     print("✅ cascade routing self-check passed")
-    t2 = TestPickAgent()
-    t2.test_pick_returns_agent_for_level()
-    t2.test_fallback_chain_returns_list()
-    print("✅ 选模型 self-check passed")
+    # ⚠️ 这里原来还调 `t2.test_pick_returns_agent_for_level()` /
+    # `t2.test_fallback_chain_returns_list()` —— **这两个方法从来不存在**（现名是
+    # `test_可用_agent_必须进链` / `test_没有可用_agent_返回空链`），脚本方式跑必当场
+    # AttributeError；而 pytest 不走 `__main__`，所以它**早就悄悄坏了、没人发现**
+    # （2026-09-14 审计读到即坐实）。方法现在还要吃 `monkeypatch` 夹具、脚本里给不了，
+    # 索性去掉这一段——那两条用例交给 pytest 跑。

@@ -81,6 +81,12 @@ class TestCriticalFixes:
         gl._agents = {"any": []}
         result = gl._check_goal("test output", "test goal", "test task")
         assert not result.get("met", True)
+        # ⚠️ 只断言 `met` 为假是不够的（2026-09-14 变异坐实）：删掉 `if not e_agents`
+        # 那道守卫，下一行 `e_agents[0]` 会抛 IndexError，**被函数末尾那个宽
+        # `except Exception` 吞成同样形状的 `{"met": False}`** ⇒ 照样绿。
+        # 钉住 **reason** 才分得开"走了无 agent 分支"和"兜底兜住了异常"。
+        assert "no_judge_agent" in result.get("reason", ""), \
+            f"没走到'无 agent'那条分支（被兜底 except 顶替了？）: {result}"
 
     def test_token_auth_backward_compat(self):
         from singularity.scheduler._auth import _hash_token, _hash_token_v2

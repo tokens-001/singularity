@@ -85,8 +85,16 @@ def test_purge_survives_missing_or_broken_disabled():
 
 
 def test_dispatcher_reexports_purge():
-    """_api_admin 是通过 dispatcher 调的，漏了 __all__ 就会 AttributeError。"""
-    assert hasattr(dispatcher, "purge_disabled")
+    """`_api_admin` 走的是 `dispatcher.purge_disabled` —— 这条路得**真解析到那个函数**。
+
+    ⚠️ 原注释写"漏了 `__all__` 就会 AttributeError" —— **2026-09-14 之后不成立了**：
+    dispatcher 那三句星号导出改成了 PEP 562 惰性转发，`__getattr__` 用
+    `hasattr(_m, name)`、**不查 `__all__`** ⇒ 删掉 `_dispatch_crud.__all__` 里那项，
+    这条照样绿（变异实测坐实）。所以改成**断言它真的是那个函数**，
+    而不只是"这个属性存在"（后者连解析到别的同名东西都拦不住）。
+    """
+    from singularity.scheduler import _dispatch_crud as crud
+    assert dispatcher.purge_disabled is crud.purge_disabled
 
 
 def test_model_remove_also_clears_phase_models():
