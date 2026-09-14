@@ -5,10 +5,12 @@ import pytest
 
 class TestFormatKV:
     def test_list_value(self):
+        """⚠️ **原来只断子串**（`"a.py" in r`）—— 外派⑬ 变异实测：把 list 分支删掉、
+        值落进下面的引号分支，输出 `files = "['a.py', 'b.py']"`，两个子串**照样成立**。
+        ⇒ 改成**精确等值**（同文件 `test_int_value` 就是这么写的）。
+        变异：删掉 `isinstance(v, list)` 那个分支 → 红。"""
         from singularity.scheduler._io import _format_kv
-        r = _format_kv("files", ["a.py", "b.py"])
-        assert "a.py" in r
-        assert "files =" in r
+        assert _format_kv("files", ["a.py", "b.py"]) == 'files = ["a.py", "b.py"]'
 
     def test_bool_true(self):
         from singularity.scheduler._io import _format_kv
@@ -25,14 +27,21 @@ class TestFormatKV:
         assert _format_kv("count", 42) == "count = 42"
 
     def test_float_value(self):
+        """同上：原来 `"3.14" in r` 分辨不出 `score = 3.14` 和 `score = "3.14"`
+        （后者在 TOML 里是字符串，读回来类型就变了，而断言看不出来）。
+        变异：删 `(int, float)` 分支 → 红。"""
         from singularity.scheduler._io import _format_kv
-        r = _format_kv("score", 3.14)
-        assert "3.14" in r and "score" in r
+        assert _format_kv("score", 3.14) == "score = 3.14"
 
     def test_string_value(self):
+        """同上：对 `hello` 来说，删掉 str 分支落 else 输出**逐字相同**。
+        真正该钉的是 **str 分支独有的转义** —— 值里带引号/换行会把 TOML 写坏，
+        而读侧 `except: return {}` 会把解析失败吞成空配置（用户的设置静默消失）。"""
         from singularity.scheduler._io import _format_kv
-        r = _format_kv("name", "hello")
-        assert 'hello' in r and '"' in r
+        assert _format_kv("name", "hello") == 'name = "hello"'
+        assert _format_kv("note", 'say "hi"') == 'note = "say \\"hi\\""'
+        assert _format_kv("note", "a\nb") == 'note = "a\\nb"'
+        assert _format_kv("note", "a\tb") == 'note = "a\\tb"'
 
 
 class TestTryParseJson:
