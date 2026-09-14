@@ -170,6 +170,42 @@ def case_live():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+
+def case_subscript_producer():
+    """**下标赋值也算产出**（2026-09-14 修的误报）：
+    `resp.headers["Content-Encoding"] = "gzip"` 这种写法原来不被认成"产出了这个字面量"
+    ⇒ B2a 反手把 `"Content-Encoding" in response.headers` 报成"死词、消费侧在等一个
+    不会再来的词"。合成一棵最小树钉住它：
+
+    变异：把 `visit_Assign` 里那段下标赋值的收集删掉 → 本用例红（会报出 Content-Encoding）。
+    """
+    print("误报回归 —— 下标赋值 `x[\"K\"] = v` 算产出")
+    tmp = Path(tempfile.mkdtemp(prefix="pf-subscript-test-"))
+    try:
+        # ⚠️ 见证那条（Content-Type）**必须用普通赋值**写 —— 它得在**修之前**就被认成产出，
+        # 否则"有没有见证"这件事本身也会随修复一起变，变异实验就验不出东西
+        # （第一版我把见证也写成下标赋值，结果删掉修复照样绿 —— 假绿）。
+        (tmp / "m.py").write_text(
+            'def gzip_response(response, headers):\n'
+            '    if "gzip" not in headers.get("Accept-Encoding", "") \\\n'
+            '            or "Content-Encoding" in response.headers:\n'
+            '        return response\n'
+            '    response.headers["Content-Encoding"] = "gzip"\n'
+            '    headers = {"Content-Type": "application/json"}\n'
+            '    return response\n', encoding="utf-8")
+        p = subprocess.run([sys.executable, str(TOOL), "shapes", "--root", str(tmp), "--json"],
+                           capture_output=True, text=True)
+        if p.returncode not in (0, 1):
+            check("合成树扫得动", False, f"退出码 {p.returncode}: {p.stderr[-300:]}")
+            return
+        data = json.loads(p.stdout)
+        hit = find(data["findings"], "B2a-dead-word", msg_sub="Content-Encoding")
+        check("Content-Encoding 不被报成死词（它正被下标赋值产出）", hit is None,
+              f"还是报了：{hit['message'] if hit else ''}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     print(f"preflight 复现脚本（仓库: {REPO}，HEAD 基线: {HEAD}）\n")
     case_score1()
@@ -178,6 +214,7 @@ def main():
     case_score4()
     case_score5()
     case_head()
+    case_subscript_producer()
     case_live()
     print()
     if FAILURES:

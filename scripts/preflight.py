@@ -868,6 +868,16 @@ def survey_strings(idx: Index) -> dict:
                 chan = tgts[0] if tgts else ""
                 for c in value_consts(n.value):
                     value_sites[c].append(StrSite(file, sym(self.stack), "value", chan))
+                # ⚠️ **下标赋值也是产出**（2026-09-14 补）：`resp.headers["Content-Encoding"] = "gzip"`
+                # 这种写法原来**不算"产出了这个字面量"** ⇒ B2a 把它报成"死词：消费侧在等一个
+                # 不会再来的词"。实测误报过 `Content-Encoding`（`gzip_response` 里明明就在写）。
+                # 通道取被下标那个表达式的名字（`response.headers` → `headers`），与匹配位同口径。
+                for t in n.targets:
+                    if (isinstance(t, ast.Subscript)
+                            and isinstance(t.slice, ast.Constant)
+                            and isinstance(t.slice.value, str)):
+                        value_sites[t.slice.value].append(
+                            StrSite(file, sym(self.stack), "value", _channel_of(t.value)))
                 self._nested(n.value)
                 for t in n.targets:
                     self.visit(t)
