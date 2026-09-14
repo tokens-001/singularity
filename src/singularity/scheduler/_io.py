@@ -489,6 +489,23 @@ def load_for_rewrite(path: Path, *, expect: type = dict):
     return got, not is_quarantined(path)
 
 
+def load_toml_for_rewrite(path: Path):
+    """`load_for_rewrite` 的 TOML 版。返回 `(data, writable)`。
+
+    ⚠️ 存在的理由和 JSON 版一模一样，见上面那个函数的 docstring ——
+    **判据必须是"我这次读出来的是什么"，不是"有没有人来读过"**。
+    `mcp.save_mcp_configs` 原来问的是模块级标记 `_MCP_CONFIG_CORRUPT`，
+    而它只有 `load_mcp_configs` 被调用过才为真 ⇒ **第一次触碰（进程刚起、
+    没人读过坏文件时）闸门形同虚设，整份重建照写**（2026-09-14 外派⑬ 报、我核过）。
+    """
+    if not path.exists():
+        return {}, True
+    got = load_toml_or_quarantine(path)
+    if got is None:
+        return None, False
+    return got, not is_quarantined(path)
+
+
 def load_toml_or_quarantine(path: Path) -> "dict | None":
     """`load_json_or_quarantine` 的 TOML 版。
 

@@ -83,10 +83,14 @@ def _load_custom() -> dict[str, ModelEntry]:
 
 
 def _save_custom(models: dict[str, ModelEntry]) -> None:
-    from singularity.scheduler._io import is_quarantined
+    from singularity.scheduler._io import load_for_rewrite
     from singularity.scheduler import witness
     path = _custom_path()
-    if is_quarantined(path):
+    # ⚠️ **要"这次读一遍"再判**（2026-09-14 修）：原来问的 `is_quarantined` 是
+    # 路径标记，**要有人先读过坏文件才有** ⇒ 第一次触碰时闸门形同虚设、整份重建照写。
+    # §68 那条形状，这一处漏修了（外派⑬ 报、我核过；生产入口是自定义模型的增删）。
+    _existing, writable = load_for_rewrite(path)
+    if not writable:
         # 🔴 拒写：见 `_load_custom` 的说明。读侧已隔离，拿空表整份写回 = 自定义模型全没。
         witness.warn("model_registry",
                      "save_skipped: models_custom.json 损坏已隔离(.corrupt)，拒绝整份重建",

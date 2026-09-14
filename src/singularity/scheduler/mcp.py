@@ -519,10 +519,6 @@ def get_registry() -> MCPRegistry:
 MCP_CONFIG_PATH = config.SCHEDULER_DIR / "mcp_servers.toml"
 
 
-# 同 `api_store._CORRUPT`：这一轮读到过损坏的配置 ⇒ `save_mcp_configs` 拒写。
-_MCP_CONFIG_CORRUPT = False
-
-
 def load_mcp_configs() -> list[MCPServerConfig]:
     """从 TOML 配置文件加载 MCP 服务器配置。
 
@@ -534,12 +530,10 @@ def load_mcp_configs() -> list[MCPServerConfig]:
     **宁可这一轮一个服务器都没有**，也不拿默认值去冒充用户的配置。
     """
     from ._io import load_toml_or_quarantine
-    global _MCP_CONFIG_CORRUPT
     if not MCP_CONFIG_PATH.exists():
         return _default_configs()          # 真的没有文件：默认配置是对的
     data = load_toml_or_quarantine(MCP_CONFIG_PATH)
     if data is None:
-        _MCP_CONFIG_CORRUPT = True
         return []
 
     configs = []
@@ -564,8 +558,14 @@ def save_mcp_configs(configs: list[MCPServerConfig]) -> bool:
 
     ⚠️ 这一轮读到过损坏的配置（已隔离到 `.corrupt`）就**拒写** —— 见 `load_mcp_configs`。
     """
-    global _MCP_CONFIG_CORRUPT
-    if _MCP_CONFIG_CORRUPT:
+    # ⚠️ **判据是"我这次读出来的是什么"，不是模块级标记**（2026-09-14 修）：
+    # 原来问的是 `_MCP_CONFIG_CORRUPT`，而那个全局只有 `load_mcp_configs` 被调过才为真
+    # ⇒ **第一次触碰**（进程刚起、坏文件还没人读过）时闸门形同虚设，整份重建照写。
+    # 这正是 §68 那条「写侧护栏查在读之前」，`load_for_rewrite` 那一族只修了 3 处、
+    # 这条漏了（外派⑬ 报、我核过：生产入口是 `mcp_server_add` / `mcp_server_delete`）。
+    from ._io import load_toml_for_rewrite
+    _existing, writable = load_toml_for_rewrite(MCP_CONFIG_PATH)
+    if not writable:
         _log_warn(_TAG, "保存被拒：mcp_servers.toml 损坏已隔离(.corrupt)，"
                         "拒绝拿手里的这份整份重建；人工恢复备份后重启即可")
         try:

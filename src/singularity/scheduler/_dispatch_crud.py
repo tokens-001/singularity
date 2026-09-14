@@ -28,7 +28,12 @@ def _save_custom_agents(data: dict) -> None:
     from . import config
     from . import _io, witness
     p = _custom_agents_path()
-    if _io.is_quarantined(p):
+    # ⚠️ **要"这次读一遍"再判**（2026-09-14 修）：原来只问 `is_quarantined`（路径标记），
+    # 而那个标记**要有人先读过坏文件才有** ⇒ 第一次触碰（进程刚起、还没人读过）时
+    # 它是 False，闸门形同虚设、整份重建照写。§68 那条形状，这一处漏修了
+    # （外派⑬ 报、我核过；生产入口是 agent 的增删改）。
+    _existing, writable = _io.load_for_rewrite(p)
+    if not writable:
         # 🔴 **拒写**：读侧已经把坏文件隔离出去了，拿手里这份（多半是空表 + 刚改的那条）
         # 整份写回去 = 历史配置全没，而文件名一模一样。
         # ⚠️ **这个文件有两个写者**（另一个是 `skill_loader.set_agent_skills`），

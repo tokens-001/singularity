@@ -158,7 +158,6 @@ def _mcp_env(tmp_path, monkeypatch):
     from singularity.scheduler import mcp as M
     cfg = tmp_path / "mcp_servers.toml"
     monkeypatch.setattr(M, "MCP_CONFIG_PATH", cfg)
-    monkeypatch.setattr(M, "_MCP_CONFIG_CORRUPT", False)
     monkeypatch.setattr("singularity.scheduler.witness.warn", lambda *a, **k: None)
     return M, cfg
 
@@ -184,7 +183,10 @@ def test_mcp_读坏之后写侧拒写(tmp_path, monkeypatch):
     raw = '[[servers]]\nname = "myserver"\n坏 = ='
     cfg.write_text(raw, encoding="utf-8")
 
-    M.load_mcp_configs()                      # 置上损坏标记
+    # ⚠️ **这里原来有一行 `M.load_mcp_configs()`（注释写着"置上损坏标记"）——
+    # 那行是在替被测代码把洞填上**：闸门本来该由"这次读"自己判坏，先手读一次
+    # 等于把"第一次触碰"这个真实场景跳过去了（防御模式 §69：测试把缺陷前提固化成前置步骤）。
+    # 删掉之后，本用例钉的才是"**进程刚起、坏文件还没人读过**"那一刻。
     ok = M.save_mcp_configs([])               # 任何保存都该被拒
 
     assert ok is False, "拒写要如实返回 False"
@@ -228,7 +230,8 @@ def test_读坏之后_增删_agent_要拒写(tmp_path, monkeypatch):
     raw = '{"any": [{"model": "m1"}], "坏":'
     p.write_text(raw, encoding="utf-8")
 
-    crud._load_custom_agents()                    # 置上损坏标记
+    # ⚠️ 同上：原来这里先 `crud._load_custom_agents()` 置标记，那是**替被测代码填洞**。
+    # 去掉之后这才是"第一次触碰"（生产上进程刚起来就是这个状态）。
     crud._save_custom_agents({"any": [{"model": "新的"}]})
 
     assert p.read_text(encoding="utf-8") == raw, "坏文件被整份重建了 —— 用户配的 agent 全没"
@@ -347,7 +350,8 @@ def test_自定义模型表坏了_model_registry_不许整份重建(tmp_path, mo
     raw = '{"m1": {"id": "m1"}, "坏":'
     p.write_text(raw, encoding="utf-8")
 
-    assert MR._load_custom() == {}
+    # ⚠️ 同上：原来这里先 `MR._load_custom()`（那句断言兼当"置上损坏标记"），
+    # 那是替被测代码填洞。去掉之后钉的是"第一次触碰"。
     import pytest as _pytest
     with _pytest.raises(RuntimeError):
         MR._save_custom({})
