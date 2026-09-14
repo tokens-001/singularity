@@ -6,7 +6,15 @@ build-backend = "setuptools.build_meta"
 name = "singularity"
 version = "2.1.156"
 description = "Singularity Agent Dispatch Platform"
-requires-python = ">=3.11"
+# ⚠️ 地板 **3.12**，不是 3.11（2026-09-14 拍板、用户点"提到 3.12"）。
+# 理由不是"新特性"，是**声明要和实际一致**：两个真实环境是 3.12（Dockerfile 的
+# python:3.12-slim）和 3.14（本机），**没有任何东西在 3.11 上跑过**。
+# 一个没人测过的地板是"承诺了你兑不了的东西" —— 上次那个洞就踩在这条假地板上：
+# `unittest discover` 在 0 个测试时 **3.11 及以下 rc=0**（`Ran 0 tests` + `OK`）、
+# **3.12 起才是 rc=5**（`NO TESTS RAN`），于是"一个测试都没有"被 QA 门报成"通过"。
+# 那条已在 `validator.run_project_tests` 里**按版本无关**的方式修掉（匹配串补一句），
+# 这里把地板提上来是第二层：声明的地板从此就是有人真跑过的那个版本。
+requires-python = ">=3.12"
 license = {text = "MIT"}
 dependencies = [
     "Flask>=3.0",
@@ -47,7 +55,7 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
