@@ -128,3 +128,42 @@ class TestParseXmlToolCalls:
         calls = oa._parse_xml_tool_calls(
             '<invoke name="write_file"><parameter name="content">a\nb\nc</parameter></invoke>')
         assert json.loads(calls[0]["function"]["arguments"])["content"] == "a\nb\nc"
+
+
+class TestWiringIntoRun:
+    """🔴 **接线**：解析器到**执行循环**那一段（外派⑬ 报的缺口）。
+
+    上面那些用例把 `_parse_xml_tool_calls` 钉得很干净，但**解析出来了没人用**
+    照样白搭 —— 实测把 `run()` 里那句 `msg["tool_calls"] = _xml_calls` 删掉，
+    这个文件的 14 条**全绿**，而生产上就是"整段被当普通回答丢掉"
+    （正是本文件开头写的那个事故）。⇒ 这里把整条链接上。
+
+    变异：删掉 `openai_agent.py` 里那句 `msg["tool_calls"] = _xml_calls` → 红
+    （模型"写"的文件根本不落盘）。
+    """
+
+    def test_xml_调用真的被执行了(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TEST_KEY", "k")
+        cfg = {"model": "m", "api_key_env": "TEST_KEY", "entry": "http://x",
+               "max_turns": 3}
+        ex = oa.OpenAIAgentExecutor(cfg, "任务", "tid", cwd=str(tmp_path))
+
+        rounds = {"n": 0}
+
+        def fake_api(body):
+            rounds["n"] += 1
+            if rounds["n"] == 1:
+                # 第一轮：**不按协议来** —— 没有 tool_calls，正文里是 XML
+                return {"choices": [{"message": {"content": _dsml("out.txt", "写进来了\n")}}],
+                        "usage": {}}
+            return {"choices": [{"message": {"content": "做完了"}}], "usage": {}}
+
+        monkeypatch.setattr(ex, "_api_call", fake_api)
+
+        ex.run()
+
+        assert (tmp_path / "out.txt").exists(), \
+            "模型用 XML 出的工具调用**没被执行** —— 那句 msg['tool_calls'] = _xml_calls 断了？"
+        assert (tmp_path / "out.txt").read_text(encoding="utf-8").strip() == "写进来了"
+        tools = [e.get("tool") for e in ex._tool_events if e.get("kind") == "tool:done"]
+        assert "write_file" in tools, f"工具事件里没有那一跳：{tools}"

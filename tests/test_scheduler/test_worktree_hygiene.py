@@ -106,3 +106,50 @@ class TestProjectRepoEnumeration:
         roots = gw._project_repo_roots()
         names = {r.name for r in roots}
         assert "alpha" in names and "beta" in names, f"项目仓库没被纳入清理范围: {names}"
+
+
+class TestCleanupCoversProjectRepos:
+    """🔴 **接线**：`cleanup_orphans()` 真的去遍历**每棵**仓库了吗（外派⑬ 报的缺口）。
+
+    上面 `test_covers_project_repos` 钉的是**枚举函数** `_project_repo_roots()`
+    本身 —— 而"清理时真的用了它"是另一回事：实测把 `cleanup_orphans` 里那句
+    `for root in _project_repo_roots():` 改回只扫 `config.PROJECT_ROOT`，
+    全文件照样绿，而生产上就是本文件开头写的那个事故（项目仓库的残留永不清理，
+    攒到 50 个之后该项目每个任务静默降级成无沙箱）。
+
+    变异：把 `cleanup_orphans` 里那句遍历改回只扫 `config.PROJECT_ROOT` → 红。
+    """
+
+    def test_项目仓库里的孤儿会被清掉(self, tmp_path, monkeypatch):
+        from singularity.scheduler import config as cfg, project as proj_mod
+
+        proot = tmp_path / "projects"
+        proot.mkdir()
+        prepo = proot / "alpha"
+        prepo.mkdir()
+        _git(prepo, "init", "-q")
+        _git(prepo, "config", "user.email", "t@t")
+        _git(prepo, "config", "user.name", "t")
+        (prepo / "a.txt").write_text("x\n")
+        _git(prepo, "add", "-A")
+        _git(prepo, "commit", "-qm", "base")
+
+        # 孤儿：worktree 目录在，但 git 不认得它（上次崩溃留下的那种）
+        wtd = proot / ".alpha-worktrees"
+        wtd.mkdir()
+        orphan = wtd / "t-999"
+        orphan.mkdir()
+        (orphan / "junk.txt").write_text("残留\n")
+
+        # 引擎仓库也要真存在：`cleanup_orphans` 最后那步还要在 PROJECT_ROOT 里跑
+        # `git for-each-ref`（清 pending refs），目录不存在会 FileNotFoundError。
+        engine = tmp_path / "engine"
+        engine.mkdir()
+        _git(engine, "init", "-q")
+
+        monkeypatch.setattr(proj_mod, "get_projects_root", lambda: proot)
+        monkeypatch.setattr(cfg, "PROJECT_ROOT", engine)
+
+        cleaned = gw.cleanup_orphans()
+        assert cleaned >= 1, "项目仓库里的孤儿没被清 —— 遍历那行是不是断回 PROJECT_ROOT 了？"
+        assert not orphan.exists(), f"孤儿还在：{orphan}"
