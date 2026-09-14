@@ -45,14 +45,30 @@ class TestClassifyReplyValidation:
 class TestRouter:
     """任务类型检测。"""
 
-    def test_route_basic(self):
-        r = route("fix a typo in README")
-        assert r.task_type is not None
-        assert isinstance(r.gate_required, bool)
+    def test_route_basic(self, monkeypatch):
+        """`route()` 要把**分类器的结果原样透出来**。
 
-    def test_route_complex(self):
-        r = route("重构整个认证系统，支持OAuth2和JWT，改动涉及10个文件")
-        assert r.task_type is not None
+        ⚠️ 原来只断言 `task_type is not None` / `isinstance(gate_required, bool)` ——
+        而 `RouteResult` 的**默认值**恰好就是 `default` / `False`
+        ⇒ **把 `return _llm_classify(task)` 整行换成"恒返回默认值"，这三条照样全绿**
+        （2026-09-14 变异实测坐实）。那等于没测路由。
+        现在钉的是"这一跳真的把分类结果传出来了"。
+        """
+        from singularity.scheduler import router as R
+        sentinel = R.RouteResult(task_type="refactor", gate_required=True)
+        monkeypatch.setattr(R, "_llm_classify", lambda _t: sentinel)
+        assert route("fix a typo in README") is sentinel, \
+            "route 没把分类器的结果透出来（恒返回默认值也能满足旧断言）"
+
+    def test_route_complex(self, monkeypatch):
+        """同上：长描述必须**真的走分类器**，不是返回默认值蒙混。"""
+        from singularity.scheduler import router as R
+        called: list = []
+        sentinel = R.RouteResult(task_type="refactor", gate_required=True)
+        monkeypatch.setattr(R, "_llm_classify",
+                            lambda t: (called.append(t), sentinel)[1])
+        assert route("重构整个认证系统，支持OAuth2和JWT，改动涉及10个文件") is sentinel
+        assert called, "长描述没走分类器"
 
 
 class TestPropertyRouter:
@@ -63,8 +79,13 @@ class TestPropertyRouter:
         assert dispatcher.escalate("") is None
 
     def test_route_returns_task_type(self):
-        result = route("implement a login feature")
-        assert result.task_type in ("default", "bugfix", "feature", "refactor", "docs", "fusion")
+        """**短描述短路成 default**（不调 LLM 那条路），且类型落在词表里。
+
+        ⚠️ 原来断言 `in (六个值)`，而其中就有默认值 `default` ⇒
+        "恒返回默认值"也满足它（2026-09-14 变异坐实）。现在把短路那半钉死。
+        """
+        result = route("改造")                      # 2 字 < 20 ⇒ 短路，不调分类器
+        assert result.task_type == "default", "短描述该短路成 default"
 
 
 class TestStrengthMatching:
