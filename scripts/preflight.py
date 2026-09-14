@@ -257,15 +257,13 @@ class Index:
 
     def _scan_function(self, m: Module, fi: FuncInfo):
         node = fi.node
+        # 事件收集只走这一遍：每个调用/引用恰好收录一次，带正确的失败路径标注。
+        self._collect_events(m, fi, node.body, exc=False)
         for sub in ast.walk(node):
             if isinstance(sub, (ast.Import, ast.ImportFrom)):
                 self._bind_import(m, sub, fi.local_imports)
             elif isinstance(sub, ast.Global):
                 fi.global_decl.update(sub.names)
-            elif isinstance(sub, ast.Call):
-                fi.calls.append(CallSite(sub, exc=False))
-        # 失败路径标注 + 事件收集
-        self._collect_events(m, fi, node.body, exc=False)
         # 局部赋值名（用于区分"本地变量"和"模块级状态元"）
         for sub in ast.walk(node):
             if isinstance(sub, ast.arg):
@@ -275,118 +273,152 @@ class Index:
                     for n in ast.walk(t):
                         if isinstance(n, ast.Name):
                             fi.local_assigned.add(n.id)
-            elif isinstance(sub, (ast.For, ast.comprehension, ast.withitem)):
-                for n in ast.walk(getattr(sub, "target", None) or ast.Pass()):
+            elif isinstance(sub, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+                t = getattr(sub, "target", None) or getattr(sub, "value", None)
+                if t is not None:
+                    for n in ast.walk(t):
+                        if isinstance(n, ast.Name):
+                            fi.local_assigned.add(n.id)
+            elif isinstance(sub, (ast.For, ast.AsyncFor, ast.comprehension)):
+                for n in ast.walk(sub.target):
                     if isinstance(n, ast.Name):
                         fi.local_assigned.add(n.id)
+            elif isinstance(sub, ast.withitem) and sub.optional_vars is not None:
+                for n in ast.walk(sub.optional_vars):
+                    if isinstance(n, ast.Name):
+                        fi.local_assigned.add(n.id)
+            elif isinstance(sub, ast.ExceptHandler) and sub.name:
+                fi.local_assigned.add(sub.name)
 
     def _collect_events(self, m: Module, fi: FuncInfo, stmts, exc: bool):
         """按源码顺序走语句块；except 块与"判坏早退分支"内的东西标 exc=True。"""
         for st in stmts:
-            self._emit_expr_events(m, fi, st, exc)
             if isinstance(st, ast.ExceptHandler):
+                if st.type is not None:
+                    self._emit_subtree(m, fi, st.type, exc)
                 self._collect_events(m, fi, st.body, exc=True)
                 continue
             if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                for d in getattr(st, "decorator_list", []):
+                    self._emit_subtree(m, fi, d, exc)
                 continue  # 嵌套定义体不并入外层（保守：不算外层的读写）
             if isinstance(st, ast.If):
+                self._emit_subtree(m, fi, st.test, exc)
                 branch_has_exit = _has_exit(st.body)
                 self._collect_events(m, fi, st.body, exc=exc or branch_has_exit)
                 orelse_exc = exc or (_has_exit(st.orelse) and not branch_has_exit)
                 self._collect_events(m, fi, st.orelse, exc=orelse_exc)
                 continue
-            if isinstance(st, (ast.For, ast.AsyncFor, ast.While)):
+            if isinstance(st, (ast.For, ast.AsyncFor)):
+                self._emit_subtree(m, fi, st.iter, exc)
+                self._collect_events(m, fi, st.body, exc=exc)
+                self._collect_events(m, fi, st.orelse, exc=exc)
+                continue
+            if isinstance(st, ast.While):
+                self._emit_subtree(m, fi, st.test, exc)
                 self._collect_events(m, fi, st.body, exc=exc)
                 self._collect_events(m, fi, st.orelse, exc=exc)
                 continue
             if isinstance(st, (ast.With, ast.AsyncWith)):
-                for item in st.body:
-                    self._collect_events(m, fi, [item], exc=exc)
+                for item in st.items:
+                    self._emit_subtree(m, fi, item.context_expr, exc)
+                    if item.optional_vars is not None:
+                        self._emit_target_events(m, fi, item.optional_vars, exc)
+                self._collect_events(m, fi, st.body, exc=exc)
                 continue
             if isinstance(st, ast.Try):
                 self._collect_events(m, fi, st.body, exc=exc)
                 for h in st.handlers:
+                    if h.type is not None:
+                        self._emit_subtree(m, fi, h.type, exc)
                     self._collect_events(m, fi, h.body, exc=True)
                 self._collect_events(m, fi, st.orelse, exc=exc)
                 self._collect_events(m, fi, st.finalbody, exc=exc)
                 continue
+            if isinstance(st, ast.Assign):
+                self._emit_subtree(m, fi, st.value, exc)
+                for t in st.targets:
+                    self._emit_target_events(m, fi, t, exc)
+                continue
+            if isinstance(st, ast.AnnAssign):
+                if st.value is not None:
+                    self._emit_subtree(m, fi, st.value, exc)
+                self._emit_target_events(m, fi, st.target, exc)
+                continue
+            if isinstance(st, ast.AugAssign):
+                self._emit_subtree(m, fi, st.value, exc)
+                self._emit_target_events(m, fi, st.target, exc)
+                continue
+            if isinstance(st, ast.Delete):
+                for t in st.targets:
+                    self._emit_target_events(m, fi, t, exc)
+                continue
+            if isinstance(st, ast.Return):
+                if st.value is not None:
+                    self._emit_subtree(m, fi, st.value, exc)
+                continue
+            if isinstance(st, (ast.Expr, ast.Assert, ast.Raise)):
+                for f in ("value", "test", "msg", "exc", "cause"):
+                    v = getattr(st, f, None)
+                    if v is not None:
+                        self._emit_subtree(m, fi, v, exc)
+                continue
             body = getattr(st, "body", None)
             if isinstance(body, list):
-                self._collect_events(m, fi, body, exc=exc)
-                orelse = getattr(st, "orelse", None)
-                if isinstance(orelse, list):
-                    self._collect_events(m, fi, orelse, exc=exc)
+                # 没专门处理的复合语句：把非语句表达式字段抖出来，语句列表递归
+                for fname in st._fields:
+                    v = getattr(st, fname, None)
+                    if isinstance(v, ast.AST) and not isinstance(v, ast.stmt):
+                        self._emit_subtree(m, fi, v, exc)
+                    elif isinstance(v, list) and v and isinstance(v[0], ast.expr):
+                        for e in v:
+                            self._emit_subtree(m, fi, e, exc)
+                    elif isinstance(v, list) and v and isinstance(v[0], ast.stmt):
+                        self._collect_events(m, fi, v, exc=exc)
+                continue
 
-    def _emit_expr_events(self, m: Module, fi: FuncInfo, node, exc: bool):
-        """把一条语句里的读/写/调用事件按源码顺序抖出来。"""
-        if node is None or not isinstance(node, ast.AST):
+    def _emit_subtree(self, m: Module, fi: FuncInfo, node, exc: bool):
+        """把一个表达式里的调用/引用各收录一次。"""
+        if node is None:
             return
-        for sub in _ordered_walk(node):
-            if isinstance(sub, ast.Call):
-                fi.calls.append(CallSite(sub, exc=exc))
-            elif isinstance(sub, ast.Assign):
-                for t in sub.targets:
-                    self._emit_target_events(m, fi, t, exc)
-                self._emit_refs(m, fi, sub.value, exc)
-            elif isinstance(sub, ast.AnnAssign):
-                if sub.value is not None:
-                    self._emit_refs(m, fi, sub.value, exc)
-                self._emit_target_events(m, fi, sub.target, exc)
-            elif isinstance(sub, ast.AugAssign):
-                self._emit_refs(m, fi, sub.value, exc)
-                self._emit_target_events(m, fi, sub.target, exc)
-            elif isinstance(sub, (ast.Delete,)):
-                for t in sub.targets:
-                    self._emit_target_events(m, fi, t, exc)
-            elif isinstance(sub, ast.Name):
-                self._emit_ref(m, fi, sub.id, exc)
-            elif isinstance(sub, ast.Attribute):
-                self._emit_attr_ref(m, fi, sub, exc)
+        for n in ast.walk(node):
+            if isinstance(n, ast.Call):
+                fi.calls.append(CallSite(n, exc=exc))
+            elif isinstance(n, ast.Name):
+                if isinstance(n.ctx, ast.Store):
+                    continue
+                fi.events.append(("ref", n.id, exc))
+            elif isinstance(n, ast.Attribute):
+                v = n.value
+                if isinstance(v, ast.Name) and v.id == "self":
+                    if isinstance(n.ctx, ast.Load):
+                        fi.events.append(("attr_ref", n.attr, exc))
+                    else:
+                        fi.events.append(("attr_assign", n.attr, exc))
+                elif isinstance(v, ast.Name) and isinstance(n.ctx, ast.Load):
+                    # _io._QUARANTINED 这类跨模块直接引用：记 (模块别名, 属性名)
+                    fi.events.append(("xattr_ref", (v.id, n.attr), exc))
 
     def _emit_target_events(self, m: Module, fi: FuncInfo, t, exc: bool):
         if isinstance(t, ast.Name):
             fi.events.append(("assign", t.id, exc))
-            if fi.name == t.id or t.id in fi.global_decl or t.id not in fi.local_assigned:
-                pass
         elif isinstance(t, ast.Attribute):
-            base = t.value
-            if isinstance(base, ast.Name) and base.id == "self":
+            if isinstance(t.value, ast.Name) and t.value.id == "self":
                 fi.events.append(("attr_assign", t.attr, exc))
-            elif isinstance(base, ast.Name):
-                self._emit_ref(m, fi, base.id, exc)
         elif isinstance(t, ast.Subscript):
             base = t.value
             if isinstance(base, ast.Name):
                 fi.events.append(("subscript", base.id, exc))
-                self._emit_ref(m, fi, base.id, exc)
             elif isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name) \
                     and base.value.id == "self":
                 fi.events.append(("attr_subscript", base.attr, exc))
             else:
-                self._emit_refs(m, fi, t, exc)
+                self._emit_subtree(m, fi, base, exc)
         elif isinstance(t, (ast.Tuple, ast.List)):
             for e in t.elts:
                 self._emit_target_events(m, fi, e, exc)
         elif isinstance(t, ast.Starred):
             self._emit_target_events(m, fi, t.value, exc)
-
-    def _emit_ref(self, m: Module, fi: FuncInfo, name: str, exc: bool):
-        fi.events.append(("ref", name, exc))
-
-    def _emit_attr_ref(self, m: Module, fi: FuncInfo, attr: ast.Attribute, exc: bool):
-        if isinstance(attr.value, ast.Name) and attr.value.id == "self":
-            fi.events.append(("attr_ref", attr.attr, exc))
-        else:
-            # _io._QUARANTINED 这类跨模块直接引用：记下 (模块别名, 属性名)
-            if isinstance(attr.value, ast.Name):
-                fi.events.append(("xattr_ref", (attr.value.id, attr.attr), exc))
-
-    def _emit_refs(self, m: Module, fi: FuncInfo, node, exc: bool):
-        for sub in _ordered_walk(node):
-            if isinstance(sub, ast.Name):
-                self._emit_ref(m, fi, sub.id, exc)
-            elif isinstance(sub, ast.Call):
-                fi.calls.append(CallSite(sub, exc=exc))
 
     # ---------- 解析 ----------
 
@@ -464,16 +496,24 @@ def _ordered_walk(node):
 
 
 def _has_exit(stmts) -> bool:
-    """这个分支里有没有 return/raise（递归，但不下钻嵌套函数）。"""
+    """这个分支是不是"失败收口"（bail）：里面有 raise、裸 return、return 常量/简单值。
+
+    ⚠️ `return f(...)` 这种**委派型 return 不算 bail** —— 它只是把结果交上去
+    （`if http: return self._connect_http()`），把它标成失败路径会把被委派函数的
+    无条件写全污染成"仅失败路径写"（MCPClient.connect 就是这么误报出来的）。
+    """
     for s in stmts:
         for n in ast.walk(s):
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 continue
-            if isinstance(n, (ast.Return, ast.Raise)):
-                if n is s or True:
+            if isinstance(n, ast.Raise):
+                return True
+            if isinstance(n, ast.Return):
+                v = n.value
+                if v is None or not isinstance(v, (ast.Call, ast.Await)):
                     return True
             # 嵌套在 if/try 里的 return 也算（分支整体以退出收口才算"判坏早退"，
-            # 但保守起见：任何 return/raise 都先算，误标方向是"多报 exc"，安全侧）
+            # 但保守起见：任何 bail 都先算，误标方向是"多报 exc"，安全侧）
     return False
 
 
@@ -851,7 +891,7 @@ def survey_strings(idx: Index) -> dict:
                     for c in value_consts(n.value):
                         value_sites[c].append(StrSite(file, sym(self.stack), "value", ""))
                     self._nested(n.value)
-                self.visit(n.value)
+                    self.visit(n.value)
 
             def visit_Dict(self, n):
                 for k in n.keys:
@@ -918,45 +958,52 @@ def _fileish(s: str) -> bool:
     return any(ch in s for ch in ".*")
 
 def detect_b1(survey) -> list[Finding]:
+    """deny-list 家族分歧：**按文件合并**该文件里所有像 deny-list 的字符串集合，
+    只做跨文件配对 —— 同一张黑名单在 web 侧常拆成 FILES/PREFIXES/SUFFIXES 三张，
+    按文件合并才能对着"对面整张表"报差集。"""
+    by_file: dict[str, dict[str, list[str]]] = defaultdict(dict)
+    for (f, v, items, named) in survey["collections"]:
+        if named:
+            by_file[f][v] = items
+    files = sorted(by_file)
     out = []
-    deny = [(f, v, items) for (f, v, items, named) in survey["collections"] if named]
     seen = set()
-    for i in range(len(deny)):
-        for j in range(i + 1, len(deny)):
-            f1, v1, items1 = deny[i]
-            f2, v2, items2 = deny[j]
-            if f1 == f2 and v1 == v2:
-                continue
+    for i in range(len(files)):
+        for j in range(i + 1, len(files)):
+            f1, f2 = files[i], files[j]
+            items1 = [x for vs in by_file[f1].values() for x in vs]
+            items2 = [x for vs in by_file[f2].values() for x in vs]
             # 共享条目里，至少 2 条在"两边原文"都像文件模式 —— 同类名单的硬门槛
             n2map = defaultdict(list)
             for x in items2:
                 n2map[_norm_item(x)].append(x)
-            shared_pairs = []
+            shared_pairs = set()
             for x in items1:
                 for y in n2map.get(_norm_item(x), ()):
                     if _fileish(x) and _fileish(y):
-                        shared_pairs.append((x, y))
-            uniq = {(a, b) for a, b in shared_pairs}
-            if len(uniq) < 2:
+                        shared_pairs.add((x, y))
+            if len(shared_pairs) < 2:
                 continue
             n1 = {_norm_item(x) for x in items1}
             n2 = set(n2map)
             if n1 == n2:
                 continue
-            key = tuple(sorted((f"{f1}:{v1}", f"{f2}:{v2}")))
+            key = (f1, f2)
             if key in seen:
                 continue
             seen.add(key)
             only1 = [x for x in items1 if _norm_item(x) not in n2]
             only2 = [x for x in items2 if _norm_item(x) not in n1]
+            vars1 = ", ".join(sorted(by_file[f1]))
+            vars2 = ", ".join(sorted(by_file[f2]))
             out.append(Finding(
                 shape="B1-denylist-family-divergence",
-                file=f1, symbol=v1,
-                message=f"与 {f2}::{v2} 是同一族名单（两侧都是文件模式的共享条目: "
-                        f"{sorted(uniq)[:4]}），但条目已经不一致。",
+                file=f1, symbol=vars1,
+                message=f"与 {f2}（{vars2}）是同一族名单（两侧都是文件模式的共享条目: "
+                        f"{sorted(shared_pairs)[:4]}），但条目已经不一致。",
                 evidence=[
-                    f"{v1} 独有: {only1[:8]}",
-                    f"{v2} 独有: {only2[:8]}",
+                    f"{f1} 独有: {only1[:10]}",
+                    f"{f2} 独有: {only2[:10]}",
                 ]))
     return out
 
@@ -970,26 +1017,47 @@ def _token_overlap(L: str, P: str) -> set:
 
 
 def detect_b2a(survey) -> list[Finding]:
-    """死词：只出现在匹配位、没有生产者；且要有一条**同通道**的同族现役词作见证。
+    """死词：匹配位上的字面量，按它自己的匹配语义（==/in/startswith/endswith）
+    对**任何**生产出来的值都永远不命中；且要有一条**同通道**的同族现役词作见证。
 
     通道 = 匹配位"草垛"侧的变量/字段名 == 生产位的赋值目标/关键字名。
     没有通道见证的死词不报（CLI 旗标、HTTP 方法、外部产出物全在这里挡掉）。
     """
     match, value = survey["match"], survey["value"]
     out = []
+    produced = [p for p in value if len(p) <= 200]
+
+    def could_match(kind: str, L: str) -> bool:
+        if kind == "ne":
+            return True
+        for P in produced:
+            if kind == "eq" and P == L:
+                return True
+            if kind == "in" and L in P:
+                return True
+            if kind == "startswith" and P.startswith(L):
+                return True
+            if kind == "endswith" and P.endswith(L):
+                return True
+        return False
+
     prod_by_channel: dict[str, dict[str, StrSite]] = defaultdict(dict)
     for p, sites in value.items():
         for s in sites:
             if s.channel and len(p) <= 80 and "\n" not in p:
                 prod_by_channel[s.channel].setdefault(p, s)
+
     for L, sites in sorted(match.items()):
         if L in value or len(L) < 5:
             continue
+        dead = [s for s in sites if not could_match(s.kind, L)]
+        if not dead:
+            continue
         by_chan = defaultdict(list)
-        for s in sites:
+        for s in dead:
             if s.channel:
                 by_chan[s.channel].append(s)
-        best = None   # (channel, witness, sites)
+        best = None   # (channel, witness, psite)
         for chan, ss in by_chan.items():
             for P, psite in prod_by_channel.get(chan, {}).items():
                 if P == L or not _token_overlap(L, P):
@@ -1003,7 +1071,7 @@ def detect_b2a(survey) -> list[Finding]:
         out.append(Finding(
             shape="B2a-dead-word",
             file=hit_sites[0].file, symbol=hit_sites[0].symbol,
-            message=f"字面量 {L!r} 全仓只在匹配位出现、没有任何生产者 —— "
+            message=f"字面量 {L!r} 按匹配语义（{hit_sites[0].kind}）对全仓任何产出值都永不命中 —— "
                     f"消费侧在等一个不会再来的词（同通道的现役词是 {w!r}）。",
             evidence=[f"匹配位: {s.file}::{s.symbol}（通道 {chan}）" for s in hit_sites[:6]] +
                      [f"同通道现役词的生产位: {wsite.file}::{wsite.symbol}"
@@ -1012,41 +1080,48 @@ def detect_b2a(survey) -> list[Finding]:
 
 
 def detect_b2b(survey) -> list[Finding]:
-    """窄判据：匹配位字面量 L 有生产者，但同族词 P（首 token 相同）也有生产者，
-    且按该匹配位的语义 P 接不住。"""
+    """窄判据：匹配位字面量 L 有生产者，但同族词 P（首 token 相同、且与 L 不同通道
+    不算——要求同通道）也有生产者，且按该匹配位的语义 P 接不住。"""
     match, value = survey["match"], survey["value"]
     out = []
     seen = set()
+    value_by_channel: dict[str, set] = defaultdict(set)
+    for p, sites in value.items():
+        for s in sites:
+            if s.channel:
+                value_by_channel[s.channel].add(p)
     for L, sites in sorted(match.items()):
         if L not in value:
             continue
         ft = _first_token(L)
         if len(ft) < 4:
             continue
-        siblings = {p for p in value if p != L and _first_token(p) == ft}
-        for P in sorted(siblings):
-            for s in sites:
+        for s in sites:
+            if s.kind not in ("startswith", "endswith", "in") or not s.channel:
+                continue
+            chan_P = value_by_channel.get(s.channel, set())
+            for P in sorted(chan_P):
+                if P == L or P.lower() == L.lower() or _first_token(P) != ft:
+                    continue
                 if s.kind == "startswith" and P.startswith(L):
                     continue
                 if s.kind == "endswith" and P.endswith(L):
                     continue
                 if s.kind == "in" and L in P:
                     continue
-                if s.kind not in ("startswith", "endswith", "in"):
-                    continue
                 key = (s.file, s.symbol, L, P)
                 if key in seen:
                     continue
                 seen.add(key)
-                psite = value[P][0]
+                psite = next((s2 for s2 in value[P] if s2.channel == s.channel), value[P][0])
                 out.append(Finding(
                     shape="B2b-narrow-prefix-match",
                     file=s.file, symbol=s.symbol,
-                    message=f"判据只认 {L!r}，但同族词 {P!r} 也有生产者"
-                            f"（首 token {ft!r} 相同）—— 按这个匹配语义 P 会被漏掉。",
-                    evidence=[f"匹配位: {s.file}::{s.symbol}（通道 {s.channel or '?'}）",
+                    message=f"判据只认 {L!r}，但同族词 {P!r} 也在同一通道（{s.channel}）上产出"
+                            f"—— 按这个匹配语义 P 会被漏掉。",
+                    evidence=[f"匹配位: {s.file}::{s.symbol}（通道 {s.channel}）",
                               f"同族词的生产位: {psite.file}::{psite.symbol}"
-                              f"（通道 {psite.channel or '?'}）"]))
+                              f"（通道 {psite.channel}）"]))
     return out
 
 
@@ -1104,6 +1179,7 @@ def detect_b3(idx: Index, threshold: float) -> list[Finding]:
                     continue
                 seen.add(key)
                 a, b = key
+                s1, s2 = _sinks(f1.node), _sinks(f2.node)
                 sa, sb = (s1, s2) if q1 == a else (s2, s1)
                 diffs = _sink_kwarg_diffs(sa, sb, a, b)
                 out.append(Finding(
@@ -1206,6 +1282,24 @@ def _touches_singleton(fn) -> bool:
     return False
 
 
+def _accessor_name(idx: Index, m: Module, fi: FuncInfo, cs: CallSite) -> str | None:
+    """取调用名，但只认"模块级访问器"：裸名调用，或模块别名上的属性调用。
+    `request.get_json(...)` 这种 from-import 进来的**对象**上的方法不算
+    （否则 Flask 的取请求体助手会把整个 web 层并成一个假资源组）。"""
+    f = cs.node.func
+    if isinstance(f, ast.Name):
+        return f.id
+    if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
+        base = f.value.id
+        imp = fi.local_imports.get(base) or m.imports.get(base)
+        if imp:
+            if imp[0] == "modulealias":
+                return f.attr
+            if imp[0] == "module" and idx.resolve_module(imp[1]) is not None:
+                return f.attr
+    return None
+
+
 def detect_b4(idx: Index) -> list[Finding]:
     out = []
     for m in idx.modules.values():
@@ -1216,9 +1310,7 @@ def detect_b4(idx: Index) -> list[Finding]:
         for q, fi in m.funcs.items():
             readers, writers, singleton = set(), set(), _touches_singleton(fi.node)
             for cs in fi.calls:
-                f = cs.node.func
-                nm = f.attr if isinstance(f, ast.Attribute) else \
-                    (f.id if isinstance(f, ast.Name) else "")
+                nm = _accessor_name(idx, m, fi, cs)
                 if not nm:
                     continue
                 if READER_RE.match(nm):
@@ -1258,6 +1350,8 @@ from collections import Counter as Counter_  # noqa: E402  (B3 用)
 # ═══════════════════════════════════════════════════════════════
 
 LIVE_ALERT_TOKENS = ["record_skip", "save_skipped", "rollback_skipped", "corrupt", "degraded"]
+# 指定五键之外、"同一类"（被跳过/被隔离/被降级）的同族键 —— 只看 key 字段，避免正文误咬。
+LIVE_ALERT_FAMILY_RE = re.compile(r"(?:^|_)(?:skip|skipped|corrupt|degraded|quarantin)(?:e?d?)(?:$|_)", re.IGNORECASE)
 CORRUPT_SUFFIX_RE = re.compile(r"\.corrupt(\.\d+)?$")
 
 
@@ -1331,13 +1425,15 @@ def cmd_live(args) -> int:
     for rec in alert_lines:
         msg, key = rec.get("msg", ""), rec.get("key", "")
         toks = [t for t in LIVE_ALERT_TOKENS if t in key or t in msg]
-        if not toks:
+        fam = bool(key) and bool(LIVE_ALERT_FAMILY_RE.search(key)) and not toks
+        if not toks and not fam:
             continue
         ts = rec.get("ts", 0)
         if cutoff and ts < cutoff:
             continue
         report["alerts"].append({"ts": _iso(ts), "scope": rec.get("scope", ""),
-                                 "key": key, "tokens": toks, "msg": msg})
+                                 "key": key, "tokens": toks,
+                                 "family_only": fam, "msg": msg})
     report["alerts"].sort(key=lambda r: r["ts"], reverse=True)
     report["alerts"] = report["alerts"][: int(args.limit)]
     report["alerts_total_lines"] = len(alert_lines)
@@ -1416,7 +1512,8 @@ def _print_live(report, as_json: bool):
     al = report.get("alerts", [])
     print(f"== 静默降级类告警: {len(al)} 条（共扫 {report.get('alerts_total_lines', 0)} 行 alerts.jsonl）==")
     for a in al:
-        print(f"  [{a['ts']}] {a['scope']} key={a['key'] or '-'} tokens={a['tokens']}")
+        tag = f"tokens={a['tokens']}" if a.get("tokens") else "同族键(按形状扩)"
+        print(f"  [{a['ts']}] {a['scope']} key={a['key'] or '-'} {tag}")
         print(f"    原文: {a['msg']}")
     if not al:
         print("  （无）")
