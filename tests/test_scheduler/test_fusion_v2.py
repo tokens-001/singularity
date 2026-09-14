@@ -100,12 +100,25 @@ def test_finalize_prompt_carries_original_plans(monkeypatch):
 # ── 裁决规则 ──────────────────────────────────────────────
 
 def test_first_speaker_picks_most_disagreements(monkeypatch):
-    assert ej._first_speaker(EXTRACT["disagreements"], ["A", "B"]) == "A"
+    """⚠️ **这两条原来都是假绿**（外派⑬ 变异实测：把计数循环退化成"恒取 members[0]"，
+    两条照样绿）—— 因为 `EXTRACT` 里两条分歧**都是 A 提的**，而 A 恰好就是 members[0]
+    ⇒ "取分歧最多者"和"取第一个"输出一样。改成**让 B 提得更多**才分辨得出。
+
+    变异：`return max(members, key=...)` 换成 `return members[0]` → 红。
+    """
+    ds = [{"raised_by": "A"}, {"raised_by": "B"}, {"raised_by": "B"}]
+    assert ej._first_speaker(ds, ["A", "B"]) == "B", "不是 members[0] —— 得按计数走"
+    assert ej._first_speaker(ds, ["B", "A"]) == "B", "顺序不该改变结果（计数不是平手）"
 
 
 def test_first_speaker_tie_break_by_member_order():
-    ds = [{"raised_by": "B"}, {"raised_by": "A"}]
-    assert ej._first_speaker(ds, ["A", "B"]) == "A"
+    """平手才轮到"顺序靠前"这条；**非平手必须按计数**，否则这条规则就退化成
+    "永远取第一个"（上一条钉的那件事）。"""
+    tie = [{"raised_by": "B"}, {"raised_by": "A"}]
+    assert ej._first_speaker(tie, ["A", "B"]) == "A"
+    assert ej._first_speaker(tie, ["B", "A"]) == "B"
+    more = [{"raised_by": "B"}, {"raised_by": "B"}, {"raised_by": "A"}]
+    assert ej._first_speaker(more, ["A", "B"]) == "B", "非平手时按计数，不按顺序"
     assert ej._first_speaker([], ["A", "B"]) == "A"
 
 
@@ -130,11 +143,19 @@ def test_insist_then_question_keeps_writers_view(monkeypatch):
 
 
 def test_repeat_round_stops_ping_pong(monkeypatch):
-    """双方都死扛 → 复读即停，别烧到轮数上限。"""
+    """双方都死扛 → **复读即停**，别烧到轮数上限。
+
+    变异：删掉复读闸（`if cur == prev: break`）→ 红。
+    ⚠️ 原来这条是假绿（外派⑬ 变异实测）：默认 `max_rounds=5`、每周期 +2，
+    删掉闸门后 R2 仍**恰好跑 2 次** —— 断言值来自**轮数算术的巧合**，不是那个闸门。
+    ⇒ 把轮数上限拉到 20，让"停下来"只可能来自复读闸。
+    """
+    monkeypatch.setenv("QIDIAN_FUSION_V2_ROUNDS", "20")
     calls = []
     _stub(monkeypatch, calls=calls, r3={"confirms": [{"id": 1, "verdict": "question"}]})
     ej.fuse_architecture_v2("需求", PLANS)
-    assert len([1 for _, p in calls if "逐条回应" in p]) == 2   # R2 只跑两轮
+    assert len([1 for _, p in calls if "逐条回应" in p]) == 2, \
+        "没在复读那一刻停 —— 上限已经拉到 20 了，停不下来只能是复读闸断了"
 
 
 def test_gain_rejected_if_any_side_rejects(monkeypatch):
@@ -235,8 +256,13 @@ def test_no_disagreements_skips_dialogue(monkeypatch):
           extract={"consensus": ["都一致"], "disagreements": [], "unique_gains": []})
     out = ej.fuse_architecture_v2("需求", PLANS)
     assert out == "最终稿"
-    kinds = [p[:20] for _, p in calls]
-    assert not any("陈述己方理由" in p for p in kinds)
+    # ⚠️ **原来这里只看 prompt 的前 20 个字**（`kinds = [p[:20] …]`）——
+    # 而"陈述己方理由"那句模板在 prompt **深处**，永远进不了这个切片 ⇒ 断言恒真
+    # （外派⑬ 变异实测：删掉"没分歧就别辩"那个守卫，本条照样绿）。
+    # ⇒ 改成在**整段 prompt** 里找辩论轮的独有措辞。
+    joined = "\n".join(p for _, p in calls)
+    assert "陈述己方理由" not in joined, "没分歧却跑了辩论轮 1"
+    assert "逐条回应" not in joined, "没分歧却跑了辩论轮 2"
     assert len([1 for _, p in calls if "架构定稿人" in p]) == 1
 
 
