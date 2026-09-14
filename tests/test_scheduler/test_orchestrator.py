@@ -141,3 +141,95 @@ class TestBenchmark:
         elapsed = time.perf_counter() - start
         assert len(order) == 50
         assert elapsed < 0.02, f"50 node topo {elapsed:.3f}s > 0.02s"
+
+
+class TestOrphanScanIsPeriodic:
+    """**水位触发**（2026-09-14，结构性那条的第一个落点）。
+
+    孤儿探测原来**只在"队列要退出"那一刻**被调一次（`if not running_futures and
+    not pending_batches`）—— 那只在流水线彻底空下来时成立；任务一个接一个来的
+    时候**永远走不到那个分支**，探测等于没有。
+    """
+
+    def _mk(self, tid, status="running"):
+        import json
+        from singularity.scheduler import tracker
+        (tracker.tasks_dir() / f"{tid}.json").write_text(
+            json.dumps({"id": tid, "status": status, "description": "x"}), encoding="utf-8")
+
+    def test_有人管的任务不算孤儿(self, monkeypatch):
+        """**这条是新增的正确性要求**：带上活任务表之后，正常在跑的任务不能被报成孤儿。
+
+        变异：删掉 `if tid in live: continue` → 红（把在跑的任务全报成孤儿）。
+        """
+        from singularity.scheduler import orchestrator as orch, witness
+        monkeypatch.setattr(orch, "_orphans_warned", set())
+        self._mk("t-live")
+        warned = []
+        monkeypatch.setattr(witness, "warn", lambda scope, msg, key="": warned.append(msg))
+
+        class _T:
+            id = "t-live"
+        orch._warn_orphan_running({object(): (_T(), None, None, None, 0.0)}, {})
+        assert warned == [], f"在跑的任务被报成孤儿：{warned}"
+
+    def test_没人管的任务要报(self, monkeypatch):
+        """反向：不在任何活表里的 RUNNING 任务**必须**报出来。"""
+        from singularity.scheduler import orchestrator as orch, witness
+        monkeypatch.setattr(orch, "_orphans_warned", set())
+        self._mk("t-orphan")
+        warned = []
+        monkeypatch.setattr(witness, "warn", lambda scope, msg, key="": warned.append(msg))
+        orch._warn_orphan_running({}, {})
+        assert any("t-orphan" in w for w in warned), warned
+
+    def test_pending_batches_里的也算有人管(self, monkeypatch):
+        """`pending_batches`（已跑完、在等 merge）也是"有人管"的一种。"""
+        from singularity.scheduler import orchestrator as orch, witness
+        monkeypatch.setattr(orch, "_orphans_warned", set())
+        self._mk("t-pending")
+        warned = []
+        monkeypatch.setattr(witness, "warn", lambda scope, msg, key="": warned.append(msg))
+        orch._warn_orphan_running({}, {"t-pending": (None, None, None, None)})
+        assert warned == [], f"等 merge 的任务被报成孤儿：{warned}"
+
+    def test_循环每轮都做这件事(self, monkeypatch, tmp_path):
+        """**接线**：`_run_queue_v3` 每轮真的要调它（带上活任务表）。
+        变异：删掉循环里那次调用 → 红。"""
+        from singularity.scheduler import orchestrator as orch
+        calls = []
+        monkeypatch.setattr(orch, "_warn_orphan_running",
+                            lambda rf=None, pb=None: calls.append((rf, pb)))
+        monkeypatch.setattr(orch, "_ORPHAN_SCAN_INTERVAL_S", 0)     # 不节流，保证这轮就调
+        monkeypatch.setattr(orch.tracker, "ready_tasks", lambda exclude=None: [])
+        monkeypatch.setattr(orch, "_auto_trigger_test_fix", lambda *a, **k: None)
+        # 只让第一轮"看起来有活在跑" —— 否则循环会从"没活干"那个分支直接退出，
+        # 根本走不到周期性对账那一步（第一版就是这么写错的：断言收到的是退出前那次）。
+        state = {"n": 0}
+
+        class _T:
+            id = "t1"
+
+        def fake_dispatch(dispatched, pool, agents, runner, rf, mq):
+            if state["n"] == 0:
+                rf[object()] = (_T(), None, None, None, 0.0)
+            state["n"] += 1
+
+        monkeypatch.setattr(orch, "_dispatch_ready", fake_dispatch)
+        monkeypatch.setattr(orch, "_reap_futures",
+                            lambda rf, pb, mq, runner, results: (rf.clear() or True))
+
+        class _Pool:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def submit(self, *a, **k):
+                raise AssertionError("不该派任务")
+        monkeypatch.setattr(orch, "ThreadPoolExecutor", lambda **k: _Pool())
+        orch._run_queue_v3({}, 1)
+
+        assert calls, "循环里没有周期性对账那一步"
+        assert calls[0] == ({}, {}), f"应带上活任务表（空表也要带）：{calls[0]}"

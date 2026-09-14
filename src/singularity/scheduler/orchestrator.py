@@ -672,18 +672,39 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
 _orphans_warned: set[str] = set()
 
 
-def _warn_orphan_running() -> None:
-    """**只报不改**：走到"没 future、没 pending、没就绪任务"这一刻，**不该有 RUNNING 任务**。
+_ORPHAN_SCAN_INTERVAL_S = 60.0
 
-    本循环是唯一的派发方，所以此刻 tracker 里还挂着 RUNNING 的任务一定是**孤儿**：
-    没有 future ⇒ 循环看不见它 ⇒ `ready_tasks()` 也不返回它（它是 RUNNING 不是 PENDING）
-    ⇒ **900s 收割永远够不着**，就那么挂着。2026-09-13 真机实测凭空少了一个任务
-    （`1789239155520`：py-spy 栈显示池子里没有工作线程、循环空转到 `time.sleep(3)`）。
+
+def _warn_orphan_running(running_futures: dict = None, pending_batches: dict = None) -> None:
+    """**只报不改**：tracker 里挂着 RUNNING、却**不在任何活任务表里**的任务 = 孤儿。
+
+    本循环是唯一的派发方，`running_futures` ∪ `pending_batches` 就是"现在真有人管"的
+    全集。落在这两个集合之外的 RUNNING 任务：没有 future ⇒ 循环看不见它 ⇒
+    `ready_tasks()` 也不返回它（它是 RUNNING 不是 PENDING）⇒ **900s 收割永远够不着**，
+    就那么挂着。2026-09-13 真机实测凭空少了一个任务（`1789239155520`：py-spy 栈显示
+    池子里没有工作线程、循环空转到 `time.sleep(3)`）。
+
+    🔴 **2026-09-14 改成"水位触发"**（结构性那条的第一个落点）：原来它**只在
+    "队列要退出"那一刻被调一次**（`if not running_futures and not pending_batches`），
+    而那只在**流水线彻底空下来**才成立 —— 任务一个接一个来的时候**永远走不到那个分支**
+    ⇒ 孤儿探测等于没有。现在两个调用点：
+
+      · **循环每轮**（`_run_queue_v3`，节流 `_ORPHAN_SCAN_INTERVAL_S`）：带上
+        `running_futures` / `pending_batches` 这两个活任务表 —— 判据仍然是**精确的**
+        "不在表里"，不是"多久没动静"那种超时猜法（后者会被慢模型、人审等待、
+        暂停统统误伤）；
+      · **退出前**：不传那两个表（此刻循环确实什么都不管，等价于原来的语义）。
 
     ⚠️ **只报警、不改状态** —— 自动"纠正"会把真问题抹平成假的一致
     （同 `reconcile_projects` 的规矩）。
-    ⚠️ **每个任务只报一次**：这个检查每次空转都会走到，不去重会刷屏。
+    ⚠️ **每个任务只报一次**：这个检查每轮都会走到，不去重会刷屏。
     """
+    # ⚠️ 这里**不套 try**：`running_futures` 的值形状是 `(task, route, snap, pre, ts)`，
+    # 真变了就该让整个探测炸出来 —— 外层那个 `except` 会出声（`orphan_scan_failed`）。
+    # 内层包一层静默 except 只会让"形状变了、孤儿从此测不出来"变成无声的
+    # （静默 except 棘轮也会先报）。
+    live: set[str] = {v[0].id for v in (running_futures or {}).values()}
+    live |= set((pending_batches or {}).keys())
     try:
         for p in tracker.tasks_dir().glob("*.json"):
             try:
@@ -693,6 +714,8 @@ def _warn_orphan_running() -> None:
             tid = d.get("id") or p.stem
             if d.get("status") != TaskStatus.RUNNING.value or tid in _orphans_warned:
                 continue
+            if tid in live:
+                continue               # 有人管 —— 正常在跑的任务，不是孤儿
             _orphans_warned.add(tid)
             try:
                 witness.warn("orch",
@@ -721,6 +744,8 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
     running_futures: dict = {}
     pending_batches: dict = {}
     runner = TaskRunner()
+    # 节流用的可变格子（用 list 是因为闭包/嵌套函数里不能重新绑定外层名字）
+    _last_orphan_scan = [time.time()]
 
     with ThreadPoolExecutor(max_workers=max_concurrent) as pool:
         while True:
@@ -739,6 +764,12 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
             _reap_futures(running_futures, pending_batches, mq, runner, results)
             _drain_pending(pending_batches, mq, results)
             _auto_trigger_test_fix(agents, results)
+            # **水位触发**（2026-09-14）：每轮重算一次"该有几个人在跑"，不是只在
+            # "要退出了"那一刻算。带活任务表进去，判据仍是精确的"不在表里"。
+            # 节流：这个检查要 glob 全部任务文件，每 3 秒一轮没必要。
+            if time.time() - _last_orphan_scan[0] > _ORPHAN_SCAN_INTERVAL_S:
+                _last_orphan_scan[0] = time.time()
+                _warn_orphan_running(running_futures, pending_batches)
 
     return results
 
