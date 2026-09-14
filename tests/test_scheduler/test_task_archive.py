@@ -89,6 +89,37 @@ def test_drain_pending_conflict_also_archives(monkeypatch, tmp_path):
     assert sorted(called) == ["experience", "learner", "tokens"], called
 
 
+def test_drain_pending_one_failure_does_not_skip_the_rest(monkeypatch, tmp_path):
+    """收尾三件**每件各自 try** —— 第一件炸了，后两件照样得跑。
+
+    ⚠️ 原来这三件和 `transition` 挤在**同一个 try** 里 ⇒ `_release_ref` 一抛，
+    `_save_trace` 和 `_archive_task_outcome` **静默全跳过**：任务状态是 DONE，
+    可盘上没有 trace、账没记、经验没进记忆、路由没学习 —— 四件事一起消失，
+    而外面看起来一切正常（`_strand_guard` 报的是第一件，不是被跳过的那三件）。
+
+    `_account_salvaged` 的 docstring 早就写着"每件各自 try（跟 `_archive_task_outcome`
+    同规矩）"—— 这条正常收尾路**没跟**。变异验证：把三件挪回同一个 try → 这条红。
+    """
+    called = _setup(monkeypatch, tmp_path)
+
+    def _boom(*a, **k):
+        raise RuntimeError("release_ref 炸了")
+
+    monkeypatch.setattr(orch, "_release_ref", _boom)
+    warns: list[str] = []
+    monkeypatch.setattr(orch.witness, "warn", lambda scope, msg, **kw: warns.append(msg))
+
+    t = tracker.create("测试任务：收尾一件炸不该连累其余")
+    tracker.transition(t.id, tracker.TaskStatus.DONE)
+
+    pending = {t.id: (tracker.read_task(t.id), None, None, _batch())}
+    orch._drain_pending(pending, _MQ([_MR(t.id)]), [])
+
+    assert sorted(called) == ["experience", "learner", "tokens"], \
+        f"第一件炸了，后面几件被静默跳过了: {called}"
+    assert any("release_ref_failed" in w for w in warns), f"炸了没出声: {warns}"
+
+
 # ═══════════════════════════════════════════════════════════════
 # 异常收尾也要留"已知事实"（2026-09-13）
 # ═══════════════════════════════════════════════════════════════

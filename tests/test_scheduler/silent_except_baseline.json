@@ -164,7 +164,6 @@
  "scheduler/mcp.py::MCPClient._send_stdio": 1,
  "scheduler/mcp.py::MCPClient.disconnect": 1,
  "scheduler/merge.py::MergeQueue._park": 1,
- "scheduler/merge.py::MergeQueue._recover_parked": 1,
  "scheduler/merge.py::MergeQueue.resolve": 1,
  "scheduler/model_prices.py::load_prices": 1,
  "scheduler/neijinglu.py::_is_redundant_failure": 2,

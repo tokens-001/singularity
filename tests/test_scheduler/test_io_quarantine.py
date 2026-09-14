@@ -58,6 +58,34 @@ def test_损坏时原文件一字不动且留了证据(tmp_path, monkeypatch):
     assert bak.read_text(encoding="utf-8") == raw, "备份不是原样字节"
 
 
+def test_登记在善后之前_备份炸了也认这个文件是坏的(tmp_path, monkeypatch):
+    """`_QUARANTINED` 记的是"**我判定你坏了**"，必须在善后（备份 / 剪枝）之前置位。
+
+    ⚠️ 原来 `add` 在最后 ⇒ 善后中途抛就出现"盘上已经有 `.corrupt`、本进程却不知道"
+    ⇒ `is_quarantined` 判 False ⇒ **写侧闸门放行整份重建**（拿降级的空值盖掉真数据）。
+
+    这里用 `RuntimeError` 而不是 `OSError`：`copy2` 那段只吞 `OSError`，
+    用 OSError 会被它自己接住、测不出顺序。**变异验证：把 `add` 挪回函数最后 → 红。**
+    """
+    import shutil
+
+    monkeypatch.setattr(_io, "_QUARANTINED", set())
+    monkeypatch.setattr("singularity.scheduler.witness.warn", lambda *a, **k: None)
+
+    def _boom(*a, **k):
+        raise RuntimeError("非 OSError 的意外，`except OSError` 接不住")
+
+    monkeypatch.setattr(shutil, "copy2", _boom)
+    p = tmp_path / "bad.json"
+    p.write_text('{"a": 1, "还没写完":', encoding="utf-8")
+
+    with pytest.raises(RuntimeError):
+        _io.load_json_or_quarantine(p)
+
+    assert _io.is_quarantined(p), \
+        "善后炸了就没登记 ⇒ 写侧会放行整份重建（这正是要挡的那件事）"
+
+
 def test_二次损坏不毁掉第一次的证据(tmp_path, monkeypatch):
     """再坏一次要**轮转**出新文件，不能把上一份 `.corrupt` 盖掉。"""
     monkeypatch.setattr("singularity.scheduler.witness.warn", lambda *a, **k: None)

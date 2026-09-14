@@ -84,16 +84,30 @@ class MergeQueue:
         self._recover_parked()  # 重启恢复
 
     def _recover_parked(self) -> None:
-        """从磁盘恢复 parking 状态 (进程重启不丢失)。"""
+        """从磁盘恢复 parking 状态 (进程重启不丢失)。
+
+        ⚠️ **两条静默的路都要出声**（2026-09-14 改）：原来 `if req.branch:` 没有 else、
+        `except (...): pass` 也吞掉 ⇒ 一个半写/损坏的 parked 文件会让那个冲突任务
+        **从 `conflicts()` 里凭空消失**，而 tracker 里它还是 `CONFLICT_HELD` ——
+        于是"有个任务在等人解决冲突"这件事**盘上再也查不到**
+        （"损坏和没有长得一样"，本仓反复踩的那个病）。
+        """
         config.PARKED_DIR.mkdir(parents=True, exist_ok=True)
         for p in config.PARKED_DIR.glob("*.json"):
             try:
                 d = json.loads(p.read_text(encoding="utf-8"))
                 req = MergeRequest.from_dict(d)
-                if req.branch:  # branch ref 必须还有效
-                    self._parked[req.task_id] = req
-            except (json.JSONDecodeError, KeyError, OSError):
-                pass
+            except (json.JSONDecodeError, KeyError, OSError) as e:
+                witness.warn("merge", f"parked_recover_failed:{p.name}:{type(e).__name__}"[:160],
+                             key="parked_recover_failed")
+                continue
+            if req.branch:  # branch ref 必须还有效
+                self._parked[req.task_id] = req
+            else:
+                # 没 branch 就没法重放这次合并 —— 但它是个**有人在等的冲突**，
+                # 静默丢掉 = 任务蒸发。出声，至少让人知道去盘上找那个文件。
+                witness.warn("merge", f"parked_no_branch:{req.task_id}"[:160],
+                             key="parked_no_branch")
 
     def submit(self, req: MergeRequest) -> None:
         with self._lock:

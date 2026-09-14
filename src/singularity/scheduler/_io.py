@@ -400,6 +400,13 @@ def _quarantine_corrupt(path: Path, reason: str) -> None:
     import time as _time
     from .log import warn as _log_warn   # 函数体内 import：witness→tracker→_io 是现成的环
 
+    # ⚠️ **登记必须在最前面**（2026-09-14 改）：它记的是"**我判定你坏了**"，
+    # 而下面的备份/剪枝是**善后**。原来登记在最后 ⇒ 备份或剪枝中途抛（哪怕是
+    # 非 OSError 这种小概率），就会出现"盘上已经有 `.corrupt`、本进程却不知道"
+    # ⇒ `is_quarantined` 判 False ⇒ 写侧闸门放行**整份重建**。
+    # 判定和登记之间不该有任何会失败的东西（形状见 `docs/结构性-水位触发-清单-20260914.md` #4）。
+    _QUARANTINED.add(str(path))
+
     try:
         bak = path.with_suffix(path.suffix + ".corrupt")
         if bak.exists():
@@ -411,7 +418,6 @@ def _quarantine_corrupt(path: Path, reason: str) -> None:
         note = "备份失败(原文件未动)"
     _prune_corrupt_backups(path)
 
-    _QUARANTINED.add(str(path))
     msg = f"{path.name} 损坏({reason}): {note}, 拒绝当空"[:200]
     _log_warn("io", msg)
     try:
@@ -429,7 +435,11 @@ _QUARANTINED: set = set()
 
 
 def is_quarantined(path: Path) -> bool:
-    """这个路径在**本进程内**被判过损坏吗？（判过的意思是：已隔离 + 已出声）
+    """这个路径在**本进程内**被判过损坏吗？（判过的意思是：已经**判定**它坏了）
+
+    ⚠️ **"出声"不保证已经发生**（2026-09-14 改）：登记挪到了善后**之前** ——
+    备份/剪枝炸了会"先登记、后抛"。那种情况下挡住写是**安全的一侧**
+    （宁可拒写，也不要拿一份降级的空值整份重建）。详见 `_quarantine_corrupt`。
 
     ⚠️ 写者必须问这一句：读侧降级成空之后，**拿手里那份整份写回去 = 用空表重建** ——
     历史配置没了，而文件名一模一样（2026-09-14，S1 那族形状）。
