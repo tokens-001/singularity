@@ -183,6 +183,11 @@ def dispatch(
                               feedback, baseline_ref, cwd)
 
     if _committee_allowed(task, chain, route_role, allow_committee):
+        # B 臂（对照组）也要留痕 —— 实验的判据是"这一臂到底跑没跑"，
+        # 只有 A 臂留痕的话，"没看到 solo 事件"就同时是"跑了 B 臂"和"根本没进这里"，
+        # 两种完全不同的情况长得一样（本仓 §59 那个老形状）。
+        _log_arm_event("committee_arm", task_id=task_id, level=level,
+                       models=[c.get("model", "") for c in chain[:3]])
         return _dispatch_committee(task, level, task_id, agents, chain, feedback,
                                    baseline_ref, cwd, project_id=project_id)
 
@@ -630,8 +635,33 @@ def _dispatch_solo(task: str, level: str, task_id: str, chain: list[dict],
     # **逐轮**记，而且按真实模型名 —— `workflow._record_phase_usage` 读的就是这个属性，
     # 记成 `solo(a,b)` 这种合成名的话计价表查不到、整段算不出钱（同委员会那个坑）。
     er.member_usage = usage
+    # ⚠️ **A 臂的观测点**（2026-09-14 补）：P1 三臂实验要能**从盘上证明这一臂真的跑了**，
+    # 而原来唯一的痕迹是 `_run_no_tools(..., f"{task_id}_solo{rnd}")` 那个 tag ——
+    # 它**不落任何盘**（执行器只把它当 task_id 用，跑完就没了）。
+    # ⇒ 跑之前"判据是 trace 里出现 `_soloN`"这句话是**落不了地**的：跑完没法验证。
+    # 现在把臂名、轮次、token 落成一条 `scheduler.log` 里的事件（可 grep、可对账）。
+    _log_arm_event("solo_arm", task_id=task_id, level=level, model=model,
+                   rounds=len(usage), tokens=spent, budget_tokens=budget_tokens,
+                   stopped="budget" if spent >= budget_tokens else "rounds")
     return DispatchResult(level=level, agent_cfg=cfg, executor_result=er,
                           attempts=len(usage))
+
+
+def _log_arm_event(event: str, **fields) -> None:
+    """把"这一臂真的跑了"落成一条盘上痕迹（P1 三臂实验的观测点）。
+
+    `_soloN` 那个 tag 只活在内存里 ⇒ 跑完无从验证"这次到底是 A 臂还是委员会"，
+    而**实验的全部结论都建立在这一条上**（臂没跑对，后面的盲评再干净也是假的）。
+    走 `log_event`（→ `.qidian/logs/scheduler.log`，JSON 行），不是 `witness.warn`：
+    这是**正常事件**不是告警，混进 alerts.jsonl 会把真告警淹了。
+
+    自己失败要出声 —— 观测点静默失败 = 又回到"跑完查不出"的老问题。
+    """
+    try:
+        from singularity.scheduler.log import log_event
+        log_event(event, module="dispatcher", **fields)
+    except Exception as e:
+        witness.warn("dispatcher", f"arm_event_failed:{event}:{type(e).__name__}"[:120])
 
 
 def _build_synthesis_prompt(task: str, outputs: list[tuple]) -> str:

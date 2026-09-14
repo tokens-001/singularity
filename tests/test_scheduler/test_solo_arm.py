@@ -128,3 +128,76 @@ def test_no_output_raises(monkeypatch):
     monkeypatch.setattr(dx, "_run_no_tools", lambda *a, **k: None)
     with pytest.raises(RuntimeError):
         dx._dispatch_solo(_ARCH_TASK, "planning", "t1", _chain_one(), 100)
+
+
+# ── A 臂的**观测点**（2026-09-14 补）────────────────────────────
+# 原来"这一臂跑没跑"唯一的痕迹是 `_run_no_tools(..., f"{task_id}_solo{rnd}")` 那个 tag，
+# 而它**不落盘** ⇒ 跑完没法验证。而实验的全部结论都建立在"臂跑对了"上。
+
+def test_solo_arm_writes_a_greppable_event(monkeypatch):
+    """A 臂跑完要在盘上留一条 `solo_arm` 事件（轮次/token），**能 grep 出来**。
+
+    变异：删掉 `_dispatch_solo` 里那句 `_log_arm_event("solo_arm", …)` → 红。
+    """
+    _stub_chain(monkeypatch)
+    monkeypatch.setenv("QIDIAN_SOLO_TOKENS", "25")
+    monkeypatch.setattr(dx, "_run_no_tools",
+                        lambda cfg, p, tag, lv, br="", cw="": ("稿子", 10, 0.1))
+
+    got = []
+    monkeypatch.setattr(dx, "_log_arm_event", lambda ev, **kw: got.append((ev, kw)))
+
+    dx._dispatch_solo("任务", "architect", "t-solo", _stub_chain(monkeypatch)[:1], 25)
+    assert got, "A 臂一条痕迹都没留 —— 跑完没法证明它跑过"
+    ev, kw = got[0]
+    assert ev == "solo_arm", got
+    assert kw["task_id"] == "t-solo" and kw["tokens"] > 0 and kw["rounds"] >= 1, kw
+    assert kw["model"], "没记模型名就查不出是谁跑的"
+
+
+def test_committee_arm_也留痕(monkeypatch):
+    """B 臂（对照组）也得留一条 —— 只有 A 臂留痕的话，"没看到 solo"同时是
+    "跑了 B 臂"和"压根没进这里"，两种情况长得一样。
+    变异：删掉 `dispatch` 里那句 `committee_arm` → 红。"""
+    _stub_chain(monkeypatch)
+    monkeypatch.delenv("QIDIAN_SOLO_TOKENS", raising=False)
+    monkeypatch.setattr(dx, "_committee_allowed", lambda *a, **k: True)
+    monkeypatch.setattr(dx, "_dispatch_committee",
+                        lambda *a, **k: type("R", (), {"level": "architect"})())
+    got = []
+    monkeypatch.setattr(dx, "_log_arm_event", lambda ev, **kw: got.append((ev, kw)))
+
+    dx.dispatch("请给出这个系统的架构方案：模块划分与技术栈选型。", "architect",
+                "t-cmte", agents=[{"model": "m-a"}])
+    assert [e for e, _ in got] == ["committee_arm"], got
+    assert got[0][1]["models"], "委员会没记模型名单"
+
+
+def test_留痕自己失败要出声(monkeypatch):
+    """观测点**自己坏了**必须出声 —— 静默失败等于又回到"跑完查不出是哪一臂"。
+
+    变异：把 `_log_arm_event` 的 except 里那句 `witness.warn` 去掉 → 红
+    （棘轮也会先报"新静默 except"）。
+    """
+    from singularity.scheduler import log as log_mod, witness
+    warned = []
+    monkeypatch.setattr(witness, "warn", lambda scope, msg, key="": warned.append(msg))
+
+    def boom(*a, **k):
+        raise OSError("日志目录写不了")
+    monkeypatch.setattr(log_mod, "log_event", boom)
+
+    dx._log_arm_event("solo_arm", task_id="t1")     # 不许抛
+    assert warned and "arm_event_failed" in warned[0], warned
+
+
+def test_留痕真的走到日志通道(monkeypatch):
+    """**接线**：`_log_arm_event` 得真去调 `log_event`（上面那两条用例把它整个替换掉了，
+    验的是"调用点调没调"，不是"这条链通不通"）。"""
+    from singularity.scheduler import log as log_mod
+    seen = []
+    monkeypatch.setattr(log_mod, "log_event",
+                        lambda ev, module="", **kw: seen.append((ev, module, kw)))
+    dx._log_arm_event("solo_arm", task_id="t1", tokens=7)
+    assert seen and seen[0][0] == "solo_arm" and seen[0][1] == "dispatcher", seen
+    assert seen[0][2]["tokens"] == 7
