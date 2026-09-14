@@ -160,3 +160,43 @@ class TestApplyJsonPatch:
         patch = '[{"op": "replace", "path": "/x/y", "value": 2}]'
         r = self._apply(original, patch)
         assert r["a"]["b"] == 1
+
+
+class TestAtomicWrite:
+    """**原子性本身**的钉子 —— 外派⑬ 报：全仓没有一条用例分辨得出"原子写"和"裸写"
+    （`test_json_concurrency.py::test_saved_file_is_valid_json` 变异实测：把
+    `atomic_write_json` 换回裸 `write_text`，它照样绿 —— 单线程单次写本来就不会撕裂）。
+
+    "裸写一次撕裂 = 那个文件从此拒写"（`_io` 里那句原话），所以这条不是洁癖。
+    """
+
+    def test_写一半崩了_原文件不许坏(self, tmp_path, monkeypatch):
+        """模拟"tmp 写完、换名之前进程没了"：这一刻**正式文件必须还是旧的、完好的**。
+
+        变异：把 `atomic_write_json` 换成裸 `path.write_text(...)` → 红。
+        """
+        import json as _json
+        import os as _os
+        from singularity.scheduler import _io
+
+        p = tmp_path / "x.json"
+        p.write_text('{"old": 1}', encoding="utf-8")
+
+        def boom(*a, **k):
+            raise OSError("模拟：换名那一刻进程没了")
+        monkeypatch.setattr(_os, "replace", boom)
+
+        with pytest.raises(OSError):
+            _io.atomic_write_json(p, {"new": 2})
+
+        assert _json.loads(p.read_text(encoding="utf-8")) == {"old": 1}, \
+            "崩在换名之前，正式文件却被写坏了 —— 这不是原子写"
+
+    def test_正常写完好内容也对(self, tmp_path):
+        """对照：正常路径要真的写进去（别为了"原子"变成不写）。"""
+        import json as _json
+        from singularity.scheduler import _io
+        p = tmp_path / "y.json"
+        _io.atomic_write_json(p, {"a": [1, 2]})
+        assert _json.loads(p.read_text(encoding="utf-8")) == {"a": [1, 2]}
+        assert not list(tmp_path.glob("*.tmp")), f"留下 tmp 了：{list(tmp_path.iterdir())}"
