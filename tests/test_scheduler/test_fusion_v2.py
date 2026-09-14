@@ -509,3 +509,40 @@ class TestExtractorRespectsActivePool:
                           members=[("m-a", "A"), ("m-b", "B")], extract_model="m-a")
         extractor_calls = {m for m, is_ex in calls if is_ex}
         assert extractor_calls == {"m-c"}, f"该换成 m-c，实际 {extractor_calls}"
+
+
+def test_project_id_真的传到每一次模型调用(monkeypatch):
+    """🔴 **接线**（外派⑬ 报的缺口）：`fuse_architecture_v2` 内部的 `_cm` 那句
+    `project_id=project_id` 转发，原来**只有签名级钉子**（试一下能不能传参），
+    把那行删掉本文件不红 —— 而生产上就是：融合那几步的用量全进 `_unknown` 桶，
+    项目花费里看不到融合段（**它是整条流水线单次最贵的调用**，实测 86,344 tokens =
+    两席初稿的 2.4 倍）。
+
+    变异：把 `_cm` 里那句 `project_id=project_id` 删掉 → 红。
+    """
+    got = []
+
+    def fake(prompt, model, max_tokens=2000, project_id=""):
+        got.append(project_id)
+        return _stub_reply(prompt)
+
+    def _stub_reply(prompt):
+        if "架构委员会秘书" in prompt:
+            return _j(EXTRACT)
+        if "陈述己方理由" in prompt:
+            return _j({"arguments": [{"id": 1, "reason": "r"}],
+                       "unique_gains": [{"id": 1, "stance": "adopt", "reason": "好"}]})
+        if "逐条回应" in prompt:
+            return _j(R2_INSIST_ACCEPT)
+        if "对你的论证给出了回应" in prompt:
+            return _j({"confirms": [{"id": 1, "verdict": "agree", "reason": "确实"}]})
+        if "架构定稿人" in prompt:
+            return "最终稿"
+        if "检查三件事" in prompt:
+            return _j({"approved": True, "issues": []})
+        raise AssertionError("未打桩的 prompt: " + prompt[:60])
+
+    monkeypatch.setattr(ej, "_call_model", fake)
+    ej.fuse_architecture_v2("需求", PLANS, project_id="proj-42")
+    assert got, "一次模型调用都没发生？"
+    assert set(got) == {"proj-42"}, f"有调用的 project_id 丢了：{got}"
