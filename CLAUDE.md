@@ -39,3 +39,9 @@
 
 > 后三条必须用 venv 解释器：系统 `python3`（homebrew 3.14）没装 singularity，直接跑会 `ModuleNotFoundError`。
 > `pytest` 那条不受影响 —— `pyproject.toml` 给 pytest 配了 `pythonpath`。
+
+⚠️ **dev 依赖要装**：`.venv/bin/pip install -e '.[dev]'`（至少 `ruff`）。
+不装的话 `tests/test_scheduler/test_no_undefined_names.py` 里**三条 F821 闸门会静默 SKIP** ——
+它们正是 2026-09-14 §64 那个「用了没导入的名字（被 `import *` 挡住 ruff）」事故之后加的守卫，
+**跳过就等于没装**。2026-09-14 实测：本机 ruff 一直没装，那三条**从未运行过**、
+而 pytest 汇总只显示 "3 skipped"，没人会去看。（外派⑬ 报的，已装并复跑：6 条全绿。）
