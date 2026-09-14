@@ -174,12 +174,19 @@ class TestSuccessClearsTheMark:
 
         assert "glm-5.3" not in (store._load_raw().get(store._QUOTA_DEAD_KEY) or {})
 
-    def test_no_write_when_nothing_to_recover(self, store):
-        """本来就是 active 时不写盘 —— 每次成功调用都写一遍纯属浪费。"""
+    def test_no_write_when_nothing_to_recover(self, store, monkeypatch):
+        """本来就是 active 时不写盘 —— 每次成功调用都写一遍纯属浪费。
+
+        ⚠️ **"没写"不能拿字节相等来验**（2026-09-14 变异实测坐实）：
+        删掉 `if changed:` 守卫、改成无条件写盘，写出来的内容**逐字节相同**
+        ⇒ 原来那句 `read_text() == before` 照样绿。改成**数写盘次数**。
+        """
         self._seed(store, "active")
-        before = store._store_path().read_text(encoding="utf-8")
+        writes = []
+        monkeypatch.setattr("singularity.scheduler.api_store.atomic_write_json",
+                            lambda *a, **k: writes.append(a[0]))
         store.note_api_success("glm-5.3-flash")
-        assert store._store_path().read_text(encoding="utf-8") == before
+        assert writes == [], f"没东西可恢复却写了盘: {writes}"
 
     def test_empty_model_is_noop(self, store):
         self._seed(store, "quota_exhausted")
