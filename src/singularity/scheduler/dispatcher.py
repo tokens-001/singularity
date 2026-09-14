@@ -5,6 +5,7 @@ project_lineup 支持项目级自定义编组。
 """
 
 from __future__ import annotations
+import importlib
 import logging
 import threading
 import time
@@ -76,7 +77,7 @@ def load_agents() -> dict:
         agents[key] = list(v)  # shallow copy
 
     # 合并自定义覆盖
-    custom = _load_custom_agents()
+    custom = _custom_agents()
     for k, cfgs in custom.items():
         if k.startswith("_"):
             continue
@@ -180,7 +181,7 @@ def agent_api_available(agent_cfg: dict) -> bool:
 
     # 硬限制：OpenAI 模型除非在 _order 显式列出或有显式配置，否则不可用
     if provider == "openai":
-        custom = _load_custom_agents()
+        custom = _custom_agents()
         all_ordered = []
         for tier_order in (custom.get("_order", {}) or {}).values():
             all_ordered.extend(tier_order)
@@ -378,6 +379,57 @@ def pick_agent_fallback_chain(agents: dict, level: str,
 
 
 
-from singularity.scheduler._dispatch_skills import *  # noqa: F401,F403
-from singularity.scheduler._dispatch_exec import *  # noqa: F401,F403
-from singularity.scheduler._dispatch_crud import *  # noqa: F401,F403
+_LAZY_SPOKES = ("_dispatch_skills", "_dispatch_exec", "_dispatch_crud")
+
+
+def _custom_agents() -> dict:
+    """`_dispatch_crud._load_custom_agents` 的**惰性**访问。
+
+    ⚠️ 不能在本文件模块级 import 它 —— 辐条也 import 本模块，模块级就成环
+    （详见文件末尾 `__getattr__` 那段）。
+    ⚠️ 也**不能**指望那个 `__getattr__`：它只管"从外面 `dispatcher.X`"，
+    **管不到本文件函数体内的全局名查找**（那是直接查模块 `__dict__`）。
+    """
+    from singularity.scheduler._dispatch_crud import _load_custom_agents
+    return _load_custom_agents()
+
+
+def __getattr__(name: str):
+    """把三兄弟的名字**惰性**转发出去（PEP 562）。
+
+    ⚠️ **原来这里是三句 `from ..._dispatch_* import *`**，而三兄弟**各有一条**
+    `from singularity.scheduler.dispatcher import (...)` ⇒ **一个毂 + 三根双向辐条**。
+    **谁先被导入谁吃亏**：先导 `_dispatch_crud` 时，它第 1 行去导 `dispatcher`，
+    `dispatcher` 跑到这里执行 `from ..._dispatch_crud import *` —— 而那一刻
+    `_dispatch_crud` **刚执行到第 1 行**、`update_agent` 还没定义
+    ⇒ **`dispatcher.update_agent` 干脆不存在**。
+
+    实测症状（2026-09-14）：`tests/test_scheduler/test_thinking_params.py` **单独跑必红**
+    （`_api_admin.agent_update` 撞 `AttributeError`），而它在整套里是绿的
+    （别的文件先导了 dispatcher）⇒ **顺序依赖**，正常用法（经包入口）永远看不到，
+    所以这个洞躺了很久。
+
+    **惰性化之后谁先被导入都行**：三兄弟要的那些名字（`load_agents` / `DispatchResult` /
+    `_EXECUTOR_BY_TYPE` …）都定义在本文件**前面**，导入时就能拿到；而外面要的
+    `dispatch` / `add_agent` / `invalidate_mcp_cache` …（定义在辐条里）**等访问时再解析**,
+    那一刻三个模块早就加载完了。
+
+    ⚠️ **试过、不行的两条**（记下来免得再试）：① 把辐条那条反向 import 挪到**文件末尾**
+    —— 报错只是挪到隔壁 `_dispatch_skills`；② 拆"叶子模块"—— 另一个量级。
+    ⚠️ **辐条侧惰性化也不行**：`_dispatch_skills` 会给 `_MCP_CACHE` **赋值**（带 `global`），
+    惰性化会让它变成遮蔽、和 dispatcher 各拿一份。
+    ⚠️ 全仓**没有任何地方**用 `from dispatcher import *`（2026-09-14 扫过），
+    所以不需要保留"再导出"那层语义；`dispatcher.X` 这种属性访问照常работает。
+    """
+    for _mod in _LAZY_SPOKES:
+        try:
+            _m = importlib.import_module(f"singularity.scheduler.{_mod}")
+        except ImportError as e:
+            # ⚠️ 别吞：辐条导不进来是真故障（循环导入 / 语法错），
+            # 吞了就会被伪装成"dispatcher 没这个属性"，把真正的原因埋掉。
+            witness.warn("dispatcher", f"lazy_spoke_import_failed:{_mod}:{e}"[:160],
+                         key="lazy_spoke_import_failed")
+            continue
+        if hasattr(_m, name):
+            return getattr(_m, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

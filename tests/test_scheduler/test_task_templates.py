@@ -53,11 +53,17 @@ class TestGuessTemplate:
         assert guess_template("随便做点什么") == "default"
 
     def test_highest_score_wins(self):
-        """同时匹配多个模板 → 取最高分。"""
+        """同时匹配多个模板 → **取最高分**（不是随便取一个匹配上的）。
+
+        ⚠️ 原来断言是 `r in ("bugfix", "feature")` —— **两边都收**，
+        于是"取最高分"这件事根本没被钉住：把 `max(...)` 改成**取最低分的非零项**，
+        这条照样绿（外派⑬ 的 A7 批次报的，2026-09-14 我变异复核坐实：
+        那次只有隔壁 `test_test_keyword` 变红，这条没红）。
+        这里把期望值钉死成具体那一个。
+        """
         from singularity.scheduler.task_templates import guess_template
-        # 'bug'和'fix'匹配bugfix(2分), '新增'匹配feature(1分)
-        r = guess_template("新增功能来修复那个bug fix")
-        assert r in ("bugfix", "feature")
+        # 'bug'和'fix'匹配bugfix(2分), '新增'匹配feature(1分) ⇒ 必须取分高的 bugfix
+        assert guess_template("新增功能来修复那个bug fix") == "bugfix"
 
     def test_empty_description(self):
         from singularity.scheduler.task_templates import guess_template

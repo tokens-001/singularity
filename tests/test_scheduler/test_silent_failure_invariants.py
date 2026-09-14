@@ -30,12 +30,22 @@ class TestFieldCoverage:
             f"全程不报错。GATE3 的 qa_report 就是这么丢的。")
 
     def test_roundtrip_preserves_everything(self):
+        """往返之后**每个字段的值**都得跟原对象一样（不是拿 `to_dict` 跟它自己比）。
+
+        ⚠️ 原来断言的是 `from_dict(p.to_dict()).to_dict() == p.to_dict()` —— 两边都过
+        **同一个 `to_dict`** ⇒ 只要"序列化两半用同一张表"就恒真。
+        2026-09-14 变异复核坐实：让 `to_dict` **漏掉 `issues`**，这条**照样绿**
+        （只有隔壁那条扫描式用例红）。名字说"往返不丢东西"，就得真拿原对象的值比。
+        """
         p = P.ProjectState(id="x", name="y", phase=Phase.EXECUTING,
                            issues=[{"type": "t"}], review_failures=2,
                            task_ids=["a"], owner_confirm={"gate2": "approved"},
                            lineage=[{"action": "phase"}])
         again = P.ProjectState.from_dict(p.to_dict())
-        assert again.to_dict() == p.to_dict(), "序列化往返丢东西"
+        for f in dataclasses.fields(P.ProjectState):
+            assert getattr(again, f.name) == getattr(p, f.name), (
+                f"往返把 {f.name} 弄丢了："
+                f"{getattr(p, f.name)!r} → {getattr(again, f.name)!r}")
 
 
 class TestGate3LeavesEvidence:
