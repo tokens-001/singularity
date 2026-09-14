@@ -219,7 +219,16 @@ class MergeQueue:
         )
 
     def resolve(self, task_id: str, strategy: str = "manual") -> MergeResult:
-        """人工解决后重新合。strategy: manual(已手动改完) | abort(放弃)。"""
+        """人工解决后重新合。strategy: manual(已手动改完) | abort(放弃)。
+
+        ⚠️ **`merge_ref` 是会抛的，抛了必须把 parked 记录补回去**（2026-09-14 改）。
+        上面刚把记录 pop 掉 + 删了盘上的文件，而 `merge_ref` 抛出去之后没人管
+        ⇒ 这个任务还是 `CONFLICT_HELD`，但 `conflicts()` 里**再也找不到它** ——
+        冲突凭空蒸发，人也没法再解它（"状态说有、盘上查不到"）。
+
+        实测抛点（不是推的）：`repo_root` 指向的目录不存在 ⇒ `FileNotFoundError`
+        —— 因为原语底下的 `_git_worktree._run` 只吞 `TimeoutExpired`，别的 `OSError` 直接冒。
+        """
         req = self._parked.pop(task_id, None)
         # 清理磁盘持久化
         try:
@@ -233,8 +242,17 @@ class MergeQueue:
             tracker.transition(task_id, TaskStatus.FAILED, error="merge 冲突, 人工放弃")
             return MergeResult(task_id=task_id, status="failed")
 
-        mr = merge_ref(req.branch, onto=self.target_branch,
-                       repo_root=req.repo_root or str(config.PROJECT_ROOT))
+        try:
+            mr = merge_ref(req.branch, onto=self.target_branch,
+                           repo_root=req.repo_root or str(config.PROJECT_ROOT))
+        except Exception as e:          # noqa: BLE001 —— 原语底下什么都可能冒
+            self._park(req, [], reason=f"合并原语抛了 {type(e).__name__}")
+            witness.warn("merge", f"resolve_merge_ref_failed:{task_id}:{type(e).__name__}"[:160],
+                         key="resolve_merge_ref_failed")
+            # **返回**失败结果、不往上抛：本函数的契约就是"返回 MergeResult"
+            # （连"没有 parked 记录"那条也是返回失败结果），调用方直接读 `.status`/`.reason`。
+            return MergeResult(task_id=task_id, status="failed",
+                               reason=f"合并原语抛了: {type(e).__name__}: {e}"[:200])
         if mr.ok:
             return self._mark_merged(req, mr.merged_ref)
         return self._park(req, mr.conflicts, reason="resolve 后仍冲突")

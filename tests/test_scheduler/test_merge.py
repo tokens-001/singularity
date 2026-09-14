@@ -107,3 +107,41 @@ class TestDrainTermination:
             monkeypatch, [self._req("blocked", ["never"]), self._req("ready", [])])
         assert [r.task_id for r in res] == ["ready"]
         assert len(q._queue) == 1
+
+
+class TestResolveWhenPrimitiveRaises:
+    """`merge_ref` 抛了的时候，`resolve` 不许把冲突任务弄丢。
+
+    ⚠️ 抛点是**实测的**（不是推的）：`repo_root` 指向的目录不存在 ⇒ `FileNotFoundError`
+    —— 原语底下的 `_git_worktree._run` 只吞 `TimeoutExpired`，别的 `OSError` 直接冒。
+    而 `resolve` 开头已经把 parked 记录 pop 掉 + 删了盘上的文件 ⇒ 不补回去的话，
+    任务还是 `CONFLICT_HELD`，可 `conflicts()` 里**再也找不到它**。
+    """
+
+    def test_合并原语抛了_parked记录要补回去(self, tmp_path, monkeypatch):
+        from singularity.scheduler import config
+        from singularity.scheduler import merge as merge_mod
+        from singularity.scheduler.merge import MergeQueue, MergeRequest
+
+        monkeypatch.setattr(config, "PARKED_DIR", tmp_path)
+        monkeypatch.setattr(merge_mod.tracker, "transition", lambda *a, **k: None)
+        warns: list[str] = []
+        monkeypatch.setattr(merge_mod.witness, "warn",
+                            lambda scope, msg, **kw: warns.append(msg))
+
+        mq = MergeQueue()
+        req = MergeRequest(task_id="t1", branch="refs/heads/wt-t1", base_ref="main")
+        mq._park(req, [], reason="先 park 进去")
+
+        def _boom(*a, **k):
+            raise FileNotFoundError("[Errno 2] 项目目录不存在")
+
+        monkeypatch.setattr(merge_mod, "merge_ref", _boom)
+
+        res = mq.resolve("t1", "manual")
+
+        assert res.status == "failed", res           # 契约：返回失败结果，不往上抛
+        assert [r.task_id for r in mq.conflicts()] == ["t1"], \
+            "parked 记录没补回去 ⇒ 这个冲突任务从 conflicts() 蒸发了，谁也没法再解它"
+        assert (tmp_path / "t1.json").exists(), "盘上的 parked 文件也没了，重启更捞不回来"
+        assert any("resolve_merge_ref_failed" in w for w in warns), f"炸了没出声: {warns}"
