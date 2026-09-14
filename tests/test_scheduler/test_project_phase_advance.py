@@ -256,3 +256,49 @@ def test_merge_submit_failure_does_not_strand_project(tmp_path, monkeypatch):
         assert any("merge_submit_failed" in w for w in warns), f"没出声，只剩静默: {warns}"
     finally:
         orch._merge_inflight.discard(p.id)   # 别把这个 id 漏给后面的用例
+
+
+def test_delivery_no_code_ref_仍然算成功但必须出声(tmp_path, monkeypatch):
+    """打 tag 和取 HEAD **双双失败**时：仍算交付成功，但**必须出声**。
+
+    `_run_delivery` 结尾是**无条件** `return True`，`code_ref` 落成 `"unknown"` 也照样
+    推 DONE + 账本记 `delivery: ok` —— 于是"这次交付归档的是哪个 commit"这件事
+    原来只存在于 detail 串里，界面上和正常交付长得一模一样。
+    真机上还没触发过（8/8 都是真 `release/*` tag），但触发的那一刻正是它最要紧的时候。
+
+    ⚠️ 故意**不改判成失败**：tag 打不上 ≠ 代码没交付，判失败会把好项目卡死在 delivering。
+    变异验证：删掉那句 `witness.warn` → 红。
+    """
+    import subprocess
+
+    from singularity.scheduler import project as proj_mod
+
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+    monkeypatch.setattr(proj_mod, "repo_dir", lambda _id: root)
+
+    class _R:
+        returncode = 1
+        stdout = ""
+        stderr = "boom"
+
+    def _fake_run(cmd, **kw):
+        if kw.get("check"):
+            raise subprocess.CalledProcessError(1, cmd)
+        return _R()
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)     # 所有 git 调用都失败
+
+    p = proj_mod.ProjectState(
+        id="p_deliver", name="测试交付", raw_constraints=[], owner_confirm={},
+        constraints_checklist=[], task_ids=[], issues=[], supervision_log=[],
+        lineage=[], handoffs=[], agent_lineup={},
+    )
+    warns: list[str] = []
+    monkeypatch.setattr(orch.witness, "warn", lambda scope, msg, **kw: warns.append(msg))
+
+    ok, detail = orch._run_delivery(p)
+
+    assert ok is True, "tag 打不上 ≠ 代码没交付 —— 判失败会把好项目卡死在 delivering"
+    assert "unknown" in detail, f"detail 里该如实写出来: {detail}"
+    assert any("delivery_no_code_ref" in w for w in warns), f"没出声，只剩 detail 串: {warns}"

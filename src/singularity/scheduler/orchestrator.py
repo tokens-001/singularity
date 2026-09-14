@@ -1161,6 +1161,16 @@ def _run_delivery(proj) -> tuple[bool, str]:
     except Exception:
         deliverables["code_ref"] = "unknown"
 
+    if deliverables["code_ref"] == "unknown":
+        # ⚠️ **别让它悄悄过去**（2026-09-14）：一旦落到这里，"交付物清单里的
+        # `code_ref` 是个占位符"这件事**只存在于 detail 串里** —— 界面上它和正常交付
+        # 长得一模一样（phase 照样推 DONE、账本照样记 `delivery: ok`）。
+        # 真机上还没触发过（8/8 都是真 `release/*` tag），但触发的那一刻正是
+        # "这次交付到底归档了哪个 commit"最重要的时候。
+        # ⚠️ **仍然算交付成功**：tag 打不上 ≠ 代码没交付 —— 判失败会把好项目卡死在 delivering。
+        witness.warn("orch", f"delivery_no_code_ref:{proj.id}"[:160],
+                     key="delivery_no_code_ref")
+
     # 2) 交付文档: 收集 README + 部署说明
     # 应用数据留在奇点数据目录（原先 root=.qidian 恰好等于 QIDIAN_DIR，改成项目仓库后必须钉住）
     docs_dir = config.QIDIAN_DIR / "deliverables" / proj.id

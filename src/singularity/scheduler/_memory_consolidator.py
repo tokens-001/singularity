@@ -36,6 +36,16 @@ def _heavy_due() -> bool:
 
     改成把计数和上次时间**落盘**：重启不再清零；再加一条时间兜底，
     免得系统闲下来时永远攒不够 10 次。
+
+    ⚠️ **`_heavy_due` 只说"该试了"，不说"跑成了"**（2026-09-14 改）。
+    原来 due 的那一刻就把 `calls` 清零 + 打时间戳 ⇒ **重活抛异常那一次也被记成
+    "成功过"**，账上再也分不出"上次真跑成了"和"上次试了但炸了"。
+    现在三个字段各管一件事：
+      · `calls` / `last_success` —— 管**该不该跑**（自上次**成功**起攒够 10 次调用、或满 1 小时）
+      · `last_attempt` —— 管**能不能再试**（两次尝试之间至少隔 1 小时）
+    重活要调模型、**要花钱** —— 失败了无限重试比晚一小时重试坏得多，所以节流必须留。
+    **失败不重置 `calls`/`last_success`** ⇒ 节流一过就会再试；**成功才归零**
+    （`_mark_heavy_done(True)`）。
     """
     now = time.time()
     st = {}
@@ -44,27 +54,56 @@ def _heavy_due() -> bool:
     except Exception:
         st = {}
     calls = int(st.get("calls", 0) or 0) + 1
-    last = float(st.get("last_heavy", 0) or 0)
-    if not last:
+    # 老状态文件只有 `last_heavy`（那时的语义是"due 那一刻就归零+打戳"）——
+    # 它是"上次真跑过重活"的时间 ⇒ 当 `last_success` 用；`last_attempt` 那时没记过，
+    # 缺省 0 = "不知道"，于是老文件的判定跟以前一模一样（不会凭空多一道节流）。
+    legacy = float(st.get("last_heavy", 0) or 0)
+    last_success = float(st.get("last_success", legacy) or 0)
+    last_attempt = float(st.get("last_attempt", 0) or 0)
+    if not last_success:
         # 首次：只记时间起点，**不跑** —— 否则每换一个新目录就先烧一轮重活
-        _save_heavy_state(calls, now)
+        _save_heavy_state(calls, now, now)
         return calls >= _HEAVY_EVERY_CALLS
-    due = calls >= _HEAVY_EVERY_CALLS or (now - last) >= _HEAVY_EVERY_SEC
-    if due:
-        _save_heavy_state(0, now)
-    else:
-        _save_heavy_state(calls, last)
-    return due
+    want = calls >= _HEAVY_EVERY_CALLS or (now - last_success) >= _HEAVY_EVERY_SEC
+    cooled = (now - last_attempt) >= _HEAVY_EVERY_SEC
+    if want and cooled:
+        # ⚠️ 这里只打"**尝试**"戳：`calls` **不清零** —— 清不清零是
+        # `_mark_heavy_done` 的事，它才知道这次到底跑成没跑成。
+        _save_heavy_state(calls, last_success, now)
+        return True
+    _save_heavy_state(calls, last_success, last_attempt)
+    return False
 
 
-def _save_heavy_state(calls: int, last_heavy: float) -> None:
+def _save_heavy_state(calls: int, last_success: float, last_attempt: float = 0.0) -> None:
+    """落盘。三个字段各管一件事，见 `_heavy_due` 的说明。
+
+    ⚠️ `last_heavy` **仍然写**（= `last_success`）：它是对外可见的那个数 ——
+    真机排查时看的就是它（2026-09-13 那次"它自己触发了"的验证，看的就是
+    `consolidate_state.last_heavy` 更新没更新）。**别把它删了。**
+    """
     try:
         p = _heavy_state_path()
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"calls": calls, "last_heavy": last_heavy}),
+        p.write_text(json.dumps({"calls": calls, "last_success": last_success,
+                                 "last_attempt": last_attempt or last_success,
+                                 "last_heavy": last_success}),
                      encoding="utf-8")
     except Exception:
         pass    # 状态落不下去只影响"跑得勤不勤"，不该把整合带崩
+
+
+def _mark_heavy_done(ok: bool) -> None:
+    """重活跑完了 —— 记结果。**只有成功才归零重来。**
+
+    ⚠️ **失败时什么都不用写**：`_heavy_due` 已经把 `last_attempt` 打了（那是节流用的），
+    而 `calls` / `last_success` 原样留着 ⇒ 节流一过就会再试。这正是这次改动的目的：
+    让"没跑成"在账上看得出来，而不是被当成"跑成了"。
+    """
+    if not ok:
+        return
+    now = time.time()
+    _save_heavy_state(0, now, now)      # 成功了：清计数 + 推进"上次成功"
 
 
 def consolidate_memory() -> int:
@@ -84,24 +123,33 @@ def consolidate_memory() -> int:
         # F821 守卫本该拦住，但本文件开头有**星号 import** ⇒ ruff 解析不了命名空间、
         # 直接不报（2026-09-13 实测：把那行星号去掉，同一个文件立刻报 7 处）。
         from singularity.scheduler._memory_lifecycle import auto_maintain, system2_extract
+        # 三件里**任何一件炸了**都算"这次没跑成" ⇒ 不归零、节流一过再来（见 `_heavy_due`）。
+        _heavy_ok = True
         try:
             lc = auto_maintain()
             if lc.get("pruned", 0) > 0:
                 _pending_sse_events.append({"kind":"memory","msg":f"pruned {lc['pruned']} events","ts":time.time()})
-        except Exception as e: witness.warn('memory', f'consolidate:{e}')
+        except Exception as e:
+            _heavy_ok = False
+            witness.warn('memory', f'consolidate:{e}')
         try:
             s2 = system2_extract()
             if s2.get("added", 0) > 0:
                 for ins in s2.get("insights", []):
                     _pending_sse_events.append({"kind":"insight","msg":ins.get("summary",""),"ts":time.time()})
-        except Exception as e: witness.warn('memory', f'consolidate:{e}')
+        except Exception as e:
+            _heavy_ok = False
+            witness.warn('memory', f'consolidate:{e}')
         try:
             # 分层抽象：给有轨迹、还没抽象过的节点补上（一次最多 3 条）。
             # 论文的核心那步（完整分层 80.0 vs 原始轨迹 57.6），这里用便宜模型在线做。
             got = backfill_abstractions(limit=3)
             if got:
                 _pending_sse_events.append({"kind":"memory","msg":f"抽象 {got} 条轨迹","ts":time.time()})
-        except Exception as e: witness.warn('memory', f'abstract:{e}')
+        except Exception as e:
+            _heavy_ok = False
+            witness.warn('memory', f'abstract:{e}')
+        _mark_heavy_done(_heavy_ok)
 
     try:
         # `add_inferred_causal_edge` 原来**也没导入** —— 跟上面那两个同一形状：

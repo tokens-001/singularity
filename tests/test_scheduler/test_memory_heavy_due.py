@@ -9,9 +9,17 @@
 
 所以这里钉的核心不是"第 10 次会跑"，而是**"重启不清零"**：
 进程内计数为零时，只要盘上攒够了，也照样该跑。
+
+⚠️ **2026-09-14 加了另一半：「该不该试」和「跑成没跑成」分开记。**
+原来 due 的那一刻就 `calls` 清零 + 打时间戳 ⇒ **重活抛异常那一次也被记成"成功过"**，
+账上再也分不出"上次真跑成了"和"上次试了但炸了"。现在：
+`calls`/`last_success` 管**该不该跑**，`last_attempt` 管**能不能再试**，
+**只有 `_mark_heavy_done(True)` 才归零**。
 """
 import json
 import time
+
+import pytest
 
 from singularity.scheduler import _memory_consolidator as mc
 
@@ -20,10 +28,15 @@ def _state_file():
     return mc._heavy_state_path()
 
 
-def _write_state(calls: int, last_heavy: float = 0.0):
+def _write_state(calls: int, last_heavy: float = 0.0, **extra):
     p = _state_file()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"calls": calls, "last_heavy": last_heavy}), encoding="utf-8")
+    p.write_text(json.dumps({"calls": calls, "last_heavy": last_heavy, **extra}),
+                 encoding="utf-8")
+
+
+def _read_state() -> dict:
+    return json.loads(_state_file().read_text(encoding="utf-8"))
 
 
 def test_restart_does_not_reset_the_count(tmp_path, monkeypatch):
@@ -60,14 +73,52 @@ def test_counter_accumulates_on_disk(tmp_path, monkeypatch):
     assert json.loads(_state_file().read_text(encoding="utf-8"))["calls"] == 4
 
 
-def test_after_running_the_counter_resets_and_time_moves(tmp_path, monkeypatch):
-    """跑完要清计数、推进时间戳，否则下一次又立刻触发。"""
+def test_due_只说明该试了_不说明跑成了(tmp_path, monkeypatch):
+    """⚠️ **改语义的正题**：`_heavy_due()` 返回 True 只说明"该试了"。
+
+    原来它顺手就把 `calls` 清零 + 打戳 ⇒ **分不出"跑成了"和"炸了"**。
+    """
     monkeypatch.setattr(mc, "_consolidate_calls", 0)
     _write_state(calls=9, last_heavy=time.time() - 10)
     assert mc._heavy_due() is True
-    after = json.loads(_state_file().read_text(encoding="utf-8"))
-    assert after["calls"] == 0 and time.time() - after["last_heavy"] < 5
-    assert mc._heavy_due() is False, "刚跑完不该立刻再跑"
+
+    after = _read_state()
+    assert after["calls"] == 10, "due 就把计数清了 ⇒ 一次失败会被记成一次成功"
+    assert time.time() - after["last_attempt"] < 5, "没打'尝试'戳 ⇒ 节流形同虚设"
+    assert mc._heavy_due() is False, "刚试过不该立刻再试（节流按**尝试**算）"
+
+
+def test_成功才归零(tmp_path, monkeypatch):
+    """`_mark_heavy_done(True)` 才清计数、推进"上次成功"。"""
+    monkeypatch.setattr(mc, "_consolidate_calls", 0)
+    _write_state(calls=9, last_heavy=time.time() - 10)
+    assert mc._heavy_due() is True
+    mc._mark_heavy_done(True)
+
+    after = _read_state()
+    assert after["calls"] == 0 and time.time() - after["last_heavy"] < 5, after
+
+
+def test_跑炸了不算成功_计数留着(tmp_path, monkeypatch):
+    """重活**炸了**不许记成"成功过"，而且下次不该要求重新攒 10 次。"""
+    monkeypatch.setattr(mc, "_consolidate_calls", 0)
+    old_success = time.time() - 10
+    # 上次尝试要够久以前，否则被节流挡住、根本走不到"跑炸了"那一步
+    _write_state(calls=9, last_heavy=old_success,
+                 last_attempt=time.time() - mc._HEAVY_EVERY_SEC - 60)
+    assert mc._heavy_due() is True
+
+    mc._mark_heavy_done(False)              # 三件里有一件炸了
+
+    after = _read_state()
+    assert after["calls"] == 10, "失败被记成成功 ⇒ 计数被清零，下次要重新攒 10 次"
+    assert after["last_success"] == pytest.approx(old_success), "失败不该推进'上次成功'"
+    assert mc._heavy_due() is False, "刚试过（失败）也不该立刻再试 —— 重活要花钱"
+
+    # 节流一过就该能再试：`want` 仍然成立（计数没清），不需要再攒 10 次
+    _write_state(calls=10, last_heavy=old_success,
+                 last_attempt=time.time() - mc._HEAVY_EVERY_SEC - 60)
+    assert mc._heavy_due() is True, "失败了却要重新攒 10 次才再试 ⇒ 那等于失败没留痕"
 
 
 def test_corrupt_state_file_does_not_crash(tmp_path, monkeypatch):
