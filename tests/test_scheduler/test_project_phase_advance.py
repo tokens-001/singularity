@@ -224,3 +224,35 @@ class TestGate3Admission:
         p.phase = proj_mod.Phase.GATE2
         p.set_phase(proj_mod.Phase.EXECUTING, "架构通过")
         assert p.issues == []
+
+
+def test_merge_submit_failure_does_not_strand_project(tmp_path, monkeypatch):
+    """`submit` 抛了 → 占位必须**撤回**，否则这个项目**再也不会被合并**。
+
+    `_merge_inflight` 是"该项目正在合并"的防重入标记，而**清理写在后台函数
+    `_run_integration_merge_async` 的 `finally` 里** —— `submit` 一抛，那个函数
+    根本没起来 ⇒ 标记永远挂着 ⇒ 两处调用点的 `if proj.id not in _merge_inflight`
+    恒为假 ⇒ 集成合并不再被派发，项目**无声卡在 integrating**。
+    （`submit` 会抛不是猜的：`_merge_executor` 上面那句注释写的就是它。）
+
+    这条钉的是**接线**：把 `_submit_integration_merge` 里的 `discard` 删掉会红。
+    """
+    p = _setup(tmp_path, monkeypatch, [tracker.TaskStatus.DONE])
+    p.phase = proj_mod.Phase.INTEGRATING
+    orch._merge_inflight.discard(p.id)
+
+    class _Boom:
+        def submit(self, *a, **k):
+            raise RuntimeError("cannot schedule new futures after shutdown")
+
+    monkeypatch.setattr(orch, "_get_merge_executor", lambda: _Boom())
+    warns: list[str] = []
+    monkeypatch.setattr(orch.witness, "warn", lambda scope, msg, **kw: warns.append(msg))
+
+    try:
+        orch._auto_trigger_test_fix({}, [])
+        assert p.id not in orch._merge_inflight, \
+            "submit 失败后占位没撤 ⇒ 这个项目再也不会被合并（无声卡死）"
+        assert any("merge_submit_failed" in w for w in warns), f"没出声，只剩静默: {warns}"
+    finally:
+        orch._merge_inflight.discard(p.id)   # 别把这个 id 漏给后面的用例

@@ -144,6 +144,8 @@ _MAX_PROJECT_NAME_LEN = 200  # 项目名最大字符数
 _MAX_DEPENDS_ON = 50         # depends_on 最大依赖数
 _MAX_CONSTRAINTS = 50        # constraints 最大条数
 _MAX_TURNS = 50              # agent max_turns 上限
+# 周期对账的节流间隔（秒）。**按时间，不按空转轮数** —— 见 `_loop_worker` 里那段说明。
+_RECONCILE_INTERVAL_S = 300.0
 _MIN_BUDGET = 0.01           # 最小项目预算
 _MAX_BUDGET = 100000.0       # 最大项目预算
 
@@ -518,6 +520,9 @@ def _loop_worker():
     _log_info("loop", "scheduler loop started")
     _push_event("system", "loop started")
     idle_ticks = 0
+    # 对账节流的游标。用**可变容器**而不是普通变量：下面要就地更新它 ——
+    # 和 `orchestrator._last_orphan_scan` 同一个写法（那一处的注释有更多说明）。
+    _last_reconcile = [time.time()]
 
     while not _loop_stop.is_set():
         # ── 心跳落盘：给**进程外**的看门狗看的（2026-09-13）──
@@ -530,6 +535,26 @@ def _loop_worker():
         # ⚠️ 只写在**循环里**，不另起心跳线程：另起线程只能证明"进程还能跑线程"，
         # 那正是 `/health` 已经证明过的东西，等于白写。
         _write_loop_tick(idle_ticks)
+
+        # ── 周期对账（**水位触发**）：不看队列忙不忙 ──
+        # ⚠️ 原来它写在 `if count == 0:` 里（"空转满 100 轮"才比一遍）。而忙的时候
+        # `idle_ticks` **每轮被清零** ⇒ 计数永远够不到 100 ⇒ **最该对账的时候（一直在跑）
+        # 一次都不对账**。对账的判据本来就是"从盘上重算 vs 状态说的"，与忙闲无关
+        # ⇒ 触发改成"每轮 + 按时间节流"（见 `docs/结构性-水位触发-清单-20260914.md` 的 A1）。
+        # **只报不改** —— 见 `reconcile_projects` 的说明。
+        if time.time() - _last_reconcile[0] >= _RECONCILE_INTERVAL_S:
+            _last_reconcile[0] = time.time()
+            try:
+                _drifts = orchestrator.reconcile_projects()
+                if _drifts:
+                    _push_event("reconcile", f"对账发现 {len(_drifts)} 处漂移")
+            except Exception as _e:
+                # ⚠️ **对账这台仪器自己瞎了，必须说出来**（2026-09-13 外派分类抓到）。
+                # 它的全部意义就是"从盘上重算、把漂移摆出来"—— 它一抛就 `pass`，
+                # 等于**仪器坏了而没人知道**，比没有这台仪器更坏（假的安全感）。
+                witness.warn("loop", f"reconcile_failed:{type(_e).__name__}:{_e}"[:160],
+                             key="reconcile_failed")
+
         try:
             agents = disp_mod.load_agents()  # 每轮刷新 agent 配置
             results = orchestrator.run_queue(agents, max_concurrent=_loop_concurrent)
@@ -542,19 +567,6 @@ def _loop_worker():
                 # 空转时也推送状态(低频)
                 if idle_ticks % 5 == 0:
                     _sse_broadcast("heartbeat", "", time.time())
-                # 周期对账（分析里 P4 的"检出时延收尾"）：空转时每 ~5 分钟比一遍
-                # 「状态说的」vs「磁盘上真有的」。**只报不改** —— 见 reconcil 的说明。
-                if idle_ticks % 100 == 0:
-                    try:
-                        _drifts = orchestrator.reconcile_projects()
-                        if _drifts:
-                            _push_event("reconcile", f"对账发现 {len(_drifts)} 处漂移")
-                    except Exception as _e:
-                        # ⚠️ **对账这台仪器自己瞎了，必须说出来**（2026-09-13 外派分类抓到）。
-                        # 它的全部意义就是"从盘上重算、把漂移摆出来"—— 它一抛就 `pass`，
-                        # 等于**仪器坏了而没人知道**，比没有这台仪器更坏（假的安全感）。
-                        witness.warn("loop", f"reconcile_failed:{type(_e).__name__}:{_e}"[:160],
-                                     key="reconcile_failed")
                 time.sleep(3)
             else:
                 idle_ticks = 0

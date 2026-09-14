@@ -52,6 +52,30 @@ def _get_merge_executor() -> ThreadPoolExecutor:
     return _merge_executor
 
 
+def _submit_integration_merge(proj, agents: dict) -> None:
+    """把集成合并丢进后台池。**"占位"和"提交"要么一起成、要么一起不成。**
+
+    ⚠️ 原来两处调用点都写成 `_merge_inflight.add(proj.id)` 紧接 `submit(...)`：
+    而 `submit` 是会抛的（executor 已 shutdown ⇒ `cannot schedule new futures`，
+    注释就写在 `_merge_executor` 上面）。一抛，那条 id **永远不会被清** ——
+    清理写在后台函数 `_run_integration_merge_async` 的 `finally` 里，而那个函数
+    **根本没起来**。此后 `proj.id not in _merge_inflight` 恒为假 ⇒
+    **这个项目再也不会被合并**，无声卡在 integrating。
+    外层那个 `except` 只记一条 `auto_trigger:{e}`，**不回滚这个集合**。
+
+    ⇒ 所以：登记和提交收进一个函数，失败就把占位**撤回**并出声（不是静默 pass ——
+    "这个项目再也合不了"正是最该看见的那类事故）。
+    **不往上抛**：这一处失败不该连累同一轮里其它项目的推进。
+    """
+    _merge_inflight.add(proj.id)
+    try:
+        _get_merge_executor().submit(_run_integration_merge_async, proj.id, agents)
+    except Exception as e:
+        _merge_inflight.discard(proj.id)
+        witness.warn("orch", f"merge_submit_failed:{type(e).__name__}:{e}"[:160],
+                     key="merge_submit_failed")
+
+
 def run_queue(agents: dict, max_concurrent: int = 1) -> list[tuple]:
     """统一的调度循环入口。v3 支持 1..N 并发。"""
     return _run_queue_v3(agents, max_concurrent)
@@ -843,8 +867,7 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                             "ts": time.time(), "project_id": proj.id,
                         })
                         if proj.id not in _merge_inflight:
-                            _merge_inflight.add(proj.id)
-                            _get_merge_executor().submit(_run_integration_merge_async, proj.id, agents)
+                            _submit_integration_merge(proj, agents)
             elif proj.phase.value == "delivering":
                 # S1: 自动交付打包 (轻量, 同步即可)
                 ok, detail = _run_delivery(proj)
@@ -871,8 +894,7 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
             elif proj.phase.value == "integrating":
                 # 重启恢复: 若没在跑则提交 (已在跑的跳过防重入)
                 if proj.id not in _merge_inflight:
-                    _merge_inflight.add(proj.id)
-                    _get_merge_executor().submit(_run_integration_merge_async, proj.id, agents)
+                    _submit_integration_merge(proj, agents)
     except Exception as e:
         # S6: 不再静默吞错 — 记录并通知, 避免项目卡死无反馈
         try:

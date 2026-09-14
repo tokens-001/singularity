@@ -329,6 +329,54 @@ def test_loop_error_is_persisted_not_just_pushed(monkeypatch, tmp_path):
         f"循环异常没进告警通道: {warns}")
 
 
+def test_reconcile_runs_while_queue_is_busy(monkeypatch, tmp_path):
+    """**接线**测试：队列**不空**的时候，周期对账也必须跑。
+
+    原来那句写在 `if count == 0:` 里面（"空转满 100 轮"才比一遍）。而忙的时候
+    `idle_ticks` **每轮被清零** ⇒ 计数永远够不到 100 ⇒ **最该对账的时候（一直在跑）
+    一次都不对账**。对账的判据本来就是"从盘上重算 vs 状态说的"，和忙闲无关
+    ⇒ 触发改成"每轮 + 按时间节流"（见 `docs/结构性-水位触发-清单-20260914.md` 的 A1）。
+
+    这条钉的是**接线**：把那句的判据改成 `if False:` 会红 ——
+    只测 `reconcile_projects()` 函数本身是测不出这个的（外派⑬ 报过同款假绿）。
+    """
+    from singularity.web import app as webapp
+    from singularity.scheduler import orchestrator as orch_mod
+    from singularity.scheduler import memory as mem_mod
+
+    monkeypatch.setattr(webapp.time, "sleep", lambda *a: None)
+    monkeypatch.setattr(webapp, "_push_event", lambda *a: None)
+    monkeypatch.setattr(webapp, "_log_info", lambda *a: None)
+    monkeypatch.setattr(webapp, "_sse_broadcast", lambda *a: None)
+    monkeypatch.setattr(webapp.disp_mod, "load_agents", lambda: {})
+    monkeypatch.setattr(webapp.tracker, "recover", lambda: 0)
+    monkeypatch.setattr(webapp, "_RECONCILE_INTERVAL_S", 0.0)   # 让节流别挡住这一轮
+    # `else`（忙）分支里的旁路全堵掉：桌面通知 / 记忆整合 / 项目推进 —— 只留被测那句
+    monkeypatch.setattr(webapp.proj_mod, "recover_all", lambda: [])
+    monkeypatch.setattr(mem_mod, "consolidate_memory", lambda: 0)
+
+    class _Verdict:          # 必须带 `.action == "pass"`，否则会去调 osascript 发桌面通知
+        action = "pass"
+
+    rounds: list[int] = []
+
+    def _busy(*a, **k):
+        rounds.append(1)
+        if len(rounds) >= 2:
+            webapp._loop_stop.set()             # 跑两轮就退出
+        return [("t1", "pass", _Verdict())]     # ⚠️ 非空 = 队列忙
+
+    monkeypatch.setattr(webapp.orchestrator, "run_queue", _busy)
+    reconciles: list[int] = []
+    monkeypatch.setattr(orch_mod, "reconcile_projects",
+                        lambda: reconciles.append(1) or [])
+
+    webapp._loop_stop.clear()
+    webapp._loop_worker()
+
+    assert reconciles, "队列忙的时候没对账 —— 又退回'只在空转时才看'的边沿触发了"
+
+
 def test_run_queue_calls_orphan_check_at_break(monkeypatch, tmp_path):
     """**接线**测试：走到"没活干"那一刻，必须真的去查孤儿。
 
