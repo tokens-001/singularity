@@ -16,18 +16,32 @@ class TestModelRegistry:
         assert "deepseek-v4-pro" in models
 
     def test_for_phase(self):
+        """按阶段推荐查询要**真返回对的人**。
+
+        ⚠️ 原来只断言 `len(models) >= 0` —— **`len()` 永远 ≥ 0** ⇒
+        把 `for_tier` 整个函数体删空、恒返回 `[]` 也照样绿（2026-09-14 读到即坐实）。
+        """
         models = for_tier("定义", available_only=False) or for_tier("实现", available_only=False)
-        assert len(models) >= 0  # 两档后按阶段推荐查询
+        assert models, "按阶段推荐查询返回空 —— 这个查询形同虚设"
+        assert all(("定义" in m.recommended_for) or ("实现" in m.recommended_for)
+                   for m in models), "返回了跟这两个阶段都不沾边的模型"
 
 
 class TestInsertAgent:
     """Agent CRUD。"""
 
     def test_load_agents(self):
+        """钉**形状**，别钉"非空"。
+
+        ⚠️ 原来断言 `total >= 0` —— 计数永远 ≥ 0 ⇒ `load_agents` 恒返回 `{}` 也绿。
+        ⚠️ 但也**不能改成"必须非空"**：conftest 把 `QIDIAN_DIR` 隔离到 tmp，
+        `agents.toml` 根本不在那儿，读出来本来就是 0 个（我第一版改错、当场跑红）。
+        ⇒ 钉"返回的是 dict、每个值都是 list"这个**契约**：返回 None 或结构走样都会红。
+        """
         agents = load_agents()
-        # 两档后 agents 用 "any" 键或自定义键, 不再强制 E/D
-        total = sum(len(v) for v in agents.values() if isinstance(v, list))
-        assert total >= 0, f"agent loading should not crash, got {total}"
+        assert isinstance(agents, dict), f"load_agents 该返回 dict，实得 {type(agents)}"
+        bad = {k: type(v).__name__ for k, v in agents.items() if not isinstance(v, list)}
+        assert not bad, f"这些层级的 agent 配置不是 list: {bad}"
 
 
 class TestCriticalFixes:
@@ -47,11 +61,19 @@ class TestCriticalFixes:
             prev = curr
 
     def test_auth_bootstrap_rejects_when_users_exist(self):
+        """`code in (200, 403)` 两边都收 —— 得**按分支各断言各的**，否则等于没断。
+
+        ⚠️ 原来只有 `assert code in (200, 403)`：把「已有用户就拒」那句守卫删掉、
+        恒走 200，这条**照样绿**（2026-09-14 读到即坐实）。
+        """
         from singularity.scheduler._api import auth_bootstrap
         result, code = auth_bootstrap()
         assert code in (200, 403)
         if code == 403:
             assert not result.get("ok")
+            assert result.get("error"), "拒了却不说为什么"
+        else:
+            assert result.get("token"), "建了用户却没把 token 交出来"
 
     def test_goal_check_no_agent_returns_false(self):
         from singularity.scheduler.goal_loop import GoalLoop
