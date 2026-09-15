@@ -47,9 +47,23 @@ class TestJsonBodyShape:
         assert r.status_code == 200, f"白名单端点被误伤: {r.status_code} {r.data[:120]}"
 
     def test_missing_body_is_not_rejected_by_the_guard(self, client):
-        """没有 body 不该被这条守卫拦（各 handler 自己决定默认值）。"""
-        r = client.post("/api/tasks")
-        assert r.status_code != 400 or "JSON body" not in str(r.data)
+        """没有 body 不该被这条守卫拦（各 handler 自己决定默认值）。
+
+        ⚠️ 两种"没 body"是**两条不同路径**，必须都发：
+        ① 压根不带 body ⇒ 守卫在 `if not request.is_json` 就返回了，**根本走不到**
+           `body is not None` 那行（这条只是钉住行为，不构成判据）；
+        ② body 是字面量 JSON `null` ⇒ `get_json()` 得到 `None`，才真正落到那行。
+        原来只发 ①，于是把守卫改成 `if body is None or not isinstance(body, dict)`
+        （或删掉 `if not request.is_json`）**都照样绿** —— 输入到不了被测那行。
+        2026-09-15 变异复核坐实，补上 ②。
+        """
+        replies = [
+            client.post("/api/tasks"),
+            client.post("/api/tasks", data="null", content_type="application/json"),
+        ]
+        for r in replies:
+            assert "JSON body" not in str(r.data), \
+                f"守卫误伤了没 body 的请求：{r.status_code} {r.data[:120]}"
 
 
 class TestGatePhaseValidation:

@@ -93,9 +93,15 @@ class TestAssess:
         assert r.severity == "noise"
 
     def test_empty_changed_files(self):
-        """无改动文件 → 跳过核心文件检查。"""
+        """无改动文件 → 跳过核心文件检查。
+
+        ⚠️ 传的是**默认值 `None`，不是 `[]`**：`assess` 靠
+        `changed_files = changed_files or []` 把 `None` 兜成空表。
+        原来传 `[]` 时那行删掉也照样绿（空表迭代本来就不进核心文件分支）
+        ⇒ 用例守不住它声称守的那行（2026-09-15 变异复核坐实）。
+        """
         from singularity.scheduler.chancellor import assess
-        r = assess("修复", "pass", changed_files=[])
+        r = assess("修复", "pass")          # changed_files 取默认 None
         assert r.severity == "noise"
 
     def test_escalation_priority_over_retry(self):
