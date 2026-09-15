@@ -984,6 +984,18 @@ class OpenAIAgentExecutor(BaseExecutor):
         # 几分钟，看完表再开一轮照样冲过 900s，又变成被无声收割。
         _left = getattr(self, "_deadline_at", 0.0)
         _cap = min(240.0, max(1.0, _left - time.time())) if _left else 240.0
+        # ⚠️ **总时长**另算一把尺（2026-09-15 真机坐实）：
+        # `httpx.Timeout(read=)` 封的是**两次读之间**的时间，**不是总时长** ——
+        # 服务端只要持续吐 token，一次调用就能跑任意久。
+        # 实测：一次 dispatch `elapsed=1615.7` 秒（27 分钟）、**`tokens=0`**
+        # —— usage 只在流结束时才到，说明流压根没结束。
+        # 而轮间那句 `if time.time() >= self._deadline_at` **只在两轮之间**，
+        # 单次调用里根本轮不到 ⇒ **执行器全程"没看见表"**，最后被外层 900s 的刀
+        # 无声砍掉（`task_killed_no_wrapup`）—— 这正是"900s 自收尾没生效"的新根因，
+        # 与 09-13 那条「每 dispatch 归零」是**两个病**，修了一条不等于修了另一条。
+        _call_started = time.time()
+        _call_deadline = _call_started + _cap
+        _over_budget = False
         try:
             with client.stream("POST", self._url, json=payload, headers=headers,
                                timeout=httpx.Timeout(_cap, connect=15.0,
@@ -993,6 +1005,12 @@ class OpenAIAgentExecutor(BaseExecutor):
                     self._raise_for_status(resp)
                 emitted, last_emit = 0, time.time()
                 for line in resp.iter_lines():
+                    # **总时长**封顶：见 `_call_deadline` 那段注释。
+                    # 断流要**出声**（下面），否则"输出莫名其妙变短"永远找不到原因 ——
+                    # 同 `bad_frames` 那条的规矩：认不出/提前断都要明报，不能静默。
+                    if time.time() >= _call_deadline:
+                        _over_budget = True
+                        break
                     if not line.startswith("data:"):
                         continue
                     chunk_str = line[5:].strip()     # 容忍 "data:{...}" 无空格
@@ -1051,6 +1069,16 @@ class OpenAIAgentExecutor(BaseExecutor):
             # 否则"模型输出莫名其妙变短"永远找不到原因。
             try: witness.warn('oa_exec', f'sse_chunk_unparsed:{bad_frames}'[:80])
             except Exception: pass
+
+        if _over_budget:
+            # 同上，而且更该说：这是**我们主动断的**，不是模型答完了。
+            # 不说的话，下游只看到"这轮输出特别短"，会去怀疑模型而不是看这里。
+            # ⚠️ **不套 `try/except: pass`**（棘轮抓过）：那形状等于"出声失败就静默"，
+            # 而出声本身就不该失败 —— `witness.warn` 就是本仓的出声通道。
+            witness.warn('oa_exec',
+                         f'stream_over_budget:{int(time.time() - _call_started)}s'
+                         f':cap={int(_cap)}s:chars={sum(len(c) for c in content)}'[:120],
+                         key='stream_over_budget')
 
         msg = {"role": "assistant", "content": "".join(content)}
         if reasoning:

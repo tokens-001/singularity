@@ -1600,3 +1600,107 @@ def test_empty_output_still_falls_through(monkeypatch):
                                                        error="模型吐了个空", error_kind="exec"))
     with pytest.raises(RuntimeError):
         pd.dispatch("任务", "any", "tid", {})
+
+
+# ═══════════════════════════════════════════════════════════════
+# 流式调用必须有**总时长**上限（2026-09-15 真机坐实）
+# ═══════════════════════════════════════════════════════════════
+# 真机现场：一次 dispatch `elapsed = 1615.7` 秒（**27 分钟**）、`tokens = 0`
+# —— usage 只在流结束时才到，说明**流压根没结束**。
+#
+# 根因：`httpx.Timeout(read=)` 封的是**两次读之间**的时间，**不是总时长** ——
+# 服务端只要持续吐 token，一次调用就能跑任意久。而轮间那句
+# `if time.time() >= self._deadline_at` **只在两轮之间**，单次调用里根本轮不到
+# ⇒ 执行器全程"没看见表"，最后被外层 900s 的刀无声砍掉（`task_killed_no_wrapup`）。
+# ⚠️ 这跟 09-13 那条「每 dispatch 归零」**是两个病**，修了一条不等于修了另一条。
+
+class TestStreamTotalBudget:
+
+    def _executor(self):
+        from singularity.scheduler.executors.openai_agent import OpenAIAgentExecutor
+        ex = OpenAIAgentExecutor({"model": "m", "api_key_env": "K"},
+                                 "测试任务", "t_stream_budget", cwd=".")
+        ex._api_key = "k"
+        ex._url = "http://x"
+        ex._is_responses_api = False
+        return ex
+
+    def _endless_client(self, monkeypatch, stop_after_lines=300):
+        """一个**永不结束**的流：一直吐合法 chunk，从不给 [DONE]。"""
+        import httpx
+        from singularity.scheduler.executors import openai_agent as oa
+
+        class _Resp:
+            status_code = 200
+            text = ""
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): pass
+            def iter_lines(self):
+                # ⚠️ **必须带延迟**：不加 sleep 的话 10 万行瞬间吐完，循环是
+                # "生成器耗尽"退出的 —— **根本走不到总时长那条判据**，
+                # 用例会**假绿**（我第一版就是这么写的，差点蒙过去）。
+                import time as _t
+                for i in range(stop_after_lines):
+                    _t.sleep(0.01)
+                    yield 'data: {"choices":[{"delta":{"content":"x"}}]}'
+
+        class _C:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def stream(self, *a, **k): return _Resp()
+
+        monkeypatch.setattr(oa, "_get_http_client", lambda: _C())
+
+    def test_流跑过总时长就断开_不再无限跑(self, monkeypatch):
+        """判据：跑到 `_call_deadline` 就必须断，而不是一直被流拖着。"""
+        import time
+        ex = self._executor()
+        ex._deadline_at = time.time() + 1.0        # 剩余预算 1 秒 ⇒ _cap≈1s
+        self._endless_client(monkeypatch)
+
+        t0 = time.time()
+        ex._stream_call({"model": "m", "messages": []})
+        elapsed = time.time() - t0
+        # 假流**不设上限时**要跑 ~3s（300 行 × 10ms），断得掉就该 ~1s（_cap）
+        assert elapsed < 2.5, f"流跑了 {elapsed:.1f}s 还没断 —— 总时长上限没生效"
+
+    def test_主动断开要出声(self, monkeypatch):
+        """⚠️ **必须出声**：不说的话下游只看到"这轮输出特别短"，会去怀疑模型。"""
+        import time
+        ex = self._executor()
+        ex._deadline_at = time.time() + 1.0
+        self._endless_client(monkeypatch)
+
+        seen = []
+        from singularity.scheduler.executors import openai_agent as oa
+        monkeypatch.setattr(oa.witness, "warn", lambda *a, **k: seen.append((a, k)))
+
+        ex._stream_call({"model": "m", "messages": []})
+        assert any("stream_over_budget" in str(a) for a, _ in seen), \
+            f"断流没出声 —— 就查不到「输出为什么变短」：{seen}"
+
+    def test_正常结束的流不受影响(self, monkeypatch):
+        """对照组：正常 [DONE] 结束的流，照旧把内容拼回来（别把正常路径也断了）。"""
+        import httpx
+        from singularity.scheduler.executors import openai_agent as oa
+        ex = self._executor()
+        ex._deadline_at = 0.0                      # 没有任务级死线 → _cap = 240s
+
+        class _Resp:
+            status_code = 200
+            text = ""
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): pass
+            def iter_lines(self):
+                yield 'data: {"choices":[{"delta":{"content":"你好"}}]}'
+                yield 'data: [DONE]'
+        class _C:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def stream(self, *a, **k): return _Resp()
+        monkeypatch.setattr(oa, "_get_http_client", lambda: _C())
+
+        out = ex._stream_call({"model": "m", "messages": []})
+        assert out["choices"][0]["message"]["content"] == "你好"
