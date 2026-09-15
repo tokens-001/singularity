@@ -278,3 +278,63 @@ class TestArtifactLintSkip:
         assert len(ruff_calls) == 1, f"该调 ruff 却没调: {calls}"
         assert "ok.py" in " ".join(ruff_calls[0]), ruff_calls[0]
         assert r.passed, r.reason
+
+
+# ═══════════════════════════════════════════════════════════════
+# 「只跑不改」的任务不该被"零文件改动"判死（2026-09-15 真机）
+# ═══════════════════════════════════════════════════════════════
+# 现场：planner 拆出一个「独立验收：只跑不改」的任务，它**活干对了**
+# （真跑 pytest 8 passed、逐条核对 PRD、给了 evidence），
+# 却被 `QA:fail: [completeness] 无文件改动; [laziness] 检测到 2 个偷懒信号` 判死，
+# **412 秒就死 —— 与 900s 超时无关**。
+#
+# ⚠️ 判据**刻意只认固定的协议标记 `[只读]`**（由架构 schema 约定写进任务标题），
+# **不做自然语言推断** —— "只跑不改/不修改/纯核对…"是开集，永远有下一个说法。
+
+READONLY_DESC = "[只读] 独立验收：只跑不改，逐条核对 PRD"
+NORMAL_DESC = "实现 fizzbuzz.py 纯函数与 CLI 入口"
+
+
+class TestReadonlyTaskIsNotPunishedForNoChanges:
+    def test_只读任务零改动不算完整性失败(self):
+        from singularity.scheduler.supervisor import _check_completeness
+        r = _check_completeness(["验收通过"], "8 passed", [], READONLY_DESC)
+        assert r.passed, f"只读任务被判死了：{r.reason}"
+        assert r.evidence.get("readonly") is True
+
+    def test_只读任务零改动不算偷懒(self):
+        from singularity.scheduler.supervisor import _check_laziness
+        r = _check_laziness("pytest 8 passed，逐条核对完毕", [], ["跑测试验证"], READONLY_DESC)
+        assert r.passed, f"只读任务被判偷懒：{r.reason}"
+
+    def test_没有声明的任务照旧判死_对照组(self):
+        """⚠️ 别顺手把那条硬规则整个改掉了 —— 它的原意（兄弟抢活、自己空手）是真的。"""
+        from singularity.scheduler.supervisor import _check_completeness
+        r = _check_completeness(["验收通过"], "…", [], NORMAL_DESC)
+        assert not r.passed, "没声明只读的任务零改动必须仍然是失败"
+        assert r.evidence.get("hard") is True, "而且要是**硬**失败（不能被降级成 escalate）"
+
+    def test_只读任务也可能糊弄_硬信号照常生效(self):
+        """声明了 [只读] **不等于免检**：TODO / 模糊措辞照常判死。"""
+        from singularity.scheduler.supervisor import _check_laziness
+        r = _check_laziness("这块应该能跑，先这样", [], [], READONLY_DESC)
+        assert not r.passed, "只读任务说了模糊措辞，居然放行了"
+        assert r.evidence.get("hard") is True, "这条该是硬信号"
+
+    def test_默认参数下行为不变(self):
+        """不传 task_description 时 = 老行为（老调用点不该被这次改动波及）。"""
+        from singularity.scheduler.supervisor import _check_completeness, _check_laziness
+        assert not _check_completeness(["x"], "y", []).passed
+        assert not _check_laziness("y", [], ["测试" * 5]).passed
+
+    def test_架构schema里必须写着这条约定(self):
+        """⚠️ **协议得上下两头都有**：下游认 `[只读]`，上游就得告诉架构师要写它。
+
+        少了上游这一句，planner 永远不知道要打这个标记 ⇒ 豁免代码一次都不会生效
+        （= 今天这条修复白做）。同今天 QA 那条：**契约两边要对得上**。
+        """
+        import inspect
+        from singularity.scheduler import workflow as W
+        ctx = W._ARCHITECT_CONTEXT
+        assert "[只读]" in ctx, "架构 schema 没告诉架构师要打 [只读] 标记 —— 豁免永远走不到"
+        assert "title" in ctx, "得说清标记打在哪（标题）—— 标题才会拼进 description"

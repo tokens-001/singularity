@@ -76,7 +76,7 @@ def supervise(
 
     # ── 1. 完整性 ──
     verdict.checks["completeness"] = _check_completeness(
-        checklist, agent_output, changed_files,
+        checklist, agent_output, changed_files, task_description,
     )
 
     # ── 2. 约束合规 ──
@@ -86,7 +86,7 @@ def supervise(
 
     # ── 3. 偷懒检测 ──
     verdict.checks["laziness"] = _check_laziness(
-        agent_output, changed_files, checklist,
+        agent_output, changed_files, checklist, task_description,
     )
 
     # ── 4. 产物验证 (硬证据) ──
@@ -152,8 +152,30 @@ def qa_context(task) -> tuple[list, list]:
     return constraints, checklist
 
 
+_READONLY_TAG = "[只读]"
+
+
+def _is_readonly_task(task_description: str) -> bool:
+    """这个任务是不是被**明确声明**为"不改文件"。
+
+    ⚠️ **刻意只认一个固定的协议标记**（`[只读]`，约定写进 `_ARCHITECT_CONTEXT`
+    的任务 schema，由架构师把它写进**标题**、标题又会拼进 `description`）。
+    **不做自然语言推断** —— "只跑不改 / 不修改 / 纯核对 / 只验证…"是个**开集**，
+    永远有下一个说法（同仓 `_observer_answer` 那个函数就是栽在开集枚举上，
+    见 `docs/防御模式.md`）。判据必须是**我们定义的协议**，不是猜模型怎么措辞。
+
+    来历（2026-09-15 真机）：planner 拆出一个「独立验收：**只跑不改**」的任务，
+    它**活干对了**（真跑 pytest 8 passed、逐条核对 PRD、给了证据），
+    却被 `无文件改动` 判 fail（412 秒就死，**与 900s 超时无关**）。
+    而那条硬规则本身是**对的**（原意是逮"兄弟任务抢活、自己空手"，见 `_flag_file_overlap`）
+    —— 它只是**分不开**"该有产出却空手"和"本就不该有产出"。
+    """
+    return _READONLY_TAG in (task_description or "")
+
+
 def _check_completeness(
     checklist: list[str], agent_output: str, changed_files: list[str],
+    task_description: str = "",
 ) -> CheckResult:
     """完整性: checklist 逐项检查 (仅记录, 不判失败)。
 
@@ -165,6 +187,20 @@ def _check_completeness(
     if not checklist:
         return CheckResult(passed=True, reason="无 checklist,跳过")
     if not changed_files:
+        # ⚠️ 这条硬规则**分不开两种情况**：
+        #   ① 该有产出却空手回来 —— 原意，且是真的（`_flag_file_overlap` 那个真事：
+        #      兄弟任务把活抢了，这个任务零改动，门禁判得对，只是人审页上看不出为什么）；
+        #   ② **任务本身就被要求别改文件** —— planner 真的会拆出
+        #      「独立验收：只跑不改」这种任务（2026-09-15 真机）。
+        # 判据不能靠猜描述里的字（开集枚举，`_observer_answer` 栽过）⇒ 认**上游的显式声明**。
+        # ⚠️ 声明了只读**不等于免检**：TODO/模糊措辞那两条硬信号在 `_check_laziness`
+        # 里**照常生效**，LLM 语义核对也照跑 —— 这里省的只是"必须改文件"这一条。
+        if _is_readonly_task(task_description):
+            return CheckResult(
+                passed=True,
+                reason="只读任务（描述带 [只读] 声明），零改动是预期结果",
+                evidence={"readonly": True, "hard": False},
+            )
         return CheckResult(
             passed=False, reason="无文件改动",
             evidence={"hard": True},
@@ -221,6 +257,7 @@ _TODO_MARKER = re.compile(r"(?:#|//|/\*+|<!--|;)\s*todo\b(?![._])", re.IGNORECAS
 
 def _check_laziness(
     agent_output: str, changed_files: list[str], checklist: list[str],
+    task_description: str = "",
 ) -> CheckResult:
     """偷懒检测: 机械清单。
 
@@ -228,11 +265,18 @@ def _check_laziness(
     软信号 = 启发式 (改动文件数 vs checklist、无测试文件) → 判 escalate/retry。
     理由: 文件数 ≠ 偷懒, 一个文件的精准修复也会命中; 部分任务本就不需要改测试文件。
     把它们当硬证据会在 QA 门禁前移后把正常改动直接拦下。
+
+    ⚠️ **声明了 [只读] 的任务，两条软信号都不适用**（2026-09-15 真机）：它们**都是拿
+    `changed_files` 当尺子的** —— 对"本就不该改文件"的任务，`改动文件(0)远少于checklist`
+    和 `要求验证但无测试文件改动` **必然同时亮**（真机上就是这么亮了 2 个），
+    然后判 escalate ⇒ 转 PENDING **重新入队**，白烧一轮。
+    ⚠️ 但**硬信号（TODO / 模糊措辞）照常生效** —— 只读任务也可能糊弄。
     """
     hard_signals, soft_signals = [], []
+    readonly = _is_readonly_task(task_description)
 
     # 1. 输出远少于 checklist 预期 (软)
-    if checklist and len(changed_files) < max(1, len(checklist) // 3):
+    if not readonly and checklist and len(changed_files) < max(1, len(checklist) // 3):
         soft_signals.append(f"改动文件({len(changed_files)})远少于checklist({len(checklist)})预期")
 
     # 2. 用注释代替实现 (硬) —— 见 _TODO_MARKER：认注释标记，不认裸子串
@@ -253,7 +297,7 @@ def _check_laziness(
     )
     # 注意别用"验证"——"验证码"这类词会误命中
     wants_test = any(("测试" in c or "test" in c.lower()) for c in checklist)
-    if not has_test and wants_test:
+    if not readonly and not has_test and wants_test:
         soft_signals.append("checklist 要求验证但无测试文件改动")
 
     signals = hard_signals + soft_signals
