@@ -56,8 +56,18 @@ def timed(func=None, *, name=""):
                 result = f(*args, **kwargs)
                 log_event("fn_done", module=name or f.__name__, fn=f.__name__, elapsed_ms=int((time.perf_counter()-t0)*1000))
                 return result
-            except Exception:
-                log_event("fn_fail", module=name or f.__name__, fn=f.__name__, elapsed_ms=int((time.perf_counter()-t0)*1000))
+            except Exception as e:
+                # ⚠️ **别只记"失败了"**（2026-09-15 真机）：一次 `dispatch` 抛了，
+                # 事件流里只剩 `{"event":"fn_fail","fn":"dispatch","elapsed_ms":42416}` ——
+                # `/tmp/qidian.log` 里**没有 traceback**、`alerts.jsonl` 里**没有对应告警**
+                # ⇒ **"哪个 dispatch 失败了、为什么"查不出来**。异常在这层 `raise` 出去，
+                # 上游多半会接住并降级重试 —— 于是**失败原因就这么没了**。
+                # 带上类型 + 消息即可（`exc_info` 也行，但事件流是 JSON 行，塞整段 traceback 会撑爆）。
+                # 只有 3 个函数挂 `@timed`（executor.run / dispatcher.dispatch / router.route），
+                # 都是关键路径，记详细点不亏。
+                log_event("fn_fail", module=name or f.__name__, fn=f.__name__,
+                          elapsed_ms=int((time.perf_counter()-t0)*1000),
+                          error=f"{type(e).__name__}: {e}"[:300])
                 raise
         return wrapper
     return decorator(func) if func else decorator

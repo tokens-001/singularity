@@ -201,3 +201,56 @@ class TestPropertySnapshot:
 # 后者在两个字面量上做减法（`total, spent = 500000, 123000; assert spent <= total`）。
 # 它们的"不变量"**在代码里没有对应物** ⇒ 留着只会给虚假的安心。
 # ⚠️ 如果哪天有了真的 worktree 命名生成 / 预算 clamp 实现，**在这里重写**，别恢复旧写法。
+
+
+# ═══════════════════════════════════════════════════════════════
+# `@timed` 失败时必须记下**为什么**（2026-09-15 真机）
+# ═══════════════════════════════════════════════════════════════
+# 现场：一次 `dispatch` 抛了，事件流里只剩
+# `{"event":"fn_fail","fn":"dispatch","elapsed_ms":42416}` ——
+# `/tmp/qidian.log` 里**没有 traceback**、`alerts.jsonl` 里**没有对应告警**
+# ⇒ **"哪个 dispatch 失败了、为什么"查不出来**。
+# 异常在这层 `raise` 出去、被上游接住降级重试，**失败原因就这么没了**。
+
+def test_timed_失败要记下异常类型和消息():
+    """`fn_fail` 事件里要带 `error=<类型>: <消息>` —— 不然失败原因追不回来。
+
+    ⚠️ 直接给 `scheduler` logger 挂捕获 handler，**不用 caplog** ——
+    `log._log` 是 `propagate = False`，caplog 挂在 root 上根本收不到。
+    """
+    import logging
+    from singularity.scheduler import log as logmod
+    from singularity.scheduler.log import timed
+
+    recs = []
+
+    class _H(logging.Handler):
+        def emit(self, record):
+            recs.append(record)
+
+    h = _H()
+    logmod._log.addHandler(h)
+    try:
+        @timed(name="probe")
+        def boom():
+            raise ValueError("仓库没找到")
+
+        try:
+            boom()
+            raise AssertionError("没抛出来 —— 这个桩写错了")
+        except ValueError:
+            pass
+    finally:
+        logmod._log.removeHandler(h)
+
+    events = []
+    for r in recs:
+        try:
+            events.append(json.loads(r.getMessage()))
+        except (ValueError, TypeError):
+            continue
+    fails = [e for e in events if e.get("event") == "fn_fail"]
+    assert fails, f"没记 fn_fail 事件（收到 {[e.get('event') for e in events]}）"
+    err = str(fails[-1].get("error", ""))
+    assert "ValueError" in err, f"只记了'失败了'，没记异常类型：{fails[-1]}"
+    assert "仓库没找到" in err, f"没记异常消息：{fails[-1]}"
