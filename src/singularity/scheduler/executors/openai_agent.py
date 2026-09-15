@@ -92,6 +92,29 @@ def _looks_like_tool_markup(content: str) -> bool:
     return ("<" + "invoke") in c or bool(_DSML_HINT_RE.search(c))
 
 
+def _assistant_msg_for_history(msg: dict, tools: list) -> dict:
+    """把 assistant 的这条回复放进历史时，**哪些字段该留**。
+
+    ⚠️ **判据是 `tools` 空不空**，依据是 DeepSeek 官方 thinking-mode 文档：
+      · **带 `tools`**：`reasoning_content` **必须在后续所有请求里原样回传**
+        （含没有工具调用的轮次）——「must be fully passed back to the API in all
+        subsequent requests」；**不回传就是 400**；
+      · **不带 `tools`**：不必回传，传了也会被忽略 ⇒ **照旧剥掉**。
+
+    原来这里对 `reasoning_content` 是**一刀切剥掉**，注释写着
+    "推理模型(如Kimi/GLM)返回reasoning_content, API输入不接受此字段" —— **那是旧经验**。
+    真机症状（2026-09-15）：`any 层所有 agent 均失败: deepseek-flash: 空输出
+    [HTTP 400: The reasoning_content in the thinking mode must be passed back]`
+    —— **换 agent 也没用**（同一个剥法）⇒ 整条任务挂掉。
+
+    ⚠️ 不带 tools 的那条路（架构/规划的 `no_tools` 委员会）**保持剥掉** ——
+    对 Kimi/GLM 维持原行为，**零回归**。
+    """
+    if tools:
+        return dict(msg)
+    return {k: v for k, v in msg.items() if k != "reasoning_content"}
+
+
 def _parse_xml_tool_calls(content: str) -> list[dict] | None:
     """从 content 里捞出 XML 形式的工具调用 → OpenAI 那套结构。
 
@@ -549,9 +572,26 @@ class OpenAIAgentExecutor(BaseExecutor):
                     except Exception:
                         pass
 
-            # 推理模型(如Kimi/GLM)返回reasoning_content, API输入不接受此字段
-            msg_clean = {k: v for k, v in msg.items() if k != "reasoning_content"}
-            messages.append(msg_clean)
+            # ⚠️ `reasoning_content` **不能无条件剥掉**（2026-09-15 真机 + DeepSeek 官方文档）。
+            #
+            # 原来这行是一刀切，注释写着"推理模型(如Kimi/GLM)返回reasoning_content,
+            # API输入不接受此字段" —— **那是旧经验**。现在 DeepSeek 的规则
+            # （官方 thinking-mode 文档原文）是：
+            #   · **带 `tools` 参数**：`reasoning_content` **必须在后续所有请求里原样回传**
+            #     （含没有工具调用的轮次）——「must be fully passed back to the API in all
+            #     subsequent requests」；**不回传就是 400**；
+            #   · **不带 `tools`**：不必回传，传了也会被忽略。
+            # 真机症状：`any 层所有 agent 均失败: deepseek-flash: 空输出
+            #   [HTTP 400: The reasoning_content in the thinking mode must be passed back]`
+            # —— **换 agent 也没用**（同一个剥法）⇒ 整条任务挂掉。
+            # 注意上面**流式那条特意把 reasoning_content 拼了回来**
+            # （`if reasoning: msg["reasoning_content"] = …`）就是给这里用的 ——
+            # 原来下一行就扔了，**两条路自相矛盾**。
+            #
+            # 按官方规则**只在该回传时回传**：带 tools 才留。
+            # 不带 tools 的那条路（架构/规划的 `no_tools` 委员会）**照旧剥掉** ——
+            # 对 Kimi/GLM 维持原行为，**零回归**。
+            messages.append(_assistant_msg_for_history(msg, tools))
 
             # 有 tool_calls → 执行工具
             tool_calls = msg.get("tool_calls", [])

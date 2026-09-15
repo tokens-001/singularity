@@ -92,3 +92,52 @@ def test_merge_tmpl_noop_without_tmpl_update():
     updates = {"max_turns": 3}
     assert crud._merge_tmpl({}, updates) == updates
     assert "request_template" not in crud._merge_tmpl({}, updates)
+
+
+# ═══════════════════════════════════════════════════════════════
+# `reasoning_content` 的回传（2026-09-15 真机 + DeepSeek 官方文档）
+# ═══════════════════════════════════════════════════════════════
+# 真机症状：`any 层所有 agent 均失败: deepseek-flash: 空输出
+#   [HTTP 400: The `reasoning_content` in the thinking mode must be passed back to the API.]`
+# 原来对 `reasoning_content` 是**一刀切剥掉**（注释："API输入不接受此字段"——旧经验）。
+#
+# 官方规则（thinking-mode 文档原文）：
+#   · **带 `tools` 参数** → 必须**原样回传**（含没有工具调用的轮次）——「must be fully
+#     passed back to the API in all subsequent requests」；不回传 = 400；
+#   · **不带 `tools`** → 不必回传，传了也会被忽略。
+# ⇒ 判据卡在"这次请求有没有带 tools"，**不是**维护模型能力表（同本文件顶上那条取舍）。
+
+from singularity.scheduler.executors.openai_agent import _assistant_msg_for_history
+
+_ASSISTANT = {"role": "assistant", "content": "", "reasoning_content": "我先看看文件…",
+              "tool_calls": [{"id": "t1", "type": "function",
+                              "function": {"name": "read_file", "arguments": "{}"}}]}
+
+
+def test_带工具时必须回传_reasoning_content():
+    """⚠️ 这条不回传就是 **HTTP 400**，而且换 agent 也没用（同一个剥法）⇒ 整个任务挂掉。"""
+    out = _assistant_msg_for_history(dict(_ASSISTANT), tools=[{"type": "function"}])
+    assert "reasoning_content" in out, "带 tools 却把 reasoning_content 剥了 —— DeepSeek 会 400"
+    assert out["reasoning_content"] == "我先看看文件…"
+
+
+def test_不带工具时照旧剥掉_对别家零回归():
+    """不带 tools 时官方说"不必回传、传了也忽略" ⇒ **保持原行为**（Kimi/GLM 那边零回归）。"""
+    out = _assistant_msg_for_history(dict(_ASSISTANT), tools=[])
+    assert "reasoning_content" not in out
+
+
+def test_其它字段一个都不许动():
+    """对照组：这条判据只管 `reasoning_content`，别顺手改了别的字段。"""
+    for tools in ([{"type": "function"}], []):
+        out = _assistant_msg_for_history(dict(_ASSISTANT), tools=tools)
+        assert out["role"] == "assistant"
+        assert out["tool_calls"] == _ASSISTANT["tool_calls"]
+        assert out["content"] == ""
+
+
+def test_没有_reasoning_content_时两种都无所谓():
+    """普通模型（非思考）压根没这个字段 —— 两种路径都该原样过去。"""
+    plain = {"role": "assistant", "content": "好的"}
+    for tools in ([{"type": "function"}], []):
+        assert _assistant_msg_for_history(dict(plain), tools=tools) == plain
