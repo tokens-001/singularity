@@ -520,10 +520,15 @@ def _qa_verdict_from_raw(qa_raw: str) -> tuple[dict, str, str]:
     "把缺证据摆到台面上，比卡死项目有用"。所以这里给**三态**
     （`go` / `no_go` / `未产出`），由调用点负责让它出声、进 issues。
     """
-    try:
-        qa_data = json.loads(qa_raw) if str(qa_raw).strip().startswith("{") else {}
-    except (ValueError, TypeError):
-        qa_data = {}
+    # ⚠️ 原来是 `json.loads(qa_raw) if str(qa_raw).strip().startswith("{") else {}`
+    # —— **模型把 JSON 包在 ```json 代码块里时直接判"没解析出"**。
+    # 2026-09-15 真机实测：QA 的报告是好的（7/7 约束 pass、8 个测试通过），
+    # 就因为外面裹了代码块 ⇒ 判"未产出" ⇒ GATE3 的 QA 那一维**永远是瞎的**。
+    # 换成同仓的 `validator._extract_json_obj`（取最外层 `{`…`}`，**本来就容忍代码块**）——
+    # `qa_acceptance_review` 一直用的就是它，两边收敛到同一个提取器，别再各写一份。
+    # 注：它解析不出时返回 None ⇒ 落到下面的"未产出"，**没有放松 fail-closed 那半边**。
+    from singularity.scheduler.validator import _extract_json_obj
+    qa_data = _extract_json_obj(str(qa_raw)) or {}
     if not isinstance(qa_data, dict):
         qa_data = {}
 
@@ -632,9 +637,23 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
         witness.warn("review", f"machine_checks:{type(e).__name__}:{e}"[:120])
 
     # ── ② QA 验收（LLM，兜机械查不了的残余面）──
+    # ⚠️ **提示词必须给出 schema**（2026-09-15 真机）：原来只有一句"输出 JSON"，
+    # 没写字段名 —— 而下游 `_qa_verdict_from_raw` 要的是 `verdict` / `issues` / `passed`。
+    # **契约根本没建立**：模型按自己的理解给了 `{"summary": "…", "constraints":[…]}`，
+    # 于是报告写得再好，汇总也永远判"未产出"，GATE3 的 QA 那一维永远是瞎的。
+    # 对照组：同仓 `validator.qa_acceptance_review` 的提示词**是给了完整 schema 的**。
     qa_prompt = (
         f"你是 QA 工程师。做验收验证，不写代码，只出报告。\n\n{ctx}\n\n"
-        "逐条检查约束是否满足，给出 evidence。输出 JSON。"
+        "逐条检查约束是否满足，给出 evidence。\n\n"
+        "只输出一个 JSON 对象（**不要包在 markdown 代码块里**），字段固定为：\n"
+        '{"verdict": "go 或 no_go",\n'
+        ' "passed": [{"id": "约束标识", "desc": "约束内容", "evidence": "满足的证据"}],\n'
+        ' "issues": [{"id": "约束标识", "severity": "critical|warning",\n'
+        '             "detail": "差在哪", "suggested_fix": "怎么修"}],\n'
+        ' "summary": "一句话结论"}\n'
+        "**一致性要求**：verdict 判 no_go 时 issues 里**必须至少有一条**，"
+        "写清是哪条约束、差在哪 —— 判了 no_go 却给不出具体条目，下游只知道"
+        "\"要修\"却不知道修什么，只会原样再来一遍。"
     )
     disp_result, err = _safe_dispatch(qa_prompt, "any", f"qa_{project.id}", agents, project,
                                       phase="reviewing")

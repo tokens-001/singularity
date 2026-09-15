@@ -123,6 +123,59 @@ class TestQaVerdictIsNotFailOpen:
         _, verdict, _ = W._qa_verdict_from_raw('{"issues": [{"description": "挂了"}]}')
         assert verdict == "no_go"
 
+    # ── 2026-09-15 真机：模型把 JSON 包在 ```json 代码块里 ──
+
+    def test_包裹在代码块里的结论要认得出来(self):
+        """```json 包裹**不该**导致"未产出" —— 2026-09-15 真机就是栽在这儿。
+
+        QA 的报告是好的（7/7 约束 pass、8 个测试通过），只因为外面裹了代码块
+        ⇒ 汇总判"未产出" ⇒ GATE3 的 QA 那一维**永远是瞎的**。
+        原来那句 `str(qa_raw).strip().startswith("{")` 一撞上 ``` 就进不了 json.loads。
+        """
+        from singularity.scheduler import workflow as W
+        fenced = '```json\n{"verdict": "go", "summary": "7/7 约束满足"}\n```'
+        _, verdict, _ = W._qa_verdict_from_raw(fenced)
+        assert verdict == "go", "包了代码块就认不出来了 —— QA 维度会永远'未产出'"
+
+    def test_真机的实际形状仍然算未产出(self):
+        """⚠️ **光剥代码块是不够的**（这条钉住那个残留）。
+
+        真机那次 QA 实际吐的是 `{"summary": "<字符串>", "constraints": [...]}` ——
+        **没有 `verdict` 字段、也没有 `issues`**。所以解析端放宽之后它**仍然是"未产出"**。
+        ⇒ 真正的修法在**提示词**（`workflow.py` 的 `qa_prompt` 现在给了字段 schema）。
+        哪天有人把提示词里那段 schema 删了，这条会提醒他：**光靠解析端兜不住**。
+        """
+        from singularity.scheduler import workflow as W
+        real = ('```json\n{"summary": "全部 7 条约束满足，8 个测试全部通过",'
+                ' "constraints": [{"id": "reliability-1", "status": "pass"}]}\n```')
+        _, verdict, reason = W._qa_verdict_from_raw(real)
+        assert verdict == W._QA_VERDICT_MISSING, \
+            "这个形状没有 verdict 字段，本来就判不了 —— 别顺手把它当成 go"
+        assert reason, "得说清为什么"
+
+    def test_QA提示词必须点名解析端要的字段(self):
+        """**契约两边要对得上**（2026-09-15 真机，这条是本轮的主修复）。
+
+        `_qa_verdict_from_raw` 读的是 `verdict` / `issues` / `passed`，
+        而 `qa_prompt` 原来只有一句"输出 JSON"、**一个字段名都没写** ⇒
+        模型怎么猜都合理（它给了 `{"summary":…, "constraints":[…]}`）⇒
+        **报告写得再好，汇总也永远判"未产出"**，GATE3 的 QA 那一维永远是瞎的。
+
+        ⚠️ 解析端放宽（认得代码块）**兜不住这个** —— 那个形状压根没有 verdict 字段。
+        所以这条钉的是提示词：**schema 一被删掉就红**。
+        """
+        import inspect
+        import re
+        from singularity.scheduler import workflow as W
+
+        src = inspect.getsource(W)
+        m = re.search(r"qa_prompt = \((.*?)\n    \)", src, re.S)
+        assert m, "找不到 qa_prompt 那段了 —— 改结构的话同步改这条测试"
+        block = m.group(1)
+        for f in ("verdict", "issues", "passed"):
+            assert f'"{f}"' in block, (
+                f"qa_prompt 没点名字段 `{f}` —— 模型只能猜，下游读不到 ⇒ 永远是'未产出'")
+
     def test_flag_leaves_both_traces(self):
         """判据为真时**两件必做事**都得做：进 issues + 出声。
 

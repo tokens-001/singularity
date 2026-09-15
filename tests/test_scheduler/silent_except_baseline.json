@@ -237,7 +237,6 @@
  "scheduler/workflow.py::_flag_file_overlap": 3,
  "scheduler/workflow.py::_flag_unordered_architecture": 1,
  "scheduler/workflow.py::_phase_cwd": 1,
- "scheduler/workflow.py::_qa_verdict_from_raw": 1,
  "scheduler/workflow.py::_read_observer_rollup": 1,
  "scheduler/workflow.py::_run_verification": 1,
  "scheduler/workflow.py::_safe_dispatch": 1,
