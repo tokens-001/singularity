@@ -624,9 +624,11 @@ class TestFusionModelResolution:
             def __exit__(self, *a): return False
             def read(self): pass
 
-            def iter_lines(self):
+            # 2026-09-16：被测代码改用 `iter_text()`（按**字节批**吐、行切分自己做）。
+            # 替身必须跟着真实类型长大，否则替身喂的路径和线上不是同一条。
+            def iter_text(self):
                 for l in self._lines:
-                    yield l
+                    yield l + "\n"
 
         class _C:
             def __enter__(self): return self
@@ -1088,10 +1090,10 @@ class TestCallModelEmptyContent:
             def __enter__(self): return self
             def __exit__(self, *a): return False
             def read(self): pass
-            def iter_lines(self):
+            def iter_text(self):
                 # 只有 reasoning 没有 content，且 finish_reason=length —— 思考模型烧光额度
-                yield 'data: {"choices":[{"delta":{"reasoning_content":"想"},"finish_reason":"length"}]}'
-                yield 'data: [DONE]'
+                yield 'data: {"choices":[{"delta":{"reasoning_content":"想"},"finish_reason":"length"}]}\n'
+                yield 'data: [DONE]\n'
 
         class _C:
             def __enter__(self): return self
@@ -1220,9 +1222,9 @@ class TestStreamCall:
             def __enter__(self): return self
             def __exit__(self, *a): return False
             def read(self): pass
-            def iter_lines(self):
+            def iter_text(self):
                 for l in lines:
-                    yield l
+                    yield l + "\n"
 
         class _C:
             def stream(self, *a, **k): return _Resp()
@@ -1316,8 +1318,8 @@ class TestStreamCall:
             def __enter__(self): return self
             def __exit__(self, *a): return False
             def read(self): pass
-            def iter_lines(self):
-                yield 'data: {"choices":[{"delta":{"content":"开头"}}]}'
+            def iter_text(self):
+                yield 'data: {"choices":[{"delta":{"content":"开头"}}]}\n'
                 raise httpx.ReadTimeout("stalled")
 
         class _C:
@@ -1636,14 +1638,14 @@ class TestStreamTotalBudget:
             def __enter__(self): return self
             def __exit__(self, *a): return False
             def read(self): pass
-            def iter_lines(self):
+            def iter_text(self):
                 # ⚠️ **必须带延迟**：不加 sleep 的话 10 万行瞬间吐完，循环是
                 # "生成器耗尽"退出的 —— **根本走不到总时长那条判据**，
                 # 用例会**假绿**（我第一版就是这么写的，差点蒙过去）。
                 import time as _t
                 for i in range(stop_after_lines):
                     _t.sleep(0.01)
-                    yield 'data: {"choices":[{"delta":{"content":"x"}}]}'
+                    yield 'data: {"choices":[{"delta":{"content":"x"}}]}\n'
 
         class _C:
             def __enter__(self): return self
@@ -1693,9 +1695,9 @@ class TestStreamTotalBudget:
             def __enter__(self): return self
             def __exit__(self, *a): return False
             def read(self): pass
-            def iter_lines(self):
-                yield 'data: {"choices":[{"delta":{"content":"你好"}}]}'
-                yield 'data: [DONE]'
+            def iter_text(self):
+                yield 'data: {"choices":[{"delta":{"content":"你好"}}]}\n'
+                yield 'data: [DONE]\n'
         class _C:
             def __enter__(self): return self
             def __exit__(self, *a): return False
@@ -1704,3 +1706,71 @@ class TestStreamTotalBudget:
 
         out = ex._stream_call({"model": "m", "messages": []})
         assert out["choices"][0]["message"]["content"] == "你好"
+
+    def test_吐字节但凑不满一行_也要断得掉(self, monkeypatch):
+        """**这条钉的就是 2026-09-16 真机两轮卡死那个形状。**
+
+        服务端一直在发字节、却**永远不换行**：
+          · `read=` 超时会被"又有字节进来了"**重置** ⇒ 兜不住；
+          · `iter_lines()` **一行都吐不出来** ⇒ 写在循环体里的判据**永远轮不到**。
+        ⇒ 两条保护**同时**失效。真机上 planning 阶段各卡死 30+ 分钟，
+        `stream_over_budget` 全库 **0 次**，线程栈停在
+        `_ssl__SSLSocket_read → PySSL_select → poll`。
+
+        ⚠️ **必须用真 HTTP 服务器**：手搭的替身只会把我猜的"`iter_lines()` 会一直
+        缓冲"再喂回给我 —— 那测的是我的假设，不是 httpx 的真实行为。
+        （顺带：这个形状本身在 `iter_lines` 里也是**对的**，能凑满行时它就好使。）
+
+        变异验证：把 `_stream_call` 里的 `_lines()` 换回 `resp.iter_lines()` → 红
+        （会一直等到服务器收工才回来）。
+        """
+        import http.server
+        import threading
+        import time
+
+        import httpx
+        from singularity.scheduler.executors import openai_agent as oa
+
+        TRICKLE_S = 6.0          # 服务器吐多久 —— 超过它就是"没断掉"
+
+        class _H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                t_end = time.time() + TRICKLE_S
+                try:
+                    while time.time() < t_end:
+                        self.wfile.write(b":")       # ← 有字节，但永远不换行
+                        self.wfile.flush()
+                        time.sleep(0.1)
+                except Exception:
+                    pass
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+        ex = self._executor()
+        ex._url = f"http://127.0.0.1:{srv.server_address[1]}/chat/completions"
+        ex._deadline_at = time.time() + 1.0          # 剩余 1 秒 ⇒ _cap≈1s
+        monkeypatch.setattr(oa, "_get_http_client", lambda: httpx.Client())
+
+        seen = []
+        monkeypatch.setattr(oa.witness, "warn", lambda *a, **k: seen.append((a, k)))
+
+        try:
+            t0 = time.time()
+            ex._stream_call({"model": "m", "messages": []})
+            elapsed = time.time() - t0
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+        assert elapsed < 3.0, (
+            f"流跑了 {elapsed:.1f}s 还没断（服务器一共才吐 {TRICKLE_S}s）—— "
+            f"判据又挂在「等一整行」上了")
+        assert any("stream_over_budget" in str(a) for a, _ in seen), \
+            f"断流没出声 —— 就查不到「输出为什么变短」：{seen}"

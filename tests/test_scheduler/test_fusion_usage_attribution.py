@@ -13,10 +13,12 @@ from singularity.scheduler import execution_judge as ej
 class _Resp:
     status_code = 200
 
-    def iter_lines(self):
+    # 2026-09-16：被测代码改用 `iter_text()`（按字节批吐、行切分自己做）——
+    # 替身跟着真实类型长大，否则喂的路径和线上不是同一条。
+    def iter_text(self):
         yield ('data: {"choices":[{"delta":{"content":"x"},"finish_reason":"stop"}],'
-               '"usage":{"total_tokens":42}}')
-        yield "data: [DONE]"
+               '"usage":{"total_tokens":42}}\n')
+        yield "data: [DONE]\n"
 
 
 class _Ctx:

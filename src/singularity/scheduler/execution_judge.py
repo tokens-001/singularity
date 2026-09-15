@@ -12,6 +12,7 @@
 import json
 import logging
 import os
+import time
 
 from singularity.scheduler import config, witness
 from singularity.scheduler._io import try_parse_json
@@ -63,6 +64,13 @@ def _resolve_api(model: str) -> tuple[str, str]:
 # 融合定稿一次要吐 2 万字，非流式只能干等整体超时，这里最该有停滞检测。
 _STALL_TIMEOUT = float(os.environ.get("QIDIAN_STALL_TIMEOUT", "90"))
 
+# 单次融合调用的**总时长**上限（2026-09-16 加）。
+# ⚠️ **故意取大**：实测一次融合 155 秒（v4.1 的 3 模型碰撞），而这条路的
+# prompt/输出都比任务调用大得多。它只负责**"不是无限"**，不负责精准 ——
+# 取小了会**静默砍掉真在干活的调用**（融合是整条流水线单次最贵的调用）。
+# 有实测数据了再调这个数。
+_FUSION_CALL_CAP = float(os.environ.get("QIDIAN_FUSION_CALL_CAP", "600"))
+
 
 def _stream_once(client, base_url: str, headers: dict, payload: dict,
                  project_id: str = "") -> tuple[int, str, str, str, str]:
@@ -82,7 +90,44 @@ def _stream_once(client, base_url: str, headers: dict, payload: dict,
             r.read()                                  # 先取回 body 才能读 .text
             return r.status_code, "", "", (r.text or "")[:200], ""
         parts, reasons, finish = [], [], ""
-        for line in r.iter_lines():
+        _deadline = time.time() + _FUSION_CALL_CAP
+        _over_budget = False
+
+        def _lines():
+            """按行吐，但**每收到一批字节**先看一次表。
+
+            ⚠️ 2026-09-16 真机**两轮复现**（`planning` 阶段各卡死 30+ 分钟，
+            线程栈停在 `_ssl__SSLSocket_read → PySSL_select → poll`）。
+
+            原来是 `for line in r.iter_lines()`：`iter_lines()` **按行**吐，
+            而服务端只要一直发字节、却凑不满一行（httpx 的 `LineDecoder` 会一直
+            缓冲不满一行的片段），这个循环**一行都收不到** ⇒ 写在循环体里的判据
+            （这里原来**压根没有**）永远轮不到，`read=` 超时也会被"有字节进来"重置
+            ⇒ **两条保护同时失效，永远挂着**。
+
+            ⇒ 换 `iter_text()`：每收到一批字节就 yield 一次 —— 只要网络还在动，
+            判据就有机会执行。**同一个形状的另一处**在
+            `openai_agent._stream_call`，一起改的，别只修一边。
+            """
+            nonlocal _over_budget
+            buf = ""
+            for text in r.iter_text():
+                if time.time() >= _deadline:
+                    _over_budget = True
+                    return
+                buf += text
+                while "\n" in buf:
+                    ln, buf = buf.split("\n", 1)
+                    yield ln.rstrip("\r")
+            # 收尾：最后一行不带换行符时 `iter_lines()` 会 flush 出来，行为保持一致
+            if buf:
+                yield buf.rstrip("\r")
+
+        for line in _lines():
+            # 生成器里那道是关键；这里再判一次是兜"一批字节里一次切出几十行"。
+            if time.time() >= _deadline:
+                _over_budget = True
+                break
             if not line.startswith("data:"):
                 continue
             body = line[5:].strip()                  # 容忍 "data:{...}" 无空格
@@ -99,6 +144,14 @@ def _stream_once(client, base_url: str, headers: dict, payload: dict,
                     reasons.append(delta["reasoning_content"])
                 if ch.get("finish_reason"):
                     finish = ch["finish_reason"]
+    if _over_budget:
+        # 同上：这是**我们主动断的**，不是模型答完了 —— 不出声的话，下游只看到
+        # "这次融合的输出特别短"，会去怀疑模型。⚠️ 不套 `try/except: pass`。
+        witness.warn('execution_judge',
+                     f'stream_over_budget:fusion:{int(_FUSION_CALL_CAP)}s'
+                     f':chars={sum(len(p) for p in parts)}'[:120],
+                     key='stream_over_budget')
+
     # 融合/合成是系统里**单次最贵**的调用（一次要吐两万字）。以前连用量都没申请，
     # 这条路的开销完全不在统计里。
     try:

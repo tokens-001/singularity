@@ -1017,10 +1017,48 @@ class OpenAIAgentExecutor(BaseExecutor):
                     resp.read()                      # 先取回 body 才能读 .text
                     self._raise_for_status(resp)
                 emitted, last_emit = 0, time.time()
-                for line in resp.iter_lines():
+
+                def _lines():
+                    """按行吐，但**每收到一批字节**就先看一眼表。
+
+                    ⚠️ 2026-09-16 真机**两轮复现**：原来直接 `for line in
+                    resp.iter_lines()`。而 `iter_lines()` 是**按行**吐的 ——
+                    服务端只要一直在发字节、却凑不满一行（httpx 的 `LineDecoder`
+                    会把不满一行的片段**一直缓冲**），这个循环**一行都收不到**，
+                    于是循环体里那句总时长判据**永远轮不到**。
+                    两轮真机各卡死 30+ 分钟，`stream_over_budget` 全库 **0 次**；
+                    线程栈停在 `_ssl__SSLSocket_read → PySSL_select → poll`。
+
+                    ⇒ 改成 `iter_text()`：它**每收到一批字节就 yield 一次**
+                    （行切分挪到下面自己做）**只要网络还在动，判据就有机会执行**。
+
+                    三种"服务端不吐东西"的长相，实测（read=3s 的独立探针）：
+                      · **纯静默**（一个字节不回）→ `read=` 超时 3.0s 就抛，✅ 兜得住；
+                      · **保活整行**（每秒 `: ping\\n`）→ read 超时被重置，但循环体在跑，
+                        ⇒ 总时长判据兜得住；
+                      · **吐字节但凑不满一行** → **两条都兜不住** ← 真机死的就是这种。
+                    """
+                    nonlocal _over_budget
+                    buf = ""
+                    for text in resp.iter_text():
+                        if time.time() >= _call_deadline:
+                            _over_budget = True
+                            return
+                        buf += text
+                        while "\n" in buf:
+                            ln, buf = buf.split("\n", 1)
+                            yield ln.rstrip("\r")
+                    # 收尾：最后一行不带换行符时 `iter_lines()` 会 flush 出来，
+                    # 这里保持同样行为 —— 否则最后一条 `data:` 会被无声吞掉。
+                    if buf:
+                        yield buf.rstrip("\r")
+
+                for line in _lines():
                     # **总时长**封顶：见 `_call_deadline` 那段注释。
                     # 断流要**出声**（下面），否则"输出莫名其妙变短"永远找不到原因 ——
                     # 同 `bad_frames` 那条的规矩：认不出/提前断都要明报，不能静默。
+                    # ⚠️ 生成器里已经判过一次（那才是关键那道）；这里再判一次是兜
+                    # "一批字节里一次切出几十行"——那种情况下上头只看了一次表。
                     if time.time() >= _call_deadline:
                         _over_budget = True
                         break
