@@ -94,6 +94,27 @@ export default function AppLayout() {
 
   const selectProject = (pid: string) => { setActiveProject(pid); navigate('/') }
 
+  /** 当前激活的项目是不是**正停在某个 GATE 等人审批**。 */
+  const activeAtGate = (() => {
+    const cur = projects.find((p: any) => p.id === activePid)
+    return !!cur && String(cur.phase || '').startsWith('gate')
+  })()
+
+  /**
+   * 点导航。**「对话」原来无条件把当前项目清成 `_default`** —— 后果是：
+   * 项目停在 GATE 等人批准时，用户想去对话页看审批面板，**恰恰是这一下点击把它弄丢了**
+   * （`Chat.tsx` 的 `info` 变 null ⇒ `{isGate && info && <GatePanel/>}` 整块不渲染），
+   * 界面上就是"审核凭空消失"。2026-09-15 真机用户撞上（后端一直好好的）。
+   *
+   * 判据：**一个正等着人审批的项目，不该被一次纯导航动作丢掉** ——
+   * 同族规矩见"该看见的状态不该被无关动作弄丢"（终态被画成永转的圈 / QA 读坏渲染成绿勾）。
+   * 没有待审批项目时，行为与原来**完全一致**（才是"回到无项目的通用对话"的本意）。
+   */
+  const go = (path: string) => {
+    if (path === '/' && !activeAtGate) setActiveProject('_default')
+    navigate(path)
+  }
+
   return (
     <div className="app-shell">
       <div className="sidebar" style={{ width: sidebarWidth }}>
@@ -105,7 +126,7 @@ export default function AppLayout() {
           {NAV.map(n => {
             const active = pathname === n.path
             return (
-              <button key={n.path} onClick={() => { if (n.path === '/') setActiveProject('_default'); navigate(n.path) }} className={active ? 'nav-item nav-active' : 'nav-item'}>
+              <button key={n.path} onClick={() => { go(n.path) }} className={active ? 'nav-item nav-active' : 'nav-item'}>
                 <n.icon size={15}/> {n.label}
               </button>
             )
