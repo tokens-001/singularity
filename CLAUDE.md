@@ -36,6 +36,16 @@
 - `.venv/bin/python tests/test_exec_run.py`（`_exec.run()` 退出路径，桩测试不碰真 API）
 - `.venv/bin/python tests/test_review_gate.py`（门禁能不能看到改动 —— 真 git + 真快照，不 mock；桩测试测不出这个时序）
 - `.venv/bin/python tests/smoke_test.py`（走 HTTP，40 项；需先 `.venv/bin/python -m singularity.web.app` 起后端）
+- 🔴 **前端源码改完必须重建**：`cd src/singularity/web/frontend && npm run build`（`tsc && vite build` → `static/dist/`）
+
+> 🔴 **最后那条最容易漏，2026-09-15 真机验证时实锤**：后端**服务的是构建产物**
+> （`app.py` 读 `static/dist/index.html`），而 **`static/dist/` 在 `.gitignore` 里**
+> —— 改了 `frontend/src/` **不会**改到界面，也**没有任何东西会提醒你**。
+> 实测那次：`dist` 停在 **09-13 19:53**，之后**前端源码动了 17 个提交**都没进去
+> （含"任务卡把阻断渲染成绿勾"、"SSE 断了不重连"、"useRun 吞响应"…）。
+> **症状是"代码明明改了、界面一点没变"** —— 会被误判成"修复没生效 / 功能是死的"。
+> 判据：`ls -la src/singularity/web/static/dist/assets/ | head -1` 的时间
+> **必须晚于** `git log -1 --format=%ad -- src/singularity/web/frontend/src/`。
 
 > 后三条必须用 venv 解释器：系统 `python3`（homebrew 3.14）没装 singularity，直接跑会 `ModuleNotFoundError`。
 > `pytest` 那条不受影响 —— `pyproject.toml` 给 pytest 配了 `pythonpath`。
