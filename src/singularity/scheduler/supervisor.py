@@ -76,7 +76,7 @@ def supervise(
 
     # ── 1. 完整性 ──
     verdict.checks["completeness"] = _check_completeness(
-        checklist, agent_output, changed_files, task_description,
+        checklist, agent_output, changed_files, task_description, root,
     )
 
     # ── 2. 约束合规 ──
@@ -173,9 +173,37 @@ def _is_readonly_task(task_description: str) -> bool:
     return _READONLY_TAG in (task_description or "")
 
 
+def _all_empty(changed_files: list[str], root) -> list[str]:
+    """改动的文件里，**存在但 0 字节**的那些。
+
+    ⚠️ **2026-09-15 真机坐实**：一个任务把 311 行的测试文件写对了，随后**自己把它清成
+    0 字节**（文件还在、内容没了），而 `changed_files` 非空 ⇒ 上面那条"零改动 = 没产出"
+    的判据**被一个空文件绕过去了** ⇒ 一路判 `通过` → 任务 `done` → GATE3 才被人眼看见。
+
+    判据只认"**改动的文件全是空的**"：多文件交付里个别空文件（比如 `__init__.py`）
+    是合法的，一律拦会误伤；而"这个任务的全部产出都是空文件"没有第二种解释。
+    """
+    if not changed_files or root is None:
+        return []
+    from singularity.scheduler import witness
+    empties = []
+    for f in changed_files:
+        try:
+            p = Path(root) / f
+            if p.is_file() and p.stat().st_size == 0:
+                empties.append(f)
+        except OSError as e:
+            # 读不到就当它**非空**（保守：宁可放行，也别把"读不到"误判成"没产出"
+            # —— 那会误杀正常任务）。但**必须出声**：静默 except 正是这仓的棘轮
+            # 明令禁止的（2026-09-15 加这个函数时当场被那条棘轮抓到过一次）。
+            witness.warn("supervisor", f"empty_check_stat:{f}:{type(e).__name__}"[:120])
+            continue
+    return empties if len(empties) == len(changed_files) else []
+
+
 def _check_completeness(
     checklist: list[str], agent_output: str, changed_files: list[str],
-    task_description: str = "",
+    task_description: str = "", root=None,
 ) -> CheckResult:
     """完整性: checklist 逐项检查 (仅记录, 不判失败)。
 
@@ -204,6 +232,16 @@ def _check_completeness(
         return CheckResult(
             passed=False, reason="无文件改动",
             evidence={"hard": True},
+        )
+    # 有改动，但改动**全是空文件** —— 同"无文件改动"，硬判失败。
+    # 见 `_all_empty`：这是 2026-09-15 真机那条"交付物被自己清空"漏过去的口子。
+    _empties = _all_empty(changed_files, root)
+    if _empties:
+        return CheckResult(
+            passed=False,
+            reason=(f"改动的文件**全是空的**（{'、'.join(_empties[:3])}）"
+                    "—— 空文件不算产出，等同于空手回来"),
+            evidence={"hard": True, "empty_files": _empties},
         )
     missing = [item for item in checklist if item.lower() not in agent_output.lower()]
     return CheckResult(

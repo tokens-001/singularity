@@ -676,9 +676,22 @@ class OpenAIAgentExecutor(BaseExecutor):
                     })
                 elif tool_turns >= max_tool_turns or (call_fingerprint == last_tool_calls and tool_turns >= 2):
                     # 警告: 注入系统消息，建议停止工具
+                    #
+                    # ⚠️ **必须同时说清"交付物得落盘"**（2026-09-15 真机坐实）：
+                    # 原来只有「停止使用工具，直接输出最终答案」这一句 —— 而它是全仓
+                    # **唯一一条"只劝、不硬撤工具"**的收尾指令（上一条 661 与下面 675
+                    # 都是 `tools = []`）。真机上模型听了劝、把 311 行测试文件**贴在回答
+                    # 正文里**收尾，还写着"以下代码块即为权威交付物" —— 而平台只收文件，
+                    # 正文里的代码**永远不会被交付**，任务照样判 `done`。
+                    # 同文件里还有一条方向相反的（`tool_choice` 兜底那条：
+                    # 「必须调用工具产出文件，禁止只输出文字描述」）—— 两条对着干，
+                    # **谁后出现谁赢**，而这条更靠后。补上这句，让它不再互相抵消。
                     messages.append({
                         "role": "system",
                         "content": "[系统] 已收集足够信息。停止使用工具，直接输出最终答案。"
+                                   "但**交付物必须以文件形式存在**：还没写进文件的代码/文档，"
+                                   "先用 write_file 落盘再收尾 —— "
+                                   "**只写在回答正文里的内容不会被交付**。"
                     })
                 last_tool_calls = call_fingerprint
                 continue  # 继续下一轮，让模型看工具结果
@@ -1181,6 +1194,17 @@ def _write_file(args: dict, cwd, blocked_patterns) -> str:
     if blocked:
         return f"写入被拒绝: {reason}"
     p = _safe_path_at(cwd, path)
+    # ⚠️ **空内容不许覆盖一个非空文件**（2026-09-15 真机坐实）：
+    # 原来这里无条件 `p.write_text(content)`，而 `content` 缺省是 `""` ——
+    # 一次**没带上内容**的调用（参数没拼出来 / 被 max_tokens 截掉）就能把交付物
+    # 清成 0 字节，**返回的还是一条"已写入 X (0 字符)"，长得像成功**。
+    # 真机现场：一个任务的 311 行测试文件被自己清空，而 `changed_files` 因此非空
+    # ⇒ 「零改动 = 没产出」那条判据被绕过去了 ⇒ 一路判 `通过` 到 `done`。
+    # 新建空文件（`__init__.py` 之类）仍然放行 —— 拦的只是"把已有内容抹掉"这一种。
+    if content == "" and p.is_file() and p.stat().st_size > 0:
+        return (f"写入被拒绝：content 为空，而 {path} 已有 {p.stat().st_size} 字节内容，"
+                "这会把它清空。请把**完整内容**放进 content 再调一次；"
+                "确实要清空的话，用 run_command 显式做。")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
     return f"已写入 {path} ({len(content)} 字符)"
