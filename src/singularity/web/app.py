@@ -52,7 +52,8 @@ from singularity.scheduler import witness
 from singularity.scheduler import orchestrator
 from singularity.scheduler import project as proj_mod
 from singularity.scheduler.project import Phase
-from singularity.scheduler.log import info as _log_info, warn as _log_warn, get_logger
+from singularity.scheduler.log import (info as _log_info, warn as _log_warn,
+                                       get_logger, _get_file_logger as _get_file_log)
 from singularity.scheduler import mcp as mcp_mod
 from singularity.scheduler import bridge as ws_bridge
 # ⚠️ **本机来源判定只有一份**（2026-09-14）：这个名字**就是** `_auth.is_local_origin`
@@ -2271,11 +2272,39 @@ def serve_sw():
 # 启动
 # ═══════════════════════════════════════════════════════════
 
+def _setup_startup_logger():
+    """给 `startup` logger 挂上落盘去处 + 级别。**不碰 `basicConfig`。**
+
+    ⚠️ 这个 logger 原来**一个 handler 都没有** ⇒「模型: N 注册, M 可用」「MCP: N 服务器」
+    「WebSocket 已启动」「调度循环已自动启动」这些**成功/状态**的话一个字都不落盘。
+    只剩 root 的 lastResort 兜底，而它**只放 WARNING 及以上** —— 于是**丢的是成功那半，
+    失败那半（warning）看得见**。2026-09-14 真机重启时撞见，一度把"日志静悄悄"读成"起崩了"。
+
+    为什么不用 `basicConfig`：它是**全局的**（改 root 的 handler 和级别），会顺带改掉
+    werkzeug 和别的库输出的去处。这里**只给这一个 logger 挂**。
+    落盘复用 `log.warn` 那份（`.qidian/logs/scheduler.log`），免得再多一个要 grep 的地方；
+    它由 `_get_file_log()` **读时现算**路径，和 `_setup_audit_logger` 同一个理由
+    —— 这样 conftest 改的 `config.QIDIAN_DIR` 才管得住它。
+    """
+    lg = _al.getLogger("startup")
+    if not lg.handlers:                    # 幂等：重复调用别把 handler 叠起来
+        # ⚠️ 别指望 `addHandler` 兜底：它只对**同一个 handler 实例**去重（3.13+），
+        # 换个实例照样叠 —— 叠了日志就重复（实测：不同实例两次 → 2 个）。
+        try:
+            lg.addHandler(_get_file_log().handlers[0])
+        except Exception:
+            # 落盘那条路坏了 ⇒ 退到 stderr（root 的 lastResort 用的也是它）。
+            # **不能吞**：吞了就等于又回到"启动日志一个字看不见"，正是这个函数要修的病；
+            # 而且连"为什么没落盘"都留不下。（顺带，棘轮也是靠这个 `_al.*` 才认得出声。）
+            lg.addHandler(_al.StreamHandler())
+    lg.setLevel(_al.INFO)                  # 不设的话有效级别跟着 root（WARNING）走
+    return lg
+
+
 if __name__ == "__main__":
     import signal as _signal
-    import logging as _logging
 
-    _startup_log = _logging.getLogger("startup")
+    _startup_log = _setup_startup_logger()
 
     # 审计日志/目录改成懒初始化了（原来在 import 期，测试一 import 就污染真 .qidian/）。
     # 真正跑服务时在这里显式建一次 —— 别指望"第一个请求碰巧会调 audit_log"。

@@ -85,26 +85,63 @@ class TestIsRedundantFailure:
         return d
 
     def test_pass_action_no_redundant(self, monkeypatch, tmp_path):
-        """pass → 不判重。"""
+        """真机的"通过"形状（`verdict="通过"` + `action="pass"`）→ 不判重。
+
+        ⚠️ 写进去的 5 条必须**和当前这条同签名**，否则 `match_count` 恒 0 ——
+        把下面那道守卫删掉照样绿（原来就是假绿：5 条用的是默认签名 `阻断/abort`，
+        跟"通过"这条对不上；2026-09-15 变异坐实）。
+        """
         from singularity.scheduler.neijinglu import _is_redundant_failure
         from singularity.scheduler import config
-        data = self._make_data()
-        data["validation"] = {"verdict": "通过", "action": "pass"}
+        passing = {"verdict": "通过", "action": "pass"}
 
-        _write_trace_files(tmp_path, [self._make_data() for _ in range(5)])
+        _write_trace_files(tmp_path, [self._make_data(validation=dict(passing))
+                                      for _ in range(5)])
         monkeypatch.setattr(config, "TRACE_DIR", tmp_path)
-        assert not _is_redundant_failure(data)
+        assert not _is_redundant_failure(self._make_data(validation=dict(passing)))
 
     def test_pass_verdict_no_redundant(self, monkeypatch, tmp_path):
-        """verdict=pass → 不判重。"""
+        """英文 `verdict="pass"` 也要豁免（旧形状）→ 不判重。"""
         from singularity.scheduler.neijinglu import _is_redundant_failure
         from singularity.scheduler import config
-        data = self._make_data()
-        data["validation"]["verdict"] = "pass"
+        passing = {"verdict": "pass", "action": "abort"}
 
-        _write_trace_files(tmp_path, [self._make_data() for _ in range(5)])
+        _write_trace_files(tmp_path, [self._make_data(validation=dict(passing))
+                                      for _ in range(5)])
         monkeypatch.setattr(config, "TRACE_DIR", tmp_path)
-        assert not _is_redundant_failure(data)
+        assert not _is_redundant_failure(self._make_data(validation=dict(passing)))
+
+    def test_verdict_通过_单独生效(self, monkeypatch, tmp_path):
+        """`verdict="通过"` 自己就够豁免，**不靠 action**。
+
+        用真机真有的异常形状 `('通过','retry')`（实测 24 条里有 2 条）——
+        它是唯一能单独钉住"中文通过"那条路的形状：另外几条用例里
+        `action` 都是 `"pass"`，会被 `action == "pass"` 那半救下来。
+        """
+        from singularity.scheduler.neijinglu import _is_redundant_failure
+        from singularity.scheduler import config
+        passing = {"verdict": "通过", "action": "retry"}
+
+        _write_trace_files(tmp_path, [self._make_data(validation=dict(passing))
+                                      for _ in range(5)])
+        monkeypatch.setattr(config, "TRACE_DIR", tmp_path)
+        assert not _is_redundant_failure(self._make_data(validation=dict(passing)))
+
+    def test_action_pass_verdict_空_也豁免(self, monkeypatch, tmp_path):
+        """`action="pass"` 单独也够。
+
+        这正是原来第一道守卫 `action == "pass" and not verdict` 想认的形状 ——
+        它错在**多要了**一个 `not verdict`。两个字段**任一命中**就算通过：
+        真机里这两个字段并不总是一致（实测 24 条里有 `('通过','retry')` 这种）。
+        """
+        from singularity.scheduler.neijinglu import _is_redundant_failure
+        from singularity.scheduler import config
+        passing = {"verdict": "", "action": "pass"}
+
+        _write_trace_files(tmp_path, [self._make_data(validation=dict(passing))
+                                      for _ in range(5)])
+        monkeypatch.setattr(config, "TRACE_DIR", tmp_path)
+        assert not _is_redundant_failure(self._make_data(validation=dict(passing)))
 
     def test_no_trace_dir(self, monkeypatch, tmp_path):
         """trace 目录不存在 → False。"""

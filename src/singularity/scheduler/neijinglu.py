@@ -342,10 +342,20 @@ def _is_redundant_failure(data: dict, lookback: int = 3) -> bool:
     validation = data.get("validation", {}) or {}
     verdict = validation.get("verdict", "")
     action = validation.get("action", "")
-    # 只对非 pass 的 trace 做去重
-    if action == "pass" and not verdict:
-        return False
-    if verdict == "pass":
+    # 只对**非** pass 的 trace 做去重。
+    # ⚠️ 2026-09-15 修：原来这里是两道守卫 `action == "pass" and not verdict` 和
+    # `verdict == "pass":` —— 真机（`.qidian/traces/*.json`，实测 24 条）写的是
+    # **`verdict="通过"`（中文）+ `action="pass"`**：
+    #   · 第一条要求 verdict 为**空**，真机是"通过"（真值）⇒ 不触发；
+    #   · 第二条比的是英文 `"pass"` ≠ `"通过"` ⇒ 不触发。
+    # ⇒ **通过的 trace 根本不被豁免**，会往下算签名、被判成"重复失败"；
+    # 调用方 `save_trace` 拿这个结果做**存储裁剪**（截断 agent_output / changed_files）
+    # ⇒ 同类形状的**成功任务**连续几次之后 trace 反被系统性截断 —— 与 docstring
+    # 声明的"只对非 pass 的 trace 做去重"**正好相反**。
+    # 三个写者（`validator` / `_exec` / `_task_runner`）产出的"通过"都是
+    # `verdict="通过" + action="pass"`（另有两个 `('通过','retry')` 的异常形状、
+    # unverified/evidence 都是 null，一并当通过）；**两个字段任一命中就算通过**。
+    if action == "pass" or verdict in ("通过", "pass"):
         return False
 
     sig = (task_type, verdict, action)

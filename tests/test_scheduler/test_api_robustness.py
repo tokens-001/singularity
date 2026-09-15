@@ -66,6 +66,70 @@ class TestJsonBodyShape:
                 f"守卫误伤了没 body 的请求：{r.status_code} {r.data[:120]}"
 
 
+class TestStartupLogger:
+    """启动那一串 INFO 必须真的落盘（2026-09-14 真机撞见：一个字都没有）。"""
+
+    def test_startup_logger_挂上了去处和级别(self, monkeypatch):
+        import logging
+        import types
+        from singularity.web import app as W
+
+        sentinel = logging.NullHandler()
+        lg = logging.getLogger("startup")
+        monkeypatch.setattr(lg, "handlers", [])          # 清空并交给 monkeypatch 还原
+        monkeypatch.setattr(lg, "level", logging.NOTSET)
+        # 别真去建 .qidian/logs/ —— 只验接线，不碰盘
+        monkeypatch.setattr(W, "_get_file_log",
+                            lambda: types.SimpleNamespace(handlers=[sentinel]))
+
+        W._setup_startup_logger()
+
+        assert sentinel in lg.handlers, "startup logger 没挂上落盘去处 ⇒ info 又静默了"
+        assert lg.level == logging.INFO, "级别没提到 INFO ⇒ info 仍被 root 的 WARNING 挡掉"
+
+    def test_落盘坏了要退到_stderr_不能吞(self, monkeypatch):
+        """`_get_file_log()` 抛了 ⇒ 挂一个 stderr handler，**不能静默吞掉**。
+
+        吞掉就等于又回到"启动日志一个字看不见"—— 正是这个函数存在的理由。
+        """
+        import logging
+        from singularity.web import app as W
+
+        lg = logging.getLogger("startup")
+        monkeypatch.setattr(lg, "handlers", [])
+
+        def _boom():
+            raise OSError("模拟：.qidian/logs 建不出来")
+
+        monkeypatch.setattr(W, "_get_file_log", _boom)
+        W._setup_startup_logger()          # 不该抛出去
+
+        assert len(lg.handlers) == 1, "落盘失败后一个 handler 都没挂 ⇒ 又静默了"
+        assert isinstance(lg.handlers[0], logging.StreamHandler), \
+            f"退路不是 stderr handler：{lg.handlers[0]!r}"
+
+    def test_重复调用不叠_handler(self, monkeypatch):
+        """两次调用只留一个 handler —— 叠了日志就重复。
+
+        ⚠️ 假出处必须**每次回一个新实例**：实测本解释器（3.14）的 `Logger.addHandler`
+        对**同一个实例**会自己去重（`if not (hdlr in self.handlers)`），
+        拿同一个 handler 复用的话，把幂等那句删掉也照样绿 —— 变异掐不断。
+        新实例则真的会叠（实测：不同实例两次 → 2 个）。
+        """
+        import logging
+        import types
+        from singularity.web import app as W
+
+        lg = logging.getLogger("startup")
+        monkeypatch.setattr(lg, "handlers", [])
+        monkeypatch.setattr(W, "_get_file_log",
+                            lambda: types.SimpleNamespace(handlers=[logging.NullHandler()]))
+
+        W._setup_startup_logger()
+        W._setup_startup_logger()
+        assert len(lg.handlers) == 1, f"handler 叠了 {len(lg.handlers)} 个 —— 日志会重复"
+
+
 class TestGatePhaseValidation:
     def test_invalid_gate_is_400_not_500(self, client, tmp_path, monkeypatch):
         from singularity.scheduler import project as proj_mod

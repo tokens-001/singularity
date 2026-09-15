@@ -1,7 +1,10 @@
 """_task_runner.py 单元测试 — 白盒覆盖 execute() 分支 + 辅助函数。
 
-ponytail: 只测 execute() 决策分叉和纯函数 _reorder_agents_by_rank。
+ponytail: 只测 execute() 决策分叉。
 finalize() 9 分支已由 test_exec_internals.py 覆盖。
+
+（原来的 `_reorder_agents_by_rank` 那 5 条已删：那个函数**全仓零调用点**——两档制合并后
+`execute()` 里"按模型排名重排"那段就没了。用例判据本身是真的，守的东西却不在任何生产路径上。）
 """
 
 import pytest
@@ -119,46 +122,6 @@ def _setup(monkeypatch, **overrides):
         monkeypatch.setattr(tr, name, val, raising=False)
 
     return tr, batch, pre, route, snap
-
-
-# ═══════════════════════════════════════════════════════════════
-# _reorder_agents_by_rank — 纯函数
-# ═══════════════════════════════════════════════════════════════
-
-class TestReorderAgentsByRank:
-    def test_ranked_first(self):
-        """排名靠前的模型排到列表前面。"""
-        from singularity.scheduler._task_runner import _reorder_agents_by_rank
-        agents = [{"model": "gpt-4"}, {"model": "claude"}, {"model": "qwen"}]
-        result = _reorder_agents_by_rank(agents, ["claude", "gpt-4"])
-        assert [a["model"] for a in result] == ["claude", "gpt-4", "qwen"]
-
-    def test_unranked_to_end(self):
-        """未在排名中的模型排到末尾。"""
-        from singularity.scheduler._task_runner import _reorder_agents_by_rank
-        agents = [{"model": "gpt-4"}, {"model": "qwen"}]
-        result = _reorder_agents_by_rank(agents, ["qwen"])
-        assert result[0]["model"] == "qwen"
-        assert result[1]["model"] == "gpt-4"
-
-    def test_empty_list(self):
-        """空列表直接返回。"""
-        from singularity.scheduler._task_runner import _reorder_agents_by_rank
-        assert _reorder_agents_by_rank([], ["claude"]) == []
-
-    def test_all_unranked_preserves_order(self):
-        """全未排名保持原顺序。"""
-        from singularity.scheduler._task_runner import _reorder_agents_by_rank
-        agents = [{"model": "a"}, {"model": "b"}]
-        result = _reorder_agents_by_rank(agents, ["x", "y"])
-        assert [a["model"] for a in result] == ["a", "b"]
-
-    def test_rank_missing_model_not_in_agents(self):
-        """排名引用的模型不在 agents 中 → 忽略。"""
-        from singularity.scheduler._task_runner import _reorder_agents_by_rank
-        agents = [{"model": "a"}, {"model": "b"}]
-        result = _reorder_agents_by_rank(agents, ["c", "a"])
-        assert [a["model"] for a in result] == ["a", "b"]
 
 
 # ═══════════════════════════════════════════════════════════════

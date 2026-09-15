@@ -60,18 +60,6 @@ from singularity.scheduler._git_worktree import (
 )
 from singularity.scheduler.tracker import TaskStatus
 
-# ── 单例 ─────────────────────────────────────────────────
-
-def _reorder_agents_by_rank(agents_list: list, ranked_models: list[str]) -> list:
-    """按画像排名重排 agent 列表：排名靠前的模型优先。"""
-    rank_map = {m: i for i, m in enumerate(ranked_models)}
-    return sorted(
-        agents_list,
-        key=lambda a: rank_map.get(a.get("model", ""), 999),
-    )
-
-
-
 # ═══════════════════════════════════════════════════════════════
 # 任务收尾的三件事（两条路径共用）
 # ═══════════════════════════════════════════════════════════════
