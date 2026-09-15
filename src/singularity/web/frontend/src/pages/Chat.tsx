@@ -8,7 +8,7 @@ import { Loader2, CheckCircle2, AlertCircle, FolderOpen } from 'lucide-react'
 import FilePanel from '../components/FilePanel'
 import { MessageBubble } from '../components/chat/MessageBubble'
 import { TaskCard, taskStateKind, type ProgressItem, type ToolLog } from '../components/chat/TaskCard'
-import { GatePanel } from '../components/chat/GatePanel'
+import { GatePanel, ProjectArchive } from '../components/chat/GatePanel'
 import { ChatOptions, type ExecMode } from '../components/chat/ChatOptions'
 
 const PHASE_NAMES: Record<string, string> = { template: '待开始', researching: '调研中', planning: '架构设计中', executing: '实现中', integrating: '集成合并中', reviewing: '审查中', delivering: '交付中', done: '已完成' }
@@ -281,6 +281,11 @@ export default function Chat() {
               <GatePanel info={info} gateNum={gateNum} gatePhase={gatePhase}
                 acceptance={acceptance} onGate={gateConfirm} />
             )}
+
+            {/* 不在闸门时也给个"随时能回看架构/调研"的入口（两者都是 <details>，默认收起）。
+                原来只有上面那一段 —— **批完就再也看不见自己批过什么了**，想回看只能去项目页
+                （2026-09-15 用户提的：「对话页为什么不能一直显示架构」）。 */}
+            {!isGate && info && <ProjectArchive info={info} />}
 
             {loading && (
               <div className="chat-msg-row" style={{ padding: '4px 0' }}>

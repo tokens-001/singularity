@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest'
 import { act, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { AcceptancePanel } from './GatePanel'
+import { AcceptancePanel, ProjectArchive } from './GatePanel'
 
 function render(node: ReactNode): string {
   const el = document.createElement('div')
@@ -106,5 +106,76 @@ describe('GATE3 验收摘要', () => {
     ]} />)
     expect(t).toContain('验收跳过')
     expect(t).toContain('架构没产出约束清单')
+  })
+})
+
+
+// ═══════════════════════════════════════════════════════════════
+// 项目档案：不在闸门时也能回看架构/调研（2026-09-15 用户提的）
+// ═══════════════════════════════════════════════════════════════
+// 原来对话页只在 `isGate` 时挂 `GatePanel`，而架构只在 GATE2/GATE3 露脸
+// ⇒ **批完就再也看不见自己批过什么了**，想回看只能去项目页。
+// ⚠️ 修法**不是**让 GatePanel 常驻（它是审批条：`🛑 GATE{n}` + 通过/打回，
+// 按钮无条件渲染）—— 而是把材料（`ArchitectureDetails` / `ResearchReport`）
+// 单独挂一份。这条钉的就是"**挂的是材料，不是审批条**"。
+
+const ARCH = {
+  architecture: '主设计：单文件 CLI',
+  modules: [{ name: 'cli', responsibility: '参数解析' }],
+  tasks: [{ id: 'T1', title: '实现主逻辑' }],
+}
+const RESEARCH = { pitfalls: ['编码坑'], competitive_analysis: { products: [] } }
+
+function dom(node: ReactNode): HTMLElement {
+  const el = document.createElement('div')
+  document.body.appendChild(el)
+  const root = createRoot(el)
+  act(() => { root.render(node) })
+  return el
+}
+
+describe('项目档案（不在闸门时回看架构/调研）', () => {
+  it('架构和调研都在时，两份材料都挂上', () => {
+    const el = dom(<ProjectArchive info={{ architecture: ARCH, research_report: RESEARCH }} />)
+    const text = el.textContent || ''
+    expect(text).toContain('架构方案')
+    expect(text).toContain('调研报告')
+    el.remove()
+  })
+
+  it('**不许出现审批条**：没有 GATE 横幅，也没有通过/打回按钮', () => {
+    const el = dom(<ProjectArchive info={{ architecture: ARCH, research_report: RESEARCH }} />)
+    const text = el.textContent || ''
+    expect(text, '项目档案里冒出了 GATE 横幅 —— 挂错组件了').not.toContain('GATE')
+    const labels = Array.from(el.querySelectorAll('button')).map(b => (b.textContent || '').trim())
+    expect(labels.some(l => l.includes('通过')), '不该有「通过」按钮').toBe(false)
+    expect(labels.some(l => l.includes('打回')), '不该有「打回」按钮').toBe(false)
+    el.remove()
+  })
+
+  it('**默认是收起的** —— 别把对话页撑爆', () => {
+    const el = dom(<ProjectArchive info={{ architecture: ARCH }} />)
+    // 材料都是 <details>，未展开时 detail 内容不该可见
+    const details = el.querySelectorAll('details')
+    expect(details.length, '材料该是 <details>（默认收起）').toBeGreaterThan(0)
+    expect(Array.from(details).every(d => !d.hasAttribute('open')), '默认就展开了').toBe(true)
+    el.remove()
+  })
+
+  it('没有材料时 → 整个不渲染（别在对话页留个空壳）', () => {
+    // 契约是"缺省 = falsy"：后端没有架构时给的是 **`null`**（实测 `/api/projects` 里
+    // `architecture: None`），不是 `{}`。
+    expect((dom(<ProjectArchive info={{}} />).textContent || '').trim()).toBe('')
+    expect((dom(<ProjectArchive info={null} />).textContent || '').trim()).toBe('')
+    expect((dom(<ProjectArchive info={undefined} />).textContent || '').trim()).toBe('')
+    document.querySelectorAll('div').forEach(d => { if (!d.textContent?.trim()) d.remove() })
+  })
+
+  it('只有调研（架构还没生成）→ 只挂调研，不炸', () => {
+    const el = dom(<ProjectArchive info={{ research_report: RESEARCH }} />)
+    const text = el.textContent || ''
+    expect(text).toContain('调研报告')
+    expect(text).not.toContain('架构方案')
+    el.remove()
   })
 })

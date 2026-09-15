@@ -312,6 +312,30 @@ const GateSummary = memo(function GateSummary({ gateNum, research, arch, project
   return null
 })
 
+/**
+ * 项目档案：架构 / 调研的**随时可看**入口。
+ *
+ * ⚠️ **它跟 `GatePanel` 是两件事，别合并**：`GatePanel` 本质是**审批条**
+ * （`🛑 GATE{n}` + ✅通过 / ↩打回，**按钮是无条件渲染的**）—— 不在闸门时挂它，
+ * 会常驻一个**假的 GATE 横幅**和两个**按不动也按不得的按钮**。
+ * 材料本来就拆成了独立组件（`ArchitectureDetails` / `ResearchReport`，项目页直接复用），
+ * 这里只是把同一份材料在对话页也挂一份。
+ *
+ * 折叠是白送的：两者内部都是 `<details>`，**默认就是收起的**。
+ *
+ * 2026-09-15 用户提的：「对话页为什么不能一直显示架构，还得去项目页看」——
+ * 原来架构只在 GATE2 / GATE3 那两个窗口露脸，**批完就再也看不见了**。
+ */
+export const ProjectArchive = memo(function ProjectArchive({ info }: { info: any }) {
+  if (!info?.architecture && !info?.research_report) return null
+  return (
+    <div style={{ maxWidth: 760, margin: '12px auto 0', textAlign: 'left' }}>
+      {info.architecture && <ArchitectureDetails arch={info.architecture} />}
+      {info.research_report && <ResearchReport report={info.research_report} />}
+    </div>
+  )
+})
+
 /** GATE 审核面板。memo：任务日志高频更新时不该重渲染这棵大树。 */
 export const GatePanel = memo(function GatePanel({ info, gateNum, gatePhase, acceptance, onGate }: Props) {
   const isGate3 = gateNum === '3'
