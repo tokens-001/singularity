@@ -149,6 +149,23 @@ class EdgeType:
 # ═══════════════════════════════════════════════════════════
 
 _EMBED_MODEL = None
+
+# ⚠️ **MPS 不是线程安全的 —— 2026-09-16 真机坐实，代价是整个后端进程没了。**
+#
+# 症状：进程**无声消失**，日志停在上一行、**没有任何 traceback**（崩在 C++ 里，
+# Python 层一个字都留不下）。macOS 崩溃报告里写着：
+#     EXC_BAD_ACCESS / SIGSEGV
+#     libtorch → at::native::mps::copy_cast_kernel_mps → mps_copy_ → to_device
+#
+# 形状：同一个 `SentenceTransformer` 被**多个线程同时**用。而委员会的卖点就是
+# **多模型并行 dispatch** —— 每个并行分支都来查记忆/技能 ⇒ 一起进模型。
+# 实测（本机，可复现）：单线程 encode 完全正常；**8 线程同时 encode = 必崩**。
+#
+# ⚠️ 这类崩溃**没有第二次机会**：进程直接没，调度循环、在跑的任务、SSE 全丢。
+# ⇒ 所有进模型的路径收进这一把锁：**加载**（里面的 `.to(mps)` 也是崩点）和**推理**。
+# ⚠️ 是 **RLock** 不是 Lock —— `_embed` 会**持着锁**调 `_get_embed_model`。
+_EMBED_LOCK = __import__("threading").RLock()
+
 # 模块加载时抑制HF/transformers日志
 import logging as _hf_log
 _hf_log.getLogger("sentence_transformers").setLevel(_hf_log.ERROR)
@@ -157,7 +174,16 @@ def _get_embed_model():
     """懒加载: 首次查询才下载/加载模型(420MB)。
 
     默认启用。下载超时或 CI 环境 (QIDIAN_SKIP_EMBED=1) 时降级跳过。
+
+    ⚠️ 外面套一把锁（见 `_EMBED_LOCK`）：**加载本身也是崩溃点**（里面那句
+    `SentenceTransformer(...).to(mps)`），两个线程同时冷启动会一起进模型。
     """
+    with _EMBED_LOCK:
+        return _load_embed_model()
+
+
+def _load_embed_model():
+    """真正的加载（**不加锁** —— 调用方 `_get_embed_model` 已经持锁）。"""
     global _EMBED_MODEL
     if _EMBED_MODEL is None:
         import os, time
@@ -198,10 +224,14 @@ def _embed(text: str) -> list[float]:
     """384维归一化向量。空文本或无模型时返回空列表。"""
     if not text or not text.strip():
         return []
-    model = _get_embed_model()
-    if model is None:
-        return []
-    return model.encode(text.strip(), normalize_embeddings=True).tolist()
+    # ⚠️ **加载和推理都在这一把锁里**：MPS 并发使用会段错误，崩的是整个进程。
+    # 见 `_EMBED_LOCK` 那段。`_EMBED_LOCK` 是 RLock —— 这里持锁进
+    # `_get_embed_model` 是**有意的**，不是死锁。
+    with _EMBED_LOCK:
+        model = _get_embed_model()
+        if model is None:
+            return []
+        return model.encode(text.strip(), normalize_embeddings=True).tolist()
 
 
 # ═══════════════════════════════════════════════════════════

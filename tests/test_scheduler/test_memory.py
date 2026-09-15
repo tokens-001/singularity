@@ -128,6 +128,64 @@ class TestEmbedModelActuallyLoads:
         assert seen["kw"].get("local_files_only") is True, \
             f"加载嵌入模型必须只读本地缓存，实际参数: {seen['kw']}"
 
+    def test_并发进模型会被串起来(self, monkeypatch):
+        """**MPS 并发使用 = 段错误**（2026-09-16 真机坐实，代价是整个后端进程没了）。
+
+        症状**没有第二次机会**：崩在 C++ 里，Python 层一个字都留不下 ——
+        日志停在上一行、没有 traceback、进程无声消失。macOS 崩溃报告里是
+        `EXC_BAD_ACCESS / SIGSEGV` ＋
+        `libtorch → at::native::mps::copy_cast_kernel_mps → to_device`。
+
+        形状：同一个 `SentenceTransformer` 被**多个线程同时**用。而委员会就是
+        **多模型并行 dispatch**、每个并行分支都来查记忆/技能 ⇒ 一起进模型。
+        实测（本机）：单线程 encode 正常；**8 线程同时 encode 同一个模型 = 必崩**。
+
+        ⚠️ 这条钉的是**接线**（`_embed` 里那把锁在不在），不是"锁实现得对不对" ——
+        所以用假模型自己数并发，**不加载真模型**。
+        真机复现/复验用的独立脚本见 `docs/防御模式.md` §73。
+
+        变异验证：`_EMBED_LOCK` 换成 `contextlib.nullcontext()` → 红。
+        """
+        import threading
+        import time as _t
+
+        import singularity.scheduler._memory_core as mc
+
+        class _Vec:
+            def tolist(self):
+                return [0.0] * 384
+
+        class _FakeModel:
+            """自己数"同时有几个线程在里面"。"""
+
+            def __init__(self):
+                self.n = 0
+                self.max_n = 0
+                self._l = threading.Lock()
+
+            def encode(self, text, normalize_embeddings=True):
+                with self._l:
+                    self.n += 1
+                    self.max_n = max(self.max_n, self.n)
+                _t.sleep(0.01)          # 拉大窗口，不然并发撞不上
+                with self._l:
+                    self.n -= 1
+                return _Vec()
+
+        fake = _FakeModel()
+        monkeypatch.setattr(mc, "_get_embed_model", lambda: fake)
+
+        ts = [threading.Thread(target=mc._embed, args=(f"文本{i}",))
+              for i in range(8)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+
+        assert fake.max_n == 1, (
+            f"有 {fake.max_n} 个线程同时进了 model.encode() —— "
+            f"在 MPS 上这就是段错误：**真机上整个后端进程会无声消失**")
+
     def test_skip_env_still_short_circuits(self, monkeypatch):
         """QIDIAN_SKIP_EMBED=1 时照旧跳过（CI 用）。"""
         import singularity.scheduler._memory_core as mc
