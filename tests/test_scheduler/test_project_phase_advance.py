@@ -302,3 +302,61 @@ def test_delivery_no_code_ref_仍然算成功但必须出声(tmp_path, monkeypat
     assert ok is True, "tag 打不上 ≠ 代码没交付 —— 判失败会把好项目卡死在 delivering"
     assert "unknown" in detail, f"detail 里该如实写出来: {detail}"
     assert any("delivery_no_code_ref" in w for w in warns), f"没出声，只剩 detail 串: {warns}"
+
+
+def test_交付清单的报告栏不该永远空(tmp_path, monkeypatch):
+    """报告在 `.qidian/projects/<id>.<名字>` 里，**不在项目仓库里**。
+
+    真机（2026-09-15）：用户点完 GATE3 通过问"交付的东西呢" —— 代码交付是好的
+    （`release/<id>-…` tag 真打上了），但交付清单三项全空，其中 `reports` 是
+    **永远空**：收报告时用的是 `_Path(root) / "qa_report.json"`，而 `root` 是
+    **项目仓库**（`_repo_dir(proj.id)`），报告全在 `.qidian/projects/` 下、
+    名字还带 `<id>.` 前缀。⇒ 一栏永远空，界面上却跟"正常交付"长得一模一样。
+
+    ⚠️ 报告**只放在 `.qidian/projects/`**，项目仓库里一份都不放 ——
+    这样"改回 `_Path(root)`"必然红（放一份在仓库里会让旧代码也过，
+    那条断言就白钉了）。
+    变异验证：`_pop(proj.id, fname)` 改回 `_Path(root) / fname` → 红。
+    """
+    import subprocess
+
+    from singularity.scheduler import config
+    from singularity.scheduler import project as proj_mod
+
+    pid = "p_reports"
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+    monkeypatch.setattr(proj_mod, "repo_dir", lambda _id: root)
+
+    # 报告落在**项目数据目录**，名字带 `<id>.` 前缀
+    # ⚠️ 这里直接拼 `config.QIDIAN_DIR` 而不是调 `_phase_output_path()` ——
+    # 把"约定"本身钉死，免得跟被测代码用同一个函数、一起错。
+    pdir = config.QIDIAN_DIR / "projects"
+    pdir.mkdir(parents=True, exist_ok=True)
+    for name in ("qa_report.json", "qa-report.md", "security-report.md", "machine-checks.json"):
+        (pdir / f"{pid}.{name}").write_text("{}", encoding="utf-8")
+    # 项目状态文件也在同一个目录 —— 它**不是**报告，不许被收进去
+    (pdir / f"{pid}.json").write_text("{}", encoding="utf-8")
+
+    class _R:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: _R())
+
+    p = proj_mod.ProjectState(
+        id=pid, name="测试报告归档", raw_constraints=[], owner_confirm={},
+        constraints_checklist=[], task_ids=[], issues=[], supervision_log=[],
+        lineage=[], handoffs=[], agent_lineup={},
+    )
+
+    ok, detail = orch._run_delivery(p)
+
+    assert ok is True
+    manifest = config.QIDIAN_DIR / "deliverables" / pid / "delivery_manifest.json"
+    reports = json.loads(manifest.read_text(encoding="utf-8"))["reports"]
+    assert reports, f"报告栏不该是空的（那就是原 bug）: {reports}"
+    assert "qa-report.md" in reports and "security-report.md" in reports, reports
+    assert f"{pid}.json" not in reports, "项目状态文件不是报告，别扫进来"
+    assert "报告=" in detail, f"报告数该进 detail，否则日志里看不出报告栏空没空: {detail}"

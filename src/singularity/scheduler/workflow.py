@@ -699,7 +699,13 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
         msgs.append(f"安全审计失败: {err2}")
 
     # S4: E2E 测试执行 (对照 test_cases.json 中的 e2e 用例)
-    tc_path = config.PROJECT_ROOT / "test_cases.json"
+    # ⚠️ `config.PROJECT_ROOT` 是**奇点自己的仓库**（= 上面 orchestrator 里
+    # 已经修过的那处同一个错）：于是这一支永远走不到 —— 奇点根目录下压根没有
+    # `test_cases.json` ⇒ `e2e_checklist.json` **从来没被写出来过**，
+    # GATE3 上那份 E2E 清单永远空，而界面上跟"没有 E2E 用例"长得一样。
+    # 和集成检查（orchestrator._run_delivery 上面的 `_Path(root)`）对齐：读项目仓库。
+    from singularity.scheduler import project as _proj_mod
+    tc_path = _proj_mod.repo_dir(project.id) / "test_cases.json"
     if tc_path.exists():
         try:
             tc = json.loads(tc_path.read_text())

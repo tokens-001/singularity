@@ -1183,10 +1183,18 @@ def _run_delivery(proj) -> tuple[bool, str]:
             shutil.copy2(str(src), str(dst))
             deliverables["docs"].append(fname)
 
-    # 3) 报告归档: QA/Security/Test cases
-    for fname in ["qa_report.json", "security_report.json", "test_cases.json", "review_report.json"]:
-        src = _Path(root) / fname
-        if src.exists():
+    # 3) 报告归档: QA/Security/机器检查
+    # ⚠️ 报告**不在项目仓库里**：`_save_phase_output()` 一律写
+    # `.qidian/projects/<id>.<名字>`（见 workflow._phase_output_path）。
+    # 原来是在 `root`（项目仓库）下找 `qa_report.json` / `security_report.json` /
+    # `test_cases.json` / `review_report.json` —— **目录和名字双双对不上**，
+    # 后两个全仓**压根没人写** ⇒ 这一栏**永远空**，而界面上它跟"正常交付"
+    # 长得一模一样（phase 照样推 DONE、账本照样记 delivery: ok）。
+    # ⚠️ 名字必须跟 `_save_phase_output` 的真实调用点对齐，别再照抄旧列表。
+    from singularity.scheduler.workflow import _phase_output_path as _pop
+    for fname in ["qa_report.json", "qa-report.md", "security-report.md",
+                  "machine-checks.json", "e2e_checklist.json"]:
+        if _pop(proj.id, fname).exists():
             deliverables["reports"].append(fname)
 
     # 4) 产物打包: 按项目类型
@@ -1201,5 +1209,8 @@ def _run_delivery(proj) -> tuple[bool, str]:
     manifest_path = docs_dir / "delivery_manifest.json"
     manifest_path.write_text(_json.dumps(deliverables, ensure_ascii=False, indent=2))
 
-    return True, f"交付完成: tag={deliverables['code_ref'][:16]}, 文档={len(deliverables['docs'])}, 制品={len(deliverables['artifacts'])}"
+    # ⚠️ 报告数一起报 —— 不然"报告一栏是空的"这件事在日志里看不出来，
+    # 只有翻 manifest 才发现（原来就是这个问题）。
+    return True, (f"交付完成: tag={deliverables['code_ref'][:16]}, 文档={len(deliverables['docs'])}, "
+                  f"制品={len(deliverables['artifacts'])}, 报告={len(deliverables['reports'])}")
 
