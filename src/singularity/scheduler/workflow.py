@@ -655,16 +655,30 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
         '{"verdict": "go 或 no_go",\n'
         ' "passed": [{"id": "约束标识", "desc": "约束内容", "evidence": "满足的证据"}],\n'
         ' "issues": [{"id": "约束标识", "severity": "critical|warning",\n'
-        '             "detail": "差在哪", "suggested_fix": "怎么修"}],\n'
+        '             "detail": "差在哪", "suggested_fix": "怎么修",\n'
+        '             "fix_route": "impl|design|note"}],\n'
         ' "summary": "一句话结论"}\n'
         "**一致性要求**：verdict 判 no_go 时 issues 里**必须至少有一条**，"
         "写清是哪条约束、差在哪 —— 判了 no_go 却给不出具体条目，下游只知道"
-        "\"要修\"却不知道修什么，只会原样再来一遍。"
+        "\"要修\"却不知道修什么，只会原样再来一遍。\n"
+        # ⚠️ `fix_route` 这个字段**必须给**（2026-09-15 真机补上）：原来提示词里没有它，
+        # 下游却拿它决定"人工打回时退到哪一层" —— 缺了就只能由 severity 去猜，
+        # 而 severity 表达的是"这条验收过没过"，**不是**"要退到哪一层"。
+        # 真机后果：一个"实现全对、只差补测试文件"的项目被判 design，
+        # 打回时**清空架构重新规划**。字段补上之后，读的那一端才有依据。
+        "`fix_route` 怎么填：**改代码/补文件就能修 → impl**；"
+        "**非改架构或重新规划不可 → design**；只是提示不必修 → note。\n"
+        "⚠️ **拿不准就填 `impl`** —— `design` 会让人工打回时**清空架构、从头重新规划**，"
+        "是代价最大的一条路，别为保险起见全填它。"
     )
     disp_result, err = _safe_dispatch(qa_prompt, "any", f"qa_{project.id}", agents, project,
                                       phase="reviewing")
+    # ⚠️ **临时探针**（2026-09-15，定位完就删，见 `~/OPEN.md` 那条）：
+    # 记下落盘那一刻的长度，给下面的解析点比对。
+    _qa_raw_len = 0
     if disp_result and disp_result.executor_result:
         raw = disp_result.executor_result.raw_output
+        _qa_raw_len = len(raw)
         _save_phase_output(project.id, "qa-report.md", raw)
         msgs.append(f"QA报告完成 ({len(raw)} chars)")
     elif err:
@@ -705,6 +719,16 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     try:
         from singularity.scheduler.validator import build_qa_report
         qa_raw = disp_result.executor_result.raw_output if disp_result and disp_result.executor_result else "{}"
+        # ⚠️ **临时探针**（2026-09-15，定位完就删）：`saved` 和 `parsed` 必须相等。
+        # 不等的两种读法，各自指向不同的病，所以两个数都要打出来：
+        #   · `saved` ≠ `parsed` → 两次访问之间结果被换了（谁换的）
+        #   · 两个数相等却仍判"未产出" → 问题不在这一层，而在别处（比如这段跑了两趟）
+        # 这条探针**每调一次打一行** ⇒ 一次 GATE3 里出现两行，本身就是"跑了两趟"的铁证。
+        from singularity.scheduler import witness as _w
+        _w.warn("workflow",
+                ("qa_raw_probe:saved=%d:parsed=%d:head=%s"
+                 % (_qa_raw_len, len(qa_raw), str(qa_raw)[:60].replace("\n", " ")))[:180],
+                key="qa_raw_probe")
         qa_data, verdict, reason = _qa_verdict_from_raw(qa_raw)
         issues = qa_data.get("issues", [])
         passed = qa_data.get("passed", [])

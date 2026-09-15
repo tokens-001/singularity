@@ -692,14 +692,25 @@ def security_review(code: str, file_path: str = "", severity_filter: str = "all"
 def grade_fix_route(issues: list[dict], overall_verdict: str) -> str:
     """D3: 按 issues 严重度计算 fix_route.
 
-    - 有架构级缺陷 (severity=critical + fix_route=design) → "design"
+    - 有架构级缺陷 (**显式** fix_route=design) → "design"
     - 多数为实现级 bug (severity=warning/bug) → "impl"
     - 仅有 suggestion → "note"
     - 综合 overall_verdict: no_go → 默认 "impl" (不轻易升 GATE2)
+
+    ⚠️ **`severity == "critical"` 不算架构级**（2026-09-15 真机坐实）。原来这里是
+    `fix_route == "design" **or** severity == "critical"` —— 而 QA 的提示词只给
+    severity 两档（critical|warning）、**压根没有 `fix_route` 字段** ⇒ 模型把
+    "这条验收没过"如实标成 critical（它是对的），却被读成"架构级缺陷"。
+    真机后果：项目 `1789481895784` 里 QA 明说「**实现已全部正确，只差补齐测试文件**」，
+    8 条 issues 却全被判 design ⇒ 人工点「打回」走 design 分支 ⇒
+    `set_phase(PLANNING)` + **`project.architecture = None`（清空架构重新规划）**。
+    代价最大的一条路，被一个"少写个测试文件"触发。
+    而且这与本函数 docstring **原本就写着**的意图相反（那里是"critical **＋** design"，
+    末尾还有"no_go → 默认 impl（不轻易升 GATE2）"）—— **是代码没照着注释写**。
+    放行条件收紧到"模型/观察者**显式**说了 design"。提示词那侧已同步补上该字段
+    （见 `workflow._run_verification`），否则这条路会变成谁都走不到的死路。
     """
-    has_design = any(
-        i.get("fix_route") == "design" or i.get("severity") == "critical"
-        for i in issues)
+    has_design = any(i.get("fix_route") == "design" for i in issues)
     has_bugs = any(
         i.get("fix_route") == "impl" or i.get("severity") in ("bug", "warning")
         for i in issues)
