@@ -840,7 +840,7 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                                 "ts": time.time(),
                             })
                             proj_mod.save(proj)
-                            witness.warn("orch", f"project_no_tasks:{proj.id[:8]}"[:80])
+                            witness.warn("orch", f"project_no_tasks:{tracker.short_id(proj.id)}"[:80])
                         continue
                 pending = [tid for tid in proj.task_ids
                           if tracker.read_task(tid) and tracker.read_task(tid).status not in (
@@ -865,7 +865,7 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                             })
                             proj_mod.save(proj)
                             witness.warn("orch", f"project_all_tasks_failed:"
-                                                 f"{proj.id[:8]}:{len(proj.task_ids)}"[:80])
+                                                 f"{tracker.short_id(proj.id)}:{len(proj.task_ids)}"[:80])
                     else:
                         # D2: 推进到集成合并阶段, 异步跑 (不阻塞调度循环)
                         n_failed = len(proj.task_ids) - len(done_ids)

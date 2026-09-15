@@ -722,7 +722,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                         elif sv.verdict in ("escalate", "retry"):
                             _pending_sse_events.append({
                                 "kind": "system",
-                                "msg": f"[{task.id[:8]}] QA 软信号 {sv.verdict} (不拦合并): "
+                                "msg": f"[{tracker.short_id(task.id)}] QA 软信号 {sv.verdict} (不拦合并): "
                                        + "; ".join(sv.issues[:1]),
                                 "ts": time.time(), "task_id": task.id,
                             })

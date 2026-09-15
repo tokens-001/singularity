@@ -155,6 +155,24 @@ def read_task(task_id: str) -> Optional[Task]:
 
 _NEXT_ID_CACHE = 0
 
+def short_id(tid: str) -> str:
+    """给人看的短 id —— **取后 8 位，别取前 8 位**。
+
+    任务号 / 项目号都是**毫秒时间戳**（13 位）。`[:8]` 砍掉的正好是后 5 位毫秒，
+    留下的前 8 位**每 100 秒才进一位** ⇒ 同一个项目里、甚至同一天里的 id
+    截出来**全长一个样**。
+
+    2026-09-15 真机现场（这条就是这么被抓出来的）：
+        越界告警原文「17894825 改了本属 17894825 的文件 fizzbuzz.py」
+    —— 真身是 `1789482513688` 和 `…690`，可读起来像"自己改了自己"，
+    人审页上等于**没有这条信息**（而它长得像有）。任务列表、桌面通知同理。
+
+    后 8 位随毫秒变，才是真正能区分的那一段。
+    """
+    s = str(tid)
+    return s[-8:] if len(s) > 8 else s
+
+
 def _next_id() -> str:
     """基于毫秒时间戳, 缓存兜底防碰撞。O(1) 非 O(n) 全表扫描。_LOCK 保护并发。"""
     global _NEXT_ID_CACHE
@@ -264,7 +282,7 @@ def _apply_attrs(task: Task, kwargs: dict, task_id: str, caller: str) -> None:
     if unknown:
         from singularity.scheduler import witness
         witness.warn("tracker",
-                     f"{caller}_unknown_kwargs:{','.join(unknown)}:task={task_id[:8]}"[:200])
+                     f"{caller}_unknown_kwargs:{','.join(unknown)}:task={short_id(task_id)}"[:200])
 
 
 def transition(task_id: str, new_status: TaskStatus, force: bool = False, **kwargs) -> Optional[Task]:

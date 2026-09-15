@@ -7,6 +7,7 @@ from singularity.scheduler import config, tracker
 from singularity.scheduler import dispatcher as disp_mod
 from singularity.scheduler import orchestrator
 from singularity.scheduler import snapshot as snap_mod
+from singularity.scheduler import tracker
 from singularity.scheduler.tracker import TaskStatus
 
 # 队列空时的轮询间隔。**必须定义在本模块** —— `_cmd_loop` 就在这里，而
@@ -174,7 +175,7 @@ def _drain_queue(agents: dict, max_concurrent: int = 1) -> tuple[int, int]:
         level = t.route_level if t else "?"
         action = getattr(validation, "action", "") or ""
         icon = "✅" if action == "pass" else "❌"
-        print(f"  {icon} [{tid[:8]}] level={level} {reason}", file=sys.stderr)
+        print(f"  {icon} [{tracker.short_id(tid)}] level={level} {reason}", file=sys.stderr)
         if action != "pass":
             exit_code = 1
     return exit_code, len(results)
@@ -257,7 +258,7 @@ def _cmd_merge(args: list) -> int:
             return 0
         print(f"parking 冲突任务 ({len(held)}):")
         for t in held:
-            print(f"  [{t.id[:8]}] {t.description[:50]}  error={t.error[:60]}")
+            print(f"  [{tracker.short_id(t.id)}] {t.description[:50]}  error={t.error[:60]}")
         return 0
 
     if sub == "resolve" and len(args) >= 2:
@@ -276,19 +277,19 @@ def _cmd_merge(args: list) -> int:
         if strategy == "abort":
             tracker.transition(task_id, TaskStatus.FAILED, error="merge 冲突, 人工放弃")
             _release_pending_ref(task_id)
-            print(f"[{task_id[:8]}] 已放弃 → FAILED")
+            print(f"[{tracker.short_id(task_id)}] 已放弃 → FAILED")
         else:
             # manual: 验证产出 ref 确已合入 main (重要 #5)
             if not _is_merged_to_main(task_id):
                 print(
-                    f"[{task_id[:8]}] 产出分支 refs/qidian/pending/{task_id} 未合入 main, "
+                    f"[{tracker.short_id(task_id)}] 产出分支 refs/qidian/pending/{task_id} 未合入 main, "
                     "请先手动 merge 再 resolve",
                     file=sys.stderr,
                 )
                 return 1
             tracker.transition(task_id, TaskStatus.DONE, error="")
             _release_pending_ref(task_id)
-            print(f"[{task_id[:8]}] 人工解决 → DONE")
+            print(f"[{tracker.short_id(task_id)}] 人工解决 → DONE")
             # 触发父任务聚合
             from . import orchestrator as _o
             _o._maybe_complete_parents(task_id)

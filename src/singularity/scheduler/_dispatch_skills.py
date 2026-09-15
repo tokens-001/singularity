@@ -5,6 +5,7 @@ from singularity.scheduler.dispatcher import (
     DispatchResult, _CACHE_LOCK, _SKILL_CACHE, _MCP_CACHE,
 )
 from singularity.scheduler import config
+from singularity.scheduler import tracker as _tracker
 from singularity.scheduler import witness
 from singularity.scheduler._types import _pending_sse_events
 from singularity.scheduler.log import timed
@@ -162,7 +163,7 @@ def _make_permission_checker() -> callable:
                 def _notify(_tool, _tid):
                     _pending_sse_events.append({
                         "kind": "approval",
-                        "msg": f"[{_tid[:8]}] {_tool} 等待人工审批",
+                        "msg": f"[{_tracker.short_id(_tid)}] {_tool} 等待人工审批",
                         "ts": time.time(), "task_id": _tid,
                     })
 

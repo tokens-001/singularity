@@ -178,7 +178,7 @@ def _tool_delete_failed_tasks() -> dict:
                 import json
                 d = json.loads(p.read_text())
                 if d.get("status") == "failed":
-                    deleted.append(d["id"][:8])
+                    deleted.append(tracker.short_id(d["id"]))
                     p.unlink()
             except Exception:
                 pass

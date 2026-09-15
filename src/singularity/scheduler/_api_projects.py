@@ -258,7 +258,7 @@ def project_run_phase(project_id: str, phase_name: str = "",
         return {"ok": True, "phase": phase, "running": True,
                 "note": "该项目已有阶段在跑，本次未重复启动"}, 200
     if push_event:
-        push_event("system", f"[{project_id[:8]}] {phase} 阶段已启动")
+        push_event("system", f"[{tracker.short_id(project_id)}] {phase} 阶段已启动")
     return {"ok": True, "phase": phase, "started": True}, 200
 
 
@@ -287,7 +287,7 @@ def _start_background(project_id: str, label: str, fn, *args) -> bool:
             with _PHASE_LOCK:
                 _RUNNING_PHASES.discard(project_id)
 
-    threading.Thread(target=_worker, name=f"phase-{project_id[:8]}", daemon=True).start()
+    threading.Thread(target=_worker, name=f"phase-{tracker.short_id(project_id)}", daemon=True).start()
     return True
 
 
@@ -305,7 +305,7 @@ def project_start(project_id: str, push_event=None) -> tuple[dict, int]:
         return {"ok": True, "running": True,
                 "note": "该项目已有流程在跑，本次未重复启动"}, 200
     if push_event:
-        push_event("system", f"[{project_id[:8]}] workflow 已启动")
+        push_event("system", f"[{tracker.short_id(project_id)}] workflow 已启动")
     return {"ok": True, "started": True}, 200
 
 

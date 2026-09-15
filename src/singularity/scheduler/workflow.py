@@ -816,7 +816,7 @@ def _flag_file_overlap(project: ProjectState) -> None:
     except Exception:
         pass
     detail = "；".join(
-        f"{a[:8]} 改了本属 {b[:8]} 的文件 {'、'.join(f)}"
+        f"{tracker.short_id(a)} 改了本属 {tracker.short_id(b)} 的文件 {'、'.join(f)}"
         for a, b, f in overlaps)
     project.issues.append({
         "type": "task_file_overlap",
@@ -867,7 +867,7 @@ def _flag_degraded_tasks(project: ProjectState) -> None:
     project.issues.append({
         "type": "degraded_dependency",
         "detail": (f"本轮有 **{len(degraded)} 个任务是在『上游失败』的前提下跑的**"
-                   f"（{'、'.join(t[:8] for t in degraded)}）—— "
+                   f"（{'、'.join(tracker.short_id(t) for t in degraded)}）—— "
                    "它们**拿不到上游的产物**，可能自己把上游的活干了。"
                    "本页的『通过』不覆盖这个前提"),
     })

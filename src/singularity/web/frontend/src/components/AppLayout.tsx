@@ -4,6 +4,7 @@ import { useAppStore } from '../stores/app'
 import { useSSE, useSSEConnected } from '../lib/useSSE'
 import { useToast } from '../lib/toast'
 import { getPinned } from '../lib/pinned'
+import { shortId } from '../lib/ids'
 import { api } from '../lib/api'
 import { MessageSquare, List, Settings, Boxes, Activity, AlertTriangle } from 'lucide-react'
 
@@ -199,7 +200,7 @@ export default function AppLayout() {
                 <span style={{ color: '#b45309', fontWeight: 600 }}>⚠ 等待审批</span>
                 <span className="truncate" style={{ flex: 1, color: '#6b6b68' }}
                   title={a.args_preview || ''}>
-                  <b>{a.tool}</b> · {a.model} · 任务 {String(a.task_id).slice(0, 8)}
+                  <b>{a.tool}</b> · {a.model} · 任务 {shortId(a.task_id)}
                   {' '}（{approvalTimeout}s 内不答复按拒绝）
                 </span>
                 <button className="btn-sm" onClick={() => decide(a.task_id, 'approve')}>批准</button>

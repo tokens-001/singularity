@@ -9,6 +9,7 @@ import os
 import stat
 import subprocess as _sp
 from singularity.scheduler import config
+from singularity.scheduler import tracker as _tracker
 from singularity.scheduler._git_worktree import (
     Worktree, create as wt_create, cleanup as wt_cleanup,
     merge_back as wt_merge_back, commit_wt, changed_files_between,
@@ -41,7 +42,7 @@ def _anchor_ref(task_id: str, commit_sha: str, repo_root=None) -> bool:
     )
     if r.returncode != 0:
         from singularity.scheduler import witness
-        witness.warn('worktree', f'anchor_ref {task_id[:8]}: {r.stderr[:100]}')
+        witness.warn('worktree', f'anchor_ref {_tracker.short_id(task_id)}: {r.stderr[:100]}')
         return False
     return True
 
@@ -134,7 +135,7 @@ def _maybe_create_worktree(task_id: str, level: str, agent_cfg: dict, snapshot_r
             # 而且这里是**真降级**：拿不到 worktree → 调用方直接用仓库根跑（_exec.py:317，无沙箱）。
             witness.warn("worktree",
                          f"worktree_limit_reached:{count}>={_MAX_WORKTREES},"
-                         f"unsandboxed:{task_id[:8]}"[:200])
+                         f"unsandboxed:{_tracker.short_id(task_id)}"[:200])
             return None
     except Exception as e:
         witness.warn('_worktree', f'{e}')
@@ -145,7 +146,7 @@ def _maybe_create_worktree(task_id: str, level: str, agent_cfg: dict, snapshot_r
         # 调用方 _exec.py 拿不到 wt 就用仓库根当 cwd(无沙箱), 且 _exec 的
         # `elif wt:` 不成立 → 不构造 MergeRequest → 改动落在真仓库、不进合并队列。
         # 最常走的触发路径: 残留 worktree 目录 → `git worktree add` rc=128。
-        witness.warn("worktree", f"wt_create_failed:{type(e).__name__}:{e}:unsandboxed:{task_id[:8]}"[:200])
+        witness.warn("worktree", f"wt_create_failed:{type(e).__name__}:{e}:unsandboxed:{_tracker.short_id(task_id)}"[:200])
         return None
 
 

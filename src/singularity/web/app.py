@@ -576,14 +576,14 @@ def _loop_worker():
                     t = tracker.read_task(tid)
                     level = t.route_level if t else "?"
                     verdict = getattr(validation, "action", "?")
-                    _push_event("task", f"[{tid[:8]}] level={level} {verdict}: {reason}")
+                    _push_event("task", f"[{tracker.short_id(tid)}] level={level} {verdict}: {reason}")
                     # 任务失败时推送桌面通知
                     if verdict != "pass":
                         try:
                             import subprocess, sys
                             subprocess.run([
                                 "osascript", "-e",
-                                f'display notification "任务 {tid[:8]} {verdict}" with title "Singularity Dispatch"'
+                                f'display notification "任务 {tracker.short_id(tid)} {verdict}" with title "Singularity Dispatch"'
                             ], capture_output=True, timeout=3)
                         except Exception:
                             pass

@@ -39,7 +39,7 @@ def _materialize_in_main(batch: BatchOutput, parent_task) -> None:
             est = estimate_tokens(subtasks, parent_task.description)
             from singularity.scheduler._types import _pending_sse_events
             _pending_sse_events.append({"kind": "token_estimate", "msg": (
-                f"[{parent_task.id[:8]}] 方案: {est['task_count']}个子任务, "
+                f"[{tracker.short_id(parent_task.id)}] 方案: {est['task_count']}个子任务, "
                 f"预估 ~{est['total_tokens']:,} tokens, "
                 f"拆分: " + ", ".join(f"{k}×{v['tokens']:,}" for k,v in est['level_breakdown'].items())
             ), "ts": time.time(), "task_id": parent_task.id, "estimate": est})
@@ -87,7 +87,7 @@ def materialize_plan(parent_id: str, subtasks: list[dict]) -> list[str]:
             error=f"分解深度达安全上限 {_MAX_DEPTH}，请手工拆分或放宽需求",
         )
         _pending_sse_events.append({
-            "kind": "alert", "msg": f"[{parent_id[:8]}] 分解达深度上限 {_MAX_DEPTH}，需人工介入",
+            "kind": "alert", "msg": f"[{tracker.short_id(parent_id)}] 分解达深度上限 {_MAX_DEPTH}，需人工介入",
             "ts": time.time(), "task_id": parent_id,
         })
         return []

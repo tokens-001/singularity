@@ -73,6 +73,6 @@ def conflict_resolve(task_id, resolution, push_event=None):
     elif isinstance(resolution, str) and resolution:
         strategy = resolution
     res = MergeQueue().resolve(task_id, strategy)
-    if push_event: push_event("system", f"[{task_id[:8]}] conflict resolved")
+    if push_event: push_event("system", f"[{tracker.short_id(task_id)}] conflict resolved")
     return {"ok": True, "result": {"task_id": res.task_id, "status": res.status,
             "reason": res.reason, "conflict_files": list(res.conflict_files or [])}}, 200

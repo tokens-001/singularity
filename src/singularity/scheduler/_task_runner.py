@@ -271,8 +271,8 @@ class TaskRunner:
                 tracker.transition(fix_task.id, TaskStatus.PENDING,
                                  route_locked=True)
                 tracker.transition(task.id, TaskStatus.FAILED,
-                                 error=f"已生成修复任务 {fix_task.id[:8]}: {term_reason}")
-                reason = f"auto_fix: {fix_task.id[:8]}"
+                                 error=f"已生成修复任务 {tracker.short_id(fix_task.id)}: {term_reason}")
+                reason = f"auto_fix: {tracker.short_id(fix_task.id)}"
             else:
                 # 降级重试: 重试耗尽 → 自动拆分再提交
                 retry_count = getattr(task, 'retry_count', 0)
@@ -286,7 +286,7 @@ class TaskRunner:
                                 est = estimate_tokens(subtasks, task.description)
                                 _pending_sse_events.append({
                                     "kind": "token_estimate", "msg": (
-                                        f"[{task.id[:8]}] 自动拆分: {est['task_count']}个子任务, "
+                                        f"[{tracker.short_id(task.id)}] 自动拆分: {est['task_count']}个子任务, "
                                         f"预估 ~{est['total_tokens']:,} tokens"
                                     ), "ts": time.time(), "task_id": task.id, "estimate": est,
                                 })
@@ -382,7 +382,7 @@ class TaskRunner:
         turn = getattr(batch, 'turn_count', 0) or 0
         if turn > 0:
             _pending_sse_events.append({
-                "kind": "turn", "msg": f"[{task.id[:8]}] 推理完成，共 {turn} 轮",
+                "kind": "turn", "msg": f"[{tracker.short_id(task.id)}] 推理完成，共 {turn} 轮",
                 "ts": time.time(), "task_id": task.id,
             })
         # QA gate 已上移到标 DONE 之前 (见上方), 此处只剩 QA 拒绝的提前出口:

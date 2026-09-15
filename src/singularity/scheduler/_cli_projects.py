@@ -6,6 +6,7 @@ from pathlib import Path
 from singularity.scheduler import config, tracker
 from singularity.scheduler import dispatcher as disp_mod
 from singularity.scheduler import orchestrator
+from singularity.scheduler import tracker
 from singularity.scheduler.project import Phase
 from singularity.scheduler.tracker import TaskStatus
 
@@ -71,7 +72,7 @@ def _cmd_project_create(args: list) -> int:
         print(f"创建失败: {e}", file=sys.stderr)
         return 1
     tmpl = TEMPLATES.get(template, {})
-    print(f"[project] 创建: {proj.id[:8]}  {proj.name}")
+    print(f"[project] 创建: {tracker.short_id(proj.id)}  {proj.name}")
     print(f"  template: {template} ({tmpl.get('name','')})")
     print(f"  phase: {proj.phase.value}")
     print(f"  auto: {auto_mode}")
@@ -90,7 +91,7 @@ def _cmd_project_list() -> int:
     print(f"  {'ID':<10} {'NAME':<20} {'PHASE':<14} {'TASKS':<6} {'UPDATED'}")
     for p in projects:
         ts = time.strftime("%m-%d %H:%M", time.localtime(p.updated_at)) if p.updated_at else "-"
-        print(f"  {p.id[:8]:<10} {p.name[:20]:<20} {p.phase.value:<14} {len(p.task_ids):<6} {ts}")
+        print(f"  {tracker.short_id(p.id):<10} {p.name[:20]:<20} {p.phase.value:<14} {len(p.task_ids):<6} {ts}")
     return 0
 
 
@@ -100,7 +101,7 @@ def _cmd_project_show(project_id: str) -> int:
     if proj is None:
         print(f"项目不存在: {project_id}", file=sys.stderr)
         return 1
-    print(f"[project] {proj.id[:8]}  {proj.name}")
+    print(f"[project] {tracker.short_id(proj.id)}  {proj.name}")
     print(f"  phase: {proj.phase.value}")
     print(f"  template: {proj.template}")
     print(f"  auto: {proj.auto_mode}")
@@ -146,10 +147,10 @@ def _cmd_project_advance(project_id: str, approve: bool = False, yes: bool = Fal
         if approve:
             proj.confirm_gate(phase, "approved")
             save_proj(proj)
-            print(f"[project] {proj.id[:8]}  {phase.value} APPROVED → {proj.phase.value}")
+            print(f"[project] {tracker.short_id(proj.id)}  {phase.value} APPROVED → {proj.phase.value}")
             return 0
         else:
-            print(f"[project] {proj.id[:8]}  当前在 {phase.value}，需 --approve 确认或 --reject 打回",
+            print(f"[project] {tracker.short_id(proj.id)}  当前在 {phase.value}，需 --approve 确认或 --reject 打回",
                   file=sys.stderr)
             return 1
 
@@ -160,7 +161,7 @@ def _cmd_project_advance(project_id: str, approve: bool = False, yes: bool = Fal
     if _phase_will_run(phase, proj) and not yes:
         level = _phase_agent_level(phase)
         spent, has_unpriced = _project_today_cost(proj.id)
-        print(f"[project] {proj.id[:8]}  即将进入 {phase.value} 阶段")
+        print(f"[project] {tracker.short_id(proj.id)}  即将进入 {phase.value} 阶段")
         print(f"  调用: {level} 层 agent")
         print(f"  本项目今日已花费: ${spent:.4f}"
               + ("  （有模型未配置单价，实际更高）" if has_unpriced else ""))
@@ -174,10 +175,10 @@ def _cmd_project_advance(project_id: str, approve: bool = False, yes: bool = Fal
     agents = disp_mod.load_agents()
     if phase == Phase.TEMPLATE:
         msg = start_project_workflow(proj, agents)
-        print(f"[project] {proj.id[:8]}  {msg}")
+        print(f"[project] {tracker.short_id(proj.id)}  {msg}")
     else:
         msg = run_phase(proj, agents)
-        print(f"[project] {proj.id[:8]}  {phase.value} → {proj.phase.value}")
+        print(f"[project] {tracker.short_id(proj.id)}  {phase.value} → {proj.phase.value}")
         print(f"  {msg}")
     return 0
 
@@ -231,11 +232,11 @@ def _cmd_project_reject(project_id: str) -> int:
         return 1
     phase = proj.phase
     if not phase.value.startswith("gate"):
-        print(f"[project] {proj.id[:8]}  当前 {phase.value} 不是 gate 阶段，无需打回", file=sys.stderr)
+        print(f"[project] {tracker.short_id(proj.id)}  当前 {phase.value} 不是 gate 阶段，无需打回", file=sys.stderr)
         return 1
     proj.confirm_gate(phase, "rejected")
     save_proj(proj)
-    print(f"[project] {proj.id[:8]}  {phase.value} REJECTED → {proj.phase.value}")
+    print(f"[project] {tracker.short_id(proj.id)}  {phase.value} REJECTED → {proj.phase.value}")
     return 0
 
 
@@ -250,5 +251,5 @@ def _cmd_project_delete(project_id: str) -> int:
     for tid in list(proj.task_ids):
         task_delete(tid)
     delete_proj(project_id)
-    print(f"[project] 已删除: {proj.id[:8]} {proj.name}")
+    print(f"[project] 已删除: {tracker.short_id(proj.id)} {proj.name}")
     return 0

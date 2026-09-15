@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { api, Task } from '../lib/api'
 import { useSSE, useSSEConnected } from '../lib/useSSE'
 import { useVirtualRows } from '../lib/useVirtualRows'
+import { shortId } from '../lib/ids'
 import { useToast, useModal, useRun, errText } from '../lib/toast'
 import { useAppStore } from '../stores/app'
 import { Plus, RefreshCw, RotateCcw, XCircle, Trash2, Search, Pause, Play, X } from 'lucide-react'
@@ -86,7 +87,7 @@ export default function Tasks() {
         )}
         {projectFilter && (
           <span className="flex-center gap-4 fs-10" style={{ padding: '2px 8px', borderRadius: 4, background: '#eef2ff', color: '#4f46e5', border: '1px solid #c7d2fe' }}>
-            项目：{projectNames[projectFilter] || projectFilter.slice(0, 8)}
+            项目：{projectNames[projectFilter] || shortId(projectFilter)}
             <button onClick={() => setParams({})} aria-label="清除项目筛选"
               style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'inherit', display: 'flex' }}><X size={10}/></button>
           </span>
@@ -106,7 +107,7 @@ export default function Tasks() {
             className="inp-dark" style={{ flex: 1 }}/>
           {activePid !== '_default' && (
             <span className="fs-10 text-muted" style={{ flexShrink: 0 }}>
-              → {projectNames[activePid] || activePid.slice(0, 8)}
+              → {projectNames[activePid] || shortId(activePid)}
             </span>
           )}
           <button onClick={create} style={{ background: '#fff', color: '#141413', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>创建</button>
@@ -127,14 +128,14 @@ export default function Tasks() {
               {t.project_id ? (
                 <button onClick={() => setParams({ project: t.project_id })} title="只看该项目的任务"
                   className="fs-10" style={{ flexShrink: 0, padding: '1px 6px', borderRadius: 4, background: '#eef2ff', color: '#4f46e5', border: '1px solid #c7d2fe', whiteSpace: 'nowrap', cursor: 'pointer' }}>
-                  {projectNames[t.project_id] || t.project_id.slice(0, 8)}
+                  {projectNames[t.project_id] || shortId(t.project_id)}
                 </button>
               ) : (
                 <span className="fs-10" style={{ flexShrink: 0, padding: '1px 6px', borderRadius: 4, background: '#f3f2ec', color: '#9a9993', border: '1px solid var(--border)', whiteSpace: 'nowrap' }}>独立</span>
               )}
               <span className="truncate" style={{ flex: 1, color: '#141413' }}>{t.description.split('\n')[0]}</span>
               <span className="fs-10" style={{ color: STATUS_COLOR[t.status] || '#9a9993', flexShrink: 0 }}>{STATUS_CN[t.status] || t.status}</span>
-              <span className="fs-10 text-muted mono" style={{ flexShrink: 0 }}>{t.id.slice(0, 8)}</span>
+              <span className="fs-10 text-muted mono" style={{ flexShrink: 0 }}>{shortId(t.id)}</span>
               <span className="flex-center gap-4">
                 {t.status === 'failed' && <button onClick={() => act(api.retryTask, t.id)} className="btn-icon" title="重试" aria-label="重试"><RotateCcw size={12}/></button>}
                 {t.status === 'running' && <button onClick={() => act(api.pauseTask, t.id)} className="btn-icon" title="暂停" aria-label="暂停"><Pause size={12}/></button>}

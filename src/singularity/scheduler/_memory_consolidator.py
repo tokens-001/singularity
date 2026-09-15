@@ -1,6 +1,7 @@
 from singularity.scheduler._memory_core import *  # noqa: F401,F403
 from singularity.scheduler import config as sched_config
 from singularity.scheduler import witness
+from singularity.scheduler import tracker
 from singularity.scheduler._types import _pending_sse_events
 import json, os, re, time, logging
 from pathlib import Path
@@ -457,8 +458,8 @@ def _resolve_causal_direction(c: dict) -> tuple:
 def _llm_judge_causal(c: dict, src: str, dst: str) -> dict:
     prompt = f"""Determine if there is a causal relationship between these two tasks.
 
-Task A [{src[:8]}]: {c.get('desc_a','')}
-Task B [{dst[:8]}]: {c.get('desc_b','')}
+Task A [{tracker.short_id(src)}]: {c.get('desc_a','')}
+Task B [{tracker.short_id(dst)}]: {c.get('desc_b','')}
 Shared files: {', '.join(c.get('shared_files',[]))}
 Semantic sim: {c.get('semantic_sim',0):.3f}
 Time gap: {c.get('time_gap_hours',0):.1f}h
