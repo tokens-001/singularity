@@ -1774,3 +1774,73 @@ class TestStreamTotalBudget:
             f"判据又挂在「等一整行」上了")
         assert any("stream_over_budget" in str(a) for a, _ in seen), \
             f"断流没出声 —— 就查不到「输出为什么变短」：{seen}"
+
+    def test_一直有数据但一直没有可用内容_也要断(self, monkeypatch):
+        """**停滞要量「多久没有可用进展」，不是「多久没有字节」**（2026-09-16 真机坐实）。
+
+        现场：服务端**一直在发完整的 SSE 行**（合法 JSON、能解析、够整行），
+        只是 `delta` 里**什么都没有** —— 于是
+          · `read=` 越不过去（字节一直在来，计时器一直被重置）；
+          · "按批字节看表"的总时长判据也越不过去（它只管**时长**，不管**有没有用**）。
+        ⇒ 一次调用**烧满 240s 上限、零产出**；实测同一天三次
+        （`cap=240s, chars=0` / `696s, chars=0` / `900s, chars=0`），
+        几轮就把任务的 **810s 预算**烧光 → `deadline_wrapup` → 任务判死，
+        而**前几轮已经干出来的活全丢了**（真机：185 行测试留在悬空提交里）。
+
+        判据：90 秒（这里压到 1 秒）没有 content/reasoning/tool_calls ⇒ **抛错换 agent**，
+        不是"出声之后照常返回空回答"（那会被上层当成"这次调用成功了、只是模型没说话"，
+        于是同一个卡住的模型继续被派下一轮）。
+
+        ⚠️ 用**真 HTTP 服务器**：替身喂的是我猜的行为，而这一条测的恰恰是
+        "我到底分不分得出来"。
+
+        变异验证：删掉 `_lines()` 里那段 `_idle > _STALL_TIMEOUT` → 红
+        （会一直等到服务器收工、然后正常返回空）。
+        """
+        import http.server
+        import threading
+        import time
+
+        import httpx
+        from singularity.scheduler.executors import openai_agent as oa
+
+        FEED_S = 6.0
+
+        class _H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                t_end = time.time() + FEED_S
+                try:
+                    while time.time() < t_end:
+                        # 完整的一行、合法 JSON、能解析 —— 就是**不带任何可用内容**
+                        self.wfile.write(b'data: {"choices":[{"delta":{}}]}\n\n')
+                        self.wfile.flush()
+                        time.sleep(0.1)
+                except Exception:
+                    pass
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+        ex = self._executor()
+        ex._url = f"http://127.0.0.1:{srv.server_address[1]}/chat/completions"
+        ex._deadline_at = time.time() + 30.0        # 别让"总时长"先到，要让"停滞"先触发
+        monkeypatch.setattr(oa, "_STALL_TIMEOUT", 1.0)
+        monkeypatch.setattr(oa, "_get_http_client", lambda: httpx.Client())
+
+        try:
+            t0 = time.time()
+            with pytest.raises(oa._NetworkError):
+                ex._stream_call({"model": "m", "messages": []})
+            elapsed = time.time() - t0
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+        assert elapsed < 3.0, (
+            f"{elapsed:.1f}s 才断 —— 判据又在量「有没有字节」，不是「有没有可用进展」")

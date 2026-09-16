@@ -140,7 +140,9 @@ def _parse_xml_tool_calls(content: str) -> list[dict] | None:
     return out
 # 整轮预算（schedule-to-close）：重试总耗时上限，防止 3×240s 撞穿 orchestrator 的 900s deadline
 _RETRY_TOTAL_BUDGET = float(os.environ.get("QIDIAN_RETRY_TOTAL_BUDGET", "600"))
-# 流式 + 停滞检测。read timeout = 多久没新 token 就断开（真中断，不用杀进程）。
+# 流式 + 停滞检测。**"停滞" = 多久没有可用进展**（content / reasoning / tool_calls），
+# 不是"多久没有字节"—— 2026-09-16 把实现改成和这句注释一致（`_stream_call` 里有一长段）。
+# read timeout = 多久读不到东西就断开（真中断，不用杀进程）。
 # 非流式只能干等整体 240s 超时，且线程 join 不掉 —— 见 _dispatch_exec 顶部注释。
 _STREAM = os.environ.get("QIDIAN_STREAM", "1") != "0"
 _STALL_TIMEOUT = float(os.environ.get("QIDIAN_STALL_TIMEOUT", "90"))
@@ -1017,6 +1019,26 @@ class OpenAIAgentExecutor(BaseExecutor):
                     resp.read()                      # 先取回 body 才能读 .text
                     self._raise_for_status(resp)
                 emitted, last_emit = 0, time.time()
+                # ⚠️ **"停滞"要量的是「多久没有**可用进展**」，不是「多久没有字节」**
+                # （2026-09-16 真机坐实 —— 而且 `_STALL_TIMEOUT` 那句注释本来就写着
+                #   「多久**没新 token**」：是**实现**没跟上它自己的语义）。
+                #
+                # 病：`read=` 那把尺量的是 **socket 读** —— 服务端只要一直在发字节
+                # （保活 / 凑不满一行的半截分片）它就**永不触发**，而这一轮可能
+                # **一个字都没拿到**。实测同一天三次：`cap=240s, chars=0`、
+                # `696s, chars=0`、`900s, chars=0` —— 每次调用烧满上限、零产出，
+                # 几轮就把任务的 **810s 预算**烧光 → `deadline_wrapup` → 判死，
+                # 而**前几轮已经干出来的活全丢了**（真机：185 行测试留在悬空提交里）。
+                # ⇒ 90 秒拿不到 content/reasoning/tool_calls 就当**停滞**，抛错换 agent，
+                #   别把预算烧在同一个卡住的模型上。
+                # ⚠️ **三样都算进展**：思考模型的 `reasoning_content` 也是进展，
+                # 只认 content 的话会把"正在想"误判成"卡住"。
+                # ⚠️ **阈值就是 `_STALL_TIMEOUT`（默认 90s，`QIDIAN_STALL_TIMEOUT` 可调）**，
+                # 而它有个**我没实测过**的边界：会不会有厂商"静默 90 秒、然后一次性吐"？
+                # 真撞上就是**把一次本来能成的调用换给下一个 agent** —— 代价可控
+                # （failover 拿到了活），但要知道这是拿 90 秒换的。
+                # 反过来（保持原样）的代价已经量过了：810s 预算烧光、任务判死、产物丢。
+                _last_progress = time.time()
 
                 def _lines():
                     """按行吐，但**每收到一批字节**就先看一眼表。
@@ -1044,6 +1066,14 @@ class OpenAIAgentExecutor(BaseExecutor):
                         if time.time() >= _call_deadline:
                             _over_budget = True
                             return
+                        _idle = time.time() - _last_progress
+                        if _idle > _STALL_TIMEOUT:
+                            # **抛**，不是"出声后返回空" —— 返回空会被上层当成
+                            # "这次调用成功了、只是模型没说话"，于是同一个卡住的模型
+                            # 继续被派下一轮；抛错才走 failover，换一个 agent。
+                            raise _NetworkError(
+                                f"流停滞 {_idle:.0f}s 无新 token"
+                                f"（一直在收数据，但 content/reasoning/tool_calls 一样都没有）")
                         buf += text
                         while "\n" in buf:
                             ln, buf = buf.split("\n", 1)
@@ -1062,6 +1092,8 @@ class OpenAIAgentExecutor(BaseExecutor):
                     if time.time() >= _call_deadline:
                         _over_budget = True
                         break
+                    # 这一行的**处理前后**比一比长度，才判得出它有没有带来可用进展
+                    _n_before = (len(content), len(reasoning), len(tool_calls))
                     if not line.startswith("data:"):
                         continue
                     chunk_str = line[5:].strip()     # 容忍 "data:{...}" 无空格
@@ -1109,6 +1141,11 @@ class OpenAIAgentExecutor(BaseExecutor):
                                 slot["function"]["arguments"] += fn["arguments"]
                         if ch.get("finish_reason"):
                             finish = ch["finish_reason"]
+                    # 这一行带来了可用进展吗（content / reasoning / tool_calls 有任何一个变长）
+                    # —— 变了就把"停滞计时"归零。**只有变长才算**：光"又收到一包字节"
+                    # 不算进展，那正是今晚烧光预算的那种。
+                    if (len(content), len(reasoning), len(tool_calls)) != _n_before:
+                        _last_progress = time.time()
         except httpx.TimeoutException:
             # read timeout = 流停滞（不是整体超时）—— 报清楚，方便区分
             raise _NetworkError(f"流停滞 {_STALL_TIMEOUT:.0f}s 无新 token")
