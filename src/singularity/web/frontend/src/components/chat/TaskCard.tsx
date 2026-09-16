@@ -5,6 +5,9 @@ export interface ToolLog { tool: string; kind: string; msg: string; ts: number }
 export interface ProgressItem {
   id: string; desc: string; status: string; ts: number; route_type?: string
   duration?: number; error?: string; files?: string[]; verdict?: string; logs?: ToolLog[]
+  /** 🔴 **F3**：非空 = 这个任务有一份**已提交、已锚定**的产物躺在
+   *  `refs/qidian/pending/<id>` 上，可以人工捞回来（判失败但活没白干）。 */
+  salvage_ref?: string
 }
 
 interface Props { t: ProgressItem; onRetry: (id: string) => void; onReveal: (file: string) => void }
@@ -104,6 +107,14 @@ export const TaskCard = memo(function TaskCard({ t, onRetry, onReveal }: Props) 
           {t.route_type && <span>路由 {t.route_type}</span>}
           {t.duration != null && <span>{t.duration}s</span>}
           {t.error && <span style={{ color: '#dc2626' }}>{t.error}</span>}
+          {/* 🔴 **F3：判失败 ≠ 活白干**（2026-09-17）。任务判 failed 之后，如果它的产物
+              已经 commit 并锚定在 `refs/qidian/pending/<id>` 上，那东西**还在**、能捞回来。
+              原来**界面上一个字都不显示** —— 用户只看到"失败"，不知道活其实干完了。 */}
+          {t.salvage_ref && (
+            <span style={{ color: '#b45309' }} title={`产物锚在 refs/qidian/pending/${t.id} → ${t.salvage_ref}`}>
+              📦 有可打捞的产物 {String(t.salvage_ref).slice(0, 7)}
+            </span>
+          )}
           {fail && (
             <button onClick={e => { e.stopPropagation(); onRetry(t.id) }}
               style={{ background: 'none', border: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 11, padding: 0 }}><RotateCcw size={11}/> 重试</button>

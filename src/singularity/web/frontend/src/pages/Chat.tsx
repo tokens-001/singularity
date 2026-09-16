@@ -94,7 +94,7 @@ export default function Chat() {
         const list = filtered.slice(0, 20)
         setTasks(list.map((x: any) => {
           const c = traceCache.current.get(x.id)
-          return { id: x.id, desc: x.description || '', status: x.status, ts: x.updated_at || Date.now(), route_type: x.route_type || '', duration: x.duration_sec, error: x.error || '', files: c?.files, verdict: c?.verdict }
+          return { id: x.id, desc: x.description || '', status: x.status, ts: x.updated_at || Date.now(), route_type: x.route_type || '', duration: x.duration_sec, error: x.error || '', salvage_ref: x.salvage_ref || '', files: c?.files, verdict: c?.verdict }
         }))
         // 已完成任务懒拉产物(changed_files)+校验结论，缓存防重复请求
         list.forEach((x: any) => {

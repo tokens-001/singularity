@@ -18,6 +18,10 @@ data/knowledge/data/index/corpus.json
 
 # Frontend
 src/singularity/web/frontend/node_modules/
+# ⚠️ **vitest 的 root 在 `frontend/src/`** ⇒ 它的缓存落在 `frontend/src/node_modules/.vite/`，
+# 只忽略上面那条不够（2026-09-17：跑完 `npm run build` 冒出来一个未跟踪目录，
+# 看起来像"有人手滑提交了 node_modules"，其实只是构建工具的缓存）。
+src/singularity/web/frontend/src/node_modules/
 src/singularity/web/static/dist/
 
 # 个人工具配置（不绑定项目）

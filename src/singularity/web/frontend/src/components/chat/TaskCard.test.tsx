@@ -104,3 +104,30 @@ describe('任务状态的十二个取值', () => {
     expect(cardWithStatus('done')).toContain('完成')
   })
 })
+
+/**
+ * 🔴 **F3：判失败 ≠ 活白干**（2026-09-17 真机）。
+ *
+ * 任务判 `failed` 之后，它的产物**不一定丢** —— executor 干完一轮会 `commit_wt`
+ * 并把提交**锚在 `refs/qidian/pending/<task_id>`** 上（防 git gc）。
+ * 成功合并那条路会把它删掉 ⇒ **ref 还在 = 有可打捞的产物**。
+ *
+ * 真机那轮：3 个任务全判 `failed`，而产物好好躺在 pending ref 上
+ * （拼起来 `pytest 40 passed`）—— **界面上一个字都不显示**，
+ * 用户只看到"失败"，不知道活其实干完了。
+ */
+describe('任务卡上要看得见"有可打捞的产物"', () => {
+  it('有 salvage_ref 时要说出来', () => {
+    const text = render(
+      <TaskCard t={{ ...base, status: 'failed', error: 'QA: 无文件改动',
+                     salvage_ref: '1974746abcdef' }} onRetry={noop} onReveal={noop} />)
+    expect(text).toContain('可打捞')
+  })
+
+  it('**没有产物时一个字都不许提**（别把修法改宽）', () => {
+    const text = render(
+      <TaskCard t={{ ...base, status: 'failed', error: 'QA: 无文件改动' }}
+                onRetry={noop} onReveal={noop} />)
+    expect(text).not.toContain('可打捞')
+  })
+})

@@ -31,6 +31,41 @@ from singularity.scheduler._worktree import cleanup_task_artifacts as _cleanup_t
 
 # ═══════════════════════════════════════════════════════════════
 
+def salvageable_refs() -> dict[str, str]:
+    """一次扫描，收出所有**可打捞的产物**：`{task_id: commit_sha}`。
+
+    🔴 **F3（2026-09-17 真机）**：任务判失败/超时，**产物不一定丢** ——
+    executor 干完一轮会 `commit_wt` 并把提交**锚在 `refs/qidian/pending/<task_id>`** 上
+    （`_worktree._anchor_ref` 打的，防 git gc 回收）。成功合并那条路会
+    `_release_ref` 删掉它 ⇒ **ref 还在 = 这个任务有可打捞的产物**。
+
+    真机那轮就是：3 个任务全判 `failed`，而产物好好躺在 pending ref 上
+    （拼起来 `pytest 40 passed`）—— **界面上一个字都不显示**，只有 CLI 路径有一句提示。
+
+    ⚠️ 只调 `git for-each-ref`（**每仓一次**），别在任务循环里逐条查 git。
+    ⚠️ 仓库根用 `_project_repo_roots()` —— pending ref 打在**项目仓**上，不是奇点仓
+    （"读错仓库"这一族本仓踩过三次）。
+    """
+    import subprocess
+    from singularity.scheduler._git_worktree import _project_repo_roots
+    out: dict[str, str] = {}
+    for root in _project_repo_roots():
+        try:
+            r = subprocess.run(
+                ["git", "for-each-ref", "--format=%(refname) %(objectname)",
+                 "refs/qidian/pending/"],
+                cwd=str(root), capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError) as e:
+            witness.warn("_api", f"salvage_scan_failed:{type(e).__name__}"[:120],
+                         key="salvage_scan_failed")
+            continue
+        for line in (r.stdout or "").splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[0].startswith("refs/qidian/pending/"):
+                out[parts[0].rsplit("/", 1)[-1]] = parts[1]
+    return out
+
+
 def _list_all_tasks() -> list[dict]:
     tasks_dir = tracker.tasks_dir()
     if not tasks_dir.exists(): return []
@@ -65,6 +100,8 @@ def task_list(status_filter: str = "", level_filter: str = "") -> tuple[dict, in
     `?level=` 过滤都会拿到"按类型过滤"的结果。
     """
     all_tasks = _list_all_tasks()
+    # 🔴 **一次扫描**（不是在任务循环里逐条查 git）：判失败但产物可打捞的那些任务
+    salvage = salvageable_refs()
     result = []
     now = time.time()
     for t in all_tasks:
@@ -89,6 +126,10 @@ def task_list(status_filter: str = "", level_filter: str = "") -> tuple[dict, in
             "created_at": created,
             "wait_sec": round(now - created) if created else 0,
             "duration_sec": round(updated - created) if t.get("status") in ("done", "failed") else None,
+            # 🔴 **F3：判失败但产物可打捞**（2026-09-17）。非空 = 这个任务有一份
+            # **已经提交、已经锚定**的产物躺在 `refs/qidian/pending/<id>` 上，
+            # 可以人工捞回来。原来**界面上一个字都不显示**，只有 CLI 路径有提示。
+            "salvage_ref": salvage.get(t.get("id", t["_filename"]), ""),
         })
     return {"tasks": result, "total": len(result)}, 200
 
@@ -106,6 +147,8 @@ def task_detail(task_id: str) -> tuple[dict, int]:
     updated = data.get("updated_at", created)
     data["wait_sec"] = round(now - created) if created else 0
     data["duration_sec"] = round(updated - created) if created else 0
+    # 🔴 F3：详情页也要看得见（判失败但产物可打捞）
+    data["salvage_ref"] = salvageable_refs().get(task_id, "")
     # DAG 关系
     data["_dag_parents"] = []
     data["_dag_children"] = []
