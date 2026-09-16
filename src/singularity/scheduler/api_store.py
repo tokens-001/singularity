@@ -226,8 +226,27 @@ def get(api_id: str) -> Optional[APIEntry]:
     return _load().get(api_id)
 
 
+def is_reserved_id(api_id: str) -> bool:
+    """`_` 开头 = **元数据键的保留前缀**，不是条目 id。
+
+    `_observer` / `_quota_dead` 这类元数据键就是这个前缀跟真条目分开的
+    （见 `_load` 的 `startswith("_")` 过滤 和 `_save` 的保留逻辑）。
+
+    判据**只写这一份**：HTTP 边界（`_api_admin.api_store_add`）和写入口
+    （`add`）都调它。分两份写会漂 —— 而**这个 bug 本身就是"判据只在一侧"** 造成的。
+    """
+    return api_id.startswith("_")
+
+
 def add(api_id: str, provider: str, base_url: str, api_key_env: str,
         notes: str = "") -> APIEntry:
+    # 🔴 写入口也要拦。**这个不变量以前只在读的那一侧有** ⇒ 能建进去，然后列表里
+    # 看不见（`_load` 跳过它）、`remove()` 也 `not in entries` 回 False ——
+    # **建得进、看不见、删不掉，三条路全断**，只能手改 `.qidian/api_store.json`
+    # （2026-09-15 真机验证时撞见）。
+    # ⇒ 上抛，**不静默忽略**：静默忽略等于让调用方以为建好了，那正是这个 bug 的成因。
+    if is_reserved_id(api_id):
+        raise ValueError(f"id 不能以 _ 开头（`_` 是元数据键的保留前缀）: {api_id!r}")
     entries = _load()
     now = time.time()
     has_key = bool(os.environ.get(api_key_env, ""))

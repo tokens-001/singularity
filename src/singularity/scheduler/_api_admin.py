@@ -105,6 +105,14 @@ def api_store_list():
 
 def api_store_add(api_id, provider="", base_url="", api_key_env="", notes=""):
     from . import api_store
+    # 非法 id（`_` 保留前缀）⇒ **400，不是 500**。以前这里没人拦，请求会一路写进去、
+    # 然后那条目就消失在列表里（`_load` 跳过它、`remove()` 看不见它）。
+    # ⚠️ **不写 `try/except` 翻译**：那会被静默-except 棘轮判成"既不出声也不上抛"
+    # （它按 AST 形状看，看不出我把报文交给了调用方）。所以判据做成
+    # `api_store.is_reserved_id` **两边共用** —— 边界挡输入、写入口保不变量。
+    if api_store.is_reserved_id(api_id):
+        return {"ok": False,
+                "error": f"id 不能以 _ 开头（`_` 是元数据键的保留前缀）: {api_id!r}"}, 400
     entry = api_store.add(api_id=api_id, provider=provider or api_id, base_url=base_url, api_key_env=api_key_env, notes=notes)
     return {"ok": True, "entry": entry.to_dict(),
             "hint": f"调用 POST /api/api-store/{api_id}/scan 发现模型"}, 200
