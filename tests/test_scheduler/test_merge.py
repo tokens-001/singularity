@@ -108,6 +108,46 @@ class TestDrainTermination:
         assert [r.task_id for r in res] == ["ready"]
         assert len(q._queue) == 1
 
+    def test_依赖已成终态就别再等_别永久defer(self, monkeypatch):
+        """🔴 **2026-09-17 真机坐实（一晚复现两次、干净重启后仍复现）**：
+        依赖 `FAILED` 的请求会被**永久** defer，进而**静默死锁整条调度**。
+
+        原判据 `t.status != TaskStatus.DONE` 要求依赖**全部 DONE**；而
+        `FAILED`/`ROLLED_BACK` 也是终态、**永远到不了 DONE** ⇒ 请求永远满足不了依赖
+        ⇒ 永远留在队列里。后果链（真机每一环都核过）：
+
+          它对应的任务永远留在 `pending_batches`
+          ⇒ 调度循环的睡觉条件 `not running_futures and not pending_batches` **恒 False**
+          ⇒ **全速空转**（实测 **1731 条 `drain_dep_blocked` / 2 分钟**、进程吃 44 分钟 CPU）
+          ⇒ 孤儿探测的 `live` 集合含它 ⇒ 判"有人管" ⇒ 跳过
+          ⇒ `_strand_guard` 也不响（**没东西抛异常**，任务只是永远不被处理）
+
+        ——**静默死锁**：不抛、不报、界面上任务 `running`、进程活着。
+
+        依赖到了终态就意味着**它不会再变了**：成功的照常合，失败的按**降级合并**走
+        （下游本来就允许降级运行，见 `tracker._any_dead_dep`）。
+        """
+        from singularity.scheduler import tracker as tk
+        from singularity.scheduler.tracker import Task, TaskStatus
+        monkeypatch.setattr(tk, "read_task",
+                            lambda tid: Task(id=tid, description="d", status=TaskStatus.FAILED))
+        res, q, _ = self._drain_with_deadline(monkeypatch, [self._req("t1", ["dep_failed"])])
+        assert [r.task_id for r in res] == ["t1"], "依赖已经是终态(失败)了，不该永远等它"
+        assert not q._queue, "合掉之后队列该空 —— 否则调用方的 pending_batches 永不清空"
+
+    def test_依赖还在跑_就还得等(self, monkeypatch):
+        """**别把修法改宽**：依赖还没到终态（还在跑）就该继续等。
+
+        这条钉的是上面那条改动的**边界** —— 没有它，"终态"被改成"恒真"也不会有测试变红。
+        """
+        from singularity.scheduler import tracker as tk
+        from singularity.scheduler.tracker import Task, TaskStatus
+        monkeypatch.setattr(tk, "read_task",
+                            lambda tid: Task(id=tid, description="d", status=TaskStatus.RUNNING))
+        res, q, warns = self._drain_with_deadline(monkeypatch, [self._req("t1", ["dep_running"])])
+        assert res == [] and len(q._queue) == 1, "依赖还在跑，不该合"
+        assert any("drain_dep_blocked" in str(w) for w in warns)
+
 
 class TestResolveWhenPrimitiveRaises:
     """`merge_ref` 抛了的时候，`resolve` 不许把冲突任务弄丢。

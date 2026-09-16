@@ -148,10 +148,32 @@ class MergeQueue:
         return results
 
     def _deps_satisfied(self, req: MergeRequest) -> bool:
-        """依赖的 task 全部 DONE (防御性检查, 正常由 ready_tasks 门控保证)。"""
+        """依赖的 task **都到终态了**（不会再变）—— 不是"都 DONE"。
+
+        🔴 **2026-09-17 真机坐实（一晚复现两次，重启后仍复现）**：原判据要求依赖全部 `DONE`，
+        而 **`FAILED` / `ROLLED_BACK` 也是终态、永远到不了 `DONE`** ⇒ 只要某任务的依赖失败了，
+        它的合并请求就**永远满足不了** ⇒ `drain()` 永远 defer（`_drain_pending` 上面那圈
+        `if not self._deps_satisfied(req): 放回队尾`）⇒ **它永远留在 `pending_batches`**。
+
+        完整后果链（每一环都核过）：
+          `pending_batches` 非空，而两个工人都空闲（`running_futures` 空）
+          ⇒ 调度循环的睡觉条件 `not running_futures and not pending_batches` **恒 False**
+          ⇒ **全速空转**（实测 **1731 条 `drain_dep_blocked` / 2 分钟**、进程吃 44 分钟 CPU）
+          ⇒ 孤儿探测的 `live` 集合**含它** ⇒ 判"有人管" ⇒ 跳过
+          ⇒ `_strand_guard` 也不响（**没东西抛异常**，任务只是永远不被处理）
+        = **静默死锁**：不抛、不报、界面上任务 `running`、进程活着、一切"正常"。
+
+        ⚠️ `merge.py` 上面那段注释早就写过「**实测 1 个依赖未满足的请求就能让 `drain()`
+        永不返回**……卡住 = 整个调度停摆」—— **但他们只修了内层**（让 `drain()` 自己别死循环），
+        外层循环照旧把"队里有东西"当成"有活干"。**「修了一半」。**
+
+        依赖是**终态**就意味着它不会再变了，别再等：成功的照常合，失败的按**降级合并**走
+        （下游本来就允许降级运行，见 `tracker._any_dead_dep`）。
+        ⚠️ `None`（任务文件不存在）**仍算没满足** —— 那是另一种形状，不在这条的射程里。
+        """
         for d in req.depends_on:
             t = tracker.read_task(d)
-            if t is None or t.status != TaskStatus.DONE:
+            if t is None or not tracker.is_terminal(t.status):
                 return False
         return True
 

@@ -712,6 +712,13 @@ _orphans_warned: set[str] = set()
 
 _ORPHAN_SCAN_INTERVAL_S = 60.0
 
+# 「毫无进展」的那一圈该让出多久。**别删成 0** —— 2026-09-17 真机实测：
+# 这个分支原来一句 sleep 都没有，静默死锁时全速空转 1731 条告警/2 分钟、44 分钟 CPU。
+_LOOP_NO_PROGRESS_SLEEP_S = 0.5
+# 连续多少圈「没工人在跑、合并队列却还有东西、而且一圈下来零进展」才出声。
+# 这是**矛盾状态**而不是超时猜法：正常的流水线里这三件事不可能同时成立。
+_STUCK_ROUNDS_BEFORE_WARN = 3
+
 
 def _warn_orphan_running(running_futures: dict = None, pending_batches: dict = None) -> None:
     """**只报不改**：tracker 里挂着 RUNNING、却**不在任何活任务表里**的任务 = 孤儿。
@@ -784,6 +791,8 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
     runner = TaskRunner()
     # 节流用的可变格子（用 list 是因为闭包/嵌套函数里不能重新绑定外层名字）
     _last_orphan_scan = [time.time()]
+    # 连续"零进展且无人跑活"的圈数（用 list 是因为闭包/嵌套函数里不能重新绑定外层名字）
+    _stuck_rounds = [0]
 
     with ThreadPoolExecutor(max_workers=max_concurrent) as pool:
         while True:
@@ -799,8 +808,8 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
                 time.sleep(0.5)
                 continue
 
-            _reap_futures(running_futures, pending_batches, mq, runner, results)
-            _drain_pending(pending_batches, mq, results)
+            reaped = _reap_futures(running_futures, pending_batches, mq, runner, results)
+            drained = _drain_pending(pending_batches, mq, results)
             _auto_trigger_test_fix(agents, results)
             # **水位触发**（2026-09-14）：每轮重算一次"该有几个人在跑"，不是只在
             # "要退出了"那一刻算。带活任务表进去，判据仍是精确的"不在表里"。
@@ -808,6 +817,27 @@ def _run_queue_v3(agents: dict, max_concurrent: int) -> list[tuple]:
             if time.time() - _last_orphan_scan[0] > _ORPHAN_SCAN_INTERVAL_S:
                 _last_orphan_scan[0] = time.time()
                 _warn_orphan_running(running_futures, pending_batches)
+
+            # ⚠️ **只有"这圈真推进了"才不睡**（2026-09-17 真机坐实）。
+            # 原来这个分支**一句 sleep 都没有** ⇒ 只要 `running_futures` 空、`pending_batches`
+            # 非空，循环就全速空转 —— 而"合并请求被依赖永久 defer"正好造出这个组合：
+            # 实测 **1731 条 `drain_dep_blocked` / 2 分钟**、进程吃 **44 分钟 CPU**。
+            # 判据用**有没有进展**，不用"表里有没有东西" —— 后者正是那个静默死锁的成因。
+            if not reaped and not drained:
+                # 顺带把**矛盾状态**报出来（不是超时猜法，是状态自相矛盾）：
+                # 「没有工人在跑」∧「合并队列里还有东西」∧「一圈下来零进展」——
+                # 正常的流水线里这三件事不可能同时成立。
+                if not running_futures and pending_batches:
+                    _stuck_rounds[0] += 1
+                    if _stuck_rounds[0] == _STUCK_ROUNDS_BEFORE_WARN:
+                        witness.warn(
+                            "orch",
+                            f"merge_queue_stuck:{len(pending_batches)}:"
+                            f"no_worker_no_progress:{sorted(pending_batches)[:3]}"[:160],
+                            key="merge_queue_stuck")
+                time.sleep(_LOOP_NO_PROGRESS_SLEEP_S)
+            else:
+                _stuck_rounds[0] = 0
 
     return results
 
