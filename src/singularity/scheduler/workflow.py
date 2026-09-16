@@ -673,12 +673,8 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     )
     disp_result, err = _safe_dispatch(qa_prompt, "any", f"qa_{project.id}", agents, project,
                                       phase="reviewing")
-    # ⚠️ **临时探针**（2026-09-15，定位完就删，见 `~/OPEN.md` 那条）：
-    # 记下落盘那一刻的长度，给下面的解析点比对。
-    _qa_raw_len = 0
     if disp_result and disp_result.executor_result:
         raw = disp_result.executor_result.raw_output
-        _qa_raw_len = len(raw)
         _save_phase_output(project.id, "qa-report.md", raw)
         msgs.append(f"QA报告完成 ({len(raw)} chars)")
     elif err:
@@ -725,16 +721,12 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     try:
         from singularity.scheduler.validator import build_qa_report
         qa_raw = disp_result.executor_result.raw_output if disp_result and disp_result.executor_result else "{}"
-        # ⚠️ **临时探针**（2026-09-15，定位完就删）：`saved` 和 `parsed` 必须相等。
-        # 不等的两种读法，各自指向不同的病，所以两个数都要打出来：
-        #   · `saved` ≠ `parsed` → 两次访问之间结果被换了（谁换的）
-        #   · 两个数相等却仍判"未产出" → 问题不在这一层，而在别处（比如这段跑了两趟）
-        # 这条探针**每调一次打一行** ⇒ 一次 GATE3 里出现两行，本身就是"跑了两趟"的铁证。
-        from singularity.scheduler import witness as _w
-        _w.warn("workflow",
-                ("qa_raw_probe:saved=%d:parsed=%d:head=%s"
-                 % (_qa_raw_len, len(qa_raw), str(qa_raw)[:60].replace("\n", " ")))[:180],
-                key="qa_raw_probe")
+        # ⚠️ 这里 2026-09-15 曾放一条**临时探针**（`qa_raw_probe:saved=N:parsed=M`），
+        # 用来定位「喂进去的和落在盘上的不是同一份（差 217 字符）」。
+        # **2026-09-16 真机响过一次，已按"定位完就删"删掉** —— 结论：
+        # `saved == parsed`（1819 = 1819）且解析出了真结论 ⇒ **不是"中途被换"、
+        # 也不是"跑了两趟"（只打了一行）**。那个谜没在这一轮复现（它的定性本来就是"间歇性"）。
+        # 也就是说：**病灶不在这层**。要再查得从别处下手。
         qa_data, verdict, reason = _qa_verdict_from_raw(qa_raw)
         issues = qa_data.get("issues", [])
         passed = qa_data.get("passed", [])
