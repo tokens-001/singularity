@@ -705,7 +705,7 @@ class OpenAIAgentExecutor(BaseExecutor):
             if content.strip():
                 elapsed = time.time() - start
                 # 用 git diff 追踪改动的文件
-                self._track_changed_files()
+                self._track()
                 return ExecutorResult(
                     success=True, raw_output=content,
                     changed_files=list(self._changed_files),
@@ -718,7 +718,7 @@ class OpenAIAgentExecutor(BaseExecutor):
             # success=False 是实话（活确实没干完）—— 别为了好走流程谎报成功。
             # error_kind="deadline" 是给 _exec 的信号：**别换模型重来**。换一个只会把
             # 剩下的时间再烧一遍，换完照样被 900s 无声收割，而这份账同样保不住。
-            self._track_changed_files()
+            self._track()
             return ExecutorResult(
                 success=False,
                 error=(f"到达执行预算 {_EXEC_BUDGET:.0f}s，主动收尾"
@@ -729,7 +729,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                 tool_events=list(self._tool_events))
 
         # 达到最大轮次: 模型可能已写文件但没输出终答 → 追踪 changed_files, 有文件就算产出
-        self._track_changed_files()
+        self._track()
         if self._changed_files:
             return ExecutorResult(
                 success=True, raw_output="(达到最大工具轮次, 已产出文件)",
@@ -871,6 +871,22 @@ class OpenAIAgentExecutor(BaseExecutor):
             return "\n".join(results) if results else f"未找到匹配 '{pattern}' 的行"
         except Exception as e:
             return f"搜索错误: {e}"
+
+    def _track(self):
+        """`no_tools` 时**不追改动** —— 这不是省事，是**别报假警**。
+
+        禁工具的那条路（评审 / QA / 架构 / 调研）**没有写文件的工具**，所以它
+        **不可能**改过文件；而 `_track_changed_files` 会给出一条
+        `collect_changes:no_baseline_ref` 告警 —— 那条告警在真机上**一周 338 次**，
+        常年霸占告警页第一名（同族的 `claude_cli` 那条一起算，占全部告警的 47%），
+        把真事故盖住。**假告警比没有告警更坏**：它训练人忽略这个页面。
+
+        ⚠️ 能这么写的前提是 `honors_no_tools` 那条已经落实（`_dispatch_exec._honors_no_tools`）：
+        **拦不住禁工具的执行的器根本不会跑**，所以"跑到这里 = 确实没碰过磁盘"成立。
+        """
+        if bool(self.cfg.get("no_tools")):
+            return
+        self._track_changed_files()
 
     def _track_changed_files(self):
         """追踪改动的文件。

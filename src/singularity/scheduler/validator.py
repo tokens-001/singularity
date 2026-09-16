@@ -445,7 +445,7 @@ JSON:"""
                      "detail":f"no reviewer at {review_level}"}],
                     "verdict":"retry","summary":f"no reviewer at {review_level}"}
         result = _disp.dispatch(prompt, review_level, f"review_{writer_model or '?'}",
-                               {review_level:[chain[0]]}, cwd=cwd or "")
+                               {review_level:[chain[0]]}, cwd=cwd or "", no_tools=True)
         raw = result.executor_result.raw_output if result and result.executor_result else ""
     except Exception as e:
         return {"issues":[{"severity":"critical","line":0,
@@ -569,7 +569,7 @@ No issues? {{"issues":[],"verdict":"pass","summary":"no issues"}}
 JSON:"""
             
             result = _disp.dispatch(chunk_prompt, review_level, f"mmr_{model_name[:8]}",
-                                   {review_level:[cfg]}, cwd=root)
+                                   {review_level:[cfg]}, cwd=root, no_tools=True)
             raw = result.executor_result.raw_output if result and result.executor_result else ""
             
             d = _extract_json_obj(raw)
@@ -802,7 +802,8 @@ def qa_acceptance_review(constraints, diff_text, cwd, requirements=""):
         return {"verdict": "needs_fix", "verifications": [], "summary": "无可用 QA 模型 (未验收)"}
 
     try:
-        result = _disp.dispatch(prompt, "any", "qa_acceptance", {"any": model_cfgs}, cwd=cwd)
+        result = _disp.dispatch(prompt, "any", "qa_acceptance", {"any": model_cfgs}, cwd=cwd,
+                                no_tools=True)
         raw = result.executor_result.raw_output if result and result.executor_result else ""
     except Exception as e:
         return {"verdict": "needs_fix", "verifications": [], "summary": f"QA 验收调用失败: {e}"}
@@ -864,7 +865,8 @@ severity 判定标准 —— **只有 critical/high 会拦下合并**，别把�
         ], "summary": "无可用模型"}
 
     try:
-        result = _disp.dispatch(prompt, "any", "security_audit", {"any": model_cfgs}, cwd=cwd)
+        result = _disp.dispatch(prompt, "any", "security_audit", {"any": model_cfgs}, cwd=cwd,
+                                no_tools=True)
         raw = result.executor_result.raw_output if result and result.executor_result else ""
     except Exception as e:
         # fail-closed: 安全审计失败不能标 clean（否则"没审就当安全"）。标 needs_fix + high 触发重试。
