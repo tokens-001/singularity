@@ -381,6 +381,22 @@ def pick_agent_fallback_chain(agents: dict, level: str,
 
 _LAZY_SPOKES = ("_dispatch_skills", "_dispatch_exec", "_dispatch_crud")
 
+# 🔴 **这个循环必须互斥**（2026-09-16 补；`lazy_spoke_import_failed` 已报 43 次跨三天）。
+#
+# 形状（读码得到，非推断）：`__getattr__` 按 `_LAZY_SPOKES` **依次** `import_module`。
+# 两个线程同时进来的话：
+#   · T1 开始执行 `_dispatch_skills` —— 它此刻**在 `sys.modules` 里，但还没跑完**；
+#   · T2 也 `import_module("_dispatch_skills")`，拿到那个**半成品**，`hasattr` 为假，往后走；
+#   · T2 接着 `import_module("_dispatch_exec")` —— 它第 8 行是
+#     `from ..._dispatch_skills import _load_skills_for_agent`，而那个名字在
+#     `_dispatch_skills` **第 57 行**才定义
+#   ⇒ `cannot import name '_load_skills_for_agent' from partially initialized module`
+#     —— **与真机告警文本逐字一致**。
+# 加锁之后"进入这一段的线程只有一个"，后来者看到的是**已跑完**的模块。
+# ⚠️ 用 **RLock**：辐条执行期间会反向 `from dispatcher import ...`，万一碰到属性访问
+# 又落回这里，同一线程不能自锁死。
+_LAZY_SPOKES_LOCK = threading.RLock()
+
 
 def _custom_agents() -> dict:
     """`_dispatch_crud._load_custom_agents` 的**惰性**访问。
@@ -421,15 +437,17 @@ def __getattr__(name: str):
     ⚠️ 全仓**没有任何地方**用 `from dispatcher import *`（2026-09-14 扫过），
     所以不需要保留"再导出"那层语义；`dispatcher.X` 这种属性访问照常работает。
     """
-    for _mod in _LAZY_SPOKES:
-        try:
-            _m = importlib.import_module(f"singularity.scheduler.{_mod}")
-        except ImportError as e:
-            # ⚠️ 别吞：辐条导不进来是真故障（循环导入 / 语法错），
-            # 吞了就会被伪装成"dispatcher 没这个属性"，把真正的原因埋掉。
-            witness.warn("dispatcher", f"lazy_spoke_import_failed:{_mod}:{e}"[:160],
-                         key="lazy_spoke_import_failed")
-            continue
-        if hasattr(_m, name):
-            return getattr(_m, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    # 整个循环互斥 —— 见 `_LAZY_SPOKES_LOCK` 上面那段（半成品模块那个洞）。
+    with _LAZY_SPOKES_LOCK:
+        for _mod in _LAZY_SPOKES:
+            try:
+                _m = importlib.import_module(f"singularity.scheduler.{_mod}")
+            except ImportError as e:
+                # ⚠️ 别吞：辐条导不进来是真故障（循环导入 / 语法错），
+                # 吞了就会被伪装成"dispatcher 没这个属性"，把真正的原因埋掉。
+                witness.warn("dispatcher", f"lazy_spoke_import_failed:{_mod}:{e}"[:160],
+                             key="lazy_spoke_import_failed")
+                continue
+            if hasattr(_m, name):
+                return getattr(_m, name)
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
