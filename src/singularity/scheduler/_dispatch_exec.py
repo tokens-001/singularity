@@ -207,11 +207,17 @@ def dispatch(
             last_error = f"未知 executor type: {etype}"
             continue
 
+        if no_tools and not getattr(executor_cls, "honors_no_tools", False):
+            # 🔴 **不是"出个声继续跑"**：告警等于假装拦住了，而它接着会带着工具去改磁盘
+            # （见 `_honors_no_tools` 的 docstring —— 09-11 实测调研员在**项目仓里把整个
+            # 项目实现完了**）。跳过这一个，让 fallback 链试下一个；全跳过就是"无可用 agent"，
+            # 那是对的终态（fail-closed），比"跑了但没禁住"强。
+            witness.warn("dispatcher", f"no_tools_not_enforced:{etype}"[:80],
+                         key="no_tools_not_enforced")
+            last_error = f"{etype}: 禁不掉工具（no_tools 前提不成立）"
+            continue
+
         if no_tools:
-            # 与 `_run_no_tools` 同一条禁令、同一个告警：claude-cli 这类自带工具的执行器
-            # 禁不掉 —— 让它在 trace 里可见，而不是假装禁住了。
-            if not getattr(executor_cls, "honors_no_tools", False):
-                witness.warn("dispatcher", f"no_tools_not_enforced:{etype}"[:80])
             agent_cfg = {**agent_cfg, "no_tools": True}
 
         full_task = task
@@ -314,6 +320,24 @@ def _run_executor(executor_cls, agent_cfg: dict, full_task: str, task_id: str,
     return executor.run()
 
 
+def _honors_no_tools(agent_cfg: dict) -> bool:
+    """这个 agent 的执行器**真的**能把工具禁掉吗。
+
+    "禁工具"是三条路共同的前提 —— 委员会成员 / A 臂自修订 / "产出就是一段 JSON、不该碰磁盘"
+    的阶段（调研 / 架构）：纯文本出方案，**别改磁盘**。但 `no_tools` 只是个**请求**：
+    自带工具面的执行器（`claude-cli`）忽略它，而代码里原来只有一条告警就往下跑。
+
+    ⚠️ **"出个声继续跑" = 假装拦住了**（同 `_warn_if_profile_not_enforceable` 那条规矩），
+    而这里的代价是实打实的：2026-09-11 实测**调研员在项目仓里把整个项目实现完了**
+    （wc_lite.py + 测试 + 真跑了一遍），另一处合成 agent 把目标项目的架构写进了
+    **奇点仓库自己的 `docs/`**。
+    ⇒ 判定必须**挡在调用之前**，不能"跑完再出声"。`_ensure_agent_type` 会就地改字典，
+    这里传副本（调用方还要用它）。
+    """
+    etype = _ensure_agent_type({**agent_cfg}).get("type", "claude-cli")
+    return getattr(_EXECUTOR_BY_TYPE.get(etype), "honors_no_tools", False)
+
+
 def _run_no_tools(agent_cfg: dict, prompt: str, tag: str, level: str,
                   baseline_ref: str = "", cwd: str = "") -> tuple[str, int, float] | None:
     """跑一个禁工具的单模型调用。
@@ -328,10 +352,13 @@ def _run_no_tools(agent_cfg: dict, prompt: str, tag: str, level: str,
     executor_cls = _EXECUTOR_BY_TYPE.get(etype)
     if not executor_cls:
         return None
-    # 禁工具是委员会的前提（纯文本出方案，别改磁盘）。claude-cli 这类自带工具的执行器
-    # 禁不掉 —— 告警让它在 trace 里可见，而不是假装禁住了。
-    if not getattr(executor_cls, "honors_no_tools", False):
-        witness.warn("dispatcher", f"no_tools_not_enforced:{etype}"[:80])
+    if not _honors_no_tools(agent_cfg):
+        # 🔴 **拒掉这一路，不是"出个声继续跑"**（见 `_honors_no_tools`）：
+        # 接着跑就是"带着工具的成员进了委员会"，而委员会的前提正是禁工具。
+        # 返回 None 会走进调用方既有的"单个模型失败不阻断委员会"那条路（带告警）。
+        witness.warn("dispatcher", f"no_tools_not_enforced:{etype}"[:80],
+                     key="no_tools_not_enforced")
+        return None
     try:
         result = _run_executor(executor_cls, agent_cfg, prompt, tag, level,
                                baseline_ref=baseline_ref, cwd=cwd)
@@ -547,11 +574,16 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
     try:
         etype = synthesizer.get("type", "claude-cli")
         executor_cls = _EXECUTOR_BY_TYPE.get(etype)
+        # 🔴 **光带 `no_tools` 不够，还得看它认不认**：合成 agent 带着工具、cwd 又是
+        # 奇点自己的仓库根 ⇒ 把目标项目的架构**写进了奇点仓库的 `docs/`**
+        # （2026-09-11 实测产出 `docs/ARCHITECTURE.json`）。拦不住就别合成 ——
+        # 置空 `executor_cls` 会自然走到下面「合成失败」那条兜底，返回第一份产出
+        # （**有产出、不是空手**，比"带着工具跑一遍"强）。
+        if executor_cls and not getattr(executor_cls, "honors_no_tools", False):
+            witness.warn("dispatcher", f"synthesis_no_tools_not_enforced:{etype}"[:80],
+                         key="no_tools_not_enforced")
+            executor_cls = None
         if executor_cls:
-            # no_tools 必须带上 —— 委员会全程不改磁盘（见 _run_no_tools 的说明：
-            # "禁工具是委员会的前提（纯文本出方案，别改磁盘）"）。兜底这条以前漏了：
-            # 合成 agent 带着工具、cwd 又是奇点自己的仓库根，于是把目标项目的架构
-            # 直接写进了**奇点仓库的 docs/**（2026-09-11 实测产出 docs/ARCHITECTURE.json）。
             synth_result = _run_executor(
                 executor_cls, {**synthesizer, "no_tools": True}, synthesis_prompt,
                 f"{task_id}_synth", level,

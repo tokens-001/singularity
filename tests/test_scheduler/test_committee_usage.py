@@ -78,7 +78,10 @@ class TestNoToolsContract:
             raw_output, error, token_count, elapsed = "方案", "", 777, 2.5
         monkeypatch.setattr(de, "_run_executor", lambda *a, **k: _R())
         monkeypatch.setattr(de, "_ensure_agent_type", lambda c: c)
-        monkeypatch.setattr(de, "_EXECUTOR_BY_TYPE", {"openai-agent": object})
+
+        class _Honors:          # 真的 openai-agent 是 honors_no_tools=True；裸 object 不是，
+            honors_no_tools = True   # 用它当替身会让"禁不掉就拒掉"那条把本用例误伤
+        monkeypatch.setattr(de, "_EXECUTOR_BY_TYPE", {"openai-agent": _Honors})
 
         raw, tokens, elapsed = de._run_no_tools(
             {"model": "m", "type": "openai-agent"}, "p", "tag", "any")

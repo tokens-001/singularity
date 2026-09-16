@@ -959,9 +959,15 @@ class TestCommitteeDegradationVisibility:
         monkeypatch.setattr(de, "_run_executor", fake_run_executor)
         monkeypatch.setattr(cfg, "QIDIAN_DIR", tmp_path)
         monkeypatch.setattr(ej, "fuse_architecture_v2", lambda *a, **k: "")
+        # ⚠️ `type` 必须写实：不写就默认 `claude-cli`，而它 `honors_no_tools=False` ——
+        # 2026-09-16 起那种合成 agent **根本不会被调用**（拦不住就别合成），
+        # 于是 `_run_executor` 收不到调用、这个用例会空手失败。
+        # 这条用例要守的是**能禁工具的那种**也得真带上 `no_tools`，所以用 openai-agent。
         de._dispatch_committee("模块划分 数据模型", "any", "tid", {},
-                               [{"model": "m1"}, {"model": "m2"}])
+                               [{"model": "m1", "type": "openai-agent"},
+                                {"model": "m2", "type": "openai-agent"}])
         assert seen.get("agent_cfg", {}).get("no_tools") is True, seen
+        assert seen.get("agent_cfg", {}).get("model") == "m1", "合成的应该是链首"
 
 
 class TestFusionMetaHandoff:
