@@ -7,6 +7,8 @@
 **根本没被创建**，`route_learner.json` 一动不动。而 `events.json` 正常长大 ——
 因为 `_save_trace` 两条路径都有，从外面看像是"归档跑了"，其实只跑了一半。
 """
+import json
+
 import pytest
 
 from singularity.scheduler import orchestrator as orch
@@ -492,7 +494,19 @@ def test_enqueue_merge_failure_does_not_strand_task(monkeypatch, tmp_path):
 
 
 def test_drain_pending_failure_does_not_strand_task(monkeypatch, tmp_path):
-    """`_drain_pending` 里抛了 —— batch 已经 pop，任务不能留在 RUNNING。"""
+    """`_drain_pending` 里抛了 —— batch 已经 pop，任务不能留在 RUNNING。
+
+    ⚠️ **2026-09-17 改了两处，都是因为"声称的和断言的不是一回事"**：
+
+    ① **断言**：原来只断言 `"drain_pending_failed" in warns` —— 那是个**告警 key**，
+       而 docstring 说的不变量是「**任务不能留在 RUNNING**」。两个东西对不上，
+       ⇒ **那条不变量从来没被钉住**。现在直接读盘上的状态来钉。
+
+    ② **前提**：状态现在由 `merge._mark_merged` 在**合成功那一刻**落，
+       比 `_drain_pending` 早（`mq.drain()` → `_drain_one` → `_mark_merged`）
+       ⇒ 走到这一段时**本该已经是终态**了。而这条测试的替身 `_MQ` 绕过了那个函数，
+       测的是一个**生产上不存在**的场景 ⇒ 得由测试自己把状态摆成生产的样子。
+    """
     tr = _patch_dispatch_env(monkeypatch, tmp_path)
     monkeypatch.setattr(orch, "_save_trace", lambda *a, **k: None)
     monkeypatch.setattr(orch, "_maybe_complete_parents", lambda *a: None)
@@ -504,12 +518,19 @@ def test_drain_pending_failure_does_not_strand_task(monkeypatch, tmp_path):
 
     t = tr.create("drain 炸")
     tr.transition(t.id, tr.TaskStatus.RUNNING)
+    # 生产里 `_mark_merged` 在这一步之前就落了 DONE —— 替身绕过了它，这里补上
+    tr.transition(t.id, tr.TaskStatus.DONE)
     monkeypatch.setattr(tr, "read_task", lambda tid: (_ for _ in ()).throw(RuntimeError("读盘炸")))
 
     pending = {t.id: (t, None, None, _batch())}
     orch._drain_pending(pending, _MQ([_MR(t.id)]), [])
 
-    assert "drain_pending_failed" in warns, warns
+    assert pending == {}, "batch 该被 pop 掉，否则下一轮会重复处理"
+    assert "sync_status_failed" in warns, f"读盘炸了没出声（不该静默吞）: {warns}"
+    # ✅ **真正的不变量**：收尾抛了，任务也**不许掉出终态**（读盘被桩掉了，直接看盘）
+    on_disk = (tr.tasks_dir() / f"{t.id}.json").read_text(encoding="utf-8")
+    assert json.loads(on_disk)["status"] == "done", \
+        f"收尾炸了之后任务不在终态了 —— 这正是这个函数要防的孤儿"
 
 
 def test_strand_guard_only_touches_running(monkeypatch, tmp_path):

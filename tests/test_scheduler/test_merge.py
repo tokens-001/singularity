@@ -185,3 +185,75 @@ class TestResolveWhenPrimitiveRaises:
             "parked 记录没补回去 ⇒ 这个冲突任务从 conflicts() 蒸发了，谁也没法再解它"
         assert (tmp_path / "t1.json").exists(), "盘上的 parked 文件也没了，重启更捞不回来"
         assert any("resolve_merge_ref_failed" in w for w in warns), f"炸了没出声: {warns}"
+
+
+class TestResolveLandsTheStatus:
+    """`resolve` 解完之后**状态要真的落下来** —— 否则任务永久卡 `conflict_held`。
+
+    🔴 2026-09-17 真机（一晚卡住两次）：
+      · `_mark_merged` **只改内存里那几个字段、不 `tracker.transition`**（而 `_park` 是**会**的）
+        ⇒ **进得去、出不来**；合并**在 git 里真发生了**，任务状态还停在 `conflict_held`；
+      · 而"没有 parked 记录"那条**连 transition 都没有** ⇒ 任务**永久挂死**，
+        `/api/conflicts` 一直列着它、阶段永远推不进 `integrating`；
+      · **而且没有任何 API 能把任务从 `conflict_held` 挪出来**（`retry` 只收 FAILED/ROLLED_BACK、
+        `update` 只能改 description、`cancel` 只能标 FAILED —— 那是假的）。
+      那轮是**手改任务 json** 才解开的。
+    """
+
+    def _mq(self, monkeypatch, tmp_path, *, status, has_record=True, merge_ok=True):
+        from singularity.scheduler import config
+        from singularity.scheduler import merge as merge_mod
+        from singularity.scheduler.merge import MergeQueue, MergeRequest
+        from singularity.scheduler.tracker import Task
+        from singularity.scheduler._git_worktree import MergeResult as GitMR
+
+        monkeypatch.setattr(config, "PARKED_DIR", tmp_path)
+        seen: list = []
+        monkeypatch.setattr(merge_mod.tracker, "transition",
+                            lambda tid, st, **k: seen.append((tid, st)))
+        monkeypatch.setattr(merge_mod.tracker, "read_task",
+                            lambda tid: Task(id=tid, description="d", status=status))
+        monkeypatch.setattr(merge_mod, "merge_ref",
+                            lambda *a, **k: GitMR(ok=merge_ok, merged_ref="abc123"))
+        mq = MergeQueue()
+        if has_record:
+            mq._park(MergeRequest(task_id="t1", branch="refs/heads/wt-t1", base_ref="main"),
+                     [], reason="先 park 进去")
+        seen.clear()          # 只关心 resolve 之后那次 transition
+        return mq, seen
+
+    def test_解成功要落_DONE(self, monkeypatch, tmp_path):
+        from singularity.scheduler.tracker import TaskStatus
+        mq, seen = self._mq(monkeypatch, tmp_path, status=TaskStatus.CONFLICT_HELD)
+        res = mq.resolve("t1", "manual")
+        assert res.status == "merged", res
+        assert seen == [("t1", TaskStatus.DONE)], (
+            "合成功了却不落 DONE ⇒ 任务永远停在 conflict_held，而且没有 API 能救它 —— "
+            f"实际 transition 了 {seen}")
+
+    def test_合成功要把_parked_记录删掉(self, monkeypatch, tmp_path):
+        from singularity.scheduler.tracker import TaskStatus
+        mq, _ = self._mq(monkeypatch, tmp_path, status=TaskStatus.CONFLICT_HELD)
+        mq.resolve("t1", "manual")
+        assert not (tmp_path / "t1.json").exists(), \
+            "合掉了还留着 parked 记录 ⇒ conflicts() 会一直列出一个已经合完的'冲突'"
+
+    def test_没有记录时_要给终态别让它永久挂着(self, monkeypatch, tmp_path):
+        from singularity.scheduler.tracker import TaskStatus
+        mq, seen = self._mq(monkeypatch, tmp_path, status=TaskStatus.CONFLICT_HELD,
+                            has_record=False)
+        res = mq.resolve("t1", "manual")
+        assert res.status == "failed"
+        assert seen == [("t1", TaskStatus.FAILED)], (
+            "找不到记录就什么都不做 ⇒ 任务永久卡 conflict_held（这正是真机那次）")
+
+    def test_没有记录但已经_DONE_不许降级(self, monkeypatch, tmp_path):
+        """⚠️ **边界**：记录可能只是"上一次已经成功解掉了"（那条路会 transition(DONE) 再删盘）。
+        这时再调一次 resolve **不能把交付过的任务标成 FAILED**。
+        （同 `_strand_guard` 的规矩：只在它还停在某个中间态时才改。）
+        """
+        from singularity.scheduler.tracker import TaskStatus
+        mq, seen = self._mq(monkeypatch, tmp_path, status=TaskStatus.DONE, has_record=False)
+        mq.resolve("t1", "manual")
+        assert seen == [], (
+            "任务已经是 DONE，resolve 却把它改掉了 —— 这是把交付过的任务降级")

@@ -214,9 +214,39 @@ class MergeQueue:
         return self._park(req, mr.conflicts, reason=mr.reason)
 
     def _mark_merged(self, req: MergeRequest, new_head: str) -> MergeResult:
+        """合成功了 —— **顺便把状态落了**（2026-09-17 真机改）。
+
+        🔴 这里原来**只改内存里那几个字段，不 `tracker.transition`** —— 而 `_park` 是**会**
+        transition 的 ⇒ **进得去、出不来**。那次真机的后果链：
+
+          · `resolve(manual)` 返回 `{"status":"merged"}`、**合并在 git 里真发生了**，
+            但任务状态还是 `conflict_held`；
+          · 而 `resolve` 那一头已经 pop 掉 + **删了盘上的 parked 记录** ⇒ 再调只会回
+            「无 parking 记录」⇒ **任务永久卡死**，`/api/conflicts` 还一直列着它；
+          · 阶段推进的 `pending` 集合是「非 DONE/ROLLED_BACK/FAILED/DECOMPOSED」，
+            **`conflict_held` 算 pending** ⇒ **项目永远推不进 `integrating`**；
+          · **而且没有任何 API 能把任务从 `conflict_held` 挪出来**（`retry` 只收
+            FAILED/ROLLED_BACK、`update` 只能改 description、`cancel` 只能标 FAILED）。
+          ⇒ 那轮是**手改任务 json** 才解开的。
+
+        状态落在这里、而不是留给调用方，是因为**两条路都走这个函数**
+        （`_drain_one` 的自动合并 + `resolve` 的人工解锁）—— 放调用方**必漏一条**
+        （`merge.py` 上面那条注释早写着同一句话："挂下游必漏一条"）。
+        ⚠️ 调用方 `_drain_pending` 原来那句 `transition(DONE)` 已删，避免 DONE→DONE 重复推 SSE。
+        """
         req.status = "merged"
         self._merged.add(req.task_id)
         self._merged_files |= req.changed_files
+        tracker.transition(req.task_id, TaskStatus.DONE)
+        # 合成功了 parking 记录就没用了 —— 留着只会让 `conflicts()` 列出一个**已经合掉**的"冲突"。
+        # ⚠️ 删不掉要**出声**（静默 except 棘轮也会拦）：状态已经落成 DONE 了，
+        # 删不掉只是让 `/api/conflicts` 多列一条**已经合完**的假冲突，不致命，但得让人看得见。
+        try:
+            _parked_path(req.task_id).unlink(missing_ok=True)
+        except OSError as e:
+            witness.warn("merge",
+                         f"parked_unlink_failed:{req.task_id}:{type(e).__name__}"[:160],
+                         key="parked_unlink_failed")
         return MergeResult(task_id=req.task_id, status="merged", new_head=new_head)
 
     def _park(self, req: MergeRequest, conflicts: list[str], reason: str = "") -> MergeResult:
@@ -243,25 +273,41 @@ class MergeQueue:
     def resolve(self, task_id: str, strategy: str = "manual") -> MergeResult:
         """人工解决后重新合。strategy: manual(已手动改完) | abort(放弃)。
 
+        ⚠️ **改动顺序：先算完，再删盘**（2026-09-17 真机改）。
+        原来一进来就 `pop` + `unlink`，之后**不管走哪条路都不再把状态落回去** ——
+        而"没有 parked 记录"那条**连 transition 都没有** ⇒ 任务**永久停在 `conflict_held`**。
+        现在：成功的路走 `_mark_merged`（它负责 `transition(DONE)` + 删盘）；
+        记录真没了 ⇒ **给个终态**（标 FAILED 并说清原因），而不是让它永远挂着。
+
         ⚠️ **`merge_ref` 是会抛的，抛了必须把 parked 记录补回去**（2026-09-14 改）。
-        上面刚把记录 pop 掉 + 删了盘上的文件，而 `merge_ref` 抛出去之后没人管
-        ⇒ 这个任务还是 `CONFLICT_HELD`，但 `conflicts()` 里**再也找不到它** ——
-        冲突凭空蒸发，人也没法再解它（"状态说有、盘上查不到"）。
+        `merge_ref` 抛出去之后没人管 ⇒ 这个任务还是 `CONFLICT_HELD`，但 `conflicts()` 里
+        **再也找不到它** —— 冲突凭空蒸发，人也没法再解它（"状态说有、盘上查不到"）。
 
         实测抛点（不是推的）：`repo_root` 指向的目录不存在 ⇒ `FileNotFoundError`
         —— 因为原语底下的 `_git_worktree._run` 只吞 `TimeoutExpired`，别的 `OSError` 直接冒。
         """
         req = self._parked.pop(task_id, None)
-        # 清理磁盘持久化
-        try:
-            _parked_path(task_id).unlink(missing_ok=True)
-        except OSError:
-            pass
         if req is None:
+            # 🔴 **没有记录也要给个终态**（2026-09-17 真机改）。
+            # 原来这条**既不 transition 也不删盘**地直接返回 ⇒ 任务**永久停在 `conflict_held`**：
+            # `/api/conflicts` 一直列着它、阶段永远推不动、而且**没有任何 API 能把它挪出来**
+            # （`retry` 只收 FAILED/ROLLED_BACK、`update` 只能改 description）。
+            # ⚠️ **但只在它还停在 `CONFLICT_HELD` 时才改**（同 `_strand_guard` 的规矩）：
+            # 记录可能只是"**上一次已经成功解掉了**"—— 那条路现在会先 `transition(DONE)`
+            # 再删盘，这种情况下任务已经是 DONE，**再标 FAILED 就是把交付过的任务降级**。
+            t = tracker.read_task(task_id)
+            if t is not None and t.status == TaskStatus.CONFLICT_HELD:
+                tracker.transition(
+                    task_id, TaskStatus.FAILED,
+                    error="merge 冲突：找不到 parking 记录，没法重放这次合并（标失败，免得永久卡住）")
             return MergeResult(task_id=task_id, status="failed", conflict_files=["无 parking 记录"])
 
         if strategy == "abort":
             tracker.transition(task_id, TaskStatus.FAILED, error="merge 冲突, 人工放弃")
+            try:
+                _parked_path(task_id).unlink(missing_ok=True)
+            except OSError:
+                pass
             return MergeResult(task_id=task_id, status="failed")
 
         try:

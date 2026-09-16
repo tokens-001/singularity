@@ -661,7 +661,9 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
             failure_mode = ""
             try:
                 if mr.status == "merged":
-                    tracker.transition(t.id, TaskStatus.DONE)
+                    # ⚠️ **这里不再自己 transition**（2026-09-17）：`_mark_merged` 已经落了 DONE。
+                    # 两处都写会 DONE→DONE 重复推一次 SSE，而且**"状态落在哪"会有两个答案** ——
+                    # 那条路本来就漏过一次（人工 resolve 不走这里 ⇒ 永远停在 conflict_held）。
                     _maybe_complete_parents(t.id)
                     results.append((t.id, f"merged: {mr.new_head[:8]}", batch.validation))
                     failure_mode = ""
@@ -698,7 +700,19 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
             # 只有 _save_trace 上面调了，于是走合并队列的任务这三件静默少做。
             # 实测（2026-09-11 真机验证）：跑完一个任务 experiences.json /
             # token_usage.json 根本没被创建，route_learner.json 一动不动。
-            fresh = tracker.read_task(t.id)
+            # ⚠️ **这一句也要兜住**（2026-09-17）：上面几件都走了 `_best_effort`，**就它裸着**。
+            # `read_task` 正常会吞 JSON/IO 错返回 None，可它**一旦抛**（桩 / 异常实现），
+            # 异常会从 `_drain_pending` 冒出去 —— 而 batch **已经被 pop 掉了**，
+            # 任务就**留在 RUNNING 没人管**，正好是这个函数存在的理由。
+            # 实测：`test_drain_pending_failure_does_not_strand_task` 就是这么红的 ——
+            # 它桩的抛点原本落在上面那句 `transition` 上、被 `_strand_guard` 接住；
+            # transition 挪进 `_mark_merged` 之后，抛点落到这里就没人接。
+            fresh = None
+            try:
+                fresh = tracker.read_task(t.id)
+            except Exception as _e:      # noqa: BLE001 —— 读盘失败不该连累整批收尾
+                witness.warn("orch", f"sync_status_failed:{type(_e).__name__}:{_e}"[:160],
+                             key="sync_status_failed")
             if fresh is not None:
                 t.status = fresh.status      # transition 只改盘上对象，内存里还是旧状态
             _best_effort("archive_outcome", _archive_task_outcome, t, route,
