@@ -1685,6 +1685,28 @@ def api_store_status(api_id):
     data, code = _api_handler.api_store_set_status(api_id, body["status"], body.get("notes", ""))
     return jsonify(data), code
 
+@app.route("/api/observer/status")
+def api_observer_status():
+    """观察者的**活性痕迹** —— 它自己的失效方式是"什么都不发生"，与"一切正常"长得一样。
+
+    ⇒ 光看 `running: true` 不够（那是"线程对象还在"，不是"它还在转"）；
+      这里报的是它**上一圈是什么时候跑的**。
+    ⚠️ 2026-09-17 真机：那晚它一个任务卡了 50 分钟没吭声，而没有任何地方能看出它聋了。
+    """
+    import time as _t
+    from singularity.scheduler._observer_worker import read_state, is_running
+    st = read_state()
+    last = (st or {}).get("last_beat") or 0
+    age = (_t.time() - last) if last else None
+    return jsonify({
+        "running": is_running(),
+        # **读不到就是读不到**，别拿 0 冒充（"没有"和"空"要分得开）
+        "state": st,
+        "seconds_since_beat": round(age, 1) if age is not None else None,
+        # 超过 3 个循环周期（worker 每 5s 一圈）就算不新鲜
+        "stale": (age is None) or (age > 15),
+    }), 200
+
 @app.route("/api/observer/model")
 def api_observer_model_get():
     data, code = _api_handler.observer_model_get()
