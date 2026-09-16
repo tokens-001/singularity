@@ -2,6 +2,30 @@ import { memo } from 'react'
 
 const GATE_LABELS: Record<string, string> = { '1': '定义完成·请审核PRD', '2': '架构完成·请审核方案', '3': '验收完成·请审核交付物' }
 
+/** GATE2 **兼任两个完全不同的角色**，而长文案以前按门号写死 ⇒ 两种处境长得一模一样。
+ *
+ *  · **初次审架构** —— 架构刚出来，人看一眼再放行；
+ *  · **出事后的兜底点** —— `integrating` 里「审查自动修已达上限(2轮), 升 GATE2 人工兜底」，
+ *    升上来请人拍板。真机 2026-09-15 用户当场问：**「为什么任务都执行失败了，还有架构审核」**。
+ *
+ * 理由**一直躺在盘上**（`lineage` 里最后一次进 gate2 的那条 `reason`），**界面不读它**
+ * ⇒ 人不可能知道为什么又被问了一次。这里读出来。
+ *
+ * ⚠️ 判据用 **`owner_confirm.gate2 === 'approved'`（本门批过 ⇒ 这次是二次进来）**，
+ * 而不是去匹配 `reason` 的措辞 —— 文案会变，状态不会。
+ * ⚠️ 短标签（`Projects.tsx` 的 `gate2:'G2确认'`）写死不碍事，**长文案写死才是误导**。
+ */
+export function gateCopy(gateNum: string, info: any): { label: string; reason?: string } {
+  if (gateNum !== '2') return { label: GATE_LABELS[gateNum] || '等待审核', reason: '' }
+  if (info?.owner_confirm?.gate2 !== 'approved') return { label: GATE_LABELS['2'], reason: '' }
+  const entries = Array.isArray(info?.lineage) ? info.lineage : []
+  const back = [...entries].reverse().find((e: any) => e?.to === 'gate2')
+  return {
+    label: '⚠️ 出事后升上来的人工兜底 —— 这次不是初次审架构',
+    reason: (back && back.reason) || '',
+  }
+}
+
 const Details = memo(function Details({ title, color, children }: { title: string; color: string; children: React.ReactNode }) {
   return (
     <details style={{ background: '#ffffff', border: '1px solid #e5e2d8', borderRadius: 10, marginBottom: 10, overflow: 'hidden' }}>
@@ -339,11 +363,12 @@ export const ProjectArchive = memo(function ProjectArchive({ info }: { info: any
 /** GATE 审核面板。memo：任务日志高频更新时不该重渲染这棵大树。 */
 export const GatePanel = memo(function GatePanel({ info, gateNum, gatePhase, acceptance, onGate }: Props) {
   const isGate3 = gateNum === '3'
+  const copy = gateCopy(gateNum, info)
   return (
     <div style={{ padding: '8px 0', textAlign: 'center' }}>
       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: '#eaf6ec', border: '1px solid #16a34a', borderRadius: 8, padding: '8px 16px' }}>
         <span style={{ fontSize: 13, fontWeight: 600, color: '#16a34a' }}>🛑 GATE{gateNum}</span>
-        <span style={{ fontSize: 12, color: '#6b6b68' }}>{GATE_LABELS[gateNum] || '等待审核'}</span>
+        <span style={{ fontSize: 12, color: copy.reason ? '#b45309' : '#6b6b68' }}>{copy.label}</span>
         <button onClick={() => onGate('approved')}
           style={{ background: '#16a34a', color: '#141413', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>✅ 通过</button>
         <button onClick={() => onGate('rejected')}
@@ -363,6 +388,14 @@ export const GatePanel = memo(function GatePanel({ info, gateNum, gatePhase, acc
         {isGate3 && (
           <div style={{ fontSize: 11, color: '#6b6b68', marginTop: 4 }}>
             下面两份是项目早期的调研与架构，仅供追溯，不是本次要审的交付物。
+          </div>
+        )}
+        {/* 兜底升上来的 GATE2：**把来路摆出来** —— 理由一直在 `lineage` 里，界面以前不读它 */}
+        {copy.reason && (
+          <div style={{ fontSize: 12, color: '#b45309', background: '#fdf6ec',
+                        border: '1px solid #e8c99b', borderRadius: 8,
+                        padding: '8px 12px', marginTop: 8, lineHeight: 1.6 }}>
+            <b>为什么又问你一次：</b>{copy.reason}
           </div>
         )}
       </div>
