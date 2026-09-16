@@ -1769,7 +1769,14 @@ class TestStreamTotalBudget:
 
         try:
             t0 = time.time()
-            ex._stream_call({"model": "m", "messages": []})
+            # ⚠️ 2026-09-16 起这里**要抛**：`_cap≈1s` 撞上限、而内容零产出 ——
+            # 正是 F1 管的那一格（撞上限 **且** 零产出 ⇒ 按调用失败处理）。
+            # 原来它"断掉 + 出声 + **照常返回一个空回答**"，而上层会把那个空回答
+            # 当成"这次调用成功了、只是模型没说话" ⇒ 同一个卡住的模型继续烧。
+            # 这条守卫真正要守的东西没变：**断得比服务器收工快**（`iter_lines()`
+            # 缓冲 bug 一旦回来，这行会卡满 TRICKLE_S 且**不抛**，两条断言都红）。
+            with pytest.raises(oa._NetworkError):
+                ex._stream_call({"model": "m", "messages": []})
             elapsed = time.time() - t0
         finally:
             srv.shutdown()
@@ -1850,3 +1857,91 @@ class TestStreamTotalBudget:
 
         assert elapsed < 3.0, (
             f"{elapsed:.1f}s 才断 —— 判据又在量「有没有字节」，不是「有没有可用进展」")
+
+
+class TestStreamOverBudgetNoOutput:
+    """F1（保险）：**撞了上限、又一个字没拿到** ⇒ 按调用失败抛出去。
+
+    2026-09-16 真机死法：provider 抽搐、每次调用烧满 240s 上限、一个字符没吐；
+    而撞上限之后代码**照常返回一个空回答** ⇒ 执行器的 turn 循环**不看 raw_output**
+    （它只看 `msg`）直接进下一轮 ⇒ 同一个卡住的模型继续烧，一轮 240s，
+    三轮就把任务的 810s 预算耗尽 → `deadline_wrapup` → 任务判死、前几轮产物全丢。
+
+    F2（`_STALL_TIMEOUT`，90s 无新 token）已覆盖大部分；F1 只管**兜底那一格**。
+    ⚠️ 必须用**真 HTTP 服务器** —— 替身喂的是我猜的行为。
+    """
+
+    def _executor(self):
+        from singularity.scheduler.executors.openai_agent import OpenAIAgentExecutor
+        ex = OpenAIAgentExecutor({"model": "m", "api_key_env": "K"},
+                                 "测试任务", "t_f1", cwd=".")
+        ex._api_key = "k"
+        ex._is_responses_api = False
+        return ex
+
+    def _serve(self, *frames: bytes, tail_s: float = 6.0):
+        """起一个服务器：先按顺序吐 frames，然后一直吐 `:`（有字节、凑不满行）。"""
+        import http.server, threading, time
+        class _H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                try:
+                    for f in frames:
+                        self.wfile.write(f); self.wfile.flush()
+                    t_end = time.time() + tail_s
+                    while time.time() < t_end:
+                        self.wfile.write(b":"); self.wfile.flush(); time.sleep(0.1)
+                except Exception:
+                    pass
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return srv
+
+    def test_撞上限且零产出_按调用失败抛(self, monkeypatch):
+        """**正题**：`_cap≈1s` + 服务器一个字符没吐 ⇒ 抛 `_NetworkError`。
+
+        不抛的话返回的是"看起来正常的空回答"，上层读成"这次调用成功了、只是模型没说话"。
+        """
+        import time
+        import httpx
+        from singularity.scheduler.executors import openai_agent as oa
+
+        srv = self._serve()                      # 一帧内容都没有
+        ex = self._executor()
+        ex._url = f"http://127.0.0.1:{srv.server_address[1]}/chat/completions"
+        ex._deadline_at = time.time() + 1.0      # 剩余 1 秒 ⇒ _cap≈1s
+        monkeypatch.setattr(oa, "_get_http_client", lambda: httpx.Client())
+        monkeypatch.setattr(oa.witness, "warn", lambda *a, **k: None)
+        try:
+            with pytest.raises(oa._NetworkError):
+                ex._stream_call({"model": "m", "messages": []})
+        finally:
+            srv.shutdown(); srv.server_close()
+
+    def test_对照_撞上限但有内容_不抛(self, monkeypatch):
+        """**对照**：撞上限时**已经有内容** ⇒ 照常返回（长回答被截断是正常的一格）。
+
+        别把 F1 改宽成"凡撞上限都抛" —— 那会把"答了一大半被我们掐掉"也判成调用失败。
+        """
+        import time
+        import httpx
+        from singularity.scheduler.executors import openai_agent as oa
+
+        frame = b'data: {"choices":[{"delta":{"content":"\xe4\xbd\xa0\xe5\xa5\xbd"}}]}\n\n'
+        srv = self._serve(frame)
+        ex = self._executor()
+        ex._url = f"http://127.0.0.1:{srv.server_address[1]}/chat/completions"
+        ex._deadline_at = time.time() + 1.0
+        monkeypatch.setattr(oa, "_get_http_client", lambda: httpx.Client())
+        monkeypatch.setattr(oa.witness, "warn", lambda *a, **k: None)
+        try:
+            got = ex._stream_call({"model": "m", "messages": []})
+        finally:
+            srv.shutdown(); srv.server_close()
+
+        msg = got["choices"][0]["message"]
+        assert msg.get("content") == "你好", f"有内容却被吞了：{got}"

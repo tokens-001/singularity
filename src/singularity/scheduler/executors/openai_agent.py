@@ -1168,6 +1168,21 @@ class OpenAIAgentExecutor(BaseExecutor):
                          f':cap={int(_cap)}s:chars={sum(len(c) for c in content)}'[:120],
                          key='stream_over_budget')
 
+            # ── F1（保险）：**撞了上限、又一个字没拿到** ⇒ 按调用失败抛出去 ──
+            # 不抛的话这里返回的是一个**看起来正常的空回答**，而：
+            #   · 执行器的 turn 循环**不看 raw_output**（它只看 `msg`），直接进下一轮；
+            #   · `_dispatch_exec` 那条 failover 判据（`result.raw_output`）要等这个
+            #     执行器**先返回**才轮得到。
+            # ⇒ 同一个卡住的模型继续烧，一轮 240s，三轮就把 810s 预算耗尽 ——
+            # 2026-09-16 真机正是这么死的（`stream_over_budget:329s/696s/900s, chars=0`
+            # → 执行器撞自己的 810s → `deadline_wrapup` → 任务判死、产物不合并）。
+            # `_STALL_TIMEOUT`（F2，90s 无新 token）已覆盖大部分；这条只管**兜底那一格**：
+            # 只在"撞了上限"**且"零产出"**时抛 —— 内容还在长（长回答被截断）不在此列。
+            if not content and not reasoning and not tool_calls:
+                raise _NetworkError(
+                    f"流式撞上限 {int(_cap)}s 且零产出 —— 按调用失败处理"
+                    f"（不是「模型答完了、只是没说话」）")
+
         msg = {"role": "assistant", "content": "".join(content)}
         if reasoning:
             msg["reasoning_content"] = "".join(reasoning)

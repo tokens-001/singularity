@@ -886,7 +886,10 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                 # S1: 自动交付打包 (轻量, 同步即可)
                 ok, detail = _run_delivery(proj)
                 if ok:
-                    proj.set_phase(proj_mod.Phase.DONE, f"交付完成: {detail[:60]}")
+                    # ⚠️ **别再套一层 `交付完成: `** —— `_run_delivery` 返回的串**自带**那个前缀
+                    # （账本和 SSE 那两处就是直接用它，读着正是要的样子）。这里再套一遍，
+                    # 真机上 lineage 就成了 `交付完成: 交付完成: tag=…`（2026-09-16 撞见）。
+                    proj.set_phase(proj_mod.Phase.DONE, detail[:60])
                     proj_mod.save(proj)
                     _record_ledger(proj, {"delivery": "ok", "detail": detail[:120]})
                     _pending_sse_events.append({
