@@ -422,14 +422,50 @@ def repo_root_for(task) -> Path:
     return repo_dir(pid) if pid else config.PROJECT_ROOT
 
 
+# 🔴 **项目仓必须有 `.gitignore`**（2026-09-17 真机，一个根因打了三枪）。
+#
+# 原来建仓**不写 `.gitignore`** ⇒ `__pycache__/*.pyc` 被 git 跟踪：
+#   ① **合并必冲突**：多个任务碰同一个模块时，各自跑测试编译出**不同的二进制 `.pyc`**
+#      ⇒ 真机 T3/T5 双双 `conflict_held`，冲突文件是 `logstat/__pycache__/*.pyc`；
+#   ② **集成检查第①步就返回**：它的第一句是"工作区必须干净（`??` 除外）"，
+#      而跑测试会重新生成 pyc ⇒ `git status` 里 7 个 ` M` ⇒ 判"工作区不干净"
+#      ⇒ 项目在 `integrating ↔ executing` 之间来回打转；
+#   ③ 🔴 **交付物被污染**：`git archive release/<tag>` 导出后，包里躺着 **7 个 `.pyc`**
+#      —— 坑一路漏到收件人手里。
+#
+# ⚠️ 前十几轮没撞见是因为 **FizzBuzz**：单文件时写实现和写测试碰的是**不同路径**的 pyc，
+# 不交叉。**这是"真实规模、多任务同模块"才会露出来的形状。**
+# ⚠️ 写在 `init` 提交**之前**，它才会进初始 commit（否则第一个任务的 base 里没有它）。
+_PROJECT_GITIGNORE = (
+    "__pycache__/\n"
+    "*.py[cod]\n"
+    "*$py.class\n"
+    ".pytest_cache/\n"
+    "*.egg-info/\n"
+    ".venv/\n"
+    "venv/\n"
+    "node_modules/\n"
+    ".DS_Store\n"
+)
+
+
 def ensure_repo(project_id: str) -> Path:
     """确保项目有独立 git 仓库 (git init + main 初始提交)。幂等。"""
     import subprocess
     d = repo_dir(project_id)
     d.mkdir(parents=True, exist_ok=True)
     if (d / ".git").exists():
+        # ⚠️ **已存在的仓只补 `.gitignore` 文件，不动索引**（2026-09-17）：
+        # 把已经跟踪的 pyc 从索引里摘掉（`git rm --cached`）会改历史状态，
+        # 而**在跑的任务的 worktree 是基于旧状态的** ⇒ 它们的合并会变成
+        # modify/delete 冲突（当天真机从另一头踩过一模一样的形状）。
+        # 那是一次性的人工操作，不在这里静默做。
+        if not (d / ".gitignore").exists():
+            (d / ".gitignore").write_text(_PROJECT_GITIGNORE, encoding="utf-8")
         return d
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=str(d), capture_output=True, text=True)
+    (d / ".gitignore").write_text(_PROJECT_GITIGNORE, encoding="utf-8")
+    subprocess.run(["git", "add", ".gitignore"], cwd=str(d), capture_output=True, text=True)
     # 全局无 git 身份，只在奇点仓库配了本地身份 → 项目 repo 也配一份
     subprocess.run(["git", "config", "user.name", "singularity"], cwd=str(d), capture_output=True, text=True)
     subprocess.run(["git", "config", "user.email", "singularity@local"], cwd=str(d), capture_output=True, text=True)

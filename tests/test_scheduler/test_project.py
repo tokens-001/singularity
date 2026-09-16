@@ -187,3 +187,69 @@ class TestProjectDelete:
 
         assert not (config.QIDIAN_DIR / "projects" / pid).exists(), \
             "兜底分支把已删项目的空目录重建了 → 症状复现"
+
+
+class TestProjectRepoGitignore:
+    """项目仓的 `.gitignore` —— **2026-09-17 真机，一个根因打了三枪**。
+
+    项目仓原来**不写 `.gitignore`** ⇒ `__pycache__/*.pyc` 被 git 跟踪：
+      ① **合并必冲突**：多任务碰同一模块 ⇒ 各自编译出**不同的二进制 `.pyc`**
+         ⇒ 真机 T3/T5 双双 `conflict_held`，冲突文件是 `logstat/__pycache__/*.pyc`；
+      ② **集成检查第①步就返回**：它第一句是"工作区必须干净（`??` 除外）"，
+         而跑测试会重新生成 pyc ⇒ `git status` 里 7 个 ` M` ⇒ 判"不干净"
+         ⇒ 项目在 `integrating ↔ executing` 之间来回打转；
+      ③ 🔴 **交付物被污染**：`git archive release/<tag>` 导出后，包里躺着 **7 个 `.pyc`**。
+
+    ⚠️ 前十几轮没撞见是因为 **FizzBuzz**：单文件时"写实现"和"写测试"碰的是
+    **不同路径**的 pyc，不交叉 —— **这是"真实规模"才会露出来的形状。**
+    """
+
+    def _repo(self, monkeypatch, tmp_path):
+        """建一个隔离的项目仓，返回 (项目 id, 仓目录)。"""
+        monkeypatch.setattr(repo_mod, "get_projects_root", lambda: tmp_path / "root")
+        proj = repo_mod.create("gitignore_test", template="product_dev")
+        return proj.id, repo_mod.ensure_repo(proj.id)
+
+    def test_建仓就写_gitignore_而且进了初始提交(self, monkeypatch, tmp_path):
+        import subprocess
+        _pid, d = self._repo(monkeypatch, tmp_path)
+        assert (d / ".gitignore").exists(), "项目仓没有 .gitignore ⇒ pyc 会被提交进各任务分支"
+        tracked = subprocess.run(["git", "ls-files"], cwd=str(d),
+                                 capture_output=True, text=True).stdout
+        assert ".gitignore" in tracked, \
+            "文件写了却没进初始 commit ⇒ 第一个任务的 base 里没有它，等于没写"
+
+    def test_pyc_和_pytest_cache_真的被忽略(self, monkeypatch, tmp_path):
+        import subprocess
+        _pid, d = self._repo(monkeypatch, tmp_path)
+        (d / "logstat").mkdir()
+        (d / "logstat" / "__init__.py").write_text("x = 1\n", encoding="utf-8")
+        (d / "logstat" / "__pycache__").mkdir()
+        (d / "logstat" / "__pycache__" / "x.cpython-314.pyc").write_bytes(b"\x00\x01")
+        (d / ".pytest_cache").mkdir()
+        (d / ".pytest_cache" / "CACHEDIR.TAG").write_text("x", encoding="utf-8")
+        st = subprocess.run(["git", "status", "--porcelain"], cwd=str(d),
+                            capture_output=True, text=True).stdout
+        assert "__pycache__" not in st, f"pyc 没被忽略 ⇒ 合并必冲突。实际 status: {st!r}"
+        assert ".pytest_cache" not in st, f".pytest_cache 也没被忽略。实际 status: {st!r}"
+        # git 会把未跟踪**目录**折叠成 `logstat/` —— 真源码该被看见，这条防"改宽"
+        assert "logstat/" in st, f"别改宽：真源码还是该被 git 看见。实际: {st!r}"
+
+    def test_已存在的仓只补文件不动索引(self, monkeypatch, tmp_path):
+        """⚠️ **边界**：改**已存在**仓的索引（`git rm --cached`）会让在跑任务的 worktree
+        合并变成 **modify/delete 冲突**（当天真机从另一头踩过一模一样的形状）
+        ⇒ 这里**只补文件、不碰索引**；摘索引是需要人工决定的一次性操作。
+        """
+        import subprocess
+        pid, d = self._repo(monkeypatch, tmp_path)
+        # 造一个"建仓时还没这个功能"的旧仓：文件删掉、索引里也去掉
+        (d / ".gitignore").unlink()
+        subprocess.run(["git", "rm", "--cached", "-q", ".gitignore"], cwd=str(d),
+                       capture_output=True, text=True)
+        repo_mod.ensure_repo(pid)              # 幂等再调一次
+        assert (d / ".gitignore").exists(), \
+            "已存在的仓也该补上 .gitignore（不动索引，只补文件）"
+        st = subprocess.run(["git", "status", "--porcelain"], cwd=str(d),
+                            capture_output=True, text=True).stdout
+        assert "?? .gitignore" in st, \
+            f"补的文件应该是未跟踪状态（不替用户 commit 已存在仓的东西）: {st!r}"
