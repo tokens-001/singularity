@@ -378,6 +378,92 @@ if __name__ == "__main__":
           S.last_dispatch_kw.get("budget_s") is None,
           f"实际 {S.last_dispatch_kw.get('budget_s')!r}")
 
+    # ── 14/15/16: 表到点后**不许再发起 dispatch**（2026-09-16 真机坐实）──
+    # 症状：任务判 `QA:fail: [completeness] 无文件改动`、产物进不了合并队列，
+    # 而 worktree 里那份实现好好躺在 `refs/qidian/pending/<task_id>` 上。
+    # 真链条：死线已过还发起了一次 dispatch → 新执行器预算 ≤0 →
+    # `openai_agent.py:437` 第 1 轮开头就 `_wrapped=True`，**39 毫秒返回一具
+    # 「0 轮 / 0 文件 / 0 token」的空壳** → 那具空壳成了收尾那条 `return` 的
+    # `dispatch_result`，**把前面几轮真干出来的账整份盖掉**。
+    #
+    # ⚠️ 所以判据不能只看"有没有报错" —— 要看**结果里还剩不剩前几轮的事实**。
+    # 这三条各自钉一根线：① turn 循环的 guard ② 收尾 return 带着 merge_request
+    # ③ `_run_with_retry` 的重试 guard。**删掉任一根对应那条就会红。**
+    _orig_dispatch = _exec.disp_mod.dispatch
+    # 让"表到点"变成确定事件：第 1 次 dispatch **之后**把 deadine 拨到过去，
+    # 不靠真实时钟赛跑（那会是偶发红，本仓栽过）。
+    def _exhaust_after_first(ctx):
+        _n = []
+        def _wrap(*a, **k):
+            _n.append(1)
+            if len(_n) == 1:
+                ctx.deadline_at = time.time() - 1
+            return _orig_dispatch(*a, **k)
+        return _wrap, _n
+
+    print("── 路径14: 表到点 → 不再发起，且保留上一轮真结果 ──")
+    reset_wt()
+    S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 3}]
+    _t = make_task()
+    _ctx = make_ctx(deadline_in=400.0)
+    _wrap, _n = _exhaust_after_first(_ctx)
+    _exec.disp_mod.dispatch = _wrap
+    S.dispatch_queue = [("ok", FakeExec(success=True, changed_files=["fizzbuzz.py"])),
+                        ("ok", FakeExec(success=True, changed_files=[]))]  # 第 2 发=空壳
+    S.validate_queue = [FakeVal(action="retry", confidence=0.5), FakeVal(action="abort")]
+    _b = _exec.run(_t, _ctx, {"any": list(S.chain)})
+    _exec.disp_mod.dispatch = _orig_dispatch
+    check("表到点后没再发起 dispatch", len(_n) == 1, f"实际发了 {len(_n)} 次")
+    _got = (getattr(_b.dispatch_result, "executor_result", None).changed_files
+            if _b.dispatch_result else None)
+    check("changed_files 还是上一轮那份（没被空壳顶掉）",
+          _got == ["fizzbuzz.py"], f"实际 {_got!r}")
+    check("收尾这条出口没丢掉 merge_request", _b.merge_request == "FAKE_MR",
+          f"实际 {_b.merge_request!r}")
+    check("worktree 对称 (建=清)", sorted(CREATED) == sorted(CLEANED), f"建{CREATED} 清{CLEANED}")
+
+    print("── 路径15: _run_with_retry 在表到点后交回上一轮结果 ──")
+    reset_wt()
+    _t = make_task(); _t.max_retries = 3
+    _ctx = make_ctx(deadline_in=400.0)
+    _wrap, _n = _exhaust_after_first(_ctx)
+    _exec.disp_mod.dispatch = _wrap
+    S.dispatch_queue = [("ok", FakeExec(success=True, changed_files=["a.py"])),
+                        ("ok", FakeExec(success=True, changed_files=[]))]
+    S.validate_queue = [FakeVal(action="abort"), FakeVal(action="abort")]
+    _b = _exec._run_with_retry(_t, _ctx, {"any": list(S.chain)})
+    _exec.disp_mod.dispatch = _orig_dispatch
+    check("重试循环没在表到点后开新一轮", len(_n) == 1, f"实际开了 {len(_n)} 轮")
+    _got = (getattr(_b.dispatch_result, "executor_result", None).changed_files
+            if _b.dispatch_result else None)
+    check("交回的是上一轮那份（不是空壳）", _got == ["a.py"], f"实际 {_got!r}")
+
+    print("── 路径16: 第一轮就没预算 → 一次 dispatch 都不发 ──")
+    reset_wt()
+    _t = make_task()
+    _ctx = make_ctx(deadline_in=400.0)
+    _n = []
+    _wrap, _n = _exhaust_after_first(_ctx)
+    _ctx.deadline_at = time.time() - 1          # 进来就是"表已到点"
+    _exec.disp_mod.dispatch = _wrap
+    S.dispatch_queue = [("ok", FakeExec(success=True, changed_files=["x.py"]))]
+    S.validate_queue = [FakeVal(action="pass")]
+    _b = _exec.run(_t, _ctx, {"any": list(S.chain)})
+    _exec.disp_mod.dispatch = _orig_dispatch
+    check("一次都没发", len(_n) == 0, f"实际发了 {len(_n)} 次")
+    # 收尾要挂 `deadline_wrapup` —— `_run_with_retry` 靠它"别重试"，
+    # 不然外面还会拿同一个死线再开一轮（那正是空壳的来源）。
+    check("收尾挂了 deadline_wrapup", _b.deadline_wrapup is True,
+          f"实际 {_b.deadline_wrapup!r}, term_reason={_b.term_reason!r}")
+    # 对照：没给死线（deadline_at=0）时**照常发起** —— 别把 guard 改宽成"一律不发"
+    reset_wt()
+    S.last_dispatch_kw = None
+    S.dispatch_queue = [("ok", FakeExec(success=True))]
+    S.validate_queue = [FakeVal(action="pass")]
+    _exec.run(S.task, make_ctx(), {"any": list(S.chain)})
+    check("没给死线 → 照常发起（guard 没改宽）",
+          S.last_dispatch_kw is not None, "deadline_at=0 被当成'立即到期'了")
+
     print("\n" + "=" * 48)
     total = PASS + FAIL
     print(f"{'✅ 全通过!' if FAIL == 0 else '❌ 有失败'}  通过 {PASS} / 失败 {FAIL} / 总 {total}")

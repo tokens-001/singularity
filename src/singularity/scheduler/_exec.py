@@ -185,6 +185,27 @@ def _dispatch_budget_s(ctx) -> float | None:
     return ctx.deadline_at - time.time() - config.TASK_WRAPUP_MARGIN_S
 
 
+def _budget_exhausted(ctx) -> bool:
+    """任务那把表到点了吗 —— 到点就**别再去调模型**了。
+
+    跟 `_dispatch_budget_s` 共用同一个判据（`<= 0` 就是它，不再写第二份算法），
+    因为"发起"和"收尾"必须对同一把尺：只要预算 ≤0，新执行器必然在第 1 轮开头
+    `_wrapped=True`（`openai_agent.py:437`）**立刻空转收尾**。
+
+    ⚠️ **为什么非要挡在 dispatch 之前，而不是让它收尾**（2026-09-16 真机坐实）：
+    那次空收尾只活了 39 毫秒，返回一具「0 轮 / 0 文件 / 0 token」的空壳 ——
+    而这具空壳会被收尾那条 `return` 当成 `BatchOutput.dispatch_result`，
+    **把前面几轮真干出来的账整份盖掉**（改了哪些文件、烧了多少 token、合并请求）。
+    外面看到的是「QA: [completeness] 无文件改动」→ 任务 failed → 产物进不了合并队列，
+    而 worktree 里那份 75 行的实现好好躺在 `refs/qidian/pending/` 上。
+
+    `ctx.deadline_at == 0`（goal_loop / 阶段级那条路没给）⇒ `False` = 不管，
+    **不是"立即到期"**（同 `_dispatch_budget_s`）。
+    """
+    b = _dispatch_budget_s(ctx)
+    return b is not None and b <= 0
+
+
 def _mark_dispatch_started(task_id: str) -> None:
     """dispatch **开始**时落一个时间戳 —— 只为让两种"没账"分得开。
 
@@ -525,6 +546,17 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 _lock_wt(wt)
 
             for turn in range(1, level_max + 1):
+                # 表到点 ⇒ 这一轮**不发起**（见 `_budget_exhausted`）。放在最前面：
+                # 心跳/取消/暂停都不必做，反正这一轮什么也不会发生。
+                # ⚠️ 这里 break 出去时 `disp_result` 仍是**上一轮那份真结果** ——
+                # 正是要它留到收尾 `return` 里，别被空壳顶掉。
+                # ⚠️ 这里**只置 `deadline_wrapup`、不写 `term_reason`** —— 循环后面那段
+                # `next_level is None` 会把 `term_reason` 整个覆盖成 `no_escalation_path`，
+                # 写了也是死代码（2026-09-16 写测试时被自己的用例抓到）。
+                # `deadline_wrapup` 才是真信号：`_run_with_retry` 靠它"别重试"。
+                if _budget_exhausted(ctx):
+                    deadline_wrapup = True
+                    break
                 final_turn = turn          # P3 修复: 失败兜底不再恒报 0 轮
                 witness.heartbeat(task.id, level)
 
@@ -769,6 +801,13 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
 
     return BatchOutput(
         ok=False, task_id=task.id, dispatch_result=disp_result,
+        # ⚠️ **`merge_request` 以前在这条 return 上是漏的** —— 而这条正是"没升级档 /
+        # 兜底收尾"的公共出口。前面几轮辛苦 build 出来的合并请求到此**整份丢掉**：
+        # `orchestrator` 只看 `batch.merge_request`（`orchestrator.py:494`，None 就不 submit），
+        # 于是 worktree 里已 commit、已锚到 `refs/qidian/pending/<id>` 的产物**永远进不了合并队列**
+        # —— 仓库看起来是空的，而活其实干完了（2026-09-16 真机坐实，见 OPEN.md 接手指针）。
+        # 其它出口（pass / soft_quality_gate / merge_conflict）都带着它，只有这里漏了。
+        merge_request=pending_merge_req,
         term_reason=term_reason, validation=last_validation,
         tool_events=all_tool_events, turn_count=final_turn,
         qa_verdict=qa_verdict, qa_issues=qa_issues,
@@ -782,9 +821,20 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
     本函数在 worker 线程跑, 只调 run() (纯执行), 不碰 tracker。
     """
     retry = 0
+    prev_batch = None
     while retry <= task.max_retries:
+        # 表到点 ⇒ **别再开新一轮**（见 `_budget_exhausted`）。新一轮的 turn 1 什么都不会
+        # 发起，交回的 BatchOutput 里一条事实都没有（`dispatch_result=None`：0 文件 /
+        # 0 token / 没有 merge_request），而 `finalize` 把它当**任务的最终结论** ⇒
+        # 上一轮真干出来的账整份丢掉（2026-09-16 真机：判「无文件改动」，产物在 pending ref 上）。
+        # ⇒ 手里有上一轮的结果就交它回去 —— 那才是磁盘上真发生过的事实。
+        # ⚠️ 第一轮没有"上一轮"（`prev_batch is None`）⇒ 照常进 run()：那种情形下
+        # 确实什么都还没发生，run() 里那道 guard 会立刻收尾，不会白烧一次调用。
+        if prev_batch is not None and _budget_exhausted(ctx):
+            return prev_batch
         ctx.retry_count = retry  # ponytail: 传入 run() 用于 force_premium 判定
         batch = run(task, ctx, agents)
+        prev_batch = batch
 
         # ── 执行后钩子 ──
         try:
