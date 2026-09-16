@@ -1095,7 +1095,7 @@ def _run_integration_merge(proj) -> tuple[bool, str]:
     except Exception as e:
         return False, f"git status 异常: {e}"
 
-    # 2) 集成测试: 跑 test_cases.json 中的 integration 用例
+    # 2) 集成测试: 跑 test_cases.json 中**声明的** integration 用例
     tc_path = _Path(root) / "test_cases.json"
     if tc_path.exists():
         try:
@@ -1103,12 +1103,32 @@ def _run_integration_merge(proj) -> tuple[bool, str]:
             tc = _json.loads(tc_path.read_text())
             integration_cases = tc.get("integration", [])
             if integration_cases:
-                # 跑 pytest (如果项目有测试)
-                r = subprocess.run(
-                    ["python3", "-m", "pytest", "-q", "--tb=short", "-k", "test_integration"],
-                    capture_output=True, text=True, timeout=120, cwd=root)
-                if r.returncode != 0:
-                    return False, f"集成测试失败: {(r.stdout+r.stderr)[:200]}"
+                # 🔴 **按声明的名字跑，不写死 `-k test_integration`**（2026-09-16 真机）。
+                # 那个写死的过滤器跟它读的那份清单**从来就对不上**：真机那 5 条叫
+                # `test_normal_path_output_n5` / `test_default_n_is_15` 这类，一个都不含
+                # "test_integration" ⇒ **一条也选不中**，pytest 退 5。
+                # 以前没人发现，是因为 `test_cases.json` **压根没人写**
+                # （见 `_workflow_phases._materialize_test_cases`）—— 这段检查从没被激活过。
+                # 输入有了之后它得真的去跑**清单上那几条**；而名字对得上是因为架构声明的
+                # `name` 就是照着要写的测试函数名起的（真机实测：声明的 5 条 5/5 全中）。
+                names = [c.get("name", "") for c in integration_cases if c.get("name")]
+                if not names:
+                    witness.warn("orch",
+                                 f"integration_cases_unnamed:{len(integration_cases)} 条没写 name，"
+                                 f"选不出要跑哪几个"[:160], key="integration_cases_unnamed")
+                else:
+                    r = subprocess.run(
+                        ["python3", "-m", "pytest", "-q", "--tb=short", "-k", " or ".join(names)],
+                        capture_output=True, text=True, timeout=120, cwd=root)
+                    if r.returncode == 5:
+                        # pytest 明说"**一条都没收集到**"（no tests collected）—— 这**不是**
+                        # "测试挂了"，是"清单上写的用例没落成测试"。判失败会误伤一整轮交付
+                        # （名字一变就炸），静默又正是这个洞的成因 ⇒ **出声，放行**。
+                        witness.warn("orch",
+                                     f"integration_cases_not_implemented:{len(names)} 条声明但没匹配到"
+                                     f"测试"[:200], key="integration_cases_missing")
+                    elif r.returncode != 0:
+                        return False, f"集成测试失败: {(r.stdout+r.stderr)[:200]}"
         except Exception as e:
             return False, f"集成测试异常: {e}"
 

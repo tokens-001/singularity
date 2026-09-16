@@ -17,6 +17,48 @@ from singularity.scheduler.workflow import (
     _arch_tasks_are_unordered, _flag_unordered_architecture,
 )
 
+def _materialize_test_cases(project: ProjectState, arch: dict) -> None:
+    """把架构里的 `test_cases` 落成**项目仓里的 `test_cases.json`**。
+
+    🔴 **这个文件以前没人写**（2026-09-16 真机撞见）。架构里明明有
+    （`unit` / `integration` / `e2e` / `security` 都齐，真机那次是 3/5/3/2 条），
+    `execution_judge` 也在内存里拿它匹配 `acceptance` —— 但**没有任何一处把它落盘**。
+    而**三个读者都按 `<项目仓>/test_cases.json` 找它**：
+      · `orchestrator._run_integration_check` —— `if tc_path.exists()` **恒假** ⇒
+        **集成测试从来没跑过**（真机那 5 个用例一次没动过），而且是**静默**的：
+        没有告警，跟"本来就没有集成用例"长得一模一样；
+      · `workflow._run_verification` 的 E2E 那支 ⇒ `e2e_checklist.json` 永远不被写，
+        GATE3 那份 E2E 清单永远空，界面上照样跟"没有 E2E 用例"一样。
+
+    ⇒ 挂在这里的理由和上面那条守卫**一样**：架构定稿只有一个入口，建任务的有两条路
+    （`_run_execution` / `orchestrator._decompose_and_create_tasks`）—— 挂下游必漏一条（§60 的形状）。
+
+    ⚠️ 写进去的是**未跟踪文件**，不会碰炸集成检查那条"工作区不干净"——它 `not l.startswith("??")`
+    把未跟踪的跳掉了（`orchestrator._run_integration_check`）。
+    ⚠️ 架构里**没有** `test_cases` 时**不写空文件**（别造一个假的"有"），但要**出声** ——
+    静默正是这个坑的成因。
+    """
+    from singularity.scheduler import witness      # 本模块的惯例：懒导入
+    from singularity.scheduler import project as project_mod
+    tc = arch.get("test_cases") if isinstance(arch, dict) else None
+    if not isinstance(tc, dict) or not tc:
+        witness.warn("workflow",
+                     f"test_cases_missing_in_arch:{project.id} —— 架构没给 test_cases，"
+                     f"集成测试和 E2E 清单都会是空的"[:200],
+                     key="test_cases_missing_in_arch")
+        return
+    try:
+        # `repo_dir` **不建目录**（它自己的 docstring：需要目录的调用方自己建）——
+        # `ensure_repo` 才是那个自带 mkdir 的原语，幂等。同 `workflow._phase_cwd` 的写法。
+        repo = project_mod.ensure_repo(project.id)
+        (repo / "test_cases.json").write_text(
+            json.dumps(tc, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:  # noqa: BLE001
+        # 写失败必须出声：三个读者会静默跳过，而那跟"没有用例"长得一样（本坑的成因）
+        witness.warn("workflow", f"test_cases_write_failed:{type(e).__name__}:{e}"[:200],
+                     key="test_cases_write_failed")
+
+
 def _phase_selection(phase: str, project: ProjectState):
     """某阶段该用哪些模型 → ``(lineup, restrict_to_lineup)``。
 
@@ -320,6 +362,7 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
         disp_result = disp_result2  # lineage 用重试结果
 
     project.architecture = arch
+    _materialize_test_cases(project, arch)
 
     # ⚠️ 守卫放在**这里**（架构定稿、两条建任务的路的上游）是有意的：
     # 建任务的路不止一条（`_run_execution` 和 `orchestrator._decompose_and_create_tasks`），

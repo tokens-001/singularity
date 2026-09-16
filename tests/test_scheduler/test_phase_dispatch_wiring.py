@@ -216,3 +216,65 @@ def test_executing_phases_keep_tools(tmp_path, monkeypatch):
     workflow._safe_dispatch("prompt", "any", "t1", {}, p)
     assert seen.get("no_tools") is False, "默认必须是有工具"
 
+
+
+# ── 第四条接线：架构定稿必须把 `test_cases` 落盘 ──────────────────
+# 2026-09-16 真机撞见：`test_cases.json` **全仓只有读的人、没有写的人**。
+# 架构里明明有（unit/integration/e2e/security），`execution_judge` 也在内存里用它，
+# 但没人落盘 ⇒ 两个读者全部静默跳过：
+#   · `orchestrator._run_integration_check` 的集成测试（真机那 5 个用例一次没跑过）
+#   · `workflow._run_verification` 的 E2E 清单（`e2e_checklist.json` 从没被写出来过）
+
+_ARCH_WITH_TC = ('{"tasks": [{"id": "t1", "title": "x", "desc": "y"}], "constraints": [],'
+                 ' "test_cases": {"integration": [{"name": "i1"}],'
+                 ' "e2e": [{"name": "e1", "user_flow": "跑一下"}]}}')
+
+
+def test_planning_writes_test_cases_into_project_repo(tmp_path, monkeypatch):
+    """架构定稿 ⇒ 项目仓里出现 `test_cases.json`，内容就是架构里那份。"""
+    import json as _json
+    p = _mk_project(tmp_path, monkeypatch)
+    wp, _ = _stub_phase_pipeline(monkeypatch, _ARCH_WITH_TC)
+    wp._run_planning(p, {})
+
+    tc = tmp_path / "projects" / "探路" / "test_cases.json"
+    assert tc.exists(), ("架构定稿了却没落 test_cases.json —— 集成测试和 E2E 清单"
+                         "都会**静默**是空的（跟「本来就没有用例」长得一样）")
+    got = _json.loads(tc.read_text(encoding="utf-8"))
+    assert got["integration"][0]["name"] == "i1", got
+    assert got["e2e"][0]["user_flow"] == "跑一下", got
+
+
+def test_planning_without_test_cases_speaks_up(tmp_path, monkeypatch):
+    """**架构没给 `test_cases` ⇒ 不写空文件，但要出声。**
+
+    写个空的 `{}` 出来是**造假**（三个读者看到它跟"有文件但没用例"一样，而
+    真正的区别是**架构师没产出**）；一声不吭则是这个坑的原样。
+    """
+    warns = []
+    monkeypatch.setattr("singularity.scheduler.witness.warn",
+                        lambda *a, **k: warns.append(a))
+    p = _mk_project(tmp_path, monkeypatch)
+    wp, _ = _stub_phase_pipeline(monkeypatch,
+                                 '{"tasks": [{"id": "t1", "title": "x"}], "constraints": []}')
+    wp._run_planning(p, {})
+
+    assert not (tmp_path / "projects" / "探路" / "test_cases.json").exists(), "不该造空文件冒充"
+    assert any("test_cases_missing_in_arch" in str(a) for a in warns), \
+        f"没产出却一声不吭 —— 这正是这个洞三年没人发现的原因：{warns}"
+
+
+def test_write_failure_is_loud_not_silent(tmp_path, monkeypatch):
+    """写盘炸了必须出声 —— 它一静，下游两个读者就静默跳过（本坑的成因）。"""
+    warns = []
+    monkeypatch.setattr("singularity.scheduler.witness.warn",
+                        lambda *a, **k: warns.append(a))
+    p = _mk_project(tmp_path, monkeypatch)
+    wp, _ = _stub_phase_pipeline(monkeypatch, _ARCH_WITH_TC)
+
+    def _boom(_pid):
+        raise OSError("磁盘满了")
+    monkeypatch.setattr(proj_mod, "repo_dir", _boom)
+    wp._run_planning(p, {})           # 不许把架构阶段整个带崩
+
+    assert any("test_cases_write_failed" in str(a) for a in warns), f"写失败却静默：{warns}"
