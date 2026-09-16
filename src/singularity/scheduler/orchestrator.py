@@ -1170,11 +1170,29 @@ def _run_integration_merge(proj) -> tuple[bool, str]:
                     if r.returncode == 5:
                         # pytest 明说"**一条都没收集到**"（no tests collected）—— 这**不是**
                         # "测试挂了"，是"清单上写的用例没落成测试"。判失败会误伤一整轮交付
-                        # （名字一变就炸），静默又正是这个洞的成因 ⇒ **出声，放行**。
+                        # （名字一变就炸），静默又正是这个洞的成因 ⇒ **出声**。
                         witness.warn("orch",
                                      f"integration_cases_not_implemented:{len(names)} 条声明但没匹配到"
                                      f"测试"[:200], key="integration_cases_missing")
-                    elif r.returncode != 0:
+                        # 🔴 **但不能就此"放行"**（2026-09-17 真机改）。
+                        # 放行 = **这条检查等于没跑**，而"跑过了"和"没跑"在交付报告上
+                        # **长得一模一样**（本仓反复咬人的那个形状）。
+                        # 真机那轮就是这么过去的：声明的名字是中文描述
+                        # （`parse_ts 时区归一化`），`-k` 一条都选不中 ⇒ 退 5 ⇒ 放行。
+                        # ⇒ **退一步：跑项目里的全部测试** —— 至少真的跑了。
+                        #    （集成点的语义本来就是"这个项目现在是不是绿的"，
+                        #     而"只跑声明的几条"是当初为了省钱加的筛子。）
+                        r = subprocess.run(
+                            ["python3", "-m", "pytest", "-q", "--tb=short"],
+                            capture_output=True, text=True, timeout=300, cwd=root)
+                        if r.returncode == 5:
+                            # 项目里**压根没有测试** —— 那是另一种处境，
+                            # 不是"检查没跑成"，如实说出来。
+                            witness.warn("orch",
+                                         f"integration_no_tests_at_all:{root}"[:200],
+                                         key="integration_no_tests")
+                            return True, "集成合并通过（项目里没有测试可跑）"
+                    if r.returncode != 0:
                         return False, f"集成测试失败: {(r.stdout+r.stderr)[:200]}"
         except Exception as e:
             return False, f"集成测试异常: {e}"

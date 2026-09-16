@@ -85,11 +85,18 @@ def test_按声明的用例名拼_k(tmp_path, monkeypatch):
     assert k != "test_integration", "还是那个选不中任何东西的写死过滤器"
 
 
-def test_退出码5是出声放行不是判失败(tmp_path, monkeypatch):
-    """**这个修法最危险的一处**：pytest 退 5 = 「一条都没收集到」，不是「测试挂了」。
+def test_退出码5要出声_而且退到跑全部_没测试才放行(tmp_path, monkeypatch):
+    """pytest 退 5 = 「一条都没收集到」，不是「测试挂了」。
 
-    判失败 ⇒ 声明的名字一变，**整轮交付就炸**（而老代码正是这么写的，只是从没被触发过，
-    因为输入文件压根不存在）。静默 ⇒ 又变回"看不出集成测试没跑"。所以：**出声，放行**。
+    判失败 ⇒ 声明的名字一变，**整轮交付就炸**（老代码正是这么写的）；
+    静默 ⇒ 又变回"看不出集成测试没跑"。
+
+    🔴 **2026-09-17 真机追加**：原来退 5 就**直接放行** —— 而放行 = **这条检查等于没跑**，
+    而"跑过了"和"没跑"在交付报告上**长得一模一样**。
+    真机那轮就是：声明的名字全是中文描述 ⇒ `-k` 一条都选不中 ⇒ 退 5 ⇒ 放行 ⇒
+    **8 个集成用例压根没跑，报告上写着"集成通过"**。
+    ⇒ 现在退 5 之后**退一步跑项目里的全部测试**；只有**项目里压根没有测试**（也是退 5）
+    才放行，并把那个处境如实说出来。
     """
     warns = []
     monkeypatch.setattr("singularity.scheduler.witness.warn",
@@ -117,3 +124,53 @@ def test_没有集成用例时不下结论(tmp_path, monkeypatch):
     seen = _stub_subprocess(monkeypatch, pytest_rc=1)     # 真跑了就会红
     ok, _ = orch._run_integration_merge(p)
     assert ok is True and seen["pytest_argv"] is None, "没有集成用例却跑了 pytest"
+
+
+def _stub_subprocess_seq(monkeypatch, pytest_rcs: list):
+    """pytest 按**调用次序**回不同退出码（第一条退 5、退一步那条退 0 这种）。"""
+    import subprocess as _sp
+    seen = {"argv": []}
+    real_run = _sp.run
+    rcs = list(pytest_rcs)
+
+    def fake_run(argv, *a, **k):
+        if isinstance(argv, list) and argv and argv[0] == "git":
+            return _sp.CompletedProcess(argv, 0, stdout="", stderr="")
+        if isinstance(argv, list) and "pytest" in " ".join(argv):
+            seen["argv"].append(list(argv))
+            rc = rcs.pop(0) if rcs else 0
+            return _sp.CompletedProcess(argv, rc, stdout="fake", stderr="")
+        return real_run(argv, *a, **k)
+
+    monkeypatch.setattr(_sp, "run", fake_run)
+    return seen
+
+
+def test_名字选不中要退到跑全部_不能就此放行(tmp_path, monkeypatch):
+    """🔴 **2026-09-17 真机改的那一处**：退 5 之后**放行** = 这条检查等于没跑。
+
+    真机那轮声明的名字全是**中文描述**（`parse_ts 时区归一化`）⇒ `-k` 一条选不中
+    ⇒ 退 5 ⇒ 放行 ⇒ **8 个集成用例压根没跑，而报告上写着"集成通过"**。
+
+    ⇒ 退一步：**跑项目里的全部测试**。这一步真挂了就要判失败。
+    """
+    warns = []
+    monkeypatch.setattr("singularity.scheduler.witness.warn", lambda *a, **k: warns.append(a))
+    p, _ = _mk(tmp_path, monkeypatch, [{"name": "parse_ts 时区归一化"}])
+    seen = _stub_subprocess_seq(monkeypatch, [5, 1])      # 第一条退 5；退一步那条退 1
+
+    ok, detail = orch._run_integration_merge(p)
+
+    assert len(seen["argv"]) == 2, (
+        "没有退到「跑全部」那一步 ⇒ 这条检查等于没跑（而报告上照样写集成通过）: "
+        f"{seen['argv']}")
+    assert "-k" not in seen["argv"][1], "退一步那条不该再带 -k 过滤器"
+    assert ok is False, "退一步跑出真失败却放行了 —— 那就是「检查没跑却显示通过」"
+
+
+def test_退一步全绿就通过(tmp_path, monkeypatch):
+    """**对照**：退一步跑全绿 ⇒ 集成通过（不是"凡退 5 都失败"）。"""
+    p, _ = _mk(tmp_path, monkeypatch, [{"name": "parse_ts 时区归一化"}])
+    seen = _stub_subprocess_seq(monkeypatch, [5, 0])
+    ok, detail = orch._run_integration_merge(p)
+    assert ok is True and len(seen["argv"]) == 2, (ok, detail)
