@@ -989,11 +989,44 @@ def decompose_architecture(arch_json: dict) -> list[dict]:
             if api.get("path", "") in api_names or api.get("description", "") in api_names:
                 ctx_parts.append(f"API {api.get('method','')} {api.get('path','')}: {api.get('description','')}")
 
-        # 相关约束
+        # 🔴 **全部约束都进，不再按关键词筛**（2026-09-17 真机改）。
+        #
+        # 原来那句筛子是 `type`（**分类**，如 "reliability"）或 `rule[:20]`（**散文**）
+        # **出现在任务标题/描述里** —— 这在结构上就**永远匹配不上**。
+        # 真机实测：**10 条约束，一条都没进过任何任务**（11 个任务 × 10 条 = 0 命中）
+        # ⇒ 干活的人**连规则文字都没见过**，更别说机器检查要跑哪个文件
+        # ⇒ 收尾时 `machine_checks ran=10 passed=0`，十条全是
+        #   `ERROR: file or directory not found: tests/test_contract_*.py`。
+        #
+        # 为什么不改成按 `covers` 索引：架构里确实有 `covers`，真机数据是
+        # **1:1 对上 `api_contracts`**（7 条契约 ↔ `[0]..[6]`），但它**索引到"契约"不是"任务"**，
+        # 而最需要知道"要造哪个测试文件"的恰恰是**测试任务**——它多半一条契约都不挂。
+        # ⇒ **约束是项目级的**（每条都决定项目能不能过机器检查），人人有责，别筛。
         for c in constraints:
-            if any(kw in title.lower() or kw in desc.lower()
-                   for kw in [c.get("type", ""), c.get("rule", "")[:20]]):
-                ctx_parts.append(f"约束[{c.get('type','')}]: {c.get('rule','')}")
+            ctx_parts.append(f"约束[{c.get('type','')}]: {c.get('rule','')}")
+            # **把"这条约束会被怎么机器检查"一起带上** —— 判据要的输入，必须和判据一起
+            # 交给产出它的人（同 `<项目仓>/test_cases.json` 那条：三个读者都在等一份
+            # **没人被要求写**的文件）。
+            _chk = (c.get("check") or {}).get("argv") or []
+            if _chk:
+                ctx_parts.append(
+                    "  ↳ 机器检查会真跑这条命令（退出码必须为 0）：`"
+                    + " ".join(str(x) for x in _chk)
+                    + "` —— 它引用的文件/路径**必须存在**（缺了就是判失败）。")
+                # 🔴 **把"这条约束会被怎么机器检查"一起带上**（2026-09-17 真机）。
+                # 架构声明的 `constraints[].check.argv` 指定了**具体命令**（真机那轮是
+                # `python3 -m pytest -q tests/test_contract_normal.py` 这种），
+                # 而这里原来**只传了 `rule` 的文字** —— 干活的人从头到尾**没见过那个文件名**
+                # ⇒ 收尾时 10 条机器检查**10 条全失败**，全是
+                # `ERROR: file or directory not found: tests/test_contract_*.py`。
+                # ⇒ **判据要的输入，必须和判据一起交给产出它的人**（同 `<项目仓>/test_cases.json`
+                #   那条：三个读者都在等一份**没人被要求写**的文件）。
+                _chk = (c.get("check") or {}).get("argv") or []
+                if _chk:
+                    ctx_parts.append(
+                        "  ↳ 机器检查会真跑这条命令（退出码必须为 0）：`"
+                        + " ".join(str(x) for x in _chk)
+                        + "` —— 它引用的文件/路径**必须存在**（缺了就是判失败）。")
 
         # acceptance 来自 test_cases
         acceptance = t.get("acceptance", "")
