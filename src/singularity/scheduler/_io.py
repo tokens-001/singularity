@@ -190,7 +190,24 @@ def try_parse_json(raw: str, try_repair: bool = False) -> dict:
         repaired = _repair_truncated_json(raw)
         if repaired is not None:
             return repaired
-    return {"raw_output": raw[:5000], "parse_error": True}
+    # ⚠️ **兜底必须说清自己是被截断的**（2026-09-17 真机）。
+    # 原来只给 `{"raw_output": raw[:5000], "parse_error": True}` —— 前端拿到这份
+    # 兜底之后**渲染成一个空框**（它只读 `competitive_analysis.products` / `pitfalls` /
+    # `recommendation` 三个结构化字段，兜底那份**一个都没有**），
+    # 而且**连"这是被截断的"都看不出来**（用户原话：「我怎么不能看报告」）。
+    #
+    # ⚠️ 这里**故意不存全文**：项目 json 在调度循环里**每圈被 `list_all()` 读一遍**，
+    # 真机那份原文 2 万字、存进去就是给热路径加 ~45KB。
+    # 全文一直在 `<id>.research.md`（`_save_phase_output` 写的），
+    # 由 `/api/projects/<id>/research-raw` 端出去。
+    return {
+        "raw_output": raw[:5000],
+        "parse_error": True,
+        # 原文**总长** —— 前端靠它说"这是前 5000 字，完整 N 字"，而不是假装这就是全部
+        "raw_chars": len(raw),
+        "raw_truncated": len(raw) > 5000,
+        "raw_ref": "research-raw",     # 前端拼 `/api/projects/<id>/research-raw`
+    }
 
 
 def _repair_truncated_json(raw: str) -> dict | None:

@@ -200,3 +200,47 @@ class TestAtomicWrite:
         _io.atomic_write_json(p, {"a": [1, 2]})
         assert _json.loads(p.read_text(encoding="utf-8")) == {"a": [1, 2]}
         assert not list(tmp_path.glob("*.tmp")), f"留下 tmp 了：{list(tmp_path.iterdir())}"
+
+
+class TestParseErrorFallbackTellsTheTruth:
+    """解析失败时的兜底**必须说清自己是被截断的** —— 2026-09-17 真机。
+
+    那天模型吐的 JSON 字符串里带裸换行 ⇒ 四层修复一层都不覆盖 ⇒ 兜底
+    `{"raw_output": raw[:5000], "parse_error": True}`。前端只读
+    `competitive_analysis.products` / `pitfalls` / `recommendation` 三个结构化字段，
+    兜底那份**一个都没有** ⇒ **渲染成空框**；而且**连「这是被截断的」都看不出来**。
+    用户原话：「**我怎么不能看报告**」。
+
+    ⚠️ 全文**故意不存进这份 dict**：项目 json 在调度循环里每圈被 `list_all()` 读一遍，
+    真机那份原文 2 万字、存进去就是给热路径加 ~45KB。全文在 `<id>.research.md`，
+    由 `/api/projects/<id>/research-raw` 端出去 —— 所以这里要给出**够拼出那个地址**的线索。
+    """
+
+    @staticmethod
+    def _bad(total: int) -> str:
+        """一个**修不好**的输入：带围栏，且 JSON 字符串里有裸换行（非法控制字符）。"""
+        head = '```json\n{"a": "x\ny", "pad": "'
+        tail = '"}\n```'
+        return head + ("k" * max(0, total - len(head) - len(tail))) + tail
+
+    def test_兜底要说清原文多长_以及这是不是截断的(self):
+        from singularity.scheduler._io import try_parse_json
+        raw = self._bad(20000)
+        r = try_parse_json(raw)
+        assert r.get("parse_error"), f"这份输入本该解析失败（否则这条测的是别的东西）: {list(r)[:6]}"
+        assert r.get("raw_chars") == len(raw), \
+            f"没说清原文多长 ⇒ 前端以为手里那份就是全部: {r.get('raw_chars')} vs {len(raw)}"
+        assert r.get("raw_truncated") is True, "被截断了却不说 ⇒ 用户以为报告就这么短"
+
+    def test_短原文不谎报截断(self):
+        from singularity.scheduler._io import try_parse_json
+        r = try_parse_json(self._bad(200))       # 远小于 5000
+        assert r.get("parse_error")
+        assert r.get("raw_truncated") is False, \
+            f"没截断却报截断 —— 「狼来了」会让真的截断没人信: {r.get('raw_truncated')}"
+
+    def test_兜底给出取全文的地址线索(self):
+        from singularity.scheduler._io import try_parse_json
+        r = try_parse_json(self._bad(20000))
+        assert r.get("raw_ref") == "research-raw", \
+            f"没给全文的入口线索 ⇒ 界面上还是没地方看: {r.get('raw_ref')}"

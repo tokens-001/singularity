@@ -185,7 +185,7 @@ export default function Projects() {
                     )}
                     <div className="text-secondary" style={{ marginBottom: 4 }}>{detail.description}</div>
                     {detail.repo_dir && <div className="fs-10 text-muted" style={{ marginBottom: 4 }}>📁 成品：{detail.repo_dir}</div>}
-                    {detail.research_report && <ResearchReport report={detail.research_report} />}
+                    {detail.research_report && <ResearchReport report={detail.research_report} projectId={detail.id} />}
                     {detail.architecture && <ArchitectureDetails arch={detail.architecture} />}
                     {detail.phase && detail.phase.startsWith('gate') && (
                       <div className="flex-center gap-6 fs-10" style={{ marginBottom: 8, color: 'var(--accent-yellow)' }}>

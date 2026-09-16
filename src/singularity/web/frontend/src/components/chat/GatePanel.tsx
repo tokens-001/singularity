@@ -38,9 +38,43 @@ const Details = memo(function Details({ title, color, children }: { title: strin
   )
 })
 
-export const ResearchReport = memo(function ResearchReport({ report }: { report: any }) {
+export const ResearchReport = memo(function ResearchReport(
+  { report, projectId }: { report: any; projectId?: string }) {
   const products = report.competitive_analysis?.products || []
   const pitfalls: string[] = report.pitfalls || []
+
+  // 🔴 **解析失败必须说出来**（2026-09-17 真机，用户原话「我怎么不能看报告」）。
+  //
+  // 模型吐的 JSON 坏了（字符串里带裸换行）⇒ 后端 `try_parse_json` 走兜底
+  // `{raw_output: 前 5000 字, parse_error: true}` ⇒ 底下那三个分支**一个都不进**
+  // ⇒ **渲染成一个空框**（标题还在、点开是空的，跟"还没有数据"长得一模一样）。
+  // ⚠️ 而这里原来**压根不认识 `parse_error`** ⇒ **一个字都不提示**。
+  if (report?.parse_error) {
+    const raw: string = report.raw_output || ''
+    return (
+      <Details title="📋 调研报告 ⚠" color="#dc2626">
+        <div style={{ fontSize: 12, color: '#dc2626', lineHeight: 1.6, marginBottom: 8 }}>
+          ⚠ 报告解析失败 —— 模型输出的不是合法 JSON。下面这段是原文开头。
+        </div>
+        {report.raw_truncated && (
+          <div style={{ fontSize: 11, color: '#6b6b68', marginBottom: 8 }}>
+            这里只有前 {raw.length} 字，原文共 {report.raw_chars} 字。
+          </div>
+        )}
+        {projectId && (
+          <div style={{ marginBottom: 8 }}>
+            <a href={`/api/projects/${projectId}/research-raw`} target="_blank" rel="noreferrer"
+               style={{ fontSize: 12, color: '#2563eb' }}>📄 打开完整原文</a>
+          </div>
+        )}
+        <pre style={{
+          fontSize: 11, color: '#141413', background: '#faf9f5', borderRadius: 6, padding: 8,
+          maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+        }}>{raw || '（原文也是空的）'}</pre>
+      </Details>
+    )
+  }
+
   return (
     <Details title="📋 调研报告" color="#2563eb">
       {report.recommendation && (
@@ -355,7 +389,7 @@ export const ProjectArchive = memo(function ProjectArchive({ info }: { info: any
   return (
     <div style={{ maxWidth: 760, margin: '12px auto 0', textAlign: 'left' }}>
       {info.architecture && <ArchitectureDetails arch={info.architecture} />}
-      {info.research_report && <ResearchReport report={info.research_report} />}
+      {info.research_report && <ResearchReport report={info.research_report} projectId={info.id} />}
     </div>
   )
 })
@@ -382,7 +416,7 @@ export const GatePanel = memo(function GatePanel({ info, gateNum, gatePhase, acc
                      arch={info.architecture} projectIssues={info.issues} />
         {isGate3 && <AcceptancePanel acceptance={acceptance} projectIssues={info.issues} />}
         {/* GATE3 的正文是交付物（上面那块），旧文档降级为"项目背景"排在后面 */}
-        {gateNum !== '1' && info.research_report && <ResearchReport report={info.research_report} />}
+        {gateNum !== '1' && info.research_report && <ResearchReport report={info.research_report} projectId={info.id} />}
         {gateNum === '2' && info.architecture && <ArchitectureDetails arch={info.architecture} />}
         {isGate3 && info.architecture && <ArchitectureDetails arch={info.architecture} />}
         {isGate3 && (

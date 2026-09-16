@@ -1685,6 +1685,32 @@ def api_store_status(api_id):
     data, code = _api_handler.api_store_set_status(api_id, body["status"], body.get("notes", ""))
     return jsonify(data), code
 
+@app.route("/api/projects/<project_id>/research-raw")
+def api_project_research_raw(project_id):
+    """调研报告的**完整原文**（纯文本）—— 解析失败时前端靠它把报告显示出来。
+
+    🔴 2026-09-17 真机（用户原话「**我怎么不能看报告**」）：
+    模型吐的 JSON 坏了 ⇒ `try_parse_json` 走兜底（只留前 5000 字）⇒
+    前端按结构化字段渲染 ⇒ **空框**；而**全文（2 万字）一直躺在
+    `.qidian/projects/<id>.research.md` 里，界面上没有任何入口**
+    （`/files` 那条路会跳过 `.md` 和 `.qidian/`）。
+
+    ⚠️ 回**纯文本**而不是 JSON：前端只要给个链接就能看，不用加异步取数的状态。
+    """
+    from singularity.scheduler.workflow import _phase_output_path
+    p = _phase_output_path(project_id, "research.md")
+    if not p.exists():
+        return jsonify({"error": "没有调研报告原文"}), 404
+    try:
+        text = p.read_text(encoding="utf-8")
+    except OSError as e:
+        # 读不出来 ≠ 没有（"损坏和没有长得一样" —— 本仓反复咬人的那个病）
+        witness.warn("web", f"research_raw_unreadable:{project_id}:{type(e).__name__}"[:160],
+                     key="research_raw_unreadable")
+        return jsonify({"error": f"原文读不出来（{type(e).__name__}）"}), 500
+    from flask import Response
+    return Response(text, mimetype="text/plain; charset=utf-8")
+
 @app.route("/api/observer/status")
 def api_observer_status():
     """观察者的**活性痕迹** —— 它自己的失效方式是"什么都不发生"，与"一切正常"长得一样。

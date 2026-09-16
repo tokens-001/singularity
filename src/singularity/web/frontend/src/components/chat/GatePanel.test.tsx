@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest'
 import { act, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { AcceptancePanel, ProjectArchive, GatePanel, gateCopy } from './GatePanel'
+import { AcceptancePanel, ProjectArchive, GatePanel, gateCopy, ResearchReport } from './GatePanel'
 
 function render(node: ReactNode): string {
   const el = document.createElement('div')
@@ -228,5 +228,57 @@ describe('GATE2 兜底升上来时要说真话', () => {
                                    onGate={() => {}} />)
     expect(text).toContain('审查自动修已达上限')
     expect(text).not.toContain('架构完成·请审核方案')
+  })
+})
+
+/**
+ * 调研报告**解析失败时不能是个空框** —— 2026-09-17 真机，用户原话「我怎么不能看报告」。
+ *
+ * 模型吐的 JSON 坏了（字符串里带裸换行）⇒ 后端 `try_parse_json` 走兜底
+ * `{raw_output: 前 5000 字, parse_error: true}` ⇒ 组件里那三个分支（推荐方案 / 竞品 / 关键坑）
+ * **一个都不进** ⇒ **渲染成一个空框**（标题还在、点开是空的）。
+ * ⚠️ 而这里原来**压根不认识 `parse_error`** ⇒ **一个字都不提示**。
+ */
+describe('调研报告解析失败要说话，不能是空框', () => {
+  const 坏报告 = {
+    parse_error: true,
+    raw_output: '```json\n{"competitive_analysis": {"products": [{"name": "jq"',
+    raw_chars: 20442,
+    raw_truncated: true,
+  }
+
+  it('要说"解析失败"，而不是什么都不说', () => {
+    const text = render(<ResearchReport report={坏报告} projectId="p1" />)
+    expect(text).toContain('解析失败')
+  })
+
+  it('要把原文摆出来（至少开头），不能是空的', () => {
+    const text = render(<ResearchReport report={坏报告} projectId="p1" />)
+    expect(text).toContain('competitive_analysis')
+  })
+
+  it('被截断就要说清"这是前多少字、全文多少字"', () => {
+    const text = render(<ResearchReport report={坏报告} projectId="p1" />)
+    expect(text).toContain('20442')
+  })
+
+  it('有 projectId 时给一条读全文的链接', () => {
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    const root = createRoot(el)
+    act(() => { root.render(<ResearchReport report={坏报告} projectId="p1" />) })
+    const href = el.querySelector('a')?.getAttribute('href') || ''
+    act(() => { root.unmount() })
+    el.remove()
+    expect(href).toBe('/api/projects/p1/research-raw')
+  })
+
+  it('正常报告**不受影响**（别把修法改宽）', () => {
+    const text = render(<ResearchReport report={{
+      recommendation: '用 Python', competitive_analysis: { products: [{ name: 'jq', type: 'x', strengths: 'y' }] },
+    }} projectId="p1" />)
+    expect(text).toContain('推荐方案')
+    expect(text).toContain('jq')
+    expect(text).not.toContain('解析失败')
   })
 })
