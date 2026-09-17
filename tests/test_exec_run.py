@@ -29,7 +29,7 @@ def check(name, cond, detail=""):
         FAIL += 1; print(f"  ❌ {name}" + (f" — {detail}" if detail else ""))
 
 # ── 桩: worktree 生命周期记账 ──────────────────────────────
-CREATED, CLEANED = [], []
+CREATED, CLEANED, ANCHORED = [], [], []
 class FakeWT:
     _seq = 0
     def __init__(self):
@@ -38,7 +38,7 @@ class FakeWT:
         self.path = Path(f"/tmp/fake_wt_{self.id}")
 
 def reset_wt():
-    CREATED.clear(); CLEANED.clear()
+    CREATED.clear(); CLEANED.clear(); ANCHORED.clear()
 
 # ── 桩: executor / validation 结果 ─────────────────────────
 class FakeExec:
@@ -99,7 +99,7 @@ def install_stubs():
     _exec._cleanup_wt = fake_cleanup
 
     _exec.commit_wt = lambda wt: "fakebranchref"
-    _exec._anchor_ref = lambda tid, ref, repo_root=None: None
+    _exec._anchor_ref = lambda tid, ref, repo_root=None: ANCHORED.append((tid, ref))
     _exec._build_merge_request = lambda task, br, base, repo_root=None: "FAKE_MR"
     _exec.wt_merge_back = lambda wt, repo_root=None: type("MR", (), {"ok": False, "reason": "冲突", "conflicts": ["f"]})()
 
@@ -463,6 +463,29 @@ if __name__ == "__main__":
     _exec.run(S.task, make_ctx(), {"any": list(S.chain)})
     check("没给死线 → 照常发起（guard 没改宽）",
           S.last_dispatch_kw is not None, "deadline_at=0 被当成'立即到期'了")
+
+    print("── 工作树没动过 ⇒ 不许把**基线**锚成这个任务的产物 ──")
+    # 2026-09-18 round g：`…835` 被判「无文件改动」却"有可打捞产物"，
+    # 锚的就是它哥哥 `…833` 的合并提交（835 自己一次 `write_file` 都没有）。
+    # 根因：`commit_wt` 在**没改动**时返回的是工作树的 HEAD，而工作树是从
+    # `snapshot_ref` 建的 ⇒ 那就是基线本身、是别人的提交。
+    reset_wt()
+    S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 3}]
+    _exec.commit_wt = lambda wt: "snapref"          # == make_ctx().snapshot_ref
+    S.dispatch_queue = [("ok", FakeExec(success=True))]
+    S.validate_queue = [FakeVal(action="pass")]
+    run_case(v3=True)
+    check("没改动 → 不锚（否则把别人的活记到这个任务头上）",
+          ANCHORED == [], f"锚了 {ANCHORED}")
+
+    print("── 对照: 真改过 ⇒ 照旧锚（别把它修成'谁也不锚'）──")
+    reset_wt()
+    _exec.commit_wt = lambda wt: "newcommit"
+    S.dispatch_queue = [("ok", FakeExec(success=True))]
+    S.validate_queue = [FakeVal(action="pass")]
+    run_case(v3=True)
+    check("有改动 → 照旧锚", ANCHORED == [("1234567890123", "newcommit")], f"实到 {ANCHORED}")
+    _exec.commit_wt = lambda wt: "fakebranchref"    # 还原桩
 
     print("\n" + "=" * 48)
     total = PASS + FAIL

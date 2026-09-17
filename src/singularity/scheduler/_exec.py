@@ -359,7 +359,20 @@ def _process_planner_or_merge(task, ctx, turn, level, is_planner, wt,
         if ctx.merge_queue is not None:
             # v3: commit_wt 拿含改动的 commit (修复 #2), 不直接 merge
             branch_ref = commit_wt(wt)
-            if branch_ref:
+            # ⚠️ **工作树没动过时，`commit_wt` 返回的是 HEAD —— 那是基线，不是这个任务的产物。**
+            # 工作树是从 `ctx.snapshot_ref` 建的（`wt_create(base_ref=snapshot_ref)`），
+            # 所以"什么都没发生"的判据就是 `branch_ref == snapshot_ref`。
+            #
+            # 无条件锚它 = **把别人的活记到这个任务头上**：2026-09-18 round g 的 `…835`
+            # 被判「无文件改动」却"有可打捞产物"，锚的就是它哥哥 `…833` 的合并提交
+            # （835 自己的工具日志里一次 `write_file` 都没有）。它能走到这里，是因为
+            # 更上游把"被掐断的半截思考"当成了正文 ⇒ `success=True`。
+            #
+            # ⚠️ **不能改用 `_has_changes_in_wt`**（那看的是"未提交改动"）：agent 自己
+            # `git commit` 过之后工作区是干净的，用它判断会把**真的产出**当成没产出、
+            # 连合并都不做 —— 比原 bug 更坏。**跟基线比才是对的。**
+            # `snapshot_ref` 为空（没建快照）时 `branch_ref != ""` 成立 ⇒ 退回原行为。
+            if branch_ref and branch_ref != ctx.snapshot_ref:
                 _anchor_ref(task.id, branch_ref, repo_root=repo_root)  # 防 gc 回收 (重要 #3)
                 pending_merge_req_holder[0] = _build_merge_request(
                     task, branch_ref, ctx.snapshot_ref, repo_root=repo_root,
