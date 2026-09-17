@@ -17,7 +17,11 @@ interface AppState {
   conversations: Record<string, ChatMsg[]>
   activeProjectId: string
   setActiveProject: (id: string) => void
-  addChatMsg: (msg: ChatMsg) => void
+  /** `projectId` 缺省 = 当前打开的那个项目（旧行为）。
+   *  ⚠️ **服务端主动推的消息必须显式给 projectId** —— 不给就会塞进"用户此刻正开着的
+   *  那个项目"的对话里：你在看 A，B 的汇报插进 A（2026-09-17 发现，在接
+   *  "观察者主动汇报"之前先修，否则一推就串台）。 */
+  addChatMsg: (msg: ChatMsg, projectId?: string) => void
   clearConversation: (id: string) => void
 }
 
@@ -29,8 +33,8 @@ export const useAppStore = create<AppState>()(
       conversations: {},
       activeProjectId: '_default',
       setActiveProject: (id) => set({ activeProjectId: id }),
-      addChatMsg: (msg) => {
-        const pid = get().activeProjectId
+      addChatMsg: (msg, projectId) => {
+        const pid = projectId || get().activeProjectId
         set(s => {
           const convs = { ...s.conversations }
           const msgs = [...(convs[pid] || []), msg].slice(-200)

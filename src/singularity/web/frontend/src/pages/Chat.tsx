@@ -13,6 +13,13 @@ import { ChatOptions, type ExecMode } from '../components/chat/ChatOptions'
 
 const PHASE_NAMES: Record<string, string> = { template: '待开始', researching: '调研中', planning: '架构设计中', executing: '实现中', integrating: '集成合并中', reviewing: '审查中', delivering: '交付中', done: '已完成' }
 
+/** `12345` → `12.3k`。用量那行只求"一眼看出量级"，不求精确。 */
+function fmtTokens(n: number): string {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`
+  return String(n)
+}
+
 export default function Chat() {
   const conversations = useAppStore(s => s.conversations)
   const activePid = useAppStore(s => s.activeProjectId)
@@ -234,6 +241,27 @@ export default function Chat() {
   const info = activePid !== '_default' ? projects.find(p => p.id === activePid) : null
   const gatePhase = info?.phase || ''
   const isGate = gatePhase.startsWith('gate')
+
+  // 这个项目的用量 —— 2026-09-17 用户提：「看不到单独项目 token 用量，
+  // 我建议放在独立项目对话框」。数据一直在（`/api/token-usage` 的 `by_project`），
+  // 只是**界面一处都没读过**（`project_cost` 接口同理，前端 grep 零命中）。
+  //
+  // ⚠️ **这是「今日」的用量**（后端 `per_project_usage` 只汇总今天）——
+  //    所以标题里要写明"今日"，不然昨天跑完的项目今天显示 0，看着像坏了。
+  // ⚠️ 只在**换项目 / 换阶段**时取，不跟着 SSE 每一跳刷新。
+  const [usage, setUsage] = useState<any>(null)
+  useEffect(() => {
+    if (!activePid || activePid === '_default') { setUsage(null); return }
+    let dead = false
+    api.tokenUsage()
+      .then((d: any) => {
+        if (dead) return
+        const row = (d?.by_project || []).find((r: any) => r.project_id === activePid)
+        setUsage(row ? { ...row, unpriced: (d?.unpriced_models || []).length > 0 } : null)
+      })
+      .catch(() => { if (!dead) setUsage(null) })
+    return () => { dead = true }
+  }, [activePid, gatePhase])
   const gateNum = isGate ? gatePhase.replace('gate','') : ''
   const isEmpty = activePid === '_default'
 
@@ -310,6 +338,11 @@ export default function Chat() {
             <div style={{ maxWidth: 860, margin: '0 auto' }}>
               {info && <div className="fs-11 text-muted" style={{ marginBottom: 4 }}>
                 {info.name} <span style={{color: isGate?'#16a34a':gatePhase==='done'?'#16a34a':'#9a9993'}}>· {PHASE_NAMES[gatePhase] || gatePhase}</span>
+                {usage && <span title="按项目汇总的**今日**用量。观察者对话的用量单独算，不在里面。">
+                  {' · '}{fmtTokens(usage.tokens)} tokens
+                  {' · $'}{usage.cost.toFixed(4)}{usage.unpriced ? '+' : ''}
+                  <span style={{ color: '#b5b2a8' }}>（今日）</span>
+                </span>}
               </div>}
               <Sender value={input} onChange={(v) => setInput(v)} onSubmit={(v) => send(v)}
                 loading={loading} onCancel={cancelWait} placeholder="发送消息..." autoSize={{ minRows: 1, maxRows: 6 }}
