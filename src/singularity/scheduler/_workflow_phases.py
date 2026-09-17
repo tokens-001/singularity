@@ -419,6 +419,22 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     project.architecture = arch
     _materialize_test_cases(project, arch)
 
+    # 🔴 **架构换了一版 ⇒ 任务必须跟着换**（2026-09-17 真机坐实，**打回重做曾经是半吊子**）。
+    #
+    # 不清 `task_ids` 的话，两条建任务的路**都够不着"重规划后还有旧任务"这个状态**：
+    #   · `_workflow_phases._run_execution`（清空 + 重建）—— **GATE2 批准时不跑它**：
+    #     批准只启 planning，executing 归调度循环推（刻意如此，防两套驱动抢 phase）；
+    #   · `orchestrator._decompose_and_create_tasks`（也清也建）—— 被 `if not proj.task_ids:`
+    #     挡着，而**旧任务还在**（非空）⇒ 永远不触发。
+    # ⇒ **新架构的任务一个都不建**，项目拿着旧任务冲过执行层：真机实测 **10 秒**从
+    #    `gate2` 冲到 `reviewing`（旧任务 6 成 7 败、全终态），重规划白花钱；
+    #    连带 `constraints_checklist` 没人写 ⇒ `constraints_checklist_fallback` 报警。
+    #
+    # 清了之后，调度循环那条 guard 才会触发重建（`_decompose_and_create_tasks`）。
+    # ⚠️ **旧任务文件不删**：它们是审计痕迹，而且 **F3 的 pending ref 挂在上面**（可打捞）。
+    #    调度只认 `_SCHEDULABLE`（PENDING/ROUTED/BLOCKED/PAUSED），旧的 done/failed 不会被捡起来。
+    project.task_ids = []
+
     # ⚠️ 守卫放在**这里**（架构定稿、两条建任务的路的上游）是有意的：
     # 建任务的路不止一条（`_run_execution` 和 `orchestrator._decompose_and_create_tasks`），
     # 挂在任何一条上都会漏掉另一条 —— 那是 §60 那个坑的形状（同一件事两个入口，

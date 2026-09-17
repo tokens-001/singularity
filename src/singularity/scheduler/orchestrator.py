@@ -1015,11 +1015,31 @@ def _decompose_and_create_tasks(proj, agents: dict) -> None:
         role_key = get_phase_role(Phase.EXECUTING) or "implementer"
         proj.task_ids = []
         id_map: dict[str, str] = {}
+        # ⚠️ **与 `_run_execution` 逐样对齐**（2026-09-17 真机坐实）。
+        # 这里原来**只传 `t["desc"]`**，把 `context_snippet`（**约束和机器检查命令就在里面**）
+        # 和 `acceptance` 一起丢了。后果不是"少几行字"：干活的人**不知道要建哪些测试文件**
+        # ⇒ 机器检查 10/10 全红，失败信息是 `file or directory not found: tests/…`。
+        # ⚠️ 这正是 §60 的形状（同一个动作两个入口，一条做全了、一条没做全）——
+        #    而上面那段注释还写着"与 `_run_execution` 对齐……原来丢了四样"：
+        #    **它对齐了四样（depends_on / route_level / route_role / 清 task_ids），
+        #      但这几样不在那四样里。**
+        _cons = arch_json.get("constraints") or []
         for idx, t in enumerate(tasks):
             local_id = t.get("id", "") or f"T{idx+1}"
             arch_deps = t.get("depends_on", []) or t.get("depends_on_local_id", [])
             dep_ids = [id_map[d] for d in arch_deps if d in id_map]
-            task = tracker.create(t["desc"], project_id=proj.id, depends_on=dep_ids)
+            ctx_snippet = t.get("context_snippet", "")
+            acceptance = t.get("acceptance", "") or "代码可运行，功能完整"
+            task_desc = (
+                f"[{local_id}] {t['desc']}\n"
+                f"验收标准: {acceptance}\n"
+                + (f"相关上下文:\n{ctx_snippet}\n" if ctx_snippet else "")
+                + f"角色: {role_key}\n"
+                f"项目背景: {str(proj.description)[:200]}\n"
+                + "约束: " + ("; ".join(str(c.get("rule", c.get("text", "")))
+                                      for c in _cons[:3]) if _cons else "无")
+            )
+            task = tracker.create(task_desc, project_id=proj.id, depends_on=dep_ids)
             new_ids.append(task.id)      # 回滚集合：create 成功就记下（transition 抛时还没 append）
             tracker.transition(task.id, tracker.TaskStatus.PENDING,
                              route_level="any",
