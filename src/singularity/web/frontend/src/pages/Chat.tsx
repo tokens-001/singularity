@@ -8,7 +8,7 @@ import { Loader2, CheckCircle2, AlertCircle, FolderOpen } from 'lucide-react'
 import FilePanel from '../components/FilePanel'
 import { MessageBubble } from '../components/chat/MessageBubble'
 import { TaskCard, taskStateKind, type ProgressItem, type ToolLog } from '../components/chat/TaskCard'
-import { GatePanel, ProjectArchive } from '../components/chat/GatePanel'
+import { GateBar, GateBody, ProjectArchive } from '../components/chat/GatePanel'
 import { ChatOptions, type ExecMode } from '../components/chat/ChatOptions'
 
 const PHASE_NAMES: Record<string, string> = { template: '待开始', researching: '调研中', planning: '架构设计中', executing: '实现中', integrating: '集成合并中', reviewing: '审查中', delivering: '交付中', done: '已完成' }
@@ -30,6 +30,8 @@ export default function Chat() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [showFiles, setShowFiles] = useState(false)
+  // 材料侧滑面板。**默认收起** —— 正文留给观察者说话（2026-09-17）。
+  const [showMaterials, setShowMaterials] = useState(false)
   const [execMode, setExecMode] = useState<ExecMode>('auto_edit')
   const [tasks, setTasks] = useState<ProgressItem[]>([])
   const [projects, setProjects] = useState<any[]>([])
@@ -282,77 +284,62 @@ export default function Chat() {
         </div>
       ) : (
         <>
+          {/* ── 常驻状态条（2026-09-17）────────────────────────────────
+              用户提：「之前忽略了观察者对话窗口，导致现在调研架构等任务都堆在对话窗口」。
+              查下来根子是**两种性质不同的东西共用了一条时间轴**：
+                · 对话   = 流水（只增不减，要能往回翻）
+                · 项目状态 = 快照（永远只有当前这一份，要能**一眼看到**）
+              塞在一起必然打架：快照被流水推走、流水被快照截断。
+              ⇒ 状态**钉在顶部不参与滚动**，材料收进侧滑面板，正文留给观察者说话。
+
+              🔴 **门禁那根条必须在这里**：门禁是「当前状态 + 一个动作」，本来就不属于正文。
+                 留在正文里的话，用户往下滚一屏就看不见"该我审批了"（#28 那一族）。
+                 那个打回理由输入框也跟着搬 —— 不然点了"打回"，输入框在屏幕外。 */}
+          {info && (
+            <div style={{ flexShrink: 0, borderBottom: '1px solid #e5e2d8', background: '#fffdf8' }}>
+              <div style={{ padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span className="fs-12 fw-600">{info.name}</span>
+                <span className="fs-11" style={{ color: gatePhase === 'done' ? '#16a34a' : '#6b6b68' }}>
+                  {PHASE_NAMES[gatePhase] || gatePhase}
+                </span>
+                {tasks.length > 0 && (
+                  <span className="fs-11 text-muted">
+                    · {failed > 0 && <span style={{ color: '#dc2626' }}>⚠ </span>}
+                    {/* ⚠️ 带上 `已完成/总数` —— 只说"1 个执行中"看不出还剩几个，
+                        而这条摘要就是人在顶栏能看到的全部进度。 */}
+                    {active > 0 ? `${active} 个执行中 · ${completed}/${tasks.length}`
+                      : completed === tasks.length ? '全部完成' : `进度 ${completed}/${tasks.length}`}
+                    {failed > 0 && <span style={{ color: '#dc2626' }}> {failed} 失败</span>}
+                  </span>
+                )}
+                {usage && (
+                  <span className="fs-11 text-muted" title="按项目汇总的**今日**用量；观察者对话单独算，不在里面">
+                    · {fmtTokens(usage.tokens)} tokens · ${usage.cost.toFixed(4)}{usage.unpriced ? '+' : ''}（今日）
+                  </span>
+                )}
+                <button onClick={() => setShowMaterials(v => !v)}
+                  style={{ marginLeft: 'auto', background: showMaterials ? '#eef2ff' : '#f5f4ef',
+                           border: '1px solid #e5e2d8', borderRadius: 6, padding: '2px 10px',
+                           fontSize: 11, cursor: 'pointer' }}>
+                  📁 材料
+                </button>
+              </div>
+              {isGate && (
+                <div style={{ padding: '0 12px 8px' }}>
+                  <GateBar info={info} gateNum={gateNum} gatePhase={gatePhase} onGate={gateConfirm} />
+                </div>
+              )}
+            </div>
+          )}
+
           <div ref={scrollRef} onScroll={onScroll} style={{ flex: 1, overflow: 'auto', padding: '8px 0' }}>
             {msgs.map((m: ChatMsg, i: number) => <MessageBubble key={i} m={m} />)}
 
-            {/* ── 项目档案抽屉（2026-09-17）─────────────────────────────
-                用户原话：「之前忽略了观察者对话窗口，导致现在调研架构等任务都堆在对话窗口」。
-                实测：13 张任务卡 + 门禁面板 + 调研 8 行 + 架构详情，**观察者说的话只剩薄薄几行**。
-
-                ⚠️ **不是撤销 09-15 那次**（用户提的「对话页为什么不能一直显示架构」）——
-                   要的是**入口常在**，不是**内容常挂**。所以收成抽屉：收起时也带进度，
-                   一眼能看出"跑到哪了"，点开才是全貌。
-
-                🔴 **门禁面板不许收进来**：它是"要你点通过/打回"的，收进去就可能看不见该审批
-                   —— 正是这个仓反复栽的"该看见的没看见"（#28）。同理，下面那条
-                   "实时连接断开"的警告也留在抽屉外面。 */}
+            {/* ⚠️ 留在正文里（不进材料面板）：它是"你看到的是旧数据"的免责声明 */}
             {!sseAlive && tasks.length > 0 && (
               <div className="chat-msg-row fs-10" style={{ color: 'var(--warning, #d48806)', marginBottom: 4 }}>
-                ⚠ 实时连接断开 —— 下面这份是**轮询拿的**（10 秒一次），可能比实际状态慢一拍；正在自动重连
+                ⚠ 实时连接断开 —— 任务状态是**轮询拿的**（10 秒一次），可能比实际慢一拍；正在自动重连
               </div>
-            )}
-
-            {info && (tasks.length > 0 || !isGate) && (
-              <details className="chat-msg-row" style={{ marginBottom: 16 }}>
-                <summary className="fs-11" style={{ cursor: 'pointer', color: '#6b6b68', userSelect: 'none', listStyle: 'none' }}>
-                  📁 项目档案
-                  {tasks.length > 0 && <>
-                    {' · '}
-                    {/* 收起时也要看得见进度 —— 否则"收起来"就变成"看不见了"。
-                        ⚠️ 判据同下面那条：**全失败时 active 也是 0**，绿勾只能给"真的没失败"那一侧
-                        （2026-09-14，外派④抓出）。 */}
-                    {failed > 0 ? '⚠ ' : ''}
-                    {/* ⚠️ 这里**必须带上 `已完成/总数`** —— 只说"1 个执行中"看不出还剩几个，
-                        而收起时这条摘要就是用户能看到的全部信息。 */}
-                    {active > 0 ? `${active} 个执行中 · ${completed}/${tasks.length}`
-                      : completed === tasks.length ? '全部完成' : `进度 ${completed}/${tasks.length}`}
-                    {failed > 0 && <span style={{ color: '#dc2626', marginLeft: 4 }}>{failed} 失败</span>}
-                  </>}
-                  {!isGate && ' · 调研 / 架构'}
-                  <span style={{ marginLeft: 6, color: '#b5b2a8' }}>展开 ▾</span>
-                </summary>
-
-                <div style={{ marginTop: 8 }}>
-                  {tasks.length > 0 && (
-                    <div style={{ marginBottom: 12 }}>
-                      <div className="flex-center gap-4" style={{ marginBottom: 6 }}>
-                        {active > 0 ? <Loader2 size={10} style={{animation:'spin 1s linear infinite'}}/>
-                          : failed > 0 ? <AlertCircle size={10} style={{color:'#b45309'}}/>
-                          : <CheckCircle2 size={10} style={{color:'#16a34a'}}/>}
-                        <span className="fw-600 fs-11 text-muted">
-                          {active > 0 ? `${active} 个执行中` : completed === tasks.length ? '全部完成' : `进度 ${completed}/${tasks.length}`}
-                          {failed > 0 && <span style={{ color: '#dc2626', marginLeft: 4 }}>{failed} 失败</span>}
-                        </span>
-                        {info && <span className="fs-11" style={{ marginLeft: 'auto', color: '#2563eb', fontWeight: 600 }}>{PHASE_NAMES[gatePhase] || gatePhase}</span>}
-                      </div>
-                      <div style={{ height: 6, background: '#e5e2d8', borderRadius: 999, overflow: 'hidden', marginBottom: 8 }}>
-                        <div style={{ height: '100%', width: `${tasks.length ? Math.round((completed / tasks.length) * 100) : 0}%`, background: '#16a34a', borderRadius: 999, transition: 'width 0.3s' }} />
-                      </div>
-                      {tasks.map((t) => <TaskCard key={t.id} t={t} onRetry={retryFailed} onReveal={revealFile} />)}
-                    </div>
-                  )}
-
-                  {/* 不在闸门时也给个"随时能回看架构/调研"的入口（两者内部都是 <details>，默认收起）。
-                      原来这段是常驻的 —— **批完就再也看不见自己批过什么了**，想回看只能去项目页
-                      （2026-09-15 用户提的：「对话页为什么不能一直显示架构」）。 */}
-                  {!isGate && <ProjectArchive info={info} />}
-                </div>
-              </details>
-            )}
-
-            {isGate && info && (
-              <GatePanel info={info} gateNum={gateNum} gatePhase={gatePhase}
-                acceptance={acceptance} onGate={gateConfirm} />
             )}
 
             {loading && (
@@ -369,14 +356,8 @@ export default function Chat() {
 
           <div style={{ padding: '0 0 12px' }}>
             <div style={{ maxWidth: 860, margin: '0 auto' }}>
-              {info && <div className="fs-11 text-muted" style={{ marginBottom: 4 }}>
-                {info.name} <span style={{color: isGate?'#16a34a':gatePhase==='done'?'#16a34a':'#9a9993'}}>· {PHASE_NAMES[gatePhase] || gatePhase}</span>
-                {usage && <span title="按项目汇总的**今日**用量。观察者对话的用量单独算，不在里面。">
-                  {' · '}{fmtTokens(usage.tokens)} tokens
-                  {' · $'}{usage.cost.toFixed(4)}{usage.unpriced ? '+' : ''}
-                  <span style={{ color: '#b5b2a8' }}>（今日）</span>
-                </span>}
-              </div>}
+              {/* 项目名/阶段/用量已搬到顶部**常驻状态条**（2026-09-17）——
+                  放这儿的话会随正文滚走，而"现在到哪了"恰恰是要**一直看得见**的东西。 */}
               <Sender value={input} onChange={(v) => setInput(v)} onSubmit={(v) => send(v)}
                 loading={loading} onCancel={cancelWait} placeholder="发送消息..." autoSize={{ minRows: 1, maxRows: 6 }}
                 prefix={<button onClick={() => setShowFiles(!showFiles)} className="btn-icon" aria-label="文件面板" style={{ color: showFiles?'#2563eb':'#9a9993' }}><FolderOpen size={15}/></button>}/>
@@ -387,6 +368,57 @@ export default function Chat() {
           </div>
         </>
       )}
+      {/* ── 材料侧滑面板（2026-09-17）────────────────────────────────
+          任务卡 / 门禁材料 / 调研 / 架构都在这。**默认收起**，正文留给观察者说话。
+          ⚠️ **覆盖式**（而不是把正文挤窄）：否则对话的滚动位置会跳，
+             而且窄屏上会被挤成一条缝。点右上角 ✕ 或「📁 材料」关掉。 */}
+      {showMaterials && !isEmpty && (
+        <div style={{ position: 'absolute', inset: 0, zIndex: 30 }}>
+          <div onClick={() => setShowMaterials(false)}
+               style={{ position: 'absolute', inset: 0, background: 'rgba(20,20,19,.12)' }} />
+          <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0,
+                        width: 'min(560px, 92%)', background: '#ffffff',
+                        borderLeft: '1px solid #e5e2d8', boxShadow: '-10px 0 30px rgba(0,0,0,.10)',
+                        display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flexShrink: 0, padding: '8px 12px', borderBottom: '1px solid #e5e2d8',
+                          display: 'flex', alignItems: 'center', gap: 8 }}>
+              <b className="fs-12">📁 项目材料</b>
+              {info && <span className="fs-11 text-muted">· {info.name}</span>}
+              <button onClick={() => setShowMaterials(false)} aria-label="关闭材料面板"
+                style={{ marginLeft: 'auto', background: 'none', border: 'none',
+                         fontSize: 15, cursor: 'pointer', color: '#6b6b68' }}>✕</button>
+            </div>
+            <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
+              {tasks.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <div className="flex-center gap-4" style={{ marginBottom: 6 }}>
+                    {active > 0 ? <Loader2 size={10} style={{animation:'spin 1s linear infinite'}}/>
+                      : failed > 0 ? <AlertCircle size={10} style={{color:'#b45309'}}/>
+                      : <CheckCircle2 size={10} style={{color:'#16a34a'}}/>}
+                    <span className="fw-600 fs-11 text-muted">
+                      {active > 0 ? `${active} 个执行中 · ${completed}/${tasks.length}`
+                        : completed === tasks.length ? '全部完成' : `进度 ${completed}/${tasks.length}`}
+                      {failed > 0 && <span style={{ color: '#dc2626', marginLeft: 4 }}>{failed} 失败</span>}
+                    </span>
+                  </div>
+                  <div style={{ height: 6, background: '#e5e2d8', borderRadius: 999, overflow: 'hidden', marginBottom: 8 }}>
+                    <div style={{ height: '100%', width: `${tasks.length ? Math.round((completed / tasks.length) * 100) : 0}%`, background: '#16a34a', borderRadius: 999, transition: 'width 0.3s' }} />
+                  </div>
+                  {tasks.map((t) => <TaskCard key={t.id} t={t} onRetry={retryFailed} onReveal={revealFile} />)}
+                </div>
+              )}
+              {info && isGate && (
+                <GateBody info={info} gateNum={gateNum} gatePhase={gatePhase} acceptance={acceptance} onGate={gateConfirm} />
+              )}
+              {/* 不在闸门时也给个"随时能回看架构/调研"的入口（两者内部都是 <details>，默认收起）。
+                  09-15 用户提的「对话页为什么不能一直显示架构」—— 要的是**入口常在**，
+                  不是**内容常挂**。 */}
+              {info && !isGate && <ProjectArchive info={info} />}
+            </div>
+          </div>
+        </div>
+      )}
+
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
     {showFiles && <FilePanel onClose={() => setShowFiles(false)} />}

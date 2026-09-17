@@ -92,50 +92,64 @@ const TASK = (id: string, desc: string, status = 'running') => ({
   id, description: desc, status, project_id: 'p1', updated_at: 1, created_at: 1,
 })
 
-/** 找到"项目档案"那个抽屉。 */
-function drawerOf(el: HTMLElement): HTMLDetailsElement | undefined {
-  return Array.from(el.querySelectorAll('details'))
-    .find(d => (d.querySelector('summary')?.textContent || '').includes('项目档案')) as any
+const clickText = async (el: HTMLElement, label: string) => {
+  const btn = Array.from(el.querySelectorAll('button'))
+    .find(b => (b.textContent || '').trim() === label)
+  expect(btn, `没找到「${label}」按钮`).toBeTruthy()
+  await act(async () => { (btn as HTMLElement).click() })
 }
 
 /**
- * 对话窗口别被项目材料堆满（2026-09-17 用户提：
+ * 布局：**状态钉住、材料侧滑、正文留给观察者**（2026-09-17 用户提：
  * 「之前忽略了观察者对话窗口，导致现在调研架构等任务都堆在对话窗口」）。
  *
- * 实测当时对话页从上到下是：观察者对话（薄）→ 13 张任务卡 → 门禁面板 → 调研 8 行 → 架构详情。
- * 收成"项目档案"抽屉，**但门禁面板和连接断线警告必须留在外面** —— 它们要人看/要人点，
- * 收进去就是"该看见的没看见"（#28）。
+ * 根子是**两种性质不同的东西共用了一条时间轴**：
+ *   · 对话 = 流水（只增不减，要能往回翻）
+ *   · 项目状态 = 快照（永远只有当前这一份，要能**一眼看到**）
+ * 塞在一起必然打架。⇒ 状态钉顶栏、材料收进侧滑面板。
+ *
+ * 🔴 **门禁那根条必须在顶栏**：它是「状态 + 一个动作」。放进材料面板的话，
+ *    用户不点开就看不见"该我审批了" —— 正是这个仓反复栽的 #28 那一族。
  */
-describe('项目档案抽屉', () => {
-  it('任务卡收进抽屉，且**默认收起**', async () => {
-    ;(api.tasks as any).mockResolvedValue([TASK('t1', '实现解析器'), TASK('t2', '写测试')])
-    const { el, done } = await mount()
-    const d = drawerOf(el)
-    expect(d, '没有"项目档案"抽屉').toBeTruthy()
-    expect(d!.hasAttribute('open'), '抽屉默认就展开了 —— 那跟没收起一样').toBe(false)
-    expect(d!.textContent, '任务卡没在抽屉里').toContain('实现解析器')
-    done()
-  })
-
-  it('收起时也看得见进度（收起来 ≠ 看不见了）', async () => {
+describe('常驻状态条 + 材料侧滑面板', () => {
+  it('顶栏常驻：项目名 / 阶段 / 进度（带总数）', async () => {
     ;(api.tasks as any).mockResolvedValue([TASK('t1', 'a', 'done'), TASK('t2', 'b')])
     const { el, done } = await mount()
-    const summary = drawerOf(el)!.querySelector('summary')!.textContent || ''
-    expect(summary).toContain('项目档案')
-    expect(summary, '收起了就看不出跑到哪了').toContain('1/2')
+    const text = (el.textContent || '').replace(/\s+/g, ' ')
+    expect(text).toContain('日志统计工具')
+    expect(text).toContain('实现中')
+    expect(text, '进度没带总数 —— 看不出还剩几个').toContain('1/2')
     done()
   })
 
-  it('**门禁面板不在抽屉里** —— 收进去就可能看不见该审批', async () => {
+  it('任务卡**默认不在正文里**（要点「📁 材料」才出来）', async () => {
+    ;(api.tasks as any).mockResolvedValue([TASK('t1', '实现解析器')])
+    const { el, done } = await mount()
+    expect(el.textContent, '任务卡又堆回正文了').not.toContain('实现解析器')
+    done()
+  })
+
+  it('点「📁 材料」→ 材料出来；再点 ✕ → 收回去', async () => {
+    ;(api.tasks as any).mockResolvedValue([TASK('t1', '实现解析器')])
+    const { el, done } = await mount()
+    await clickText(el, '📁 材料')
+    expect(el.textContent, '点了材料却没出来').toContain('实现解析器')
+    await act(async () => {
+      ;(el.querySelector('[aria-label="关闭材料面板"]') as HTMLElement).click()
+    })
+    expect(el.textContent, '关不掉').not.toContain('实现解析器')
+    done()
+  })
+
+  it('**门禁按钮在顶栏、不点材料也看得见** —— 收进去就可能看不见该审批', async () => {
     ;(api.projects as any).mockResolvedValue({ projects: [{ ...PROJECT, phase: 'gate1' }] })
     ;(api.tasks as any).mockResolvedValue([TASK('t1', 'x')])
     const { el, done } = await mount()
-    const btns = Array.from(el.querySelectorAll('button'))
-      .filter(b => /通过|打回/.test(b.textContent || ''))
-    expect(btns.length, '门禁按钮没渲染出来').toBeGreaterThan(0)
-    for (const b of btns) {
-      expect(b.closest('details'), '门禁按钮被收进抽屉了 —— 用户可能看不见该审批').toBeNull()
-    }
+    // 没点「📁 材料」
+    expect(el.textContent, '门禁按钮没渲染出来').toMatch(/通过/)
+    expect(el.textContent).toMatch(/打回/)
+    // 而且正文（材料面板之外）里也确实有 —— 不是被藏在抽屉里
+    expect(el.textContent, '任务卡不该同时露在外面').not.toContain('x')
     done()
   })
 })

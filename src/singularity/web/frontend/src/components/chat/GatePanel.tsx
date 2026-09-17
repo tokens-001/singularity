@@ -508,9 +508,14 @@ export const ProjectArchive = memo(function ProjectArchive({ info }: { info: any
   )
 })
 
-/** GATE 审核面板。memo：任务日志高频更新时不该重渲染这棵大树。 */
-export const GatePanel = memo(function GatePanel({ info, gateNum, gatePhase, acceptance, onGate }: Props) {
-  const isGate3 = gateNum === '3'
+/** 门禁**那根条**：状态 + 通过/打回（+ 打回理由输入框）。
+ *
+ * 2026-09-17 从 `GatePanel` 里抽出来 —— 它要挪进**常驻的顶部状态条**。
+ * 判据：**门禁本质是「当前状态 + 一个动作」，属于状态条，不属于正文**。
+ * 留在正文里的话，用户往下滚一屏就看不见"该我审批了"—— 而这个仓为"该看见的没看见"
+ * 栽过太多次（#28 那一族）。
+ */
+export const GateBar = memo(function GateBar({ info, gateNum, onGate }: Props) {
   const copy = gateCopy(gateNum, info)
   // 打回理由。**点"打回"先展开一个输入框**，而不是弹系统 prompt：
   // 系统 prompt 样式不可控、非浏览器宿主没有，而且 jsdom 里压根不实现（测不了）。
@@ -519,7 +524,7 @@ export const GatePanel = memo(function GatePanel({ info, gateNum, gatePhase, acc
   const [reason, setReason] = useState('')
   const doReject = () => { onGate('rejected', reason); setRejecting(false); setReason('') }
   return (
-    <div style={{ padding: '8px 0', textAlign: 'center' }}>
+    <div style={{ textAlign: 'center' }}>
       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: '#eaf6ec', border: '1px solid #16a34a', borderRadius: 8, padding: '8px 16px' }}>
         <span style={{ fontSize: 13, fontWeight: 600, color: '#16a34a' }}>🛑 GATE{gateNum}</span>
         <span style={{ fontSize: 12, color: copy.reason ? '#b45309' : '#6b6b68' }}>{copy.label}</span>
@@ -546,7 +551,18 @@ export const GatePanel = memo(function GatePanel({ info, gateNum, gatePhase, acc
           </div>
         </div>
       )}
-      <div style={{ maxWidth: 760, margin: '12px auto 0', textAlign: 'left' }}>
+    </div>
+  )
+})
+
+/** 门禁要看的**材料**：摘要 / 验收明细 / 调研报告 / 架构。放进「材料」侧滑面板。
+ *  ⚠️ 它和 `GateBar` 分开是有意的：条要**钉在视野里**，材料可以滚、可以收起。 */
+export const GateBody = memo(function GateBody({ info, gateNum, acceptance }: Props) {
+  const isGate3 = gateNum === '3'
+  const copy = gateCopy(gateNum, info)
+  return (
+    <div style={{ textAlign: 'left' }}>
+      <div style={{ maxWidth: 760, margin: '0 auto', textAlign: 'left' }}>
         {/* 摘要和"该看的东西"都按门分 —— 三道门以前长一个样，且显示的内容不对：
             GATE1 那时还没有架构却显示"架构方案"；GATE3 要审交付物，却把几周前的
             调研/架构摆在最前面。 */}
@@ -578,4 +594,10 @@ export const GatePanel = memo(function GatePanel({ info, gateNum, gatePhase, acc
       </div>
     </div>
   )
+})
+
+/** 条 + 材料拼起来 —— 老的调用方（和既有测试）不用改。
+ *  ⚠️ 顺序不能反：**先看见"该审批了"，再看见"审什么"**。 */
+export const GatePanel = memo(function GatePanel(props: Props) {
+  return <><GateBar {...props} /><GateBody {...props} /></>
 })
