@@ -92,6 +92,12 @@ const TASK = (id: string, desc: string, status = 'running') => ({
   id, description: desc, status, project_id: 'p1', updated_at: 1, created_at: 1,
 })
 
+/** 找到按阶段分组的那一个抽屉（按 summary 上的标签）。 */
+function groupOf(el: HTMLElement, label: string): HTMLDetailsElement | undefined {
+  return Array.from(el.querySelectorAll('details'))
+    .find(d => (d.querySelector('summary')?.textContent || '').includes(label)) as any
+}
+
 const clickText = async (el: HTMLElement, label: string) => {
   const btn = Array.from(el.querySelectorAll('button'))
     .find(b => (b.textContent || '').trim() === label)
@@ -138,6 +144,31 @@ describe('常驻状态条 + 材料侧滑面板', () => {
       ;(el.querySelector('[aria-label="关闭材料面板"]') as HTMLElement).click()
     })
     expect(el.textContent, '关不掉').not.toContain('实现解析器')
+    done()
+  })
+
+  it('材料**按阶段分组**：调研 / 架构 / 实现', async () => {
+    ;(api.projects as any).mockResolvedValue({ projects: [{
+      ...PROJECT, architecture: { modules: [{ name: 'parser' }], tasks: [{ id: 'T1' }] },
+      research_report: { recommendation: '用标准库' },
+    }] })
+    ;(api.tasks as any).mockResolvedValue([TASK('t1', '实现解析器')])
+    const { el, done } = await mount()
+    await clickText(el, '📁 材料')
+    for (const g of ['📋 调研', '🏗 架构', '⚙️ 实现']) {
+      expect(groupOf(el, g), `材料里没有「${g}」这一组`).toBeTruthy()
+    }
+    done()
+  })
+
+  it('**当前这道门对应的那一组默认展开** —— 不然每次还得先想"该点哪个"', async () => {
+    ;(api.projects as any).mockResolvedValue({ projects: [{
+      ...PROJECT, phase: 'gate1', research_report: { recommendation: '用标准库' },
+    }] })
+    const { el, done } = await mount()
+    await clickText(el, '📁 材料')
+    expect(groupOf(el, '📋 调研')!.hasAttribute('open'), 'GATE1 审调研，调研组却没展开').toBe(true)
+    expect(groupOf(el, '🏗 架构')!.hasAttribute('open'), '不相关的那组不该默认展开').toBe(false)
     done()
   })
 

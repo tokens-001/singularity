@@ -8,7 +8,7 @@ import { Loader2, CheckCircle2, AlertCircle, FolderOpen } from 'lucide-react'
 import FilePanel from '../components/FilePanel'
 import { MessageBubble } from '../components/chat/MessageBubble'
 import { TaskCard, taskStateKind, type ProgressItem, type ToolLog } from '../components/chat/TaskCard'
-import { GateBar, GateBody, ProjectArchive } from '../components/chat/GatePanel'
+import { GateBar, ProjectMaterials } from '../components/chat/GatePanel'
 import { ChatOptions, type ExecMode } from '../components/chat/ChatOptions'
 
 const PHASE_NAMES: Record<string, string> = { template: '待开始', researching: '调研中', planning: '架构设计中', executing: '实现中', integrating: '集成合并中', reviewing: '审查中', delivering: '交付中', done: '已完成' }
@@ -389,31 +389,12 @@ export default function Chat() {
                          fontSize: 15, cursor: 'pointer', color: '#6b6b68' }}>✕</button>
             </div>
             <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
-              {tasks.length > 0 && (
-                <div style={{ marginBottom: 12 }}>
-                  <div className="flex-center gap-4" style={{ marginBottom: 6 }}>
-                    {active > 0 ? <Loader2 size={10} style={{animation:'spin 1s linear infinite'}}/>
-                      : failed > 0 ? <AlertCircle size={10} style={{color:'#b45309'}}/>
-                      : <CheckCircle2 size={10} style={{color:'#16a34a'}}/>}
-                    <span className="fw-600 fs-11 text-muted">
-                      {active > 0 ? `${active} 个执行中 · ${completed}/${tasks.length}`
-                        : completed === tasks.length ? '全部完成' : `进度 ${completed}/${tasks.length}`}
-                      {failed > 0 && <span style={{ color: '#dc2626', marginLeft: 4 }}>{failed} 失败</span>}
-                    </span>
-                  </div>
-                  <div style={{ height: 6, background: '#e5e2d8', borderRadius: 999, overflow: 'hidden', marginBottom: 8 }}>
-                    <div style={{ height: '100%', width: `${tasks.length ? Math.round((completed / tasks.length) * 100) : 0}%`, background: '#16a34a', borderRadius: 999, transition: 'width 0.3s' }} />
-                  </div>
-                  {tasks.map((t) => <TaskCard key={t.id} t={t} onRetry={retryFailed} onReveal={revealFile} />)}
-                </div>
-              )}
-              {info && isGate && (
-                <GateBody info={info} gateNum={gateNum} gatePhase={gatePhase} acceptance={acceptance} onGate={gateConfirm} />
-              )}
-              {/* 不在闸门时也给个"随时能回看架构/调研"的入口（两者内部都是 <details>，默认收起）。
-                  09-15 用户提的「对话页为什么不能一直显示架构」—— 要的是**入口常在**，
-                  不是**内容常挂**。 */}
-              {info && !isGate && <ProjectArchive info={info} />}
+              {/* **按阶段分组**（2026-09-17 用户提：「每个阶段的任务都收纳到抽屉」）。
+                  材料本来就是按阶段长出来的：调研出报告、架构出方案、实现出任务、交付出验收。
+                  平铺的话，"这条属于哪个阶段"要靠读内容猜。 */}
+              {info && <ProjectMaterials info={info} tasks={tasks} gateNum={gateNum}
+                                         acceptance={acceptance}
+                                         onRetry={retryFailed} onReveal={revealFile} />}
             </div>
           </div>
         </div>

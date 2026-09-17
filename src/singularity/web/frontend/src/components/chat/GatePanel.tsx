@@ -1,4 +1,5 @@
 import { memo, useState } from 'react'
+import { TaskCard } from './TaskCard'
 
 const GATE_LABELS: Record<string, string> = { '1': '定义完成·请审核PRD', '2': '架构完成·请审核方案', '3': '验收完成·请审核交付物' }
 
@@ -432,6 +433,8 @@ interface Props {
   gateNum: string
   gatePhase: string
   acceptance?: any
+  /** 本项目的任务清单（`ProjectMaterials` 的「⚙️ 实现」那一组要它）。 */
+  tasks?: any[]
   /** `feedback` = 打回理由（选填）。会一路带到重跑的调研/架构提示词里。 */
   onGate: (decision: 'approved' | 'rejected', feedback?: string) => void
 }
@@ -555,10 +558,85 @@ export const GateBar = memo(function GateBar({ info, gateNum, onGate }: Props) {
   )
 })
 
-/** 门禁要看的**材料**：摘要 / 验收明细 / 调研报告 / 架构。放进「材料」侧滑面板。
+/** 一个阶段的材料抽屉。 */
+function MatGroup({ label, summary, open, children }:
+  { label: string; summary?: string; open?: boolean; children: React.ReactNode }) {
+  return (
+    <details open={open} style={{ border: '1px solid #f3f2ec', borderRadius: 8, marginBottom: 8 }}>
+      <summary style={{ cursor: 'pointer', padding: '8px 10px', fontSize: 12, listStyle: 'none',
+                        display: 'flex', gap: 8, alignItems: 'center', userSelect: 'none' }}>
+        <b style={{ whiteSpace: 'nowrap' }}>{label}</b>
+        <span style={{ color: '#6b6b68', flex: 1, overflow: 'hidden',
+                       textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{summary}</span>
+        <span style={{ color: '#b5b2a8', fontSize: 11, whiteSpace: 'nowrap' }}>展开 ▾</span>
+      </summary>
+      <div style={{ padding: '2px 10px 10px' }}>{children}</div>
+    </details>
+  )
+}
+
+/** 门禁号 → 该看哪个阶段的材料（这道门默认展开那一组）。 */
+const GATE_TO_PHASE: Record<string, string> = { '1': 'research', '2': 'arch', '3': 'deliver' }
+
+/**
+ * 项目材料 —— **按阶段分组**，每组一个抽屉。
+ *
+ * 2026-09-17 用户提：「每个阶段的任务都收纳到抽屉」。
+ * 之前是**平铺**（任务卡一长串 + 调研 + 架构），于是"这条属于哪个阶段"要靠读内容去猜。
+ * 而材料本来就是**按阶段长出来的**：调研产出报告、架构产出方案、实现产出任务、交付产出验收。
+ * 按阶段收，才对得上人脑里的那张流程图。
+ *
+ * ⚠️ **当前相关的那一组默认展开**（审批时就是这道门要审的那组）——
+ *    全收起的话，每次还得先想"我该点哪个"。
+ */
+export const ProjectMaterials = memo(function ProjectMaterials(
+  { info, tasks, gateNum = '', acceptance, onRetry, onReveal }: any) {
+  const rr = info?.research_report
+  const arch = info?.architecture
+  const list: any[] = Array.isArray(tasks) ? tasks : []
+  const done = list.filter((t: any) => t.status === 'done').length
+  const isOpen = (key: string) => GATE_TO_PHASE[gateNum] === key
+
+  const 调研摘要 = !rr ? '（还没产出）'
+    : rr.parse_error ? '⚠ 解析失败（原文还在，点开看）'
+    : `${Object.keys(rr).length} 段 · ${(rr.competitive_analysis?.products || []).length} 竞品 · ${(rr.pitfalls || []).length} 个坑`
+  const 架构摘要 = !arch ? '（还没产出）'
+    : `${(arch.modules || []).length} 模块 · ${(arch.tasks || []).length} 任务 · ${(arch.constraints || []).length} 条约束`
+
+  return (
+    <div style={{ textAlign: 'left' }}>
+      <MatGroup label="📋 调研" summary={调研摘要} open={isOpen('research')}>
+        {rr ? <ResearchReport report={rr} projectId={info?.id} />
+            : <div style={MUTED}>这个项目还没跑调研。</div>}
+      </MatGroup>
+
+      <MatGroup label="🏗 架构" summary={架构摘要} open={isOpen('arch')}>
+        {arch ? <ArchitectureDetails arch={arch} />
+              : <div style={MUTED}>还没出架构方案。</div>}
+      </MatGroup>
+
+      <MatGroup label="⚙️ 实现"
+                summary={list.length ? `${done}/${list.length} 完成` : '（还没拆出任务）'}
+                open={isOpen('arch')}>
+        {list.length
+          ? list.map((t: any) => <TaskCard key={t.id} t={t} onRetry={onRetry} onReveal={onReveal} />)
+          : <div style={MUTED}>还没拆出任务。</div>}
+      </MatGroup>
+
+      {(acceptance || info?.issues?.length) && (
+        <MatGroup label="📦 交付"
+                  summary={acceptance ? '验收明细' : `${info.issues.length} 条 issue`}
+                  open={isOpen('deliver')}>
+          {acceptance && <AcceptancePanel acceptance={acceptance} projectIssues={info.issues} />}
+        </MatGroup>
+      )}
+    </div>
+  )
+})
+
+/** 门禁要看的**材料**：摘要 / 验收明细 / 按阶段分组的材料。放进「材料」侧滑面板。
  *  ⚠️ 它和 `GateBar` 分开是有意的：条要**钉在视野里**，材料可以滚、可以收起。 */
-export const GateBody = memo(function GateBody({ info, gateNum, acceptance }: Props) {
-  const isGate3 = gateNum === '3'
+export const GateBody = memo(function GateBody({ info, gateNum, acceptance, tasks }: Props) {
   const copy = gateCopy(gateNum, info)
   return (
     <div style={{ textAlign: 'left' }}>
@@ -568,21 +646,14 @@ export const GateBody = memo(function GateBody({ info, gateNum, acceptance }: Pr
             调研/架构摆在最前面。 */}
         <GateSummary gateNum={gateNum} research={info.research_report}
                      arch={info.architecture} projectIssues={info.issues} />
-        {isGate3 && <AcceptancePanel acceptance={acceptance} projectIssues={info.issues} />}
-        {/* GATE3 的正文是交付物（上面那块），旧文档降级为"项目背景"排在后面 */}
-        {/* 🔴 **GATE1 必须渲染调研报告**（2026-09-17 真机）。
-            原来这里是 `gateNum !== '1' && ...` —— 而 GATE1 正是**审调研**的那道门：
-            加上 `Chat.tsx` 的 `!isGate` 把 `ProjectArchive` 也藏了 ⇒ **两道门一起把报告挡死**，
-            用户在第一道门上**一处都看不到报告**，只剩上面那条摘要（还写着"调研没给方案"）。
-            昨夜 `6de62c4` 修的红字解析失败提示，就修在这个**当时不渲染**的组件里。 */}
-        {info.research_report && <ResearchReport report={info.research_report} projectId={info.id} />}
-        {gateNum === '2' && info.architecture && <ArchitectureDetails arch={info.architecture} />}
-        {isGate3 && info.architecture && <ArchitectureDetails arch={info.architecture} />}
-        {isGate3 && (
-          <div style={{ fontSize: 11, color: '#6b6b68', marginTop: 4 }}>
-            下面两份是项目早期的调研与架构，仅供追溯，不是本次要审的交付物。
-          </div>
-        )}
+        {/* 🔴 **材料按阶段收进各自的抽屉**（2026-09-17 用户提：「每个阶段的任务都收纳到抽屉」）。
+            改之前这里是三段写死的渲染顺序（`gateNum === '2' && 架构` …）——
+            于是"这道门该看什么"靠**门号硬编码**，材料本身没有归属。
+            ⚠️ 那条 `gateNum !== '1'` 的挡板也在这段历史里：GATE1（审调研的门）当时
+               一处都看不到调研报告 —— 现在按阶段分组，调研永远在「📋 调研」那一组里，
+               不再依赖"哪道门渲染哪一段"。
+            ⚠️ 当前这道门对应的一组**默认展开**（见 `ProjectMaterials`）。 */}
+        <ProjectMaterials info={info} tasks={tasks} gateNum={gateNum} acceptance={acceptance} />
         {/* 兜底升上来的 GATE2：**把来路摆出来** —— 理由一直在 `lineage` 里，界面以前不读它 */}
         {copy.reason && (
           <div style={{ fontSize: 12, color: '#b45309', background: '#fdf6ec',
