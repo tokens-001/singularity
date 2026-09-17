@@ -1742,8 +1742,12 @@ class TestStreamTotalBudget:
         path = tmp_path / "llm_calls_slow.jsonl"
         assert path.exists(), "慢调用没落账 ⇒ 又只能靠读代码猜"
         rec = json.loads(path.read_text(encoding="utf-8").strip().splitlines()[-1])
-        for k in ("model", "elapsed", "first_byte", "prompt_chars", "out_chars", "loops", "cut"):
+        for k in ("model", "elapsed", "first_byte", "prompt_chars",
+                  "content_chars", "reasoning_chars", "loops", "cut"):
             assert k in rec, f"账里没有 {k} ⇒ 分不出是哪一种慢：{rec}"
+        # ⚠️ **正文和思考必须分开**（2026-09-18）：合在一起时"产出 67385 字符"看不出
+        # 那是思考还是正文 —— 而"240 秒是不够、还是它在原地打转"就靠这个比来答。
+        assert "out_chars" not in rec, "又把正文和思考合起来记了 ⇒ 那个判断题永远答不了"
         assert rec["first_byte"] is not None, "没记到首字节时刻 ⇒ 分不出「发出去就慢」和「吐得慢」"
         assert rec["prompt_chars"] > 0
         assert rec["loops"] > 1, f"循环明明转了却记成 {rec['loops']} 圈 ⇒ 计数没接上"
@@ -2106,3 +2110,43 @@ class TestCutStreamNotContent:
 
         assert r.success is True, "正常答完的兜底被误伤了"
         assert r.raw_output == "答案在思考里"
+
+
+class TestFailureKeepsChangedFiles:
+    """**失败返回要把已经改过的文件交回去**（2026-09-18）。
+
+    症状：一个任务**前几轮写好了文件、后面某一轮网络抖一下就失败** ——
+    交回去的却是"改动 0 个" ⇒ QA 拿这个 0 判它「无文件改动 + 偷懒」。
+    **干过活的和没干活的，在账上长得一模一样**；09-18 那 15 个失败任务正是靠这个 0 判死的。
+
+    修法：四条失败 `return` 统一走 `_fail_result`（它调 `_track()` —— 那是**幂等追加**，
+    不会把先前轮次记下的文件冲掉，`error_kind` 仍是 `exec`，所以照旧会换模型重试）。
+    """
+
+    def _ex(self, monkeypatch, tmp_path):
+        from singularity.scheduler.executors import openai_agent as oa
+        monkeypatch.setenv("TEST_KEY", "k")
+        # ⚠️ `cwd` 必须指到空目录：不指的话 `_fail_result` 里的 `_track()` 会去扫
+        # **奇点自己这个仓库**的 git status —— 测试会读进真仓库的改动（我改一个文件它就变），
+        # 既不确定也不隔离。
+        ex = oa.OpenAIAgentExecutor(
+            {"model": "m", "api_key_env": "TEST_KEY", "entry": "http://x", "max_turns": 3},
+            "任务", "tid", cwd=str(tmp_path), skill_tools=[], mcp_tools=[])
+        return oa, ex
+
+    def test_失败时把改过的文件交回去(self, monkeypatch, tmp_path):
+        """**接线测试**：变异 = 把 `_fail_result` 里的 `changed_files=` 去掉 ⇒ 这条红。"""
+        oa, ex = self._ex(monkeypatch, tmp_path)
+        monkeypatch.setattr(oa.witness, "warn", lambda *a, **k: None)
+        # 前几轮已经写好了文件（`_track_changed_files` 只 append，所以这里是"累积值"）
+        ex._changed_files = ["logstat/parser.py", "tests/test_parser.py"]
+        monkeypatch.setattr(ex, "_api_call",
+                            lambda b: (_ for _ in ()).throw(oa._NetworkError("连接断了")))
+
+        r = ex.run()
+
+        assert r.success is False
+        assert r.changed_files == ["logstat/parser.py", "tests/test_parser.py"], (
+            "失败就把改过的文件丢了 ⇒ QA 会拿「改动 0 个」判它偷懒"
+            f"（干过活的和没干活的在账上长得一样）。实到 {r.changed_files!r}")
+        assert r.error_kind == "exec", "失败种类不许改 —— 改了就不会换模型重试了"

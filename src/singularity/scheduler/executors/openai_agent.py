@@ -515,9 +515,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                         time.sleep(min(2 ** turn, 60))
                         continue
                     except (_NetworkError, _FormatError) as e2:
-                        return ExecutorResult(success=False, error=str(e2),
-                                              error_kind="exec", elapsed=time.time() - start,
-                                              tool_events=list(self._tool_events))
+                        return self._fail_result(str(e2), start)
                 elif (bad := _drop_rejected_think_param(body, str(e))):
                     # 该模型不吃这个思考参数（各家支持面不同且会变）→ 摘掉重试一次，
                     # 并记住键名（body 每轮重建，不记就每轮再撞一次 400）
@@ -530,22 +528,16 @@ class OpenAIAgentExecutor(BaseExecutor):
                         time.sleep(min(2 ** turn, 60))
                         continue
                     except (_NetworkError, _FormatError) as e2:
-                        return ExecutorResult(success=False, error=str(e2),
-                                              error_kind="exec", elapsed=time.time() - start,
-                                              tool_events=list(self._tool_events))
+                        return self._fail_result(str(e2), start)
                 else:
-                    return ExecutorResult(success=False, error=str(e),
-                                          error_kind="exec", elapsed=time.time() - start,
-                                          tool_events=list(self._tool_events))
+                    return self._fail_result(str(e), start)
             except _NetworkError as e:
                 # 预算已到 → 这多半是上面封顶超时导致的断流，**不是**该换模型重来的
                 # 瞬时网络故障。报成网络错会被上层 failover 掉，白烧剩下的时间。
                 if time.time() >= self._deadline_at:
                     _wrapped = True
                     break
-                return ExecutorResult(success=False, error=str(e),
-                                      error_kind="exec", elapsed=time.time() - start,
-                                      tool_events=list(self._tool_events))
+                return self._fail_result(str(e), start)
 
             if self._is_responses_api:
                 # responses API → chat format
@@ -959,6 +951,28 @@ class OpenAIAgentExecutor(BaseExecutor):
             try: witness.warn('oa_exec', f'collect_changes:{e}'[:80])
             except Exception: pass
 
+    def _fail_result(self, error: str, started: float) -> ExecutorResult:
+        """失败返回 —— **已经改过的文件必须跟着交回去**。
+
+        ⚠️ 2026-09-18：这几条 `return` 原来**都不带 `changed_files=`**（只有成功路径和
+        撞预算收尾调 `self._track()`）⇒ 一个任务**前几轮写好了 5 个文件、第 4 轮网络
+        抖一下就失败**，交回去的却是"改动 0 个" ⇒ QA 拿这个 0 判它
+        「无文件改动 + 偷懒」。**干过活的和没干活的，在账上长得一模一样** ——
+        而 2026-09-18 那 15 个失败任务，正是靠这个 0 一条条判死的。
+
+        `_track()` 在这里是**幂等追加**（`_track_changed_files` 只 `append`，不覆盖），
+        所以先前轮次记下的文件不会丢。
+
+        ⚠️ `error_kind` 仍然是 `"exec"`（调用真的失败了）—— **不改成 `deadline`**：
+        那档是给"我方上限主动收尾"的，改了会让 `_dispatch_exec` 不再换模型重试，
+        而这里的失败（网络/格式）本来就该换。
+        """
+        self._track()
+        return ExecutorResult(
+            success=False, error=error, error_kind="exec",
+            changed_files=list(self._changed_files),
+            elapsed=time.time() - started, tool_events=list(self._tool_events))
+
     # ── API 调用 ──
 
     def _api_call(self, body: dict) -> dict:
@@ -1278,7 +1292,12 @@ class OpenAIAgentExecutor(BaseExecutor):
                         "elapsed": round(_elapsed, 1),
                         "first_byte": round(_first_byte, 1) if _first_byte is not None else None,
                         "prompt_chars": _prompt_chars,
-                        "out_chars": sum(len(c) for c in content) + sum(len(r) for r in reasoning),
+                        # ⚠️ **正文和思考必须分开记**（2026-09-18）：合在一起时
+                        # "产出 67385 字符"根本看不出那是思考还是正文 —— 而
+                        # **"240 秒是不够、还是它在原地打转"**这个判断题，答案就在这两者之比上。
+                        # 分开之前，只能靠"另跑一次拿真 prompt 直打"去猜（见 OPEN.md 那条未答）。
+                        "content_chars": sum(len(c) for c in content),
+                        "reasoning_chars": sum(len(r) for r in reasoning),
                         "tool_calls": len(tool_calls),
                         "loops": _loops,
                         "cut": bool(_over_budget),
