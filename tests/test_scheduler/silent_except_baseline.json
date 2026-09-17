@@ -140,7 +140,6 @@
  "scheduler/dispatcher.py::pick_agent_fallback_chain": 1,
  "scheduler/execution_judge.py::_call_model": 1,
  "scheduler/execution_judge.py::_stream_once": 1,
- "scheduler/execution_judge.py::fuse_architecture_v2._usable": 1,
  "scheduler/executors/anthropic_api.py::AnthropicApiExecutor._execute_tool": 1,
  "scheduler/executors/anthropic_api.py::AnthropicApiExecutor._get_changed_files": 2,
  "scheduler/executors/anthropic_api.py::AnthropicApiExecutor.run": 2,

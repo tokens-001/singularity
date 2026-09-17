@@ -197,14 +197,12 @@ def _model_in_active_pool(model: str) -> bool:
         prov = model_registry.provider_for_model(model)
         if prov and not api_store.is_available(prov):
             return False
-        pool = dispatcher._all_agents_list(dispatcher.load_agents())
-        if not pool:
-            # ⚠️ **池子空 ≠ 这个模型被停用**：那多半是"根本没配 agent"（测试环境就是）。
-            # 两者混为一谈的代价实测过 —— 加这条闸门时**一次红了 7 个用例**，
-            # 全是"没摆池子"的：闸门把"没配"当成了"停用"。
-            # 信息不足时不该拦（拦了就是拿一个错误的前提去否决调用）。
-            return True
-        return any(a.get("model") == model for a in pool)
+        # 池子判据复用 `dispatcher.is_model_active` —— **同一个判据，两个调用方各定方向**：
+        # 那边是派发侧、fail-open（池子读挂 ⇒ 整个池子空掉，比多跑一个模型严重）；
+        # 这里是融合侧、fail-closed（下面那个 except）。
+        # 抄一份的代价 2026-09-18 00:35 刚付过：两份判据分叉成"融合拦得住、
+        # 派发拦不住"，**两边测试都绿**，而钱在派发侧烧。
+        return dispatcher.is_model_active(model)
     except Exception as e:      # noqa: BLE001
         # 查不了 → 判不可用（fail-closed）。**但要出声**：静默吞掉的话，
         # "池子读不出来"和"这个模型被停用"在盘上长得一模一样。
@@ -723,26 +721,15 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
         （本模块 `_disabled` 出现 0 次），于是停用的模型照样被真调。
         实测：池里只剩两个便宜模型、planning 用满两个 ⇒ 提取员必是委员 ⇒
         每次融合都换到 `glm-5.2` 并**真的发起调用** —— 用户为省钱停掉的模型一直在烧。
+
+        ⚠️ **别再往这里抄一份判据**：本模块原来有**两份**（这份 + 模块级的
+        `_model_in_active_pool`），2026-09-18 00:35 修"闸门装错层"时只改了其中一份，
+        另一份照旧放行 —— **测试全绿而钱照烧**。现在两份都收敛到
+        `dispatcher.is_model_active`（判据一处，方向各自定）。
         """
-        if not m:
-            return False
-        try:
-            # ⚠️ `model_registry` 必须一起 import —— 原来这里**只 import 了 api_store**，
-            # 下一行却用 `model_registry` → 每次调用抛 NameError → 被 `except` 吞掉 →
-            # 恒返回"可用"。**这个函数从上线起就没生效过**（同一个形状的坑：今早那个
-            # 嵌入路径 `SentenceTransformer` 没 import，也是被 except 吞掉）。
-            # 它"看起来在工作"是因为 fail-open 的默认值恰好等于旧行为。
-            from singularity.scheduler import api_store, dispatcher, model_registry
-            prov = model_registry.provider_for_model(m)
-            if prov and not api_store.is_available(prov):
-                return False
-            return any(a.get("model") == m
-                       for a in dispatcher._all_agents_list(dispatcher.load_agents()))
-        except Exception:
-            # 查不了 → **判不可用**（不换兜底，留在委员里）。
-            # 方向是刻意的：换兜底的收益只是"选手别给自己出题"（**质量**问题），
-            # 而换错的代价是调一个用户停用的模型（**花钱** + 功能可能挂）。
-            return False
+        # 两关（provider 欠费 / 在不在激活池）都在 `_model_in_active_pool` 里，
+        # 方向也一样（fail-closed）。这里只转发，不再自己实现一遍。
+        return _model_in_active_pool(m)
 
     if not _usable(extractor):
         alt = next((m for m in _V2_EXTRACT_FALLBACKS if m not in members and _usable(m)), "")

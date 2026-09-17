@@ -144,6 +144,37 @@ def _ensure_agent_type(agent_cfg: dict) -> dict:
     return agent_cfg
 
 
+def is_model_active(model: str) -> bool:
+    """这个模型现在**允许被调**吗 —— 在不在激活池里。
+
+    「激活池」= `load_agents()` 返回的那份（用户的启用/停用就是 `_disabled`，
+    在 `load_agents` 里生效）。**读不出来时抛异常**，方向交给调用方定：
+    派发侧 fail-open（池子读挂 ⇒ 整个池子空掉、一个任务都派不出去，
+    比多跑一个模型严重），融合侧 fail-closed（见 `execution_judge._model_in_active_pool`）。
+
+    ⚠️ **判据必须是"在不在池里"，不能只挡 `_disabled`**：模型注册表里有一批
+    **从来没人启用过**的模型（kimi-k2.6 / qwen3.7-max / gpt-5.5 …，2026-09-18 数是 15 个）
+    —— 它们没被停用，只是没配成 agent。只挡 `_disabled` 的话，
+    `_expand_review_pool` 照样拿它们去审代码（**真花钱**）。
+
+    ⚠️ **闸门只设这一处，且在所有选路的下游**：`pick_agent_fallback_chain`
+    （含 cascade 换人、委员会席位）、`_expand_review_pool`、`multi_model_review`
+    的 stub 分支 —— 全都过 `agent_api_available`，所以装在它里面一处就够。
+    装错层是这个仓的老毛病：2026-09-18 00:35 我先把闸门装在 `execution_judge._call_model`
+    （融合侧），而真在烧钱的**是派发侧这条**——`_expand_review_pool` 拿 `_disabled`
+    里的 `glm-5.2` / `deepseek-v4-pro` 去审代码，每 20 来秒一轮，
+    重启、测试全绿、变异也验过，**钱照烧**（00:37 分诊账还在进）。
+
+    ⚠️ **池子空 ≠ 停用**：那是"根本没配 agent"（测试环境就是，`conftest` 把
+    `QIDIAN_DIR` 指到 tmp 后池子恒空）⇒ 放行。混淆两者的代价实测过：
+    `_model_in_active_pool` 加这条时**一次红了 7 个用例**。
+    """
+    pool = _all_agents_list(load_agents())
+    if not pool:
+        return True
+    return any(a.get("model") == model for a in pool)
+
+
 def agent_api_available(agent_cfg: dict) -> bool:
     """检查 agent 的 API 是否可用。
 
@@ -157,6 +188,22 @@ def agent_api_available(agent_cfg: dict) -> bool:
     agent_cfg = _ensure_agent_type(agent_cfg)
     model = agent_cfg.get("model", "")
     agent_type = agent_cfg.get("type", "")
+
+    # 闸门：不在激活池 / 被用户停用 ⇒ 不可用。见 `is_model_active`。
+    # ⚠️ 位置在 `_ensure_agent_type` **之后**是故意的 —— 那行会把 type/provider
+    # 就地补进 cfg，调用方（如 `_expand_review_pool`）要读补出来的 `type`。
+    if model:
+        try:
+            active = is_model_active(model)
+        except Exception as e:      # noqa: BLE001
+            # 查不了 ⇒ **放行**（fail-open，和融合侧相反，理由见 `is_model_active`）。
+            # 但要出声：静默吞掉的话，"池子读不出来"和"这个模型没问题"长得一模一样。
+            from . import witness
+            witness.warn("dispatch", f"pool_check_failed:{model}:{type(e).__name__}"[:120],
+                         key="pool_check_failed")
+            active = True
+        if not active:
+            return False
 
     # ponytail: API 类 agent 必须有 entry 或 api_key_env, 否则无法调 API
     if agent_type in ("openai-agent", "zhipu-api"):
