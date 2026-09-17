@@ -30,7 +30,7 @@ export default function Chat() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [showFiles, setShowFiles] = useState(false)
-  // 材料侧滑面板。**默认收起** —— 正文留给观察者说话（2026-09-17）。
+  // 文件侧滑面板。**默认收起** —— 正文留给观察者说话（2026-09-17）。
   const [showMaterials, setShowMaterials] = useState(false)
   const [execMode, setExecMode] = useState<ExecMode>('auto_edit')
   const [tasks, setTasks] = useState<ProgressItem[]>([])
@@ -321,7 +321,7 @@ export default function Chat() {
                   style={{ marginLeft: 'auto', background: showMaterials ? '#eef2ff' : '#f5f4ef',
                            border: '1px solid #e5e2d8', borderRadius: 6, padding: '2px 10px',
                            fontSize: 11, cursor: 'pointer' }}>
-                  📁 材料
+                  📁 文件
                 </button>
               </div>
               {isGate && (
@@ -382,9 +382,9 @@ export default function Chat() {
                         display: 'flex', flexDirection: 'column' }}>
             <div style={{ flexShrink: 0, padding: '8px 12px', borderBottom: '1px solid #e5e2d8',
                           display: 'flex', alignItems: 'center', gap: 8 }}>
-              <b className="fs-12">📁 项目材料</b>
+              <b className="fs-12">📁 项目文件</b>
               {info && <span className="fs-11 text-muted">· {info.name}</span>}
-              <button onClick={() => setShowMaterials(false)} aria-label="关闭材料面板"
+              <button onClick={() => setShowMaterials(false)} aria-label="关闭项目文件面板"
                 style={{ marginLeft: 'auto', background: 'none', border: 'none',
                          fontSize: 15, cursor: 'pointer', color: '#6b6b68' }}>✕</button>
             </div>

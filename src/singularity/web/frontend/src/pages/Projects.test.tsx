@@ -119,3 +119,48 @@ describe('项目页 · 小活走轻量的提示条', () => {
            'create() 没走到结尾的刷新 —— 提示那块中途抛了').toBeGreaterThan(before)
   })
 })
+
+// ═══════════════════════════════════════════════════════════════
+// 项目列表按时间排序（2026-09-17 用户提：「项目列表改，按时间排序」）
+// ═══════════════════════════════════════════════════════════════
+// 原来**完全没有排序** —— 顺序就是后端返回的顺序，界面上看着像随机的，
+// 刚跑完的项目可能排在几个星期前的项目下面。
+describe('项目列表排序', () => {
+  it('**最近动过的排最前**（按 updated_at 倒序）', async () => {
+    ;(api.projects as any).mockResolvedValue({ projects: [
+      { id: 'old', name: '很久以前', phase: 'done', updated_at: 100 },
+      { id: 'new', name: '刚跑完的', phase: 'done', updated_at: 900 },
+      { id: 'mid', name: '中间那个', phase: 'done', updated_at: 500 },
+    ] })
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    await act(async () => {
+      createRoot(el).render(
+        <ConfigProvider theme={antdTheme}><AntApp><Projects /></AntApp></ConfigProvider> as ReactNode)
+    })
+    await act(async () => { await new Promise(r => setTimeout(r, 0)) })
+    const text = el.textContent || ''
+    const iNew = text.indexOf('刚跑完的'), iMid = text.indexOf('中间那个'), iOld = text.indexOf('很久以前')
+    expect(iNew, '三个都没渲染出来').toBeGreaterThanOrEqual(0)
+    expect(iNew, '最近动过的没排最前').toBeLessThan(iMid)
+    expect(iMid).toBeLessThan(iOld)
+    el.remove()
+  })
+
+  it('缺 updated_at 的老项目退回 created_at，别插到中间', async () => {
+    ;(api.projects as any).mockResolvedValue({ projects: [
+      { id: 'a', name: '没有时间字段', phase: 'done' },
+      { id: 'b', name: '有更新的时间', phase: 'done', updated_at: 900 },
+    ] })
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    await act(async () => {
+      createRoot(el).render(
+        <ConfigProvider theme={antdTheme}><AntApp><Projects /></AntApp></ConfigProvider> as ReactNode)
+    })
+    await act(async () => { await new Promise(r => setTimeout(r, 0)) })
+    const text = el.textContent || ''
+    expect(text.indexOf('有更新的时间'), '没时间字段的插到了前面').toBeLessThan(text.indexOf('没有时间字段'))
+    el.remove()
+  })
+})

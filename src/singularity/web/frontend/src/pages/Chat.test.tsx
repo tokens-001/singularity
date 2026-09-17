@@ -117,7 +117,7 @@ const clickText = async (el: HTMLElement, label: string) => {
  * 🔴 **门禁那根条必须在顶栏**：它是「状态 + 一个动作」。放进材料面板的话，
  *    用户不点开就看不见"该我审批了" —— 正是这个仓反复栽的 #28 那一族。
  */
-describe('常驻状态条 + 材料侧滑面板', () => {
+describe('常驻状态条 + 文件侧滑面板', () => {
   it('顶栏常驻：项目名 / 阶段 / 进度（带总数）', async () => {
     ;(api.tasks as any).mockResolvedValue([TASK('t1', 'a', 'done'), TASK('t2', 'b')])
     const { el, done } = await mount()
@@ -138,10 +138,10 @@ describe('常驻状态条 + 材料侧滑面板', () => {
   it('点「📁 材料」→ 材料出来；再点 ✕ → 收回去', async () => {
     ;(api.tasks as any).mockResolvedValue([TASK('t1', '实现解析器')])
     const { el, done } = await mount()
-    await clickText(el, '📁 材料')
+    await clickText(el, '📁 文件')
     expect(el.textContent, '点了材料却没出来').toContain('实现解析器')
     await act(async () => {
-      ;(el.querySelector('[aria-label="关闭材料面板"]') as HTMLElement).click()
+      ;(el.querySelector('[aria-label="关闭项目文件面板"]') as HTMLElement).click()
     })
     expect(el.textContent, '关不掉').not.toContain('实现解析器')
     done()
@@ -154,7 +154,7 @@ describe('常驻状态条 + 材料侧滑面板', () => {
     }] })
     ;(api.tasks as any).mockResolvedValue([TASK('t1', '实现解析器')])
     const { el, done } = await mount()
-    await clickText(el, '📁 材料')
+    await clickText(el, '📁 文件')
     for (const g of ['📋 调研', '🏗 架构', '⚙️ 实现']) {
       expect(groupOf(el, g), `材料里没有「${g}」这一组`).toBeTruthy()
     }
@@ -166,10 +166,33 @@ describe('常驻状态条 + 材料侧滑面板', () => {
       ...PROJECT, phase: 'gate1', research_report: { recommendation: '用标准库' },
     }] })
     const { el, done } = await mount()
-    await clickText(el, '📁 材料')
+    await clickText(el, '📁 文件')
     expect(groupOf(el, '📋 调研')!.hasAttribute('open'), 'GATE1 审调研，调研组却没展开').toBe(true)
     expect(groupOf(el, '🏗 架构')!.hasAttribute('open'), '不相关的那组不该默认展开').toBe(false)
     done()
+  })
+
+  it('「📦 产出」列出项目仓的**真实文件**，点开能看内容', async () => {
+    // 这条走的是裸 `fetch`（不是 `api.*`）—— 和 FilePanel 一样直连 files 接口
+    const real = globalThis.fetch
+    globalThis.fetch = (async (u: any) => ({
+      json: async () => String(u).endsWith('/files')
+        ? { files: ['pyproject.toml', 'logstat/parser.py'] }
+        : { content: 'def parse(): pass' },
+    })) as any
+    try {
+      const { el, done } = await mount()
+      await clickText(el, '📁 文件')
+      await act(async () => { await new Promise(r => setTimeout(r, 0)) })
+      expect(groupOf(el, '📦 产出'), '没有「📦 产出」这一组').toBeTruthy()
+      expect(el.textContent, '文件列表没出来').toContain('logstat/parser.py')
+      const f = Array.from(el.querySelectorAll('button'))
+        .find(b => (b.textContent || '').includes('parser.py'))
+      await act(async () => { (f as HTMLElement).click() })
+      await act(async () => { await new Promise(r => setTimeout(r, 0)) })
+      expect(el.textContent, '点了文件却没有内容').toContain('def parse')
+      done()
+    } finally { globalThis.fetch = real }
   })
 
   it('**门禁按钮在顶栏、不点材料也看得见** —— 收进去就可能看不见该审批', async () => {

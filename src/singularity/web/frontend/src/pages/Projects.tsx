@@ -53,7 +53,18 @@ export default function Projects() {
 
   const fetch = async () => {
     setLoading(true)
-    try { const d: any = await api.projects(); setProjects(Array.isArray(d)?d:(d?.projects||[])) } catch (e) { toast(errText(e, '加载项目失败'), 'error') }
+    try {
+      const d: any = await api.projects()
+      const list = Array.isArray(d) ? d : (d?.projects || [])
+      // 🔴 **最近动过的排最前**（2026-09-17 用户提：「项目列表改，按时间排序」）。
+      // 原来**完全没有排序** —— 顺序就是后端返回的顺序，看界面上像是随机的，
+      // 刚跑完的项目可能排在几个星期前的项目下面。
+      // ⚠️ 用 `updated_at` 不是 `created_at`：一个三天前建、刚才还在跑的项目，
+      //    该排在最前（用户找的是"我刚弄的那个"）。
+      // ⚠️ 缺 `updated_at` 的老项目退回 `created_at`，都没有就垫底 —— 别让它们插到中间。
+      setProjects([...list].sort((a: any, b: any) =>
+        ((b.updated_at || b.created_at || 0) - (a.updated_at || a.created_at || 0))))
+    } catch (e) { toast(errText(e, '加载项目失败'), 'error') }
     setLoading(false)
   }
   useEffect(() => { fetch() }, [])

@@ -1,4 +1,4 @@
-import { memo, useState } from 'react'
+import { memo, useState, useEffect } from 'react'
 import { TaskCard } from './TaskCard'
 
 const GATE_LABELS: Record<string, string> = { '1': '定义完成·请审核PRD', '2': '架构完成·请审核方案', '3': '验收完成·请审核交付物' }
@@ -575,6 +575,60 @@ function MatGroup({ label, summary, open, children }:
   )
 }
 
+/** 「📦 产出」—— 项目仓里的**真实文件**（列表 + 点开预览）。
+ *
+ * 2026-09-17 用户提：「材料改为文件」。**产出才是用户真正要看的东西**
+ * ——「我的软件写成什么样了」。调研/架构是过程文档，代码文件才是结果。
+ *
+ * ⚠️ 路径原样显示（`logstat/parser.py`）而不是只显示文件名：**层级本身就是信息**，
+ *    把目录吃掉之后，"这个文件属于哪一块"就得点开才知道。
+ * ⚠️ 列表**按路径排序** —— 同目录的挨在一起，读起来才像一棵树。
+ */
+function OutputFiles({ projectId }: { projectId?: string }) {
+  const [files, setFiles] = useState<string[]>([])
+  const [pick, setPick] = useState('')
+  const [content, setContent] = useState('')
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    if (!projectId) return
+    let dead = false
+    // ⚠️ 后端把错误也放在合法 JSON 里（`{files:[], error:"…"}`）——
+    //    只判 `d.files` 会把"读取失败"显示成"暂无文件"（FilePanel 里记过这条）。
+    fetch(`/api/projects/${projectId}/files`).then(r => r.json()).then((d: any) => {
+      if (dead) return
+      if (d?.error) { setErr(String(d.error)); setFiles([]); return }
+      setFiles([...(d?.files || [])].sort())
+    }).catch(e => { if (!dead) setErr(String(e)) })
+    return () => { dead = true }
+  }, [projectId])
+
+  const openFile = (p: string) => {
+    setPick(p); setContent('加载中…')
+    fetch(`/api/projects/${projectId}/files/${p}`).then(r => r.json()).then((d: any) => {
+      setContent(d?.error ? `无法读取：${d.error}` : (d?.content || '（空文件）'))
+    }).catch(e => setContent(`加载失败：${e}`))
+  }
+
+  if (err) return <div style={MUTED}>读文件列表失败：{err}</div>
+  if (!files.length) return <div style={MUTED}>这个项目还没有产出文件。</div>
+  return (
+    <div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+        {files.map(f => (
+          <button key={f} onClick={() => openFile(f)} title={f}
+            style={{ fontFamily: 'monospace', fontSize: 11, padding: '2px 8px', cursor: 'pointer',
+                     borderRadius: 6, border: '1px solid ' + (pick === f ? '#c7d2fe' : '#e5e2d8'),
+                     background: pick === f ? '#eef2ff' : '#faf9f5', color: '#141413' }}>{f}</button>
+        ))}
+      </div>
+      {pick && (
+        <pre style={{ ...PRE, maxHeight: 320 }}>{content}</pre>
+      )}
+    </div>
+  )
+}
+
 /** 门禁号 → 该看哪个阶段的材料（这道门默认展开那一组）。 */
 const GATE_TO_PHASE: Record<string, string> = { '1': 'research', '2': 'arch', '3': 'deliver' }
 
@@ -621,6 +675,11 @@ export const ProjectMaterials = memo(function ProjectMaterials(
         {list.length
           ? list.map((t: any) => <TaskCard key={t.id} t={t} onRetry={onRetry} onReveal={onReveal} />)
           : <div style={MUTED}>还没拆出任务。</div>}
+      </MatGroup>
+
+      {/* 📦 产出放最后：前面是"怎么想出来的"，这里是"最后做出来什么"。 */}
+      <MatGroup label="📦 产出" summary="项目仓里的文件（点开看内容）">
+        <OutputFiles projectId={info?.id} />
       </MatGroup>
 
       {(acceptance || info?.issues?.length) && (
