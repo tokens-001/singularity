@@ -168,6 +168,10 @@ def is_model_active(model: str) -> bool:
     ⚠️ **池子空 ≠ 停用**：那是"根本没配 agent"（测试环境就是，`conftest` 把
     `QIDIAN_DIR` 指到 tmp 后池子恒空）⇒ 放行。混淆两者的代价实测过：
     `_model_in_active_pool` 加这条时**一次红了 7 个用例**。
+
+    ⚠️ 这是"**别自动派活**"的闸门，不是"别调它"的闸门 —— 有一处**故意**不走这里：
+    `_benchmark.run_benchmark`（`POST /api/models/<id>/benchmark`）**直接构造 executor**，
+    因为那是**用户点名要测某个模型**，不是系统替他挑人。别顺手把它也堵上。
     """
     pool = _all_agents_list(load_agents())
     if not pool:
