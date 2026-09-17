@@ -325,15 +325,22 @@ def _run_research(project: ProjectState, agents: dict) -> str:
     # 🔴 **解析失败要重试一次**（2026-09-17，**一天撞了三次**）。
     # 规划那条路早就有这道（见 `_run_planning` 里 `[格式错误]` 那段），**调研没有** ——
     # 坏了就直接进 GATE1，用户看到的是一份解不开的报告，而调研比规划还贵。
-    # ⚠️ 真机实测两次的根因都是**输出被截断**（`raw_truncated=True`、末尾停在半句话），
-    # 所以重试提示词得让它**写短一点把 JSON 补完整** —— 只照抄规划那句
-    # "请用 ```json 包起来" 治不了截断（它本来就是合法 JSON，只是没写完）。
+    # ⚠️ **别猜原因，用解析器报的那句**（2026-09-17 修订）。
+    # 我第一版把 `raw_truncated` 当成了"模型输出被截断"的证据 —— **错了**：
+    # 那只是 `_io.py` 兜底里"原文超过 5000 字"的**展示标记**。
+    # 拉出原文一看，JSON 结尾是**完整闭合**的（`...]\n}\n```），真因是
+    # **字符串里写了没转义的双引号**（第 307 行 `（"Exception ignored in..."）`）
+    # ⇒ 提示词得说这个，说"写短一点"是治错了病。
     if isinstance(report, dict) and report.get("parse_error"):
+        _detail = str(report.get("parse_error_detail") or "")[:120]
         _retry_prompt = (
             prompt
-            + "\n\n[格式错误] 上一次输出**没写完就被截断了**，JSON 不完整、解析不了。"
-              "请**重出一份更短的报告**：结构保持不变，每一段只留最关键的几条，"
-              "确保整个 JSON 完整闭合（**宁短勿断**）。"
+            + "\n\n[格式错误] 上一次输出的 JSON **解析失败**"
+            + (f"（解析器报：{_detail}）" if _detail else "")
+            + "。最常见的原因是**字符串值里出现了没有转义的双引号**"
+              "（例如 `（\"Exception ignored in...\"）` 这种正文引号）。"
+              "请**重出一次**：字符串里的双引号一律写成 \\\" —— "
+              "**不要在字符串内部直接写 \"**。结构保持不变。"
         )
         _disp2, _err2 = _safe_dispatch(_retry_prompt, "any", task_id + "_r", agents,
                                        project, lineup, restrict, phase="researching",

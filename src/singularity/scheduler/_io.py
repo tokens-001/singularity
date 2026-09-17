@@ -171,30 +171,41 @@ def try_parse_json(raw: str, try_repair: bool = False) -> dict:
         m = _re.search(r"\{[\s\S]*\}", raw)
         if m:
             candidates.append(m.group().strip())
+    # 最近一次**真实的**解析错误 —— 兜底那份要如实带出去。
+    # 不带的后果（2026-09-17 真机）：调用方只能猜原因，而"猜"猜错了整整一轮 ——
+    # 我拿 `raw_truncated` 当"被截断"的证据（其实那只是"超过 5000 字"的**展示标记**），
+    # 真因是**模型在字符串里写了没转义的双引号**（第 307 行 `（"Exception ignored in..."）`）。
+    _last_err = ""
     for c in candidates:
         # 修复模型 JSON 瑕疵: 用 `?` 标注可选字段但位置错 (}? 和 ]? 非法)
         c = _re.sub(r'\}\?', '}', c)
         c = _re.sub(r'\]\?', ']', c)
         try:
             return json.loads(c)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            _last_err = f"{e}"
             # 修复常见 JSON 错误 (尾逗号)
             try:
                 fixed = _re.sub(r',\s*}', '}', c)
                 fixed = _re.sub(r',\s*]', ']', fixed)
                 return json.loads(fixed)
-            except Exception:
+            except Exception as e2:
+                _last_err = f"{e2}"
                 continue
     # 尝试截断修复
     if try_repair:
         repaired = _repair_truncated_json(raw)
         if repaired is not None:
             return repaired
-    # ⚠️ **兜底必须说清自己是被截断的**（2026-09-17 真机）。
+    # ⚠️ **兜底必须说清自己为什么没解出来**（2026-09-17 真机）。
     # 原来只给 `{"raw_output": raw[:5000], "parse_error": True}` —— 前端拿到这份
     # 兜底之后**渲染成一个空框**（它只读 `competitive_analysis.products` / `pitfalls` /
     # `recommendation` 三个结构化字段，兜底那份**一个都没有**），
     # 而且**连"这是被截断的"都看不出来**（用户原话：「我怎么不能看报告」）。
+    # 🔴 `parse_error_detail` 是 2026-09-17 补的：**别让调用方猜原因**。
+    #    当晚我就是靠猜——拿 `raw_truncated`（那只是"超过 5000 字"的展示标记）当成了
+    #    "模型输出被截断"的证据，于是改了提示词让它"写短一点"，**方向整个错了**。
+    #    真因是**字符串里有没转义的双引号**，第 307 行。
     #
     # ⚠️ 这里**故意不存全文**：项目 json 在调度循环里**每圈被 `list_all()` 读一遍**，
     # 真机那份原文 2 万字、存进去就是给热路径加 ~45KB。
@@ -207,6 +218,9 @@ def try_parse_json(raw: str, try_repair: bool = False) -> dict:
         "raw_chars": len(raw),
         "raw_truncated": len(raw) > 5000,
         "raw_ref": "research-raw",     # 前端拼 `/api/projects/<id>/research-raw`
+        # 真实报错（`Expecting ',' delimiter: line 307 column 99` 这种）——
+        # 重试提示词靠它说人话，人排查时也靠它一眼看出是"引号没转义"还是"真被截断"
+        "parse_error_detail": _last_err[:200],
     }
 
 
