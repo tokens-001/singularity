@@ -1717,6 +1717,37 @@ class TestStreamTotalBudget:
         assert int(m.group(1)) > 1, f"循环体转了 {m.group(1)} 圈（该上百）⇒ 计数没接上：{msg}"
         assert "idle=" in msg, f"没有 idle ⇒ 看不出最后一次进展距今多久：{msg}"
 
+    def test_慢调用要落一条分诊账(self, tmp_path, monkeypatch):
+        """🔴 2026-09-17 加的分诊账：真机慢调用 90~240 秒，而**直连同一个接口**
+        首字节 0.1s、8 并发整批 8 秒 ⇒ 外部原因全排除，慢在奇点自己这一跳。
+        但还要分出是哪一种（首字节就慢 / 真在写大东西 / 真空转）——
+        三种修法完全不同，所以这行账必须带上 `first_byte` / `prompt_chars` / `loops`。
+
+        ⚠️ 判据钉在**账真的写出来了、且字段齐全**上：只断言"函数没抛"的话，
+        把写文件那段删掉照样绿。
+        """
+        import json
+        import time
+        from singularity.scheduler import config
+        from singularity.scheduler.executors import openai_agent as oa
+
+        monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+        monkeypatch.setattr(oa, "_SLOW_CALL_LOG_S", 0.0)   # 都记，别真等 20 秒
+
+        ex = self._executor()
+        ex._deadline_at = time.time() + 1.0
+        self._endless_client(monkeypatch)
+        ex._stream_call({"model": "m", "messages": [{"role": "user", "content": "x"}]})
+
+        path = tmp_path / "llm_calls_slow.jsonl"
+        assert path.exists(), "慢调用没落账 ⇒ 又只能靠读代码猜"
+        rec = json.loads(path.read_text(encoding="utf-8").strip().splitlines()[-1])
+        for k in ("elapsed", "first_byte", "prompt_chars", "out_chars", "loops", "cut"):
+            assert k in rec, f"账里没有 {k} ⇒ 分不出是哪一种慢：{rec}"
+        assert rec["first_byte"] is not None, "没记到首字节时刻 ⇒ 分不出「发出去就慢」和「吐得慢」"
+        assert rec["prompt_chars"] > 0
+        assert rec["loops"] > 1, f"循环明明转了却记成 {rec['loops']} 圈 ⇒ 计数没接上"
+
     def test_正常结束的流不受影响(self, monkeypatch):
         """对照组：正常 [DONE] 结束的流，照旧把内容拼回来（别把正常路径也断了）。"""
         import httpx

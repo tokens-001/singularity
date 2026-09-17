@@ -140,6 +140,21 @@ def _parse_xml_tool_calls(content: str) -> list[dict] | None:
     return out
 # 整轮预算（schedule-to-close）：重试总耗时上限，防止 3×240s 撞穿 orchestrator 的 900s deadline
 _RETRY_TOTAL_BUDGET = float(os.environ.get("QIDIAN_RETRY_TOTAL_BUDGET", "600"))
+
+
+# 多慢算"慢"（秒）。**可配是为了测试**：写死 20 的话，测这条就得真跑 20 秒
+# —— 而测试跑得慢的代价是整个仓的测试没人愿意跑（这不划算）。
+_SLOW_CALL_LOG_S = float(os.environ.get("QIDIAN_SLOW_CALL_LOG_S", "20"))
+
+
+def _slow_calls_path() -> "Path":
+    """慢调用的分诊账（`.qidian/llm_calls_slow.jsonl`）。
+
+    ⚠️ 放在 `.qidian/` 下是**有意**的：那里**不在版本控制里**，是运行期产物，
+    跟 `alerts.jsonl` / `partial_usage/` 一个性质。只记 ≥20s 的调用 ——
+    全记的话这台账自己就是噪声，而"快的那些"直连已经量过了（0.1s 首字节）。
+    """
+    return config.QIDIAN_DIR / "llm_calls_slow.jsonl"
 # 流式 + 停滞检测。**"停滞" = 多久没有可用进展**（content / reasoning / tool_calls），
 # 不是"多久没有字节"—— 2026-09-16 把实现改成和这句注释一致（`_stream_call` 里有一长段）。
 # read timeout = 多久读不到东西就断开（真中断，不用杀进程）。
@@ -1027,6 +1042,10 @@ class OpenAIAgentExecutor(BaseExecutor):
         _call_started = time.time()
         _call_deadline = _call_started + _cap
         _over_budget = False
+        # 慢调用分诊账要的三样（见文件末尾那段注释）：发出去的 payload 多大、
+        # **第一个字节什么时候到**、一共转了几圈。
+        _prompt_chars = len(json.dumps(payload, ensure_ascii=False))
+        _first_byte = None
         try:
             with client.stream("POST", self._url, json=payload, headers=headers,
                                timeout=httpx.Timeout(_cap, connect=15.0,
@@ -1082,10 +1101,12 @@ class OpenAIAgentExecutor(BaseExecutor):
                         ⇒ 总时长判据兜得住；
                       · **吐字节但凑不满一行** → **两条都兜不住** ← 真机死的就是这种。
                     """
-                    nonlocal _over_budget, _loops
+                    nonlocal _over_budget, _loops, _first_byte
                     buf = ""
                     for text in resp.iter_text():
                         _loops += 1
+                        if _first_byte is None:
+                            _first_byte = time.time() - _call_started
                         if time.time() >= _call_deadline:
                             _over_budget = True
                             return
@@ -1209,6 +1230,35 @@ class OpenAIAgentExecutor(BaseExecutor):
                 raise _NetworkError(
                     f"流式撞上限 {int(_cap)}s 且零产出 —— 按调用失败处理"
                     f"（不是「模型答完了、只是没说话」）")
+
+        # ── 慢调用的分诊账（2026-09-17 加）────────────────────────────
+        # 背景：真机上模型调用动辄 90~240 秒，而**直连同一个接口**（同 key、同模型、
+        # 8 并发）实测首字节 0.1~0.2s、整批 8 秒 ⇒ **外部原因全排除了**
+        # （代理没开 · 服务端不慢 · prompt 4.8 万字符也一样快 · 并发不是瓶颈）。
+        # 那慢就一定在**奇点自己这一跳**，但要先分出是哪一种：
+        #   ① 首字节就慢          ⇒ 发出去的 payload / 连接建立有问题
+        #   ② 首字节快、总久、产出大 ⇒ **模型真在写大东西**（不是 bug，是"看起来像卡住"）
+        #   ③ 首字节快、总久、产出小 ⇒ 才是真的空转
+        # 三种修法完全不同 ⇒ 只记**慢的那些**（≥20s），不然这台账自己就成噪声。
+        _elapsed = time.time() - _call_started
+        if _elapsed >= _SLOW_CALL_LOG_S:
+            try:
+                with open(_slow_calls_path(), "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({
+                        "ts": time.time(),
+                        "elapsed": round(_elapsed, 1),
+                        "first_byte": round(_first_byte, 1) if _first_byte is not None else None,
+                        "prompt_chars": _prompt_chars,
+                        "out_chars": sum(len(c) for c in content) + sum(len(r) for r in reasoning),
+                        "tool_calls": len(tool_calls),
+                        "loops": _loops,
+                        "cut": bool(_over_budget),
+                    }, ensure_ascii=False) + "\n")
+            except Exception as _e:      # noqa: BLE001 —— 记账不许连累调用本身
+                # ⚠️ **不吞**（本仓的静默异常棘轮抓过两次这个形状）：写不进去也要吭一声,
+                # 否则"这台账没数据"和"没有慢调用"长得一模一样 —— 正是它要防的。
+                witness.warn("oa_exec", f"slow_call_log:{type(_e).__name__}:{_e}"[:120],
+                             key="slow_call_log_failed")
 
         msg = {"role": "assistant", "content": "".join(content)}
         if reasoning:
