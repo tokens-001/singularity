@@ -383,7 +383,27 @@ describe('GATE1 上看得见调研报告', () => {
   it('**GATE1 就要渲染调研报告**（删掉那道 `gateNum !== \'1\'` 挡板）', () => {
     const text = render(<GatePanel info={{ id: 'p1', research_report: { recommendation: '用 Python' } }}
                                    gateNum="1" gatePhase="gate1" onGate={() => {}} />)
-    expect(text, 'GATE1 上看不到报告 —— 审调研的门上没有调研').toContain('调研报告')
+    // ⚠️ 断言**报告内容**而不是标题字符串 —— 报告现在进「📋 调研」那一组、
+    //    标题由分组提供（`bare`），盯标题会盯了个会搬家的东西。
+    expect(text, 'GATE1 上看不到报告内容 —— 审调研的门上没有调研').toContain('用 Python')
+  })
+
+  it('**架构那组不许再套一层抽屉** —— 套了就要点两下', () => {
+    // 用户 09-17 贴的截图：「🏗 架构 → 🏗 架构方案 → 点击展开」两层套娃。
+    // 分组已经给了标题+摘要，里面的 `ArchitectureDetails` 就必须传 `bare`。
+    //
+    // ⚠️ **只钉架构，不钉调研**：调研组里确实有 8 个嵌套 `<details>`，
+    //    但那是「每段一行」本身（用户点名要的功能），不是多余的壳。
+    //    **"有嵌套"不是病，"套了个重复标题的壳"才是** —— 判据别写成前者。
+    const el = dom(<GatePanel info={{ id: 'p1',
+        architecture: { architecture: '主设计', modules: [], tasks: [] } }}
+      gateNum="2" gatePhase="gate2" onGate={() => {}} />)
+    const g = Array.from(el.querySelectorAll('details'))
+      .find(d => (d.querySelector('summary')?.textContent || '').includes('🏗 架构'))
+    expect(g, '没有「🏗 架构」这一组').toBeTruthy()
+    expect(g!.querySelectorAll('details').length,
+      '架构那组里还套着折叠框（🏗 架构方案）—— 要点两下才看得见内容').toBe(0)
+    el.remove()
   })
 
   it('解析失败的原文一进来就要看得见（默认展开），不是再点一下', () => {

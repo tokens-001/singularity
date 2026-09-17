@@ -144,7 +144,7 @@ function SectionBody({ name, value }: { name: string; value: any }) {
 }
 
 export const ResearchReport = memo(function ResearchReport(
-  { report, projectId }: { report: any; projectId?: string }) {
+  { report, projectId, bare }: { report: any; projectId?: string; bare?: boolean }) {
   // 🔴 **解析失败必须说出来**（2026-09-17 真机，用户原话「我怎么不能看报告」）。
   //
   // 模型吐的 JSON 坏了（字符串里带裸换行）⇒ 后端 `try_parse_json` 走兜底
@@ -193,8 +193,9 @@ export const ResearchReport = memo(function ResearchReport(
   const rank = (k: string) => { const i = RESEARCH_ORDER.indexOf(k); return i < 0 ? 99 : i }
   const keys = Object.keys(obj).sort((a, b) => rank(a) - rank(b))
   return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ ...SECTION_TITLE, fontSize: 12, marginBottom: 6 }}>📋 调研报告（{keys.length} 段）</div>
+    <div style={{ marginBottom: bare ? 0 : 10 }}>
+      {/* `bare` ⇒ 省掉这行标题：分组抽屉的 summary 已经写了「📋 调研」+ 摘要 */}
+      {!bare && <div style={{ ...SECTION_TITLE, fontSize: 12, marginBottom: 6 }}>📋 调研报告（{keys.length} 段）</div>}
       {keys.map(k => (
         <details key={k} style={{ border: '1px solid #f3f2ec', borderRadius: 6, marginBottom: 4 }}>
           <summary style={{ cursor: 'pointer', padding: '8px 10px', fontSize: 12, listStyle: 'none',
@@ -213,7 +214,14 @@ export const ResearchReport = memo(function ResearchReport(
   )
 })
 
-export const ArchitectureDetails = memo(function ArchitectureDetails({ arch }: { arch: any }) {
+/** `bare`：**只渲染正文，不带自己的折叠壳**（2026-09-17）。
+ *
+ * 🔴 为什么需要：`ProjectMaterials` 已经按阶段给了抽屉（标题 + 摘要），
+ * 而这几个组件**自己也套了一层 `<details>`** ⇒ 套进去就是**两层抽屉**，
+ * 要点两下才看得见内容（用户贴的截图就是「🏗 架构 → 🏗 架构方案 → 点击展开」）。
+ * 壳归分组提供，正文归组件提供 —— 各出一半，别都出。
+ */
+export const ArchitectureDetails = memo(function ArchitectureDetails({ arch, bare }: { arch: any; bare?: boolean }) {
   const modules = arch.modules || []
   const tasks = arch.tasks || []
   const entities = arch.data_model?.entities || []
@@ -223,8 +231,8 @@ export const ArchitectureDetails = memo(function ArchitectureDetails({ arch }: {
   const risks = arch.risks || []
   const sectionTitle = { fontSize: 11, color: '#6b6b68', fontWeight: 600, marginBottom: 4 } as const
   const row = { fontSize: 11, color: '#141413', padding: '3px 0', borderBottom: '1px solid #f3f2ec' } as const
-  return (
-    <Details title="🏗 架构方案" color="#7c3aed">
+  const body = (
+    <>
       {arch.architecture && (
         <div style={{ fontSize: 12, color: '#141413', lineHeight: 1.6, marginBottom: 10, padding: '8px 10px', background: '#faf9f5', borderRadius: 6 }}>
           {arch.architecture}
@@ -343,15 +351,16 @@ export const ArchitectureDetails = memo(function ArchitectureDetails({ arch }: {
           ))}
         </div>
       )}
-    </Details>
+    </>
   )
+  return bare ? body : <Details title="🏗 架构方案" color="#7c3aed">{body}</Details>
 })
 
 const secTitle = { fontSize: 11, color: '#6b6b68', fontWeight: 600, marginBottom: 4 } as const
 
 /** GATE3 验收摘要。以前这道门只显示几周前的调研/架构，QA 报告生成完没人看得见。
  *  摘要行刻意放在折叠框外：不展开也能判断该不该过。 */
-export const AcceptancePanel = memo(function AcceptancePanel({ acceptance, projectIssues }: { acceptance: any; projectIssues?: any[] }) {
+export const AcceptancePanel = memo(function AcceptancePanel({ acceptance, projectIssues, bare }: { acceptance: any; projectIssues?: any[]; bare?: boolean }) {
   const qa = acceptance?.qa_report
   const conf = acceptance?.conformance
   const sum = qa?.summary || {}
@@ -396,10 +405,10 @@ export const AcceptancePanel = memo(function AcceptancePanel({ acceptance, proje
         </div>
       )}
       {(issues.length > 0 || conf?.reason) && (
-        <details style={{ background: '#ffffff', border: '1px solid #e5e2d8', borderRadius: 10, marginTop: 8, overflow: 'hidden' }}>
+        <details open={bare} style={{ background: '#ffffff', border: '1px solid #e5e2d8', borderRadius: 10, marginTop: 8, overflow: 'hidden' }}>
           <summary style={{ cursor: 'pointer', padding: '12px 14px', fontSize: 13, fontWeight: 700, color: '#0f766e', listStyle: 'none', display: 'flex', alignItems: 'center', gap: 8, userSelect: 'none' }}>
             <span>🔍 验收明细</span>
-            <span style={{ marginLeft: 'auto', color: '#6b6b68', fontSize: 11, fontWeight: 400 }}>点击展开 ▾</span>
+            <span style={{ marginLeft: 'auto', color: '#6b6b68', fontSize: 11, fontWeight: 400 }}>{bare ? '' : '点击展开 ▾'}</span>
           </summary>
           <div style={{ padding: '0 14px 14px' }}>
             {issues.length > 0 && (
@@ -642,6 +651,9 @@ const GATE_TO_PHASE: Record<string, string> = { '1': 'research', '2': 'arch', '3
  *
  * ⚠️ **当前相关的那一组默认展开**（审批时就是这道门要审的那组）——
  *    全收起的话，每次还得先想"我该点哪个"。
+ * ⚠️ **里面的组件一律传 `bare`**：它们**自己也套了一层折叠壳**
+ *    （`ArchitectureDetails` / `AcceptancePanel`）⇒ 不传就是**两层抽屉**，
+ *    要点两下才看得见内容。用户 09-17 贴的截图就是「🏗 架构 → 🏗 架构方案 → 点击展开」。
  */
 export const ProjectMaterials = memo(function ProjectMaterials(
   { info, tasks, gateNum = '', acceptance, onRetry, onReveal }: any) {
@@ -660,12 +672,12 @@ export const ProjectMaterials = memo(function ProjectMaterials(
   return (
     <div style={{ textAlign: 'left' }}>
       <MatGroup label="📋 调研" summary={调研摘要} open={isOpen('research')}>
-        {rr ? <ResearchReport report={rr} projectId={info?.id} />
+        {rr ? <ResearchReport report={rr} projectId={info?.id} bare />
             : <div style={MUTED}>这个项目还没跑调研。</div>}
       </MatGroup>
 
       <MatGroup label="🏗 架构" summary={架构摘要} open={isOpen('arch')}>
-        {arch ? <ArchitectureDetails arch={arch} />
+        {arch ? <ArchitectureDetails arch={arch} bare />
               : <div style={MUTED}>还没出架构方案。</div>}
       </MatGroup>
 
@@ -686,7 +698,7 @@ export const ProjectMaterials = memo(function ProjectMaterials(
         <MatGroup label="📦 交付"
                   summary={acceptance ? '验收明细' : `${info.issues.length} 条 issue`}
                   open={isOpen('deliver')}>
-          {acceptance && <AcceptancePanel acceptance={acceptance} projectIssues={info.issues} />}
+          {acceptance && <AcceptancePanel acceptance={acceptance} projectIssues={info.issues} bare />}
         </MatGroup>
       )}
     </div>
