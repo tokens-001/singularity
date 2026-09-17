@@ -2005,3 +2005,104 @@ class TestStreamOverBudgetNoOutput:
 
         msg = got["choices"][0]["message"]
         assert msg.get("content") == "你好", f"有内容却被吞了：{got}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 被掐断时，思考不许当正文（2026-09-18）
+#
+# 症状：15 个失败任务**没有一个败在"做错"，全败在"没产出"**。
+# 链子：240s 硬顶掐断 → `content = content or reasoning_content` → 那段**半截思考
+# 被当成任务的产出** → QA 扫这段"产出"、判它「偷懒」。
+#
+# 接口本来就把两者分开（`content` / `reasoning_content`），是我们主动合的。
+# 兜底本身有理（有的模型把答案写在思考里，不合就白跑），**错在它没有条件** ——
+# "模型答完了、答案写在思考里" 和 "我们把它掐断、只拿到半截思考"被一视同仁。
+#
+# ⚠️ 只把兜底加上条件**是不够的**：正文变空 ⇒ 轮循环会**再调一次** ⇒ 同一个模型
+# 同一个上限再烧 240 秒（比不改更烧钱）⇒ 掐断且无正文时**直接收尾**，
+# 且用 `error_kind="deadline"`（`_dispatch_exec` 已经认这一档是"我方造成、别赖模型"）。
+# ═══════════════════════════════════════════════════════════════
+
+class TestCutStreamNotContent:
+
+    def _ex(self, monkeypatch):
+        from singularity.scheduler.executors import openai_agent as oa
+        monkeypatch.setenv("TEST_KEY", "k")
+        ex = oa.OpenAIAgentExecutor(
+            {"model": "m", "api_key_env": "TEST_KEY", "entry": "http://x", "max_turns": 3},
+            "任务", "tid", skill_tools=[], mcp_tools=[])
+        return oa, ex
+
+    @staticmethod
+    def _reasoning_only_client(step: float = 0.2):
+        """一直吐**思考**、正文一个字没有 —— 吐到撞上 `_cap` 为止。"""
+        class _Resp:
+            status_code, text = 200, ""
+
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): pass
+
+            def iter_text(self):
+                for i in range(60):
+                    time.sleep(step)
+                    yield 'data: {"choices":[{"delta":{"reasoning_content":"想%d"}}]}\n' % i
+
+        class _C:
+            def stream(self, *a, **k): return _Resp()
+        return _C()
+
+    def test_被掐断的流_出口必须带cut(self, monkeypatch):
+        """钉 `_stream_call` 的**出口**：撞上限这件事必须带出来。
+
+        不带的话下游只能靠猜 —— 而"猜"就是这条链的起点（答完了 vs 被我们断了）。
+        """
+        oa, ex = self._ex(monkeypatch)
+        ex._deadline_at = time.time() + 1.0            # ⇒ _cap ≈ 1 秒
+        monkeypatch.setattr(oa, "_get_http_client",
+                            lambda: self._reasoning_only_client())
+        monkeypatch.setattr(oa.witness, "warn", lambda *a, **k: None)
+        d = ex._stream_call({"model": "m", "messages": []})
+
+        assert d["choices"][0]["message"].get("reasoning_content"), "这份替身没喂出思考"
+        assert d["choices"][0]["message"]["content"] == "", "思考被塞进正文了"
+        assert d.get("_cut") is True, "被掐断了，出口却没带 `_cut` —— 下游只能靠猜"
+
+    def test_被掐断的思考不算产出(self, monkeypatch):
+        """**接线测试**：掐断时那段思考不许当正文，更不许报成功。
+
+        变异：把 `:719` 那个条件去掉 ⇒ 这条变红。
+        """
+        oa, ex = self._ex(monkeypatch)
+        monkeypatch.setattr(oa.witness, "warn", lambda *a, **k: None)
+        monkeypatch.setattr(ex, "_api_call", lambda b: {
+            "choices": [{"message": {"content": "", "reasoning_content": "半截思考…"},
+                         "finish_reason": ""}],
+            "_cut": True, "usage": {"total_tokens": 5}})
+
+        r = ex.run()
+
+        assert "半截思考" not in (r.raw_output or ""), \
+            "被掐断的半截思考被当成任务产出了 —— 下游会拿它判「偷懒」"
+        assert r.success is False, "活没干完不许报成功"
+        assert r.error_kind == "deadline", (
+            "要标成 `deadline`（我方上限），别落进 `exec` —— 那会被记成"
+            f"「这个模型空输出」并熔断它。实到 {r.error_kind!r}")
+
+    def test_正常答完写在思考里_照旧兜底(self, monkeypatch):
+        """对照：**别把兜底一起打死**。
+
+        "模型答完了、答案写在思考里"是已知的模型行为，这条兜底就是为它写的。
+        只有"被我们掐断"那一格才该关掉。
+        """
+        oa, ex = self._ex(monkeypatch)
+        monkeypatch.setattr(oa.witness, "warn", lambda *a, **k: None)
+        monkeypatch.setattr(ex, "_api_call", lambda b: {
+            "choices": [{"message": {"content": "", "reasoning_content": "答案在思考里"},
+                         "finish_reason": "stop"}],
+            "_cut": False, "usage": {"total_tokens": 5}})
+
+        r = ex.run()
+
+        assert r.success is True, "正常答完的兜底被误伤了"
+        assert r.raw_output == "答案在思考里"

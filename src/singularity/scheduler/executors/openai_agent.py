@@ -715,8 +715,33 @@ class OpenAIAgentExecutor(BaseExecutor):
 
             # 无 tool_calls → 任务完成
             tool_turns = 0  # 重置工具计数
-            # 推理模型(如Kimi/GLM)可能 content="" 但 reasoning_content 有内容
-            content = msg.get("content", "") or msg.get("reasoning_content", "")
+            content = msg.get("content", "")
+            if not content and resp_data.get("_cut"):
+                # ── 被我们掐断、正文一个字没拿到 ⇒ **这次调用没有可用产出** ──
+                # 两条理由都必须在这里收尾，而不是让循环再转一圈：
+                #   ① 剩下的"产出"只有**半截思考** —— 拿它当正文就是 2026-09-18 那条链的起点
+                #      （真机 15 个失败任务**没一个败在"做错"，全败在"没产出"**，
+                #       而 QA 是扫着模型**自己的思考**判它「偷懒」的）；
+                #   ② 原样重试 = 同一个模型 + 同一个上限 ⇒ **再烧一个 240 秒**，
+                #      正是 `TestStreamOverBudgetNoOutput` 那条 F1 死法（三轮烧穿 810s）。
+                # `error_kind="deadline"`（我方上限）是**刻意的**：`_dispatch_exec.py:236`
+                # 已经认这一档是"我方造成、别赖模型" —— 落进 `exec` 会被记成
+                # "这个模型空输出"并 `record_failure`，三次就把好模型熔断 300 秒。
+                self._track()
+                return ExecutorResult(
+                    success=False,
+                    error=(f"单次调用撞上限被掐断，正文零产出"
+                           f"（工具轮 {len(self._tool_events)} 次，"
+                           f"改动 {len(self._changed_files)} 个文件）"),
+                    error_kind="deadline",
+                    changed_files=list(self._changed_files),
+                    elapsed=time.time() - start, token_count=total_tokens,
+                    tool_events=list(self._tool_events))
+            # 推理模型(如Kimi/GLM)可能 content="" 但 reasoning_content 有内容 ——
+            # 那种"答完了、只是答案写在思考里"要兜底。
+            # ⚠️ **被掐断时不许兜底**：那时 reasoning 是半截思考，不是产出的替身。
+            if not content:
+                content = msg.get("reasoning_content", "")
             if content.strip():
                 elapsed = time.time() - start
                 # 用 git diff 追踪改动的文件
@@ -1269,7 +1294,11 @@ class OpenAIAgentExecutor(BaseExecutor):
             msg["reasoning_content"] = "".join(reasoning)
         if tool_calls:
             msg["tool_calls"] = [tool_calls[k] for k in sorted(tool_calls)]
-        return {"choices": [{"message": msg, "finish_reason": finish}], "usage": usage}
+        # ⚠️ `_cut` 是**我们自己的**字段（不是 provider 的 schema），下划线标出来。
+        # 它回答的是"这次是模型答完了，还是**被我们掐断的**" —— 这两件事
+        # 以前在返回值里**长得一模一样**，只能靠猜。2026-09-18：往下游要这个答案。
+        return {"choices": [{"message": msg, "finish_reason": finish}],
+                "usage": usage, "_cut": bool(_over_budget)}
 
 
 # ── 全局 httpx 客户端 (连接池复用) ──
