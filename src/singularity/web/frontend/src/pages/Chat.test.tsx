@@ -88,6 +88,58 @@ async function mount() {
   return { el, done: () => { act(() => root.unmount()); el.remove() } }
 }
 
+const TASK = (id: string, desc: string, status = 'running') => ({
+  id, description: desc, status, project_id: 'p1', updated_at: 1, created_at: 1,
+})
+
+/** 找到"项目档案"那个抽屉。 */
+function drawerOf(el: HTMLElement): HTMLDetailsElement | undefined {
+  return Array.from(el.querySelectorAll('details'))
+    .find(d => (d.querySelector('summary')?.textContent || '').includes('项目档案')) as any
+}
+
+/**
+ * 对话窗口别被项目材料堆满（2026-09-17 用户提：
+ * 「之前忽略了观察者对话窗口，导致现在调研架构等任务都堆在对话窗口」）。
+ *
+ * 实测当时对话页从上到下是：观察者对话（薄）→ 13 张任务卡 → 门禁面板 → 调研 8 行 → 架构详情。
+ * 收成"项目档案"抽屉，**但门禁面板和连接断线警告必须留在外面** —— 它们要人看/要人点，
+ * 收进去就是"该看见的没看见"（#28）。
+ */
+describe('项目档案抽屉', () => {
+  it('任务卡收进抽屉，且**默认收起**', async () => {
+    ;(api.tasks as any).mockResolvedValue([TASK('t1', '实现解析器'), TASK('t2', '写测试')])
+    const { el, done } = await mount()
+    const d = drawerOf(el)
+    expect(d, '没有"项目档案"抽屉').toBeTruthy()
+    expect(d!.hasAttribute('open'), '抽屉默认就展开了 —— 那跟没收起一样').toBe(false)
+    expect(d!.textContent, '任务卡没在抽屉里').toContain('实现解析器')
+    done()
+  })
+
+  it('收起时也看得见进度（收起来 ≠ 看不见了）', async () => {
+    ;(api.tasks as any).mockResolvedValue([TASK('t1', 'a', 'done'), TASK('t2', 'b')])
+    const { el, done } = await mount()
+    const summary = drawerOf(el)!.querySelector('summary')!.textContent || ''
+    expect(summary).toContain('项目档案')
+    expect(summary, '收起了就看不出跑到哪了').toContain('1/2')
+    done()
+  })
+
+  it('**门禁面板不在抽屉里** —— 收进去就可能看不见该审批', async () => {
+    ;(api.projects as any).mockResolvedValue({ projects: [{ ...PROJECT, phase: 'gate1' }] })
+    ;(api.tasks as any).mockResolvedValue([TASK('t1', 'x')])
+    const { el, done } = await mount()
+    const btns = Array.from(el.querySelectorAll('button'))
+      .filter(b => /通过|打回/.test(b.textContent || ''))
+    expect(btns.length, '门禁按钮没渲染出来').toBeGreaterThan(0)
+    for (const b of btns) {
+      expect(b.closest('details'), '门禁按钮被收进抽屉了 —— 用户可能看不见该审批').toBeNull()
+    }
+    done()
+  })
+})
+
 describe('对话页顶部的项目用量', () => {
   it('把**这个项目**的 token 显示出来（而不是全站总量）', async () => {
     const { el, done } = await mount()

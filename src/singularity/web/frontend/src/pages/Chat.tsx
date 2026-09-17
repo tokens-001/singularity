@@ -285,42 +285,75 @@ export default function Chat() {
           <div ref={scrollRef} onScroll={onScroll} style={{ flex: 1, overflow: 'auto', padding: '8px 0' }}>
             {msgs.map((m: ChatMsg, i: number) => <MessageBubble key={i} m={m} />)}
 
-            {tasks.length > 0 && (
-              <div className="chat-msg-row" style={{ marginBottom: 16 }}>
-                {!sseAlive && (
-                  <div className="fs-10" style={{ color: 'var(--warning, #d48806)', marginBottom: 4 }}>
-                    ⚠ 实时连接断开 —— 下面这份是**轮询拿的**（10 秒一次），可能比实际状态慢一拍；正在自动重连
-                  </div>
-                )}
-                <div className="flex-center gap-4" style={{ marginBottom: 6 }}>
-                  {/* ⚠️ 判据原来是 `active > 0` —— **全失败时 active 也是 0**，于是亮一个绿勾：
-                      绿✓ + 绿进度条 + 红字「2 失败」同框（2026-09-14，外派④抓出）。
-                      绿勾只能给"真的没失败"那一侧。 */}
-                  {active > 0 ? <Loader2 size={10} style={{animation:'spin 1s linear infinite'}}/>
-                    : failed > 0 ? <AlertCircle size={10} style={{color:'#b45309'}}/>
-                    : <CheckCircle2 size={10} style={{color:'#16a34a'}}/>}
-                  <span className="fw-600 fs-11 text-muted">
-                    {active > 0 ? `${active} 个执行中` : completed === tasks.length ? '全部完成' : `进度 ${completed}/${tasks.length}`}
-                    {failed > 0 && <span style={{ color: '#dc2626', marginLeft: 4 }}>{failed} 失败</span>}
-                  </span>
-                  {info && <span className="fs-11" style={{ marginLeft: 'auto', color: '#2563eb', fontWeight: 600 }}>{PHASE_NAMES[gatePhase] || gatePhase}</span>}
-                </div>
-                <div style={{ height: 6, background: '#e5e2d8', borderRadius: 999, overflow: 'hidden', marginBottom: 8 }}>
-                  <div style={{ height: '100%', width: `${tasks.length ? Math.round((completed / tasks.length) * 100) : 0}%`, background: '#16a34a', borderRadius: 999, transition: 'width 0.3s' }} />
-                </div>
-                {tasks.map((t) => <TaskCard key={t.id} t={t} onRetry={retryFailed} onReveal={revealFile} />)}
+            {/* ── 项目档案抽屉（2026-09-17）─────────────────────────────
+                用户原话：「之前忽略了观察者对话窗口，导致现在调研架构等任务都堆在对话窗口」。
+                实测：13 张任务卡 + 门禁面板 + 调研 8 行 + 架构详情，**观察者说的话只剩薄薄几行**。
+
+                ⚠️ **不是撤销 09-15 那次**（用户提的「对话页为什么不能一直显示架构」）——
+                   要的是**入口常在**，不是**内容常挂**。所以收成抽屉：收起时也带进度，
+                   一眼能看出"跑到哪了"，点开才是全貌。
+
+                🔴 **门禁面板不许收进来**：它是"要你点通过/打回"的，收进去就可能看不见该审批
+                   —— 正是这个仓反复栽的"该看见的没看见"（#28）。同理，下面那条
+                   "实时连接断开"的警告也留在抽屉外面。 */}
+            {!sseAlive && tasks.length > 0 && (
+              <div className="chat-msg-row fs-10" style={{ color: 'var(--warning, #d48806)', marginBottom: 4 }}>
+                ⚠ 实时连接断开 —— 下面这份是**轮询拿的**（10 秒一次），可能比实际状态慢一拍；正在自动重连
               </div>
+            )}
+
+            {info && (tasks.length > 0 || !isGate) && (
+              <details className="chat-msg-row" style={{ marginBottom: 16 }}>
+                <summary className="fs-11" style={{ cursor: 'pointer', color: '#6b6b68', userSelect: 'none', listStyle: 'none' }}>
+                  📁 项目档案
+                  {tasks.length > 0 && <>
+                    {' · '}
+                    {/* 收起时也要看得见进度 —— 否则"收起来"就变成"看不见了"。
+                        ⚠️ 判据同下面那条：**全失败时 active 也是 0**，绿勾只能给"真的没失败"那一侧
+                        （2026-09-14，外派④抓出）。 */}
+                    {failed > 0 ? '⚠ ' : ''}
+                    {/* ⚠️ 这里**必须带上 `已完成/总数`** —— 只说"1 个执行中"看不出还剩几个，
+                        而收起时这条摘要就是用户能看到的全部信息。 */}
+                    {active > 0 ? `${active} 个执行中 · ${completed}/${tasks.length}`
+                      : completed === tasks.length ? '全部完成' : `进度 ${completed}/${tasks.length}`}
+                    {failed > 0 && <span style={{ color: '#dc2626', marginLeft: 4 }}>{failed} 失败</span>}
+                  </>}
+                  {!isGate && ' · 调研 / 架构'}
+                  <span style={{ marginLeft: 6, color: '#b5b2a8' }}>展开 ▾</span>
+                </summary>
+
+                <div style={{ marginTop: 8 }}>
+                  {tasks.length > 0 && (
+                    <div style={{ marginBottom: 12 }}>
+                      <div className="flex-center gap-4" style={{ marginBottom: 6 }}>
+                        {active > 0 ? <Loader2 size={10} style={{animation:'spin 1s linear infinite'}}/>
+                          : failed > 0 ? <AlertCircle size={10} style={{color:'#b45309'}}/>
+                          : <CheckCircle2 size={10} style={{color:'#16a34a'}}/>}
+                        <span className="fw-600 fs-11 text-muted">
+                          {active > 0 ? `${active} 个执行中` : completed === tasks.length ? '全部完成' : `进度 ${completed}/${tasks.length}`}
+                          {failed > 0 && <span style={{ color: '#dc2626', marginLeft: 4 }}>{failed} 失败</span>}
+                        </span>
+                        {info && <span className="fs-11" style={{ marginLeft: 'auto', color: '#2563eb', fontWeight: 600 }}>{PHASE_NAMES[gatePhase] || gatePhase}</span>}
+                      </div>
+                      <div style={{ height: 6, background: '#e5e2d8', borderRadius: 999, overflow: 'hidden', marginBottom: 8 }}>
+                        <div style={{ height: '100%', width: `${tasks.length ? Math.round((completed / tasks.length) * 100) : 0}%`, background: '#16a34a', borderRadius: 999, transition: 'width 0.3s' }} />
+                      </div>
+                      {tasks.map((t) => <TaskCard key={t.id} t={t} onRetry={retryFailed} onReveal={revealFile} />)}
+                    </div>
+                  )}
+
+                  {/* 不在闸门时也给个"随时能回看架构/调研"的入口（两者内部都是 <details>，默认收起）。
+                      原来这段是常驻的 —— **批完就再也看不见自己批过什么了**，想回看只能去项目页
+                      （2026-09-15 用户提的：「对话页为什么不能一直显示架构」）。 */}
+                  {!isGate && <ProjectArchive info={info} />}
+                </div>
+              </details>
             )}
 
             {isGate && info && (
               <GatePanel info={info} gateNum={gateNum} gatePhase={gatePhase}
                 acceptance={acceptance} onGate={gateConfirm} />
             )}
-
-            {/* 不在闸门时也给个"随时能回看架构/调研"的入口（两者都是 <details>，默认收起）。
-                原来只有上面那一段 —— **批完就再也看不见自己批过什么了**，想回看只能去项目页
-                （2026-09-15 用户提的：「对话页为什么不能一直显示架构」）。 */}
-            {!isGate && info && <ProjectArchive info={info} />}
 
             {loading && (
               <div className="chat-msg-row" style={{ padding: '4px 0' }}>
