@@ -104,6 +104,79 @@ def read_state() -> dict | None:
 # ═══════════════════════════════════════════════════════════════
 
 
+_GATE_LABEL = {"gate1": "第一道门（审调研报告）",
+               "gate2": "第二道门（审架构方案）",
+               "gate3": "第三道门（审交付物）"}
+
+# ⚠️ 措辞是给**非开发者**看的（用户原话：「奇点的用户不可能都是专业开发者」）。
+#    "别复述这段指令"是必须的 —— 不写的话模型会把上面三条当成要输出的小标题。
+_REPORT_PROMPT = (
+    "项目刚停在{gate}等人工审批。请用**大白话**跟用户说三件事："
+    "① 现在到哪一步、这一步在干什么；"
+    "② 他要拍板的是什么、有没有该提醒他注意的风险；"
+    "③ 他现在该做什么。"
+    "⚠️ 不要说术语、不要复述这段指令、不要列小标题。三五句话说完，别长篇大论。"
+)
+
+_report_loops = [0]
+
+
+def _maybe_report_gates() -> None:
+    """项目停在门上、还没跟用户讲过 → 让观察者说一段白话，推到**那个项目的对话框**。
+
+    🔴 为什么要这个（2026-09-17 用户提）：原话「奇点的用户不可能都是专业开发者……
+    专业架构方案看不懂，可以让观察者**翻译为白话在对话框汇报**，当然原本架构方案汇报还是保留」。
+    在此之前观察者**只在被问时才开口**，而且连项目内容都看不见（同一天下午才接上）。
+
+    ⚠️ **判据是「最后一次进门」vs「最后一次汇报」的先后**，不是"有没有报过" ——
+       同一道门可能进两次（打回重跑再回来），第二次也该说一遍。
+    ⚠️ **"报过了"落在项目 json 的 `lineage` 里，不放内存**：重启一次就丢的话，
+       "改完代码到下一道门重启"这个例行操作正好会把该说的话吞掉。
+    ⚠️ **推的是 `/api/events`**（`orchestrator._pending_sse_events` → 事件泵 → SSE），
+       不是 `bridge.broadcast_observer` —— 后者前端**压根没有监听者**（grep 零命中），
+       走它等于"出声没人听"，这个仓栽过（见本文件上面那段注释）。
+    """
+    from singularity.scheduler import orchestrator as _orch
+    from singularity.scheduler import project as _proj
+
+    for p in _proj.list_all():
+        pid = p.id
+        try:
+            if p.phase.value not in _GATE_LABEL:
+                continue
+            lin = p.lineage or []
+            last_gate = last_report = -1
+            for i, e in enumerate(lin):
+                if not isinstance(e, dict):
+                    continue
+                if e.get("action") == "phase" and e.get("to") == p.phase.value:
+                    last_gate = i
+                elif e.get("action") == "observer_report" and e.get("gate") == p.phase.value:
+                    last_report = i
+            # 判据：**汇报记录在最后一次进门之后** ⇒ 这次已经说过了，跳过。
+            # ⚠️ 别写成 `last_gate < 0 → 跳过`（我第一版就是，被测试当场抓出）：
+            #    "进门记录"是**汇报该不该说的依据之一，不是前提**。项目停在门上这件事
+            #    本身就是证据 —— 记录缺了该照说，而不是不吭声。
+            #    （真机上 `set_phase` 一定会写进门记录，但判据不该靠那个巧合成立。）
+            if last_report >= 0 and last_report > last_gate:
+                continue
+            from singularity.scheduler._observer_answer import _answer_question_inner
+            text = _answer_question_inner(
+                _REPORT_PROMPT.format(gate=_GATE_LABEL[p.phase.value]), pid)
+            if not text:
+                continue
+            # 先落痕再推：推失败也不至于下一圈重复说（"报过了"以盘为准）
+            p.add_lineage({"action": "observer_report", "gate": p.phase.value})
+            _proj.save(p)
+            _orch._pending_sse_events.append({
+                "kind": "observer_report", "project_id": pid,
+                "msg": json.dumps({"project_id": pid, "text": text}, ensure_ascii=False),
+            })
+        except Exception as e:      # noqa: BLE001 —— 汇报塌了不该连累巡检
+            witness.warn("observer", f"gate_report_failed:{pid[-4:]}:{type(e).__name__}:{e}"[:160],
+                         key="observer_gate_report_failed")
+
+
 def _observer_worker() -> None:
     _log.info("Observer agent worker started")
     while not _stop_event.is_set():
@@ -175,6 +248,13 @@ def _observer_worker() -> None:
             _loops[0] += 1
             _found[0] += len(_alerts)
             _write_state(loops=_loops[0], found_total=_found[0], checks_last=len(_alerts))
+
+            # 3. 主动汇报：项目停在门上就跟用户说一段白话（2026-09-17 用户提）。
+            # ⚠️ **每 6 圈（≈30 秒）才查一次**：它要读全部项目 json
+            #    （真机那个 60KB），每 5 秒读一遍是白烧 I/O；而"停在门上"是分钟级的事。
+            _report_loops[0] += 1
+            if _report_loops[0] % 6 == 0:
+                _maybe_report_gates()
 
         except Exception:
             _log.exception("observer worker loop error")

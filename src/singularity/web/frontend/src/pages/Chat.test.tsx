@@ -208,6 +208,36 @@ describe('常驻状态条 + 文件侧滑面板', () => {
   })
 })
 
+describe('观察者主动汇报落进对话框', () => {
+  // 2026-09-17 用户提：「让观察者翻译为白话在对话框汇报」。
+  // 后端在项目停到门上时推一条 `observer_report`，前端要**收下并显示**。
+  //
+  // 🔴 **关键是"落进哪个项目"**：`addChatMsg` 默认落在"用户此刻开着的项目"上
+  //    ⇒ 你在看 A 时 B 的汇报会插进 A。所以事件里必须带 project_id，且要按它分发。
+  it('消息进的是**事件里那个项目**，不是当前开着的那个', async () => {
+    useAppStore.setState({ conversations: {}, activeProjectId: 'p1' })
+    const { el, done } = await mount()
+    await act(async () => {
+      sseHandlers[sseHandlers.length - 1]({
+        kind: 'observer_report', project_id: 'p2',
+        msg: JSON.stringify({ project_id: 'p2', text: '这是 p2 的白话汇报' }),
+      })
+    })
+    const convs = useAppStore.getState().conversations
+    expect(convs['p2']?.map(m => m.content), 'p2 的汇报没进 p2').toEqual(['这是 p2 的白话汇报'])
+    expect(convs['p1'], 'p2 的汇报串到当前开着的 p1 去了').toBeUndefined()
+    done()
+  })
+
+  it('事件格式不对（坏 JSON）不许把事件处理打挂', async () => {
+    const { el, done } = await mount()
+    await act(async () => {
+      sseHandlers[sseHandlers.length - 1]({ kind: 'observer_report', project_id: 'p1', msg: '{坏' })
+    })
+    done()
+  })
+})
+
 describe('对话页顶部的项目用量', () => {
   it('把**这个项目**的 token 显示出来（而不是全站总量）', async () => {
     const { el, done } = await mount()

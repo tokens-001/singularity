@@ -168,6 +168,17 @@ export default function Chat() {
       if (last?.role !== 'assistant' || last.content !== e.msg) addChatMsg({ role: 'assistant', content: e.msg || '', ts: Date.now() })
       // 刷新项目状态 (phase变化)
       if (e.project_id) fetchProjects()
+    } else if (e.kind === 'observer_report') {
+      // 观察者**主动**汇报（2026-09-17 用户提：「让观察者翻译为白话在对话框汇报」）。
+      // 后端在项目停到门上时推一条，内容是**大白话**（给非开发者看的）。
+      // ⚠️ **必须带上它的 project_id** —— `addChatMsg` 缺省落在"用户此刻开着的项目"上，
+      //    那样你在看 A 时 B 的汇报会插进 A（为此 09-17 专门给它加了第二个参数）。
+      try {
+        const d = JSON.parse(e.msg || '{}')
+        if (d.project_id && d.text) {
+          addChatMsg({ role: 'assistant', content: d.text, ts: Date.now() }, d.project_id)
+        }
+      } catch { /* 解析不了就不显示，别把整个事件处理打挂 */ }
     } else if (e.kind === 'observer_answer' && pendingCid.current) {
       try {
         const data = JSON.parse(e.msg || '{}')
