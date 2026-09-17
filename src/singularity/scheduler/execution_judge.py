@@ -174,12 +174,58 @@ def _stream_once(client, base_url: str, headers: dict, payload: dict,
     return 200, "".join(parts), finish, "", "".join(reasons)
 
 
+def _model_in_active_pool(model: str) -> bool:
+    """这个模型现在**真的该被调**吗：① provider 没欠费 ② 没被用户停用。
+
+    🔴 2026-09-18 真机：`glm-5.2` / `deepseek-v4-pro` **都被用户停用**了，
+    分诊账里却每 20 来秒出现一次、还在烧钱。根因就是这条路 ——
+    代码自己的注释写着：`_call_model` 走的 `_resolve_api` **只看 provider + api_store，
+    完全不看激活池**（本模块 `_disabled` 出现 0 次），于是硬编码的备选链
+    （`_V2_EXTRACT_FALLBACKS`）**绕开阵容配置**照调不误。
+
+    ⚠️ **闸门设在这里**（所有调用的最后一道），而不是逐个去补调用点 ——
+    补调用点就是 §60 那个形状（同一件事多个入口，补一处漏一处），
+    今晚刚在 `_workflow_phases` 上栽过一次同款。
+
+    ⚠️ 查不了就判**不可用**（fail-closed）：换兜底省的只是"选手别给自己出题"（质量问题），
+    而真调一个停用模型 / 欠费 provider 的代价是**花钱 + 功能可能挂**。
+    """
+    if not model:
+        return False
+    try:
+        from singularity.scheduler import api_store, dispatcher, model_registry
+        prov = model_registry.provider_for_model(model)
+        if prov and not api_store.is_available(prov):
+            return False
+        pool = dispatcher._all_agents_list(dispatcher.load_agents())
+        if not pool:
+            # ⚠️ **池子空 ≠ 这个模型被停用**：那多半是"根本没配 agent"（测试环境就是）。
+            # 两者混为一谈的代价实测过 —— 加这条闸门时**一次红了 7 个用例**，
+            # 全是"没摆池子"的：闸门把"没配"当成了"停用"。
+            # 信息不足时不该拦（拦了就是拿一个错误的前提去否决调用）。
+            return True
+        return any(a.get("model") == model for a in pool)
+    except Exception as e:      # noqa: BLE001
+        # 查不了 → 判不可用（fail-closed）。**但要出声**：静默吞掉的话，
+        # "池子读不出来"和"这个模型被停用"在盘上长得一模一样。
+        witness.warn('execution_judge',
+                     f'pool_check_failed:{model}:{type(e).__name__}:{e}'[:120],
+                     key='pool_check_failed')
+        return False
+
+
 def _call_model(prompt: str, model: str, max_tokens: int = 2000,
                 project_id: str = "") -> str:
-    """调用单个模型（用于合成/盲评）。未知模型 / 缺 key → 返回 ""。
+    """调用单个模型（用于合成/盲评）。未知模型 / 缺 key / **不在激活池** → 返回 ""。
 
     流式（QIDIAN_STREAM=0 可退回非流式）：停滞超过 QIDIAN_STALL_TIMEOUT 秒就断开。
     """
+    if not _model_in_active_pool(model):
+        # ⚠️ **必须出声**：静默返回 "" 的话，调用方只会看到"这次提取失败"，
+        # 而真因是"你要的模型被停用了" —— 两种完全不同的修法。
+        witness.warn('execution_judge', f'model_not_in_pool:{model}'[:80],
+                     key='model_not_in_pool')
+        return ""
     env_var, base_url = _resolve_api(model)
     api_key = os.environ.get(env_var, "")
     if not api_key:
