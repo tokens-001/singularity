@@ -1087,6 +1087,25 @@ def _run_integration_merge_async(project_id: str, agents: dict) -> None:
             fail_check = check_review_fail_limit(proj.id,
                 getattr(proj, 'review_failures', 0))
             if fail_check["blocked"]:
+                # 🔴 **兜底之前先把验收层跑掉**（2026-09-17 真机坐实）。
+                # 原来这里直接 `set_phase(GATE2)`，而机器检查 + QA 验收**只挂在下面那一支**
+                # （`run_test_fix_loop`）⇒ **兜底这条路把整个验收层跳过**：真机实测 round d
+                # 就是这样过的门 —— `machine-checks.json` 压根没生成、QA 报告没有、
+                # `issues` 空着，**人站到 GATE2 面前时手里没有任何证据**。
+                # ⚠️ 而"审查修不动"往往恰恰是因为有东西坏了，那种时候更该让人看见
+                # 「哪几条机器检查没过 / QA 怎么判」，不是让他凭一句话猜。
+                # 验收自己塌了不该连累兜底（拿不到证据也得把人送到门前）⇒ 吞掉并留痕。
+                try:
+                    from singularity.scheduler import workflow as wf_mod
+                    _vmsgs = wf_mod._run_verification(proj, agents)
+                    if _vmsgs:
+                        proj.issues.append({"type": "verification_before_fallback",
+                                            "detail": " | ".join(_vmsgs)[:300]})
+                except Exception as e:      # noqa: BLE001
+                    from singularity.scheduler import witness
+                    witness.warn("integrating",
+                                 f"verification_before_fallback:{type(e).__name__}:{e}"[:160],
+                                 key="verification_before_fallback_failed")
                 proj.set_phase(proj_mod.Phase.GATE2, fail_check["reason"])
                 proj_mod.save(proj)
                 _pending_sse_events.append({
