@@ -49,7 +49,15 @@ ZHIPU_API_TIMEOUT = 240.0     # 代码生成任务长 (审计 5.3); 与 openai_a
 #   · orchestrator._reap_futures —— 到点无声收割（写取消标记 + 判 FAILED）
 #   · executor 自己（openai_agent）—— 提前 TASK_WRAPUP_MARGIN_S 收尾返回
 # 分成两份写必然漂移；漂了就回到"干到被砍、砍完无账"（2026-09-13 复查的 8003）。
-TASK_DEADLINE_S = 900.0
+# 🔴 **验证轮要能跑得快**（2026-09-17 用户提：「修 bug 的代价太大了，每次都好长时间」）。
+# 慢的不是改 bug（改+测+变异约 15 分钟），是**跑一轮**：任务挂着不动时，
+# 每个都要**耗满这 900 秒**才死 ⇒ 8 个任务并发 2 ⇒ 光等就 60 分钟起。
+# ⇒ 起后端时带上 `QIDIAN_TASK_DEADLINE_S=180`，一轮从 ~90 分钟压到 ~20 分钟。
+# ⚠️ 这**只适合验证轮**（故意让任务早点死，好快点走到要验的那条路）；
+#    跑真实产出别调小 —— 那是在砍正常任务的时间。
+# ⚠️ 别调到 ≤ `TASK_WRAPUP_MARGIN_S`（90）：收尾余量会把执行预算吃光，
+#    任务一点活都干不了，验证就变成"验证它什么都不干"。
+TASK_DEADLINE_S = float(os.environ.get("QIDIAN_TASK_DEADLINE_S", "900"))
 # 留给收尾/合并的余量: 执行器预算 = 900 - 90 = 810s。
 # 执行器从自己起跑算，比 orchestrator 的 submit 时刻晚十几秒（建 worktree/text 预检），
 # 90s 够盖住这点差 + 让 finalize 跑完。
