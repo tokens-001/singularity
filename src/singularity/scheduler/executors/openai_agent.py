@@ -1055,6 +1055,12 @@ class OpenAIAgentExecutor(BaseExecutor):
                 # （failover 拿到了活），但要知道这是拿 90 秒换的。
                 # 反过来（保持原样）的代价已经量过了：810s 预算烧光、任务判死、产物丢。
                 _last_progress = time.time()
+                # 循环体转了几圈 —— 2026-09-17 加，专门为了分清那个**解释不通的 900 秒**：
+                # 告警打出 `stream_over_budget:913s:cap=125s`，而判据就挂在循环体里、
+                # 125 秒时**必然**该触发 ⇒ 那段时间循环体多半**根本没进过**。
+                # `loops` 小 + `idle≈elapsed` = 循环**饿着**（流那头不出货）；
+                # `loops` 大 + `idle` 小 = 循环在转、是**判据没掐住**。两种修法完全不同。
+                _loops = 0
 
                 def _lines():
                     """按行吐，但**每收到一批字节**就先看一眼表。
@@ -1076,9 +1082,10 @@ class OpenAIAgentExecutor(BaseExecutor):
                         ⇒ 总时长判据兜得住；
                       · **吐字节但凑不满一行** → **两条都兜不住** ← 真机死的就是这种。
                     """
-                    nonlocal _over_budget
+                    nonlocal _over_budget, _loops
                     buf = ""
                     for text in resp.iter_text():
+                        _loops += 1
                         if time.time() >= _call_deadline:
                             _over_budget = True
                             return
@@ -1179,9 +1186,13 @@ class OpenAIAgentExecutor(BaseExecutor):
             # 不说的话，下游只看到"这轮输出特别短"，会去怀疑模型而不是看这里。
             # ⚠️ **不套 `try/except: pass`**（棘轮抓过）：那形状等于"出声失败就静默"，
             # 而出声本身就不该失败 —— `witness.warn` 就是本仓的出声通道。
+            # ⚠️ `loops` / `idle` 是 2026-09-17 加的**分诊用**两个数（见上面 `_loops` 那段）：
+            #    没有它俩，"循环饿着"和"判据没掐住"在盘上长得一模一样，
+            #    只能靠读代码猜 —— 而今晚我已经猜错一次了（拿 `raw_truncated` 当"被截断"）。
             witness.warn('oa_exec',
                          f'stream_over_budget:{int(time.time() - _call_started)}s'
-                         f':cap={int(_cap)}s:chars={sum(len(c) for c in content)}'[:120],
+                         f':cap={int(_cap)}s:chars={sum(len(c) for c in content)}'
+                         f':loops={_loops}:idle={int(time.time() - _last_progress)}s'[:200],
                          key='stream_over_budget')
 
             # ── F1（保险）：**撞了上限、又一个字没拿到** ⇒ 按调用失败抛出去 ──

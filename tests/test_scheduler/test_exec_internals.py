@@ -1688,6 +1688,35 @@ class TestStreamTotalBudget:
         assert any("stream_over_budget" in str(a) for a, _ in seen), \
             f"断流没出声 —— 就查不到「输出为什么变短」：{seen}"
 
+    def test_断开时要说清_循环体转了几圈(self, monkeypatch):
+        """🔴 **分诊用**（2026-09-17 加）：`loops` 小 + `idle≈elapsed` = 循环**饿着**；
+        `loops` 大 + `idle` 小 = 循环在转、是**判据没掐住**。两种修法完全不同。
+
+        真机那个告警是 `stream_over_budget:913s:cap=125s` —— 而判据就挂在循环体里、
+        125 秒时**必然**该触发 ⇒ 那 900 秒里循环体多半**根本没进过**。
+        没有这两个数就只能读代码猜，而当晚我已经猜错一次了。
+
+        ⚠️ 这条钉的是**计数真的在涨**：只断言"字符串里有 `loops=`"的话，
+        把 `_loops += 1` 删掉、留个常量照样绿（假接线）。
+        """
+        import re
+        import time
+        ex = self._executor()
+        ex._deadline_at = time.time() + 1.0
+        self._endless_client(monkeypatch)
+
+        seen = []
+        from singularity.scheduler.executors import openai_agent as oa
+        monkeypatch.setattr(oa.witness, "warn", lambda *a, **k: seen.append((a, k)))
+
+        ex._stream_call({"model": "m", "messages": []})
+
+        msg = next(str(a) for a, _ in seen if "stream_over_budget" in str(a))
+        m = re.search(r"loops=(\d+)", msg)
+        assert m, f"告警里没有 loops ⇒ 分不出「饿了」还是「没掐住」：{msg}"
+        assert int(m.group(1)) > 1, f"循环体转了 {m.group(1)} 圈（该上百）⇒ 计数没接上：{msg}"
+        assert "idle=" in msg, f"没有 idle ⇒ 看不出最后一次进展距今多久：{msg}"
+
     def test_正常结束的流不受影响(self, monkeypatch):
         """对照组：正常 [DONE] 结束的流，照旧把内容拼回来（别把正常路径也断了）。"""
         import httpx
