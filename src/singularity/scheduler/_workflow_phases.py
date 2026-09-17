@@ -17,6 +17,50 @@ from singularity.scheduler.workflow import (
     _arch_tasks_are_unordered, _flag_unordered_architecture,
 )
 
+def _unconsumed_feedback(project: ProjectState, reject_actions: tuple, done_action: str) -> str:
+    """人工打回后、**还没被任何一次重跑消费掉**的那句理由。没有就是 `""`。
+
+    判据：**最新一条 `reject_actions` 比最新一条 `done_action` 更靠后** ⇒ 那次重跑
+    还没发生，理由要带上；重跑一结束写了 `done_action`，判据自动转假（只生效一次）。
+
+    为什么用 lineage 判据、而不是给项目加一个"待消费"字段：
+      · `research_complete`(:279) / `planning_complete`(:435) 是**重跑真发生过的证据**，
+        不是"我声明我消费了"。#77 那一夜的形状全是"判据在量声明、故障在声明与实际之间"
+        —— 这里刻意站到"实际"那一侧；
+      · 天然只生效一次，**没有计数器要归零**（#45 那句"它什么时候清零"在这里没有答案）；
+      · 中途崩了/重启了，理由还在 lineage 里，下一轮自动重投；一次性字段 pop 完写盘
+        再崩，用户写的那句话就**永久丢了**；
+      · 不新增字段 ⇒ 不碰 `to_dict`/`from_dict`（#40 那片雷区）。
+
+    ⚠️ 依赖两个前提，破坏任一它会**静默失效**（不报错、只是理由不再进提示词）：
+      ① 这两个标记各自**只有一个写入者**。以后多一个写入者，这里要跟着看；
+      ② lineage **只追加**（只在超 1000 条时从头部裁剪，相对顺序不变）
+         ⇒ 用**下标**比较而不是 ts（ts 可能并列，下标不会）。
+    """
+    lin = project.lineage or []
+    last_reject = last_done = -1
+    for i, e in enumerate(lin):
+        action = e.get("action") if isinstance(e, dict) else None
+        if action in reject_actions:
+            last_reject = i
+        elif action == done_action:
+            last_done = i
+    if last_reject < 0 or last_reject < last_done:
+        return ""
+    entry = lin[last_reject]
+    return str(entry.get("feedback") or "")[:500]
+
+
+def _with_feedback(prompt: str, feedback: str, label: str) -> str:
+    """把打回理由缀在提示词**最后**（最后说的最管用）。
+
+    格式照抄执行层既有先例 `_dispatch_exec.py:224-228`。
+    """
+    if not feedback:
+        return prompt
+    return f"{prompt}\n\n---\n[{label}，请据此修正]\n{feedback}"
+
+
 def _materialize_test_cases(project: ProjectState, arch: dict) -> None:
     """把架构里的 `test_cases` 落成**项目仓里的 `test_cases.json`**。
 
@@ -259,6 +303,11 @@ def _run_research(project: ProjectState, agents: dict) -> str:
     except Exception:
         pass
 
+    # 人工打回 GATE1 时写的那句理由 —— 拼在**最后**（MAGMA 记忆之后），最后说的最管用。
+    prompt = _with_feedback(
+        prompt, _unconsumed_feedback(project, ("gate1_rejected",), "research_complete"),
+        "上一轮人工打回 GATE1 的反馈")
+
     task_id = f"research_{project.id}"
     lineup, restrict = _phase_selection("researching", project)
     # no_tools: 调研员的产出契约是一段 JSON 报告，不该碰磁盘。不禁的话它会当实现任务
@@ -334,6 +383,12 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
         constraints=project.raw_constraints,
         research=research_context,
     ) + _ledger
+    # 人工打回 GATE2/GATE3 时写的那句理由 —— 同样拼在最后。
+    prompt = _with_feedback(
+        prompt,
+        _unconsumed_feedback(project, ("gate2_rejected", "gate3_rejected"),
+                             "planning_complete"),
+        "上一轮人工打回的反馈")
 
     task_id = f"architect_{project.id}"
     # 架构这一项 = 委员会席位。restrict 才限制得住：不限制的话 chain 还是全池，

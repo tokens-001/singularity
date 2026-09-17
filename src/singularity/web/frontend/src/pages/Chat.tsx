@@ -202,10 +202,17 @@ export default function Chat() {
   // 停止等待：后端仍在跑，只是不再接收这条回答（清掉 client_id 后到达的 observer_answer 会被忽略）
   const cancelWait = () => { setLoading(false); pendingCid.current = '' }
 
-  const gateConfirm = async (decision: 'approved' | 'rejected') => {
+  const gateConfirm = async (decision: 'approved' | 'rejected', feedback?: string) => {
     const info = projects.find(p => p.id === activePid)
     if (!info) return
-    try { await api.gateConfirm(info.id, info.phase, decision); fetchProjects(); fetchTasks() }
+    try {
+      const r: any = await api.gateConfirm(info.id, info.phase, decision, feedback)
+      // 打回后要重跑调研/架构，而"点火"可能失败（该项目已有阶段在跑）——
+      // 后端会回一个 warning。**必须让人看见**：不说的话，项目停着不动、
+      // 界面只显示"调研中"，用户会以为它在跑（防御模式 #28）。
+      if (r?.warning) toast(r.warning, 'info')
+      fetchProjects(); fetchTasks()
+    }
     catch (e) { toast(errText(e, '操作失败'), 'error') }
   }
 

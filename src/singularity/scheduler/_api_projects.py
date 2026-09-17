@@ -211,18 +211,42 @@ def project_gate_confirm(project_id: str, gate: str = "", decision: str = "",
         return {"ok": True, "gate": gate, "decision": "approved",
                 "next_phase": next_p.value}, 200
     elif decision == "rejected":
-        proj.confirm_gate(gate_phase, "rejected")
+        # feedback 一路传到 `confirm_gate` —— 它负责写 lineage（两条入口共用一处，
+        # 防御模式 #5）。**以前这里不传**：参数签了、`handle_gate3_reject` 也接了，
+        # 但 HTTP 路由 `app.py` 根本没把 body 里的 feedback 递进来 ⇒ 恒为 ""，
+        # 用户写了理由等于没写（防御模式 #70）。
+        proj.confirm_gate(gate_phase, "rejected", feedback)
         proj_mod.save(proj)
+        resp = {"ok": True, "gate": gate, "decision": "rejected",
+                "next_phase": proj.phase.value}
         # GATE3 打回: D出修复方案
         if gate_phase == Phase.GATE3:
             from . import workflow as wf_mod
             from . import dispatcher as disp_mod
             agents = disp_mod.load_agents()
             result = wf_mod.handle_gate3_reject(proj, agents, feedback)
-            return {"ok": True, "gate": "gate3", "decision": "rejected",
-                    "result": result, "next_phase": proj.phase.value}, 200
-        return {"ok": True, "gate": gate, "decision": "rejected",
-                "next_phase": proj.phase.value}, 200
+            resp = {"ok": True, "gate": "gate3", "decision": "rejected",
+                    "result": result, "next_phase": proj.phase.value}
+        # ── 打回后**必须有人点火** ──
+        # 判据和上面批准那条一样，是"那个阶段归谁推"：RESEARCHING / PLANNING
+        # **只有 `run_phase` 能推**（调度循环只管 EXECUTING 之后，前端也没有
+        # run-phase 调用者）。⚠️ 打回退到这两档却没人推，就是**项目永久停在原地**：
+        # 界面上只显示"调研中/架构设计中"，看不出是没人点火（批准那条实测空等 14 分钟）。
+        # 这一段同时覆盖 GATE3 的 design 路由（`handle_gate3_reject` 把 phase 设成
+        # PLANNING 之后原本同样没人点）。
+        if proj.phase in (Phase.RESEARCHING, Phase.PLANNING):
+            from . import workflow as wf_mod
+            from . import dispatcher as disp_mod
+            started = _start_background(project_id, proj.phase.value,
+                                        wf_mod.run_phase, proj,
+                                        disp_mod.load_agents())
+            resp["started"] = started
+            if not started:
+                # 防御模式 #28：返回里每个"像成功"的字段都要追得到一个副作用。
+                # 没点着火却回一个纯 ok=true 的包，就是让调用方以为项目在动。
+                resp["warning"] = (f"{proj.phase.value} 打回后没能自动启动"
+                                   f"（该项目已有阶段在跑）—— 请稍后重试")
+        return resp, 200
     return {"ok": True, "gate": gate, "decision": decision or "pending"}, 200
 
 

@@ -323,6 +323,89 @@ def _build_status_context(project_id: str = "") -> str:
     return ctx
 
 
+def _project_briefing(project_id: str) -> dict:
+    """「这个项目现在怎么样了」—— 观察者汇报阶段 / 汇报问题时**唯一的信息来源**。
+
+    🔴 **2026-09-17 之前，这里什么都没有。** 观察者读不到项目的任何**内容**：
+    `research_report` / `architecture` / `issues` / `lineage` **一个都没进过它的 prompt**
+    （grep 零命中），`project_id` 只被用来①过滤任务列表②判 GATE。
+    ⇒ 用户问「这个调研怎么样」，它**答不上来** —— 它压根没看过。
+    用户原话：「本意是像 zcode 那样的独立会话，观察者汇报阶段和问题」
+    —— 那个角色**从来没实现过**，不是被谁瓜分了。
+
+    ⚠️ 只给**摘要**：调研报告全文 2 万字、架构也不小，塞进 prompt 既贵又淹掉重点。
+       要细节让它开口问，或者用户去界面上看全文（那边有独立入口）。
+
+    ⚠️ 读不到就**如实说读不到**，别返回空 dict 让上游静默跳过 ——
+       「没有项目」和「项目读坏了」长得一模一样，是本仓的老病。
+    """
+    from singularity.scheduler import project as proj_mod
+    p = proj_mod.load(project_id)
+    if p is None:
+        return {"错误": f"项目 {project_id} 读不到"}
+
+    out: dict = {"项目名": p.name, "当前阶段": p.phase.value}
+
+    rr = p.research_report
+    if isinstance(rr, dict) and rr:
+        if rr.get("parse_error"):
+            out["调研报告"] = "⚠ 解析失败（模型吐的不是合法 JSON；原文还在，界面可看全文）"
+        else:
+            prods = (rr.get("competitive_analysis") or {}).get("products") or []
+            out["调研报告"] = {
+                "段数": len(rr),
+                "推荐方案开头": str(rr.get("recommendation") or "")[:120],
+                "竞品数": len(prods),
+                "关键坑数": len(rr.get("pitfalls") or []),
+            }
+    elif p.phase.value in ("researching", "gate1"):
+        out["调研报告"] = "（还没产出）"
+
+    arch = p.architecture
+    if isinstance(arch, dict) and arch:
+        out["架构"] = {
+            "模块": [m.get("name") for m in (arch.get("modules") or [])][:12],
+            "任务数": len(arch.get("tasks") or []),
+            "约束数": len(arch.get("constraints") or []),
+        }
+
+    if p.issues:
+        out["未决问题"] = [str(i.get("detail") or i.get("type") or i)[:120]
+                           for i in p.issues[-5:]]
+
+    # 最近发生了什么 —— 汇报"跑到哪了"靠的就是这段
+    trail = []
+    for e in (p.lineage or [])[-6:]:
+        if not isinstance(e, dict):
+            continue
+        what = (f"{e.get('from')} → {e.get('to')}" if e.get("to")
+                else str(e.get("action") or ""))
+        reason = str(e.get("reason") or "")[:60]
+        trail.append(f"{what}（{reason}）" if reason else what)
+    if trail:
+        out["最近阶段流转"] = trail
+    return out
+
+
+def project_section(project_id: str) -> str:
+    """`## 当前项目` 那一段（带前导换行）。取不到 ⇒ **说清**取不到。
+
+    ⚠️ **两条对话路径都要挂**（直连那条 + 带工具那条）——「同一件事两个入口，
+       必然有一条忘了做全套」是这个仓反复栽的形状（§60）。所以抽成函数、两处各调一次。
+    """
+    if not project_id:
+        return ""
+    try:
+        brief = _project_briefing(project_id)
+    except Exception as e:
+        # 出声（门禁 `test_no_silent_except` 只认 witness/logging，别写成光吞）
+        witness.warn("observer", f"project_briefing_failed:{type(e).__name__}:{e}"[:160],
+                     key="observer_project_briefing_failed")
+        brief = {"错误": f"项目快照取不到：{e}"}
+    return ("\n\n## 当前项目（用户问的就是它，你要汇报的也是它）\n```json\n"
+            + json.dumps(brief, ensure_ascii=False, indent=2) + "\n```")
+
+
 DIRECT_SYSTEM_PROMPT = """你是 Singularity Dispatch 的主交互智能体。下面是当前系统的实时状态数据。根据这些数据回答用户问题，用户可以要求你创建任务或控制调度循环。
 
 规则：

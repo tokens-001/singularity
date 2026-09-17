@@ -90,7 +90,8 @@ def _stub_phase_pipeline(monkeypatch, raw: str):
 
     def fake_safe_dispatch(prompt, level, task_id, agents, project, lineup=None,
                            restrict=False, phase="", no_tools=False):
-        calls.append({"phase": phase, "no_tools": no_tools})
+        # 也记 prompt：下面那组"打回理由要进提示词"的用例靠它断言
+        calls.append({"phase": phase, "no_tools": no_tools, "prompt": prompt})
         return _FakeDisp(), ""
 
     monkeypatch.setattr(wp, "_safe_dispatch", fake_safe_dispatch)
@@ -278,3 +279,75 @@ def test_write_failure_is_loud_not_silent(tmp_path, monkeypatch):
     wp._run_planning(p, {})           # 不许把架构阶段整个带崩
 
     assert any("test_cases_write_failed" in str(a) for a in warns), f"写失败却静默：{warns}"
+
+
+# ── 第四条接线：人工打回的理由必须真的进提示词 ────────────────────
+# 2026-09-17 加。改之前：`feedback` 从 HTTP body 一路到 handler 形参全是空的
+# （路由 `app.py` 不传），**就算传了也没人用它拼提示词** ——
+# 用户写了「竞品补到 5 家」，重跑的调研一个字都看不到，等于没写（防御模式 #70）。
+#
+# 判据：lineage 里**最新一条 `gate1_rejected` 比最新一条 `research_complete` 更靠后**
+# ⇒ 那次重跑还没发生，理由要带上。重跑结束写了 `research_complete`，判据自动转假。
+
+def test_research_prompt_carries_the_reject_feedback(tmp_path, monkeypatch):
+    p = _mk_project(tmp_path, monkeypatch)
+    p.lineage = [{"action": "research_complete"},
+                 {"action": "gate1_rejected", "feedback": "调研太浅，竞品只有 3 家"}]
+    wp, calls = _stub_phase_pipeline(monkeypatch, '{"competitive_analysis": {"products": []}}')
+    wp._run_research(p, {})
+
+    assert calls, "调研没走到 dispatch？"
+    assert "调研太浅" in calls[0]["prompt"], "打回理由没进提示词 —— 用户写了等于没写"
+
+
+def test_reject_feedback_is_consumed_only_once(tmp_path, monkeypatch):
+    """重跑过一次（`research_complete` 写在 rejected **之后**）就不该再带上。
+
+    不带这一条的话判据恒真 ⇒ 那句理由会**粘在之后每一次调研上**，
+    永远甩不掉（项目跑第三轮调研时还在听第一轮的意见）。
+    """
+    p = _mk_project(tmp_path, monkeypatch)
+    p.lineage = [{"action": "gate1_rejected", "feedback": "调研太浅"},
+                 {"action": "research_complete"}]        # ← 重跑已经发生过
+    wp, calls = _stub_phase_pipeline(monkeypatch, '{"competitive_analysis": {"products": []}}')
+    wp._run_research(p, {})
+
+    assert "调研太浅" not in calls[0]["prompt"], "一次性的理由粘住了，每轮都会重投"
+
+
+def test_planning_prompt_carries_gate2_feedback(tmp_path, monkeypatch):
+    """架构那条路同理（GATE2 打回 → 重规划）。"""
+    p = _mk_project(tmp_path, monkeypatch)
+    p.lineage = [{"action": "planning_complete"},
+                 {"action": "gate2_rejected", "feedback": "模块拆得太粗"}]
+    wp, calls = _stub_phase_pipeline(monkeypatch,
+                                     '{"tasks": [{"id": "t1", "title": "x", "desc": "y"}], "constraints": []}')
+    wp._run_planning(p, {})
+
+    assert calls, "架构没走到 dispatch？"
+    assert "模块拆得太粗" in calls[0]["prompt"], "GATE2 打回的理由没进架构提示词"
+
+
+def test_unconsumed_feedback_four_states(tmp_path, monkeypatch):
+    """四态表 —— 判据本身单独钉一遍（提示词那几条挂了时，这条指出是判据错了还是拼接错了）。"""
+    p = _mk_project(tmp_path, monkeypatch)
+    from singularity.scheduler import _workflow_phases as wp
+    f = wp._unconsumed_feedback
+
+    p.lineage = []
+    assert f(p, ("gate1_rejected",), "research_complete") == ""
+
+    p.lineage = [{"action": "gate1_rejected", "feedback": "A"}]
+    assert f(p, ("gate1_rejected",), "research_complete") == "A"
+
+    p.lineage = [{"action": "gate1_rejected", "feedback": "A"},
+                 {"action": "research_complete"}]
+    assert f(p, ("gate1_rejected",), "research_complete") == ""
+
+    p.lineage = [{"action": "research_complete"},
+                 {"action": "gate1_rejected", "feedback": "B"}]
+    assert f(p, ("gate1_rejected",), "research_complete") == "B"
+
+    # 别的门的打回不串味
+    p.lineage = [{"action": "gate2_rejected", "feedback": "C"}]
+    assert f(p, ("gate1_rejected",), "research_complete") == ""

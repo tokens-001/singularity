@@ -34,9 +34,19 @@ class Phase(str, Enum):
 
 
 # Gate 拒绝 → 回退到哪里
+#
+# ⚠️ **回退目标必须是「有人会推它」的那一档**（2026-09-17）。
+# 判据不是"落到哪个枚举"，而是**落过去之后项目还会不会动**：
+#   · TEMPLATE    —— **没人推**：`run_phase` 只打印"等待 Owner 填写需求"就 break，
+#                    调度循环只管 EXECUTING 之后；全仓也没有"编辑项目需求"的接口。
+#   · RESEARCHING —— 由 `_api_projects` 打回时点火 `run_phase` 推。
+#   · PLANNING    —— 同上。
+# 原来 GATE1 落 TEMPLATE ⇒ **打回 = 项目永久停在原地**，界面上看不出是卡住了。
 _REJECT_FALLBACK: dict[Phase, Phase] = {
-    Phase.GATE1: Phase.TEMPLATE,
-    Phase.GATE2: Phase.RESEARCHING,        # 回调研或重写需求
+    Phase.GATE1: Phase.RESEARCHING,        # 报告不合格 ⇒ 重跑调研（不是回填需求）
+    Phase.GATE2: Phase.PLANNING,           # 架构不合格 ⇒ 重规划。
+    # 退回 RESEARCHING 是**错的一层**：调研通常没问题，还得让人再审一遍 GATE1、
+    # 再花一轮调研钱。哪一层不满意就重做哪一层。
     # GATE3 不在此表: 由 workflow.handle_gate3_reject 按 fix_route 分级路由
     # (impl→EXECUTING / design→PLANNING / note→不回退), 不再一刀切回 PLANNING
 }
@@ -173,8 +183,15 @@ class ProjectState:
 
     # ── Phase 流转 ──
 
-    def confirm_gate(self, gate: Phase, decision: str) -> Optional[Phase]:
-        """Owner 批 Gate。自动推进 phase。返回下一个 phase 或 None。"""
+    def confirm_gate(self, gate: Phase, decision: str,
+                     feedback: str = "") -> Optional[Phase]:
+        """Owner 批 Gate。自动推进 phase。返回下一个 phase 或 None。
+
+        `feedback` 是**打回理由**（人工写的那一句），只对 rejected 有意义。
+        放在这里而不是放在 HTTP 路由里，是因为**打回有两条入口**
+        （`/gate-confirm` 路由 / 观察者聊天 `_observer_answer`）——
+        放这儿两条自动一致，放路由里就是"修了一条、漏了另一条"（防御模式 #5）。
+        """
         self.owner_confirm[gate.value] = decision
         self.updated_at = time.time()
         if decision == "approved":
@@ -200,6 +217,26 @@ class ProjectState:
         elif decision == "rejected":
             fallback = _REJECT_FALLBACK.get(gate)
             if fallback:
+                # 打回理由落 lineage。两个用处：
+                #   ① 重跑时由 `_workflow_phases._unconsumed_feedback` 取出来拼进提示词
+                #      —— 光记下来不送进模型等于没记（防御模式 #70）；
+                #   ② 光看项目 json 就能 grep 出"人为什么打回"，不用翻日志。
+                # 只对**会自动回退的门**记（判据就是同一张表，一处判断）：
+                # GATE3 由 `handle_gate3_reject` 自己记，免得同一个动作记两条。
+                self.add_lineage({"action": f"{gate.value}_rejected",
+                                  "feedback": str(feedback or "")[:500]})
+                if gate == Phase.GATE2:
+                    # ① 旧架构与旧约束清单必须**一起**清：`effective_constraints()`
+                    #    在清单非空时直接返回它 ⇒ 只清 architecture 会让验收跑
+                    #    **上一版约束**，比空清单更坏（防御模式 §60）。
+                    self.architecture = None
+                    self.constraints_checklist = []
+                    # ② 计数器复位（防御模式 #45 单向棘轮）：不清的话，重规划出来的
+                    #    架构**下一次集成失败就直接弹回 GATE2**，用户看到的是
+                    #    "点了通过还让我审核"。人工介入 = 自动重试配额恢复
+                    #    —— 和上面 approved 分支是同一句话。
+                    self.review_failures = 0
+                    self.integrate_failures = 0
                 self.set_phase(fallback, f"人工打回 {gate.value}")
             return fallback
         return None

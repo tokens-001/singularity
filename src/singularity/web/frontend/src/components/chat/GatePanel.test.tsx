@@ -282,3 +282,172 @@ describe('调研报告解析失败要说话，不能是空框', () => {
     expect(text).not.toContain('解析失败')
   })
 })
+
+// ═══════════════════════════════════════════════════════════════
+// 调研报告：每段一行 + 点开看（2026-09-17 用户提的）
+// ═══════════════════════════════════════════════════════════════
+// 用户原话：「一次显示所有方案太多，我建议改为每个方案的名称摘要，
+// 我在选择要不要点开或者下拉查看」。
+//
+// 改之前是**三块固定内容写死**（推荐方案 / 竞品 / 关键坑），而调研报告实际有 8 段
+// —— 另外 5 段（前沿理论 / 用户调研 / 范围澄清 / 技术验证 / 约束）**从来没露过面**，
+// 用户根本不知道它们存在。根因是"没写进代码的段永远看不见"，所以这里钉的第一条
+// 就是**模型多吐一段必须自动出现**。
+
+const FULL = {
+  competitive_analysis: { products: [{ name: 'jq', type: 'CLI', strengths: '生态好' }], comparison: '三档' },
+  frontier_theory: { papers: [{ name: 'Drain' }], maturity: '成熟' },
+  user_research: { pain_points: ['慢'], needs: ['快'], unmet_needs: '契约' },
+  scope_clarification: { core: ['a'], secondary: ['b'], out_of_scope: ['c'], priorities: ['P0'] },
+  technical_poc: { pocs: [{ name: 'PoC-1' }], conclusion: '可行' },
+  constraints: { performance: ['<150ms'], security: ['零依赖'] },
+  recommendation: '纯标准库、分层单遍流式',
+  pitfalls: ['A', 'B', 'C'],
+}
+
+describe('调研报告：每段一行、点开看', () => {
+  it('**8 段全都出现** —— 以前只露 3 段', () => {
+    const text = render(<ResearchReport report={FULL} projectId="p1" />)
+    for (const label of ['推荐方案', '竞品分析', '关键坑', '前沿理论',
+                         '用户调研', '范围澄清', '技术验证', '约束']) {
+      expect(text, `「${label}」没渲染出来`).toContain(label)
+    }
+    expect(text).toContain('8 段')
+  })
+
+  it('**模型多吐一段要自动出现** —— 不能"没写进表里就永远看不见"', () => {
+    const text = render(<ResearchReport report={{ ...FULL, brand_new: ['x', 'y', 'z'] }}
+                                         projectId="p1" />)
+    expect(text, '表外的键被吞了 —— 这就是当年只露 3/8 段的同一个形状').toContain('brand_new')
+    expect(text).toContain('3 条')
+  })
+
+  it('摘要**按值的形状**算，不按键名写死', () => {
+    const text = render(<ResearchReport report={{
+      recommendation: '很长的字符串'.repeat(20),
+      arr: [1, 2, 3, 4, 5],
+      obj: { papers: 1, maturity: 2 },
+    }} projectId="p1" />)
+    expect(text).toContain('5 条')          // 数组 → 条数
+    expect(text).toContain('papers')        // 对象 → 点名子块
+    expect(text).toContain('maturity')
+    expect(text).toContain('…')             // 长字符串 → 截断标记
+  })
+
+  it('每段各自一个 `<details>`，且**默认全收起**', () => {
+    const el = dom(<ResearchReport report={FULL} projectId="p1" />)
+    const details = el.querySelectorAll('details')
+    expect(details.length, '8 段该有 8 个折叠条').toBe(8)
+    expect(Array.from(details).every(d => !d.hasAttribute('open')), '默认就展开了').toBe(true)
+    el.remove()
+  })
+
+  it('**每段展开后都有正文** —— 不许出现"点开是空的"', () => {
+    // `competitive_analysis` 没有 products 时，旧代码那三个分支一个都不进 ⇒ 空框。
+    // 兜底渲染成 JSON 才对：空框和"这段本来就没内容"长得一模一样。
+    const el = dom(<ResearchReport report={{
+      competitive_analysis: {}, empty_arr: [], nil: null, zero: 0,
+    }} projectId="p1" />)
+    const blocks = el.querySelectorAll('details')
+    expect(blocks.length).toBeGreaterThan(0)
+    Array.from(blocks).forEach((d, i) => {
+      const body = d.querySelector('div')
+      expect((body?.textContent || '').trim(), `第 ${i + 1} 段点开是空的`).not.toBe('')
+    })
+    el.remove()
+  })
+})
+
+describe('摘要条不许把锅甩给调研', () => {
+  it('解析失败时要说"解析失败"，**不能说成"调研没给推荐方案"**', () => {
+    const text = render(<GatePanel info={{ id: 'p1', research_report: {
+      parse_error: true, raw_output: 'x', raw_chars: 20442, raw_truncated: true,
+    } }} gateNum="1" gatePhase="gate1" onGate={() => {}} />)
+    expect(text).toContain('解析失败')
+    expect(text, '又把锅甩给调研了 —— 报告明明写了推荐方案，只是解不开')
+      .not.toContain('调研没给推荐方案')
+  })
+
+  it('报告正常时**还是原来那句**（别把修法改宽）', () => {
+    const text = render(<GatePanel info={{ id: 'p1',
+      research_report: { recommendation: '用 Python' } }} gateNum="1" gatePhase="gate1" onGate={() => {}} />)
+    expect(text).toContain('推荐：用 Python')
+    expect(text).not.toContain('解析失败')
+  })
+})
+
+describe('GATE1 上看得见调研报告', () => {
+  // 🔴 改之前：`GatePanel` 有 `gateNum !== '1'` 挡着，而 `Chat.tsx` 的 `!isGate`
+  // 又把 `ProjectArchive` 藏了 ⇒ **两道门一起把报告挡死**。偏偏 GATE1 就是审调研的那道门
+  // —— 用户在门上**一处都看不到报告**，只剩那条摘要。昨夜修的红字提示就修在这个不渲染的组件里。
+  it('**GATE1 就要渲染调研报告**（删掉那道 `gateNum !== \'1\'` 挡板）', () => {
+    const text = render(<GatePanel info={{ id: 'p1', research_report: { recommendation: '用 Python' } }}
+                                   gateNum="1" gatePhase="gate1" onGate={() => {}} />)
+    expect(text, 'GATE1 上看不到报告 —— 审调研的门上没有调研').toContain('调研报告')
+  })
+
+  it('解析失败的原文一进来就要看得见（默认展开），不是再点一下', () => {
+    const el = dom(<GatePanel info={{ id: 'p1', research_report: {
+      parse_error: true, raw_output: '{"competitive_analysis"', raw_chars: 100,
+    } }} gateNum="1" gatePhase="gate1" onGate={() => {}} />)
+    const open = Array.from(el.querySelectorAll('details')).filter(d => d.hasAttribute('open'))
+    expect(open.length, '解析失败的红框默认收起了 —— 用户还是看不到').toBeGreaterThan(0)
+    el.remove()
+  })
+})
+
+describe('打回时能写理由', () => {
+  const type = (node: HTMLTextAreaElement, text: string) => {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype, 'value')!.set!
+    setter.call(node, text)
+    node.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+  const clickText = (el: HTMLElement, label: string) => {
+    const btn = Array.from(el.querySelectorAll('button'))
+      .find(b => (b.textContent || '').includes(label))
+    expect(btn, `没找到「${label}」按钮`).toBeTruthy()
+    act(() => { (btn as HTMLElement).click() })
+  }
+  const gate = (onGate: any) => dom(
+    <GatePanel info={{ id: 'p1', research_report: { recommendation: 'x' } }}
+               gateNum="1" gatePhase="gate1" onGate={onGate} />)
+
+  it('点了打回**先弹出输入框**，不直接退回', () => {
+    const got: any[] = []
+    const el = gate((d: string, f?: string) => got.push([d, f]))
+    clickText(el, '打回')
+    expect(got, '一点打回就退了 —— 没给写理由的机会').toEqual([])
+    expect(el.querySelector('textarea'), '没有输入框').toBeTruthy()
+    el.remove()
+  })
+
+  it('**写的理由要传给 onGate**（删掉 `onGate(\'rejected\', reason)` 的第二个参数它会红）', () => {
+    const got: any[] = []
+    const el = gate((d: string, f?: string) => got.push([d, f]))
+    clickText(el, '打回')
+    type(el.querySelector('textarea') as HTMLTextAreaElement, '竞品太少，补到 5 家')
+    clickText(el, '确认打回')
+    expect(got).toEqual([['rejected', '竞品太少，补到 5 家']])
+    el.remove()
+  })
+
+  it('**不写也能退** —— 选填，别让写理由变成打回的门槛', () => {
+    const got: any[] = []
+    const el = gate((d: string, f?: string) => got.push([d, f]))
+    clickText(el, '打回')
+    clickText(el, '确认打回')
+    expect(got).toEqual([['rejected', '']])
+    el.remove()
+  })
+
+  it('取消就什么都不发生', () => {
+    const got: any[] = []
+    const el = gate((d: string, f?: string) => got.push([d, f]))
+    clickText(el, '打回')
+    clickText(el, '取消')
+    expect(got).toEqual([])
+    expect(el.querySelector('textarea'), '取消后输入框还在').toBeFalsy()
+    el.remove()
+  })
+})

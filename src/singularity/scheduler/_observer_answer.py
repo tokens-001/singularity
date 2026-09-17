@@ -10,7 +10,7 @@ import time
 import httpx
 
 from singularity.scheduler._observer_definition import (
-    _get_observer_cfg, _build_status_context, DIRECT_SYSTEM_PROMPT,
+    _get_observer_cfg, _build_status_context, DIRECT_SYSTEM_PROMPT, project_section,
     _detect_definition_intent, _any_project_at_gate3, _get_definition_context,
     _execute_observer_tool, _definition_role_prompt,
     project_at_gate3, verdict_schema_text, parse_verdict_rollup,
@@ -155,6 +155,57 @@ def _persist_gate3_rollup(project_id: str, answer: str) -> None:
         _log.warning("observer_rollup_persist_failed: %s", e)
 
 
+def _reject_reason_from(question: str) -> str:
+    """从用户那句话里剥出**理由**。「不通过」这种光杆否定 ⇒ `""`（没有理由）。
+
+    用户在聊天里说的那句话**本身就是打回理由** —— 他对着观察者说
+    「不通过，竞品太少」，那个「竞品太少」就该跟着重跑的调研走。
+    以前这条路传的是**硬编码空串**（见下面 `_gate_reject_reply` 的注释），
+    于是"和观察者说"还不如"在按钮旁边填个框"。
+
+    ⚠️ **只剥开头那个否定，剩下原样保留** —— 理由是用户的原话，转述就是失真。
+    ⚠️ **不能拿 `_REJECT_WORDS` 做前缀剥离**：那张表里有「改」「修改」，
+       「改一下竞品」会被啃成「一下竞品」。只认 `_NEGATED_APPROVE_RE`（否定+批准词的紧邻形态）。
+    """
+    q = (question or "").strip()
+    bare = "".join(ch for ch in q.lower()
+                   if ch not in " \t\r\n。，,.!！?？~、：:").strip(_BARE_TAILS)
+    # 整句就是一句打回话（「不行」「重来」「不通过」）⇒ **没有理由可说**。
+    # ⚠️ 两张表都要认：`_BARE_REJECT` 是光杆否定，`_REJECT_WORDS` 是打回词
+    #    （判定函数对两者都是"命中即 rejected"），只认一张会漏掉「重来」。
+    # ⚠️ 判据必须是**整句相等**，不能是前缀 —— 「重来一遍，竞品太少」是有理由的。
+    if bare in _BARE_REJECT or bare in _REJECT_WORDS:
+        return ""
+    q = _NEGATED_APPROVE_RE.sub("", q, count=1)
+    q = q.strip(" \t\r\n，,。.、；;：:！!?？~")
+    return q if len(q) >= 2 else ""
+
+
+def _gate_reject_reply(project_id: str, gate: str, feedback: str = "") -> str:
+    """聊天里说「不通过」→ 走**和按钮同一条**打回路径。
+
+    以前这里自己 `proj.confirm_gate(...)` + `save_project(...)`，看着等价，实际漏了
+    打回之后**点火重跑**那一步 ⇒ phase 变成 researching/planning 而项目一动不动，
+    回话却写着「将重新生成架构方案」。**失败被说成了成功**（#28 / #70 同形）。
+    GATE3 更糟：`_REJECT_FALLBACK` 里没有 GATE3 ⇒ phase 原地不动，照样回「已退回实现阶段」。
+
+    ⇒ 转调 `project_gate_confirm`（HTTP 路由用的也是它），两条入口收敛到一处（#5）。
+    回话照 `next_phase` **如实**说退到哪，不再替它编一个"将重新生成"。
+
+    `feedback` 来自 `_reject_reason_from(question)` —— **用户在聊天里说的那句话
+    就是打回理由**。⚠️ 第一版这里传的是**硬编码空串**：路走通了、话没带上，
+    「和观察者沟通」于是还不如"在按钮旁边填个框"（2026-09-17 用户当场指出）。
+    """
+    from singularity.scheduler._api_projects import project_gate_confirm
+    data, _code = project_gate_confirm(project_id, gate, "rejected", feedback)
+    if not data.get("ok"):
+        return f"打回失败：{data.get('error') or '未知原因'}"
+    msg = f"已打回（{gate}）—— 项目回到 **{data.get('next_phase') or '未变化'}**，会重新跑一遍。"
+    if data.get("warning"):
+        msg += f"\n⚠️ {data['warning']}"
+    return msg
+
+
 def _answer_question_inner(question: str, project_id: str = "") -> str:
     cfg = _get_observer_cfg()
     api_key = cfg.get("api_key", "")
@@ -173,7 +224,8 @@ def _answer_question_inner(question: str, project_id: str = "") -> str:
             ctx = _build_status_context()
         except Exception as e:
             ctx = f"（状态获取失败：{e}）"
-        system = DIRECT_SYSTEM_PROMPT + "\n\n## 当前系统状态\n```json\n" + ctx + "\n```"
+        system = (DIRECT_SYSTEM_PROMPT + "\n\n## 当前系统状态\n```json\n" + ctx + "\n```"
+                  + project_section(project_id))
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": question},
@@ -239,18 +291,17 @@ def _answer_question_inner(question: str, project_id: str = "") -> str:
                         save_project(proj)
                         return "✅ GATE2 已通过。进入实现阶段，前端/后端/数据/DevOps工程师将并行开发。"
                     elif reply == "rejected":
-                        proj.confirm_gate(Phase.GATE2, "rejected")
-                        save_project(proj)
-                        return "已退回架构阶段。请描述需要修改的内容，将重新生成架构方案。"
+                        # 用户那句话里的理由跟着走 —— 见 `_reject_reason_from`。
+                        return _gate_reject_reply(project_id, "gate2",
+                                                  _reject_reason_from(question))
                 elif proj.phase == Phase.GATE3:
                     if reply == "approved":
                         proj.confirm_gate(Phase.GATE3, "approved")
                         save_project(proj)
                         return "✅ GATE3 已通过。进入交付阶段，DevOps工程师将打包归档。"
                     elif reply == "rejected":
-                        proj.confirm_gate(Phase.GATE3, "rejected")
-                        save_project(proj)
-                        return "已退回实现阶段。请描述需要修复的问题。"
+                        return _gate_reject_reply(project_id, "gate3",
+                                                  _reject_reason_from(question))
         except Exception:
             pass
 
@@ -279,6 +330,12 @@ def _answer_question_inner(question: str, project_id: str = "") -> str:
     _gate3_now = project_at_gate3(project_id) if project_id else _any_project_at_gate3()
     if _gate3_now:
         system_prompt += verdict_schema_text()
+
+    # 🔴 **观察者要能看见它负责汇报的那个项目**（2026-09-17）。
+    # 在这之前，这条最常用的路径（带工具那条）**压根没注入过项目上下文** ——
+    # 而带工具只意味着"它能自己去查"，可查的工具里**没有一个能看到项目内容**
+    # （调研报告 / 架构 / 未决问题 / 阶段轨迹都读不到）⇒ 用户问「这调研怎么样」它答不上来。
+    system_prompt += project_section(project_id)
 
     messages = [
         {"role": "system", "content": system_prompt},

@@ -1311,7 +1311,11 @@ def api_fs_pick():
 @app.route("/api/projects/<project_id>/gate-confirm", methods=["POST"])
 def api_project_gate_confirm(project_id):
     body = request.get_json(silent=True) or {}
-    data, code = _api_handler.project_gate_confirm(project_id, body.get("gate", ""), body.get("decision", ""))
+    # `feedback` 是打回理由，**必须在这里递下去** —— handler 里那个形参一直是空的，
+    # 就是因为这一行只传了两个参数（2026-09-17 查实：整条链恒为 ""）。
+    data, code = _api_handler.project_gate_confirm(project_id, body.get("gate", ""),
+                                                   body.get("decision", ""),
+                                                   body.get("feedback", ""))
     return jsonify(data), code
 
 @app.route("/api/projects/<project_id>/run-phase", methods=["POST"])

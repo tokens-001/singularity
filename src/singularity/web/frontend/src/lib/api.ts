@@ -71,8 +71,10 @@ export const api = {
   fsList: (path: string) => request(`/api/fs/ls?path=${encodeURIComponent(path)}`),
   fsMkdir: (path: string, name: string) => request('/api/fs/mkdir',{method:'POST',body:JSON.stringify({path,name})}),
   fsPick: () => request('/api/fs/pick',{method:'POST'}),
-  gateConfirm: (id: string, gate: string, decision: string) =>
-    request(`/api/projects/${id}/gate-confirm`,{method:'POST',body:JSON.stringify({gate,decision})}),
+  // feedback = 打回理由（选填）。**必须在 body 里** —— 后端 handler 一直有这个形参、
+  // `handle_gate3_reject` 也一直收它，但前端从来没发过、路由也没传 ⇒ 恒为空串。
+  gateConfirm: (id: string, gate: string, decision: string, feedback = '') =>
+    request(`/api/projects/${id}/gate-confirm`,{method:'POST',body:JSON.stringify({gate,decision,feedback})}),
   traceability: (id: string) => request<any>(`/api/projects/${id}/traceability`),
 
   observerChat: (q: string, mode?: string, pid?: string) => request<any>('/api/observer/chat',{method:'POST',body:JSON.stringify({question:q,execution_mode:mode||'auto_edit',project_id:pid||''})}),

@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useState } from 'react'
 
 const GATE_LABELS: Record<string, string> = { '1': '定义完成·请审核PRD', '2': '架构完成·请审核方案', '3': '验收完成·请审核交付物' }
 
@@ -26,9 +26,10 @@ export function gateCopy(gateNum: string, info: any): { label: string; reason?: 
   }
 }
 
-const Details = memo(function Details({ title, color, children }: { title: string; color: string; children: React.ReactNode }) {
+const Details = memo(function Details({ title, color, children, open = false }:
+  { title: string; color: string; children: React.ReactNode; open?: boolean }) {
   return (
-    <details style={{ background: '#ffffff', border: '1px solid #e5e2d8', borderRadius: 10, marginBottom: 10, overflow: 'hidden' }}>
+    <details open={open} style={{ background: '#ffffff', border: '1px solid #e5e2d8', borderRadius: 10, marginBottom: 10, overflow: 'hidden' }}>
       <summary style={{ cursor: 'pointer', padding: '12px 14px', fontSize: 13, fontWeight: 700, color, listStyle: 'none', display: 'flex', alignItems: 'center', gap: 8, userSelect: 'none' }}>
         <span>{title}</span>
         <span style={{ marginLeft: 'auto', color: '#6b6b68', fontSize: 11, fontWeight: 400 }}>点击展开 ▾</span>
@@ -38,11 +39,111 @@ const Details = memo(function Details({ title, color, children }: { title: strin
   )
 })
 
+/** 调研报告顶层键 → 中文名。
+ *
+ * ⚠️ **查不到就原样显示键名**（下面用的是 `RESEARCH_LABELS[k] ?? k`）——
+ * 模型以后多吐一段必须**自动出现**。这份报告以前只露 3/8 段，根因就是
+ * "没写进代码的段永远看不见"，别再犯一次。
+ */
+const RESEARCH_LABELS: Record<string, string> = {
+  recommendation: '推荐方案',
+  scope_clarification: '范围澄清',
+  competitive_analysis: '竞品分析',
+  frontier_theory: '前沿理论',
+  user_research: '用户调研',
+  technical_poc: '技术验证',
+  constraints: '约束',
+  pitfalls: '关键坑',
+}
+
+/** 只决定**排序**，不决定**出现与否**。不在表里的键排到最后（靠索引 99）。 */
+const RESEARCH_ORDER = ['recommendation', 'scope_clarification', 'competitive_analysis',
+  'frontier_theory', 'user_research', 'technical_poc', 'constraints', 'pitfalls']
+
+const MUTED = { fontSize: 11, color: '#6b6b68' } as const
+const SECTION_TITLE = { fontSize: 11, color: '#6b6b68', fontWeight: 600, marginBottom: 4 } as const
+const PRE = {
+  fontSize: 11, color: '#141413', background: '#faf9f5', borderRadius: 6, padding: 8,
+  maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0,
+} as const
+
+/** 一句摘要 —— 按**值的形状**分支，**不按键名写死**（换个键名一样有摘要）。 */
+function summarize(v: any): string {
+  if (v == null || v === '') return '（空）'
+  if (typeof v === 'string') {
+    const s = v.replace(/\s+/g, ' ').trim()
+    return s.length > 80 ? `${s.slice(0, 80)}…` : s
+  }
+  if (Array.isArray(v)) return `${v.length} 条`
+  if (typeof v === 'object') {
+    const names = Object.keys(v)
+    return names.length ? `${names.length} 项：${names.slice(0, 4).join(' / ')}` : '（空对象）'
+  }
+  return String(v)
+}
+
+/** 通用正文渲染。**兜底永远是 JSON，绝不能是空** ——
+ *  少了那句，`competitive_analysis: {}`（没有 products）点开就是一个空框，
+ *  跟"这段本来就没内容"长得一模一样（防御模式 #77.10 的形状：报"没有"而实际是"没渲染"）。 */
+function renderValue(value: any, depth = 0): React.ReactNode {
+  if (value == null || value === '') return <div style={MUTED}>（空）</div>
+  if (typeof value === 'string') {
+    return <div style={{ fontSize: 12, lineHeight: 1.6 }}>{value}</div>
+  }
+  if (typeof value !== 'object') return <div style={{ fontSize: 12 }}>{String(value)}</div>
+  if (Array.isArray(value)) {
+    if (!value.length) return <div style={MUTED}>（空）</div>
+    const allStr = value.every((x: any) => typeof x === 'string')
+    if (allStr) {
+      return <div>{value.map((s: string, i: number) =>
+        <div key={i} style={{ fontSize: 12, lineHeight: 1.6, marginBottom: 2 }}>• {s}</div>)}</div>
+    }
+    return <pre style={PRE}>{JSON.stringify(value, null, 2)}</pre>
+  }
+  const entries = Object.entries(value)
+  if (!entries.length) return <div style={MUTED}>（空对象）</div>
+  return (
+    <div>
+      {entries.map(([k, v]) => (
+        <div key={k} style={{ marginBottom: depth ? 6 : 10 }}>
+          <div style={SECTION_TITLE}>{k}</div>
+          {renderValue(v, depth + 1)}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** 一段的正文。保留两处**更好读**的渲染（竞品产品卡 / 关键坑红字），其余走通用渲染。 */
+function SectionBody({ name, value }: { name: string; value: any }) {
+  if (name === 'competitive_analysis' && Array.isArray(value?.products) && value.products.length) {
+    const { products, ...rest } = value
+    return (<>
+      <div style={{ marginBottom: 8 }}>
+        {products.map((p: any, i: number) => (
+          <div key={i} style={{ fontSize: 12, color: '#141413', padding: '6px 8px', background: '#faf9f5', borderRadius: 6, marginBottom: 4, lineHeight: 1.5 }}>
+            <b style={{ color: '#141413' }}>{p.name}</b> <span style={{ color: '#6b6b68' }}>· {p.type}</span><br/>
+            <span style={{ color: '#16a34a' }}>优：</span>{p.strengths}
+          </div>
+        ))}
+      </div>
+      {/* ⚠️ 剩下的子块（`comparison` / `differentiation`）**不能被吞掉** ——
+          它们在这一段里，以前从来没露过面。产品卡只是"更好读"，不是"这一段的全部"。 */}
+      {Object.keys(rest).length > 0 && renderValue(rest)}
+    </>)
+  }
+  if (name === 'pitfalls' && Array.isArray(value) && value.length) {
+    return (
+      <div>{value.map((p: string, i: number) => (
+        <div key={i} style={{ fontSize: 12, color: '#dc2626', lineHeight: 1.5, marginBottom: 2 }}>⚠ {p}</div>
+      ))}</div>
+    )
+  }
+  return <>{renderValue(value)}</>
+}
+
 export const ResearchReport = memo(function ResearchReport(
   { report, projectId }: { report: any; projectId?: string }) {
-  const products = report.competitive_analysis?.products || []
-  const pitfalls: string[] = report.pitfalls || []
-
   // 🔴 **解析失败必须说出来**（2026-09-17 真机，用户原话「我怎么不能看报告」）。
   //
   // 模型吐的 JSON 坏了（字符串里带裸换行）⇒ 后端 `try_parse_json` 走兜底
@@ -52,7 +153,10 @@ export const ResearchReport = memo(function ResearchReport(
   if (report?.parse_error) {
     const raw: string = report.raw_output || ''
     return (
-      <Details title="📋 调研报告 ⚠" color="#dc2626">
+      // `open`：解析失败**一进来就要看见**。默认收起的话，用户在第一道门上
+      // 看到的只是一个"📋 调研报告 ⚠"的折条 —— 跟"有报告、还没点开"没区别，
+      // 而事实是"这份报告根本解不开"。要说的那句必须自己走出来。
+      <Details title="📋 调研报告 ⚠" color="#dc2626" open>
         <div style={{ fontSize: 12, color: '#dc2626', lineHeight: 1.6, marginBottom: 8 }}>
           ⚠ 报告解析失败 —— 模型输出的不是合法 JSON。下面这段是原文开头。
         </div>
@@ -75,34 +179,36 @@ export const ResearchReport = memo(function ResearchReport(
     )
   }
 
+  // ── 正常报告：**每段一行**，默认全部收起，点哪段展开哪段 ──
+  //
+  // 2026-09-17 用户提的：「一次显示所有方案太多，改为每个方案的名称摘要，
+  // 我自己选择要不要点开看」。原来是**三块固定内容写死**（推荐方案/竞品/关键坑），
+  // 调研报告实际有 8 段 —— 另外 5 段（前沿理论/用户调研/范围澄清/技术验证/约束）
+  // **从来没露过面**，用户根本不知道它们存在。
+  //
+  // ⚠️ 外层**不套折叠框**：套了的话，看任何一段都要点两下（先展开外层、再展开那段）。
+  const obj = (report && typeof report === 'object' && !Array.isArray(report)) ? report : null
+  if (!obj) return <div style={MUTED}>📋 调研报告：（格式不认识）</div>
+  const rank = (k: string) => { const i = RESEARCH_ORDER.indexOf(k); return i < 0 ? 99 : i }
+  const keys = Object.keys(obj).sort((a, b) => rank(a) - rank(b))
   return (
-    <Details title="📋 调研报告" color="#2563eb">
-      {report.recommendation && (
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 11, color: '#6b6b68', fontWeight: 600, marginBottom: 4 }}>推荐方案</div>
-          <div style={{ fontSize: 12, color: '#141413', lineHeight: 1.6 }}>{report.recommendation}</div>
-        </div>
-      )}
-      {products.length > 0 && (
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 11, color: '#6b6b68', fontWeight: 600, marginBottom: 4 }}>竞品分析</div>
-          {products.map((p: any, i: number) => (
-            <div key={i} style={{ fontSize: 12, color: '#141413', padding: '6px 8px', background: '#faf9f5', borderRadius: 6, marginBottom: 4, lineHeight: 1.5 }}>
-              <b style={{ color: '#141413' }}>{p.name}</b> <span style={{ color: '#6b6b68' }}>· {p.type}</span><br/>
-              <span style={{ color: '#16a34a' }}>优：</span>{p.strengths}
-            </div>
-          ))}
-        </div>
-      )}
-      {pitfalls.length > 0 && (
-        <div>
-          <div style={{ fontSize: 11, color: '#6b6b68', fontWeight: 600, marginBottom: 4 }}>关键坑</div>
-          {pitfalls.map((p, i) => (
-            <div key={i} style={{ fontSize: 12, color: '#dc2626', lineHeight: 1.5, marginBottom: 2 }}>⚠ {p}</div>
-          ))}
-        </div>
-      )}
-    </Details>
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ ...SECTION_TITLE, fontSize: 12, marginBottom: 6 }}>📋 调研报告（{keys.length} 段）</div>
+      {keys.map(k => (
+        <details key={k} style={{ border: '1px solid #f3f2ec', borderRadius: 6, marginBottom: 4 }}>
+          <summary style={{ cursor: 'pointer', padding: '8px 10px', fontSize: 12, listStyle: 'none',
+                            display: 'flex', gap: 8, alignItems: 'center', userSelect: 'none' }}>
+            <b style={{ color: '#141413', whiteSpace: 'nowrap' }}>{RESEARCH_LABELS[k] ?? k}</b>
+            <span style={{ color: '#6b6b68', flex: 1, overflow: 'hidden',
+                           textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{summarize(obj[k])}</span>
+            <span style={{ color: '#6b6b68', fontSize: 11, whiteSpace: 'nowrap' }}>展开 ▾</span>
+          </summary>
+          <div style={{ padding: '2px 10px 10px' }}>
+            <SectionBody name={k} value={obj[k]} />
+          </div>
+        </details>
+      ))}
+    </div>
   )
 })
 
@@ -326,7 +432,8 @@ interface Props {
   gateNum: string
   gatePhase: string
   acceptance?: any
-  onGate: (decision: 'approved' | 'rejected') => void
+  /** `feedback` = 打回理由（选填）。会一路带到重跑的调研/架构提示词里。 */
+  onGate: (decision: 'approved' | 'rejected', feedback?: string) => void
 }
 
 const Bar = ({ items, tone = 'normal' }: { items: (string | null | undefined)[]; tone?: 'normal' | 'warn' }) => {
@@ -352,7 +459,14 @@ const GateSummary = memo(function GateSummary({ gateNum, research, arch, project
     const prods = (research.competitive_analysis?.products || []).length
     const pits: string[] = research.pitfalls || []
     return <Bar items={[
-      research.recommendation ? `推荐：${research.recommendation}` : '⚠ 调研没给推荐方案',
+      // 🔴 **解析失败不能说成"调研没给方案"**（2026-09-17 真机）。
+      // 兜底对象里**没有** `recommendation`，所以原来那句判据恒假 ⇒ 界面写着
+      // 「⚠ 调研没给推荐方案」——**把锅甩给了调研**，而事实是报告解不开、内容一个字没丢。
+      // 用户原话：「页面显示调研没给推荐方案，所以我看不到」。
+      // 判据要落在"报告坏没坏"上，不是"有没有那个字段"（防御模式 #77）。
+      research.parse_error
+        ? '⚠ 报告解析失败（不是"调研没给方案"）—— 点开看原文'
+        : research.recommendation ? `推荐：${research.recommendation}` : '⚠ 调研没给推荐方案',
       prods ? `${prods} 个竞品` : null,
       pits.length ? `${pits.length} 个坑` : null,
     ]} />
@@ -398,6 +512,12 @@ export const ProjectArchive = memo(function ProjectArchive({ info }: { info: any
 export const GatePanel = memo(function GatePanel({ info, gateNum, gatePhase, acceptance, onGate }: Props) {
   const isGate3 = gateNum === '3'
   const copy = gateCopy(gateNum, info)
+  // 打回理由。**点"打回"先展开一个输入框**，而不是弹系统 prompt：
+  // 系统 prompt 样式不可控、非浏览器宿主没有，而且 jsdom 里压根不实现（测不了）。
+  // 选填 —— 不填就点"确认打回"照样能退回，别让"写理由"变成打回的门槛。
+  const [rejecting, setRejecting] = useState(false)
+  const [reason, setReason] = useState('')
+  const doReject = () => { onGate('rejected', reason); setRejecting(false); setReason('') }
   return (
     <div style={{ padding: '8px 0', textAlign: 'center' }}>
       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: '#eaf6ec', border: '1px solid #16a34a', borderRadius: 8, padding: '8px 16px' }}>
@@ -405,9 +525,27 @@ export const GatePanel = memo(function GatePanel({ info, gateNum, gatePhase, acc
         <span style={{ fontSize: 12, color: copy.reason ? '#b45309' : '#6b6b68' }}>{copy.label}</span>
         <button onClick={() => onGate('approved')}
           style={{ background: '#16a34a', color: '#141413', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>✅ 通过</button>
-        <button onClick={() => onGate('rejected')}
+        <button onClick={() => setRejecting(true)}
           style={{ background: '#b5b2a8', color: '#dc2626', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: 11, cursor: 'pointer' }}>↩ 打回</button>
       </div>
+      {rejecting && (
+        <div style={{ maxWidth: 760, margin: '8px auto 0', textAlign: 'left',
+                      background: '#fffdf5', border: '1px solid #e8dcc0', borderRadius: 8, padding: '10px 12px' }}>
+          <div style={{ fontSize: 11, color: '#b45309', marginBottom: 6 }}>
+            哪里不满意？（选填）—— 这句会**带给重新跑的那一份**，比"打回重来"有用得多。
+          </div>
+          <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3}
+            placeholder="例：竞品只有 3 家，补到 5 家并给出对比表"
+            style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, padding: 6,
+                     border: '1px solid #e5e2d8', borderRadius: 6, resize: 'vertical' }} />
+          <div style={{ marginTop: 6, display: 'flex', gap: 8 }}>
+            <button onClick={doReject}
+              style={{ background: '#dc2626', color: '#ffffff', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>确认打回</button>
+            <button onClick={() => { setRejecting(false); setReason('') }}
+              style={{ background: '#e5e2d8', color: '#141413', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: 11, cursor: 'pointer' }}>取消</button>
+          </div>
+        </div>
+      )}
       <div style={{ maxWidth: 760, margin: '12px auto 0', textAlign: 'left' }}>
         {/* 摘要和"该看的东西"都按门分 —— 三道门以前长一个样，且显示的内容不对：
             GATE1 那时还没有架构却显示"架构方案"；GATE3 要审交付物，却把几周前的
@@ -416,7 +554,12 @@ export const GatePanel = memo(function GatePanel({ info, gateNum, gatePhase, acc
                      arch={info.architecture} projectIssues={info.issues} />
         {isGate3 && <AcceptancePanel acceptance={acceptance} projectIssues={info.issues} />}
         {/* GATE3 的正文是交付物（上面那块），旧文档降级为"项目背景"排在后面 */}
-        {gateNum !== '1' && info.research_report && <ResearchReport report={info.research_report} projectId={info.id} />}
+        {/* 🔴 **GATE1 必须渲染调研报告**（2026-09-17 真机）。
+            原来这里是 `gateNum !== '1' && ...` —— 而 GATE1 正是**审调研**的那道门：
+            加上 `Chat.tsx` 的 `!isGate` 把 `ProjectArchive` 也藏了 ⇒ **两道门一起把报告挡死**，
+            用户在第一道门上**一处都看不到报告**，只剩上面那条摘要（还写着"调研没给方案"）。
+            昨夜 `6de62c4` 修的红字解析失败提示，就修在这个**当时不渲染**的组件里。 */}
+        {info.research_report && <ResearchReport report={info.research_report} projectId={info.id} />}
         {gateNum === '2' && info.architecture && <ArchitectureDetails arch={info.architecture} />}
         {isGate3 && info.architecture && <ArchitectureDetails arch={info.architecture} />}
         {isGate3 && (

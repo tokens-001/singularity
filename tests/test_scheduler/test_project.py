@@ -34,11 +34,21 @@ class TestProjectState:
         p.confirm_gate(Phase.GATE1, "approved")
         assert p.phase == Phase.PLANNING
 
-    def test_reject_gate(self):
+    def test_reject_gate_returns_to_a_phase_that_can_rerun(self):
+        """GATE1 打回 ⇒ RESEARCHING。
+
+        旧断言钉的是 `TEMPLATE`（2026-09-17 改）。**那条是"固化了旧前提"、不是
+        "钉住正确行为"**：TEMPLATE 是**没人推**的那一档 —— `run_phase` 到那儿只打印
+        "等待 Owner 填写需求"就 break，调度循环只管 EXECUTING 之后，全仓也没有
+        "编辑项目需求"的接口 ⇒ 打回等于**把项目永久停在原地**，界面上只是"卡住了"。
+
+        ⇒ 判据不是"落到了哪个枚举值"，而是**落到的这一档会不会被重新推起来**：
+           回退表里的每一档，`_api_projects` 打回时都会点火 `run_phase`。
+        """
         p = create("test_reject", template="product_dev")
         p.phase = Phase.GATE1
         p.confirm_gate(Phase.GATE1, "rejected")
-        assert p.phase == Phase.TEMPLATE
+        assert p.phase == Phase.RESEARCHING
 
     # teardown_class 已删：QIDIAN_DIR 隔离后所有产物落在 tmp_path，pytest 自己清。
 
@@ -136,7 +146,33 @@ class TestProjectWorkflow:
         assert result is None  # GATE3 拒绝不再自动回退
         self.p.phase = Phase.GATE2
         self.p.confirm_gate(Phase.GATE2, "rejected")
-        assert self.p.phase == Phase.RESEARCHING
+        # 2026-09-17 改：退回**架构**（重规划），不再退回调研。
+        # 退回调研是错的一层 —— 调研通常没问题，重跑一遍还得让人再审一次 GATE1、
+        # 再花一轮调研钱。哪一层不满意就重做哪一层。
+        assert self.p.phase == Phase.PLANNING
+
+    def test_gate2_reject_clears_stale_architecture_and_counters(self):
+        """GATE2 打回 = 重规划 ⇒ 旧产物必须清干净，否则重规划出来的是**带毒的**架构。
+
+        三样东西各有各的坏法，缺一不可：
+          · `architecture` —— 不清就是"重规划"了却还挂着旧方案；
+          · `constraints_checklist` —— `effective_constraints()` 在清单非空时**直接返回它**
+            ⇒ 只清 architecture 会让验收跑**上一版约束**，比空清单更坏（防御模式 §60）；
+          · 两个计数器 —— `review_failures` / `integrate_failures` 是**单向棘轮**（#45）：
+            不清的话重规划出来的架构**下一次集成失败就直接弹回 GATE2**，
+            用户看到的是"我明明刚打回重做过，怎么又被卡住了"。
+            人工介入 = 自动重试配额恢复，和 approved 分支同一句话。
+        """
+        self.p.architecture = {"tasks": [{"id": "T1"}]}
+        self.p.constraints_checklist = [{"type": "reliability", "rule": "旧的"}]
+        self.p.review_failures = 2
+        self.p.integrate_failures = 2
+        self.p.phase = Phase.GATE2
+        self.p.confirm_gate(Phase.GATE2, "rejected")
+        assert self.p.architecture is None
+        assert self.p.constraints_checklist == []
+        assert self.p.review_failures == 0
+        assert self.p.integrate_failures == 0
 
     def test_architecture_redo_from_executing(self):
         self.p.phase = Phase.EXECUTING
