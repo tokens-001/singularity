@@ -165,9 +165,23 @@ def _maybe_report_gates() -> None:
                 _REPORT_PROMPT.format(gate=_GATE_LABEL[p.phase.value]), pid)
             if not text:
                 continue
+            # 🔴 **写回前重新读盘**（2026-09-17 真机，钉到毫秒）。
+            #    上面那次读盘发生在**调模型之前**，而模型要跑 10~20 秒 ——
+            #    这期间世界会变：**人按了门、调度循环把任务建出来了**。
+            #    而 `save()` 写的是 `to_dict()` **全量快照**，锁只防"同时写"、
+            #    **防不住"拿旧快照写"** ⇒ 拿上面那份 `p` 写回，等于把这 20 秒
+            #    里发生的一切**抹掉**。
+            #    实测：GATE2 批准（+ 随后建出的 8 个任务）被紧随其后的一次汇报写回清零 ——
+            #    判据是 json mtime 与 `observer_report` 的 ts **只差 1.1 毫秒**。
+            #    ⚠️ 窗口正好压在"人看见门 → 拍板"这段上，**不是小概率**。
+            #    ⇒ 落痕和推消息都基于**现在**的盘上状态；这期间已经过门了就不吭声
+            #    （那段白话说的已经不是现在的处境了）。
+            fresh = _proj.load(pid)
+            if fresh is None or fresh.phase != p.phase or fresh.phase.value not in _GATE_LABEL:
+                continue
             # 先落痕再推：推失败也不至于下一圈重复说（"报过了"以盘为准）
-            p.add_lineage({"action": "observer_report", "gate": p.phase.value})
-            _proj.save(p)
+            fresh.add_lineage({"action": "observer_report", "gate": fresh.phase.value})
+            _proj.save(fresh)
             _orch._pending_sse_events.append({
                 "kind": "observer_report", "project_id": pid,
                 "msg": json.dumps({"project_id": pid, "text": text}, ensure_ascii=False),

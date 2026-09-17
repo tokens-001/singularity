@@ -30,6 +30,9 @@ def _mk(tmp_path, monkeypatch, phase, lineage=None, text="大白话汇报"):
     p.phase = phase
     monkeypatch.setattr(proj_mod, "list_all", lambda: [p])
     monkeypatch.setattr(proj_mod, "save", lambda _p: None)
+    # 写回前会**重新读盘**（见"汇报期间世界变了"那条）。默认读回同一份，
+    # 于是 add_lineage/save 仍落在这个 `p` 上 —— 现有那些断言都在看它。
+    monkeypatch.setattr(proj_mod, "load", lambda _pid: p)
     # 观察者调用要桩掉（真调会花钱、也不会在测试里返回）
     import singularity.scheduler._observer_answer as oa
     calls = []
@@ -110,6 +113,35 @@ class TestGateReport:
         acts = [e for e in p.lineage if e.get("action") == "observer_report"]
         assert len(acts) == 1, f"没落痕 ⇒ 下一圈还会再说一遍：{p.lineage}"
         assert acts[0]["gate"] == "gate1"
+
+    def test_汇报期间世界变了_不许拿旧快照写回(self, tmp_path, monkeypatch):
+        """🔴 2026-09-17 真机：观察者汇报会把项目状态**整体写回** ⇒ 人的批准被抹掉。
+
+        原写法是「读盘 → **调模型 10~20 秒** → 加一笔 → **整体写回**」，而 `save()`
+        写的是 `to_dict()` 全量快照，锁只防"同时写"、防不住"拿旧快照写" ⇒
+        **那 20 秒里发生的一切被覆盖**（实测：GATE2 批准 + 随后建的 8 个任务清零，
+        json mtime 与 `observer_report` 的 ts 只差 **1.1 毫秒**）。
+
+        ⚠️ 这条**必须让世界在调模型期间变掉**才测得出接线：模型调用前后读的是同一份的话，
+        写回旧快照和写回新快照**长得一模一样**。所以让 `load` 返回另一份（已经过了门的）。
+        ⇒ 变异：删掉写回前那次 `load`，这条必红（`save` 会被调用）。
+        """
+        p, calls, pushed = _mk(tmp_path, monkeypatch, Phase.GATE1)
+        # 模拟"调模型那 20 秒里，人批了门、调度循环把任务建出来了"
+        after = proj_mod.ProjectState(
+            id="p1", name="测试项目", raw_constraints=[], owner_confirm={},
+            constraints_checklist=[], task_ids=["t1", "t2"], issues=[],
+            supervision_log=[], lineage=list(p.lineage), handoffs=[], agent_lineup={})
+        after.phase = Phase.EXECUTING
+        monkeypatch.setattr(proj_mod, "load", lambda _pid: after)
+        saved = []
+        monkeypatch.setattr(proj_mod, "save", lambda _p: saved.append(_p))
+
+        ow._maybe_report_gates()
+
+        assert saved == [], "拿旧快照写回了 ⇒ 这 20 秒里发生的事会被抹掉"
+        assert pushed == [], "人已经过了这道门，还推那段说旧处境的白话"
+        assert len(calls) == 1, "话该照说（模型照调），只是不能拿旧快照写回"
 
     def test_观察者没话说就不推空消息(self, tmp_path, monkeypatch):
         p, calls, pushed = _mk(tmp_path, monkeypatch, Phase.GATE1, text="")
