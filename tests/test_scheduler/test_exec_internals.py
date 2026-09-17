@@ -1742,7 +1742,7 @@ class TestStreamTotalBudget:
         path = tmp_path / "llm_calls_slow.jsonl"
         assert path.exists(), "慢调用没落账 ⇒ 又只能靠读代码猜"
         rec = json.loads(path.read_text(encoding="utf-8").strip().splitlines()[-1])
-        for k in ("elapsed", "first_byte", "prompt_chars", "out_chars", "loops", "cut"):
+        for k in ("model", "elapsed", "first_byte", "prompt_chars", "out_chars", "loops", "cut"):
             assert k in rec, f"账里没有 {k} ⇒ 分不出是哪一种慢：{rec}"
         assert rec["first_byte"] is not None, "没记到首字节时刻 ⇒ 分不出「发出去就慢」和「吐得慢」"
         assert rec["prompt_chars"] > 0

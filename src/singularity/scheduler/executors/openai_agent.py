@@ -1246,6 +1246,10 @@ class OpenAIAgentExecutor(BaseExecutor):
                 with open(_slow_calls_path(), "a", encoding="utf-8") as fh:
                     fh.write(json.dumps({
                         "ts": time.time(),
+                        # ⚠️ **model 必须有**：架构/执行都是**多家**跑同一个 prompt，
+                        # 不记是哪一家的话，"这家特别慢"和"这家卡住了"分不出来
+                        # —— 而当晚真机上就是同一 prompt 两家差了 4.7 倍（738 vs 156 字/秒）。
+                        "model": str(payload.get("model") or self._model or "?"),
                         "elapsed": round(_elapsed, 1),
                         "first_byte": round(_first_byte, 1) if _first_byte is not None else None,
                         "prompt_chars": _prompt_chars,
