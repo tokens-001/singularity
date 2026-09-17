@@ -321,6 +321,39 @@ def _run_research(project: ProjectState, agents: dict) -> str:
         raw = f'{{"parse_error": true, "error": "{err}"}}'
 
     report = try_parse_json(raw)
+
+    # 🔴 **解析失败要重试一次**（2026-09-17，**一天撞了三次**）。
+    # 规划那条路早就有这道（见 `_run_planning` 里 `[格式错误]` 那段），**调研没有** ——
+    # 坏了就直接进 GATE1，用户看到的是一份解不开的报告，而调研比规划还贵。
+    # ⚠️ 真机实测两次的根因都是**输出被截断**（`raw_truncated=True`、末尾停在半句话），
+    # 所以重试提示词得让它**写短一点把 JSON 补完整** —— 只照抄规划那句
+    # "请用 ```json 包起来" 治不了截断（它本来就是合法 JSON，只是没写完）。
+    if isinstance(report, dict) and report.get("parse_error"):
+        _retry_prompt = (
+            prompt
+            + "\n\n[格式错误] 上一次输出**没写完就被截断了**，JSON 不完整、解析不了。"
+              "请**重出一份更短的报告**：结构保持不变，每一段只留最关键的几条，"
+              "确保整个 JSON 完整闭合（**宁短勿断**）。"
+        )
+        _disp2, _err2 = _safe_dispatch(_retry_prompt, "any", task_id + "_r", agents,
+                                       project, lineup, restrict, phase="researching",
+                                       no_tools=True)
+        _raw2 = _disp2.executor_result.raw_output if _disp2 else ""
+        if _err2:
+            _raw2 = f'{{"parse_error": true, "error": "{_err2}"}}'
+        _rep2 = try_parse_json(_raw2) if _raw2 else {}
+        # 只有这次真解开了才换 —— 重试再坏就拿第一次的（至少 raw 还在，界面能看原文）
+        if _raw2 and not (isinstance(_rep2, dict) and _rep2.get("parse_error")):
+            report, raw, disp_result = _rep2, _raw2, _disp2
+            project.add_lineage({"action": "research_parse_retry", "ok": True})
+        else:
+            project.add_lineage({"action": "research_parse_retry", "ok": False})
+            # ⚠️ **不套 `try/except: pass`**（本仓的静默异常棘轮抓过这个形状）：
+            # "出声失败就静默"等于没说 —— 而出声本身就不该失败。
+            from singularity.scheduler import witness
+            witness.warn("research", f"parse_retry_failed:{project.id}"[:120],
+                         key="research_parse_retry_failed")
+
     project.research_report = report
     # ponytail: 保存结构化调研报告供后续阶段复用
     _save_phase_output(project.id, "research.md", raw)
