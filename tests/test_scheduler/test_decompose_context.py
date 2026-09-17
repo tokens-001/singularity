@@ -73,3 +73,38 @@ def test_关键词对不上也必须进_真机那条筛子永远匹配不上():
         "标题/描述里没有关键词，约束就没进 ⇒ 这正是真机 10/10 全失败的原因。"
         f"实际上下文：\n{ctx}")
     assert "坏行必须被跳过并计数" in ctx, f"规则文字也没进：\n{ctx}"
+
+
+def test_check_写成散文也不许炸整条建任务流程():
+    """🔴 2026-09-18 真机：模型在 `check` 里写了**散文**，整条建任务流程崩了。
+
+    架构第 11 条约束的 `check` 是：
+    「机器验不了：表格排版是观感指标，没有稳定可判定的判定式……故如实交由人工目视验收，
+      不编造命令。」
+    ⇒ `(c.get("check") or {}).get("argv")` 抛 `'str' object has no attribute 'get'`
+    ⇒ `decompose_architecture` **整条崩** ⇒ 建任务那步反复失败回滚
+    （**每 3 秒一条告警**、刷了 331 条），项目**永远拿不到任务**（`task_ids` 恒为 0）。
+
+    ⚠️ **散文写法是设计允许的** —— `_machine_checks.parse_check` 的文档明写：
+    "两种写法是故意的：能机器跑的给 argv，验不了的如实写散文"。
+    所以这里该跟它**用同一份判据**，不是自己假设 `check` 一定是 dict。
+
+    ⚠️ 判据：①**不抛**（这是崩的那条）②散文不许被当成命令塞进上下文。
+    """
+    arch = _arch()
+    arch["constraints"][0]["check"] = "机器验不了：排版是观感指标，交由人工目视验收"
+    out = decompose_architecture(arch)          # ① 不抛
+    assert len(out) == 1, "散文 check 把整条拆解带崩了"
+    ctx = out[0]["context_snippet"]
+    assert "机器检查会真跑" not in ctx, f"散文被当成命令了：\n{ctx}"
+    assert "坏行必须被跳过并计数" in ctx, f"规则文字还是该在：\n{ctx}"
+
+
+def test_check_是别的垃圾类型也不许炸():
+    """同一格的其它长相：数字 / 列表 / None —— 一律当"没给命令"，不许崩。"""
+    for junk in (123, ["python3", "-m", "pytest"], None):
+        arch = _arch()
+        arch["constraints"][0]["check"] = junk
+        out = decompose_architecture(arch)
+        assert len(out) == 1, f"check={junk!r} 把拆解带崩了"
+        assert "机器检查会真跑" not in out[0]["context_snippet"]

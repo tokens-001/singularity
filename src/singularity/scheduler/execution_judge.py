@@ -973,6 +973,24 @@ def decompose_architecture(arch_json: dict) -> list[dict]:
     constraints = arch_json.get("constraints", [])
     test_cases = arch_json.get("test_cases", {})
 
+    def _argv_of(c) -> list:
+        """取约束的机器检查命令 —— **`check` 不一定是 dict，这是设计允许的**。
+
+        `_machine_checks.parse_check` 的文档写着："两种写法是**故意的**：
+        能机器跑的给 argv，验不了的如实写散文。" ⇒ 这里必须用**同一份判据**，
+        不能自己假设 `check` 一定是 `{"argv": [...]}`。
+
+        🔴 2026-09-18 真机：模型给了一条散文 `check`（"机器验不了：表格排版是观感指标……
+        故如实交由人工目视验收，不编造命令"）⇒ 这里抛 `'str' object has no attribute 'get'`
+        ⇒ **`decompose_architecture` 整条崩** ⇒ 建任务那步反复失败回滚
+        （**每 3 秒一条告警**、刷了 331 条），项目**永远拿不到任务**（`task_ids` 恒为 0）。
+        ⇒ 一条脏数据不该毁掉整条建任务流程；**判据要复用，别各处再写一份**。
+        """
+        if not isinstance(c, dict):
+            return []
+        from singularity.scheduler._machine_checks import parse_check
+        return (parse_check(c.get("check")) or {}).get("argv") or []
+
     result = []
     for t in tasks:
         tid = t.get("id", "")
@@ -1013,7 +1031,7 @@ def decompose_architecture(arch_json: dict) -> list[dict]:
             # **把"这条约束会被怎么机器检查"一起带上** —— 判据要的输入，必须和判据一起
             # 交给产出它的人（同 `<项目仓>/test_cases.json` 那条：三个读者都在等一份
             # **没人被要求写**的文件）。
-            _chk = (c.get("check") or {}).get("argv") or []
+            _chk = _argv_of(c)
             if _chk:
                 ctx_parts.append(
                     "  ↳ 机器检查会真跑这条命令（退出码必须为 0）：`"
@@ -1027,7 +1045,7 @@ def decompose_architecture(arch_json: dict) -> list[dict]:
                 # `ERROR: file or directory not found: tests/test_contract_*.py`。
                 # ⇒ **判据要的输入，必须和判据一起交给产出它的人**（同 `<项目仓>/test_cases.json`
                 #   那条：三个读者都在等一份**没人被要求写**的文件）。
-                _chk = (c.get("check") or {}).get("argv") or []
+                _chk = _argv_of(c)
                 if _chk:
                     ctx_parts.append(
                         "  ↳ 机器检查会真跑这条命令（退出码必须为 0）：`"
