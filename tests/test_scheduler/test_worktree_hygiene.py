@@ -153,3 +153,47 @@ class TestCleanupCoversProjectRepos:
         cleaned = gw.cleanup_orphans()
         assert cleaned >= 1, "项目仓库里的孤儿没被清 —— 遍历那行是不是断回 PROJECT_ROOT 了？"
         assert not orphan.exists(), f"孤儿还在：{orphan}"
+
+
+class TestWorktreesDirDoesNotMkdir:
+    """🔴 **`_worktrees_dir()` 只算路径、不建目录**（2026-09-19）。
+
+    这个函数原来带 `d.mkdir(parents=True, exist_ok=True)`，而**除了 `create()`
+    之外的三个调用点全是只读的**（`_worktree.py` 清 worktree / 数上限、
+    `orchestrator.py` 捞超时任务的现场），它们只用 `.glob()` / `.iterdir()`。
+    带着 mkdir 走那三条路 ⇒ 给「本来没有 worktree 的仓库」凭空建出空目录。
+
+    盘上已坐实的后果：项目被删之后 `repo_dir()` 走兜底分支（返回
+    `.qidian/projects/<id>/repo`，且**明令绝不能 mkdir** —— 建出来的空目录让
+    "项目文件自己消失"看起来像真的），某个只读调用点拿它喂进来 ⇒
+    `.qidian/projects/<id>/` 下**只剩一个 `.repo-worktrees`**，
+    兜底那句断言当场作废。
+
+    变异：把 `d.mkdir(parents=True, exist_ok=True)` 加回 `_worktrees_dir()` → 红。
+    """
+
+    def test_只算路径不建目录(self, tmp_path):
+        """`repo_dir()` 兜底给的那个路径喂进来，不许把它的父目录 mk 出来。"""
+        # 形状照抄 project.py 兜底分支：<projects_dir>/<id>/repo，且**不存在**
+        fake_root = tmp_path / "projects" / "1789475332592" / "repo"
+
+        wtd = gw._worktrees_dir(fake_root)
+        assert wtd == fake_root.parent / ".repo-worktrees", f"路径拼错了: {wtd}"
+
+        # 只读用法：glob 一遍（`_worktree.py` / `orchestrator.py` 就是这么用的）
+        assert list(wtd.glob("t*")) == []
+
+        assert not fake_root.parent.exists(), (
+            f"只读调用把 {fake_root.parent} 建出来了 —— "
+            "`_worktrees_dir()` 里那行 mkdir 是不是又加回去了？"
+        )
+
+    def test_不建目录也不妨碍_create(self, repo):
+        """另一半：去掉 mkdir 之后 `create()` 照样能建 —— **父目录由 git 自己建**。
+
+        这是"删掉那行是安全的"的证据（2026-09-19 实测：`git worktree add` 指向一个
+        父目录不存在的路径照样成功）。没这条的话，"不 mkdir"可能是在拿 create() 换。
+        """
+        assert not (repo.parent / f".{repo.name}-worktrees").exists()
+        wt = gw.create("t-mkdir-probe", "E", repo_root=repo)
+        assert wt.path.is_dir(), f"worktree 没建成：{wt.path}"

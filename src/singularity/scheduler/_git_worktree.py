@@ -41,14 +41,30 @@ def _run(args: list[str], cwd: Path, timeout: int = _GIT_TIMEOUT) -> subprocess.
 
 
 def _worktrees_dir(repo_root: Path = None) -> Path:
-    # worktree 放 repo 同级目录 (repo.parent/.{name}-worktrees), 避开主仓库的 git 干扰
-    # (修复: worktree 若落在 singularity 的 .qidian/ 里, 任务执行时 .git 指针被删, git 解析错位)
+    """worktree 目录的**路径**。**只算路径，不建目录**（2026-09-19）。
+
+    worktree 放 repo 同级目录 (repo.parent/.{name}-worktrees), 避开主仓库的 git 干扰
+    (修复: worktree 若落在 singularity 的 .qidian/ 里, 任务执行时 .git 指针被删, git 解析错位)。
+
+    🔴 **这里原来带 `mkdir(parents=True, exist_ok=True)`，已删 —— 两个理由**：
+
+    ① **唯一的创建者不需要它**：真正要建目录的只有 `create()`，而它调的是
+       `git worktree add`，**git 自己会建父目录**（2026-09-19 实测：
+       指向一个不存在的 `../r-deep/.a-b-worktrees/x1` 照样成功）。这行是多余的。
+
+    ② **另外三个调用点全是只读的**（`_worktree.py` 清 worktree / 数上限、
+       `orchestrator.py` 捞超时任务的现场），它们只用 `.glob()` / `.iterdir()`。
+       带着 mkdir 走这三条路 ⇒ **给一个「本来没有 worktree」的仓库凭空建出空目录**。
+
+    ⚠️ ②正是盘上那个现场的成因：项目被删之后 `repo_dir()` 走兜底分支
+    （返回 `.qidian/projects/<id>/repo`，且**明令绝不能 mkdir**，见 `project.py`
+    那段注释——建出来的空目录让"项目文件自己消失"看起来像真的），
+    而某个只读调用点拿这个返回值喂进来 ⇒ `repo_root.parent` 被 mk 出来
+    ⇒ `.qidian/projects/<id>/` 下只剩一个 `.repo-worktrees`，**白白把兜底那句断言废掉**。
+    """
     if repo_root is not None:
-        d = repo_root.parent / f".{repo_root.name}-worktrees"
-    else:
-        d = config.QIDIAN_DIR / "worktrees"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+        return repo_root.parent / f".{repo_root.name}-worktrees"
+    return config.QIDIAN_DIR / "worktrees"
 
 
 def _head_ref(repo_root: Path = None) -> str:
@@ -269,7 +285,9 @@ def _project_repo_roots() -> list[Path]:
 def _cleanup_worktree_dirs(root: Path) -> int:
     """清掉 root 这棵仓库下 "git 已不认得" 的 worktree 目录。返回清理数。
 
-    注意不要走 _worktrees_dir()：那个函数会 mkdir，给没有 worktree 的仓库凭空建空目录。
+    拼路径用的是内联那行、而不是 `_worktrees_dir()` —— 2026-09-19 之后
+    `_worktrees_dir()` **已经不 mkdir 了**（那行已删，理由见它的 docstring），
+    这里不换过去只是**不想为了统一而改一条没坏的路径**；两者现在是等价的。
     """
     import shutil
     if not root.exists():
