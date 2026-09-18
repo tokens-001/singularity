@@ -6,12 +6,13 @@ Docs: https://docs.anthropic.com/en/api/messages
 
 from __future__ import annotations
 
-import json, os, time
+import json
+import os
+import time
 from pathlib import Path
 
-from singularity.scheduler.executors.base import BaseExecutor, ExecutorResult
 from singularity.scheduler import config
-
+from singularity.scheduler.executors.base import BaseExecutor, ExecutorResult
 
 # ── Constants ──────────────────────────────────────────────────────────
 ANTHROPIC_VERSION = "2023-06-01"
@@ -214,7 +215,11 @@ class AnthropicApiExecutor(BaseExecutor):
         """Execute a tool call and return result text."""
         from singularity.scheduler.executors.base import _BLOCKED_PATTERNS
         from singularity.scheduler.executors.openai_agent import (
-            _read_file, _read_files, _write_file, _run_command, _search_code,
+            _read_file,
+            _read_files,
+            _run_command,
+            _search_code,
+            _write_file,
         )
         try:
             # ── 权限闸门（2026-09-14 补）──

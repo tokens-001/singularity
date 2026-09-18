@@ -6,8 +6,7 @@ import re
 import time
 from pathlib import Path
 
-from singularity.scheduler import config
-from singularity.scheduler import tracker
+from singularity.scheduler import config, tracker
 
 
 def _heartbeat_dir() -> Path:

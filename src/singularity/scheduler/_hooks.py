@@ -9,7 +9,7 @@ scheduler 不该 import web —— 那是分层倒挂，还制造 import 环
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 _loop_start: Callable[[int], bool] | None = None
 _loop_stop: Callable[[], bool] | None = None

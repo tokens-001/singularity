@@ -4,7 +4,7 @@ import json
 import os
 import threading
 import time
-from dataclasses import dataclass, field, asdict, fields
+from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -42,7 +42,7 @@ _INFLIGHT = {TaskStatus.ROUTED, TaskStatus.DISPATCHED, TaskStatus.RUNNING, TaskS
 _TERMINAL = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.ROLLED_BACK}
 
 
-def is_terminal(status: "str | TaskStatus") -> bool:
+def is_terminal(status: str | TaskStatus) -> bool:
     """这个状态是不是**走到头了**（不会再回调度循环）。
 
     读侧（时间线 / 统计 / 列表）**一律用这个**，别再手打状态名 —— 2026-09-14 实测：
@@ -106,7 +106,7 @@ class Task:
         return d
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Task":
+    def from_dict(cls, d: dict) -> Task:
         d = dict(d)
         d["status"] = TaskStatus(d.get("status", "pending"))
         # 旧数据兼容: 新字段缺失时用默认值
@@ -184,11 +184,11 @@ def _warn_task_once(token: str, msg: str, key: str) -> None:
     if token in _TASK_WARNED:
         return
     _TASK_WARNED.add(token)
-    from singularity.scheduler import witness   # 函数体内 import：witness → tracker 是现成的环
+    from singularity.scheduler import witness  # 函数体内 import：witness → tracker 是现成的环
     witness.warn("tracker", msg[:200], key=key)
 
 
-def _read_task_file(p: Path) -> Optional[Task]:
+def _read_task_file(p: Path) -> Task | None:
     """读一个任务文件。**坏了要留痕** —— 四处读路径原来各自 `except: return None`
     / `continue`，**零留痕**（2026-09-19）。
 
@@ -227,7 +227,7 @@ def _read_task_file(p: Path) -> Optional[Task]:
         return None
 
 
-def read_task(task_id: str) -> Optional[Task]:
+def read_task(task_id: str) -> Task | None:
     return _read_task_file(_path(task_id))
 
 
@@ -257,7 +257,7 @@ def _next_id() -> str:
     with _LOCK:
         base = int(time.time() * 1000)
         # 缓存过期时才扫一次全表 (时间戳进位或首次调用)
-        if _NEXT_ID_CACHE <= base:
+        if base >= _NEXT_ID_CACHE:
             max_existing = base
             for p in tasks_dir().glob("*.json"):
                 try:
@@ -304,7 +304,7 @@ def create(
     return task
 
 
-def rollback_create(task_ids: "list[str]", why: str = "") -> int:
+def rollback_create(task_ids: list[str], why: str = "") -> int:
     """把**刚建出来、还没挂进项目**的任务撤回去。返回真撤掉的条数。
 
     为什么需要（2026-09-14）：本仓有**三处**「先 `create`、后登记进 `project.task_ids`」
@@ -323,7 +323,7 @@ def rollback_create(task_ids: "list[str]", why: str = "") -> int:
     （父任务 `children` / 项目 `task_ids` 那些）。要删一条已经在用的任务，
     走 `_api_tasks` 的删除路径。
     """
-    from singularity.scheduler import witness      # 函数体内 import：witness→tracker 是现成的环
+    from singularity.scheduler import witness  # 函数体内 import：witness→tracker 是现成的环
 
     done = 0
     for tid in task_ids or []:
@@ -363,7 +363,7 @@ def _apply_attrs(task: Task, kwargs: dict, task_id: str, caller: str) -> None:
                      f"{caller}_unknown_kwargs:{','.join(unknown)}:task={short_id(task_id)}"[:200])
 
 
-def transition(task_id: str, new_status: TaskStatus, force: bool = False, **kwargs) -> Optional[Task]:
+def transition(task_id: str, new_status: TaskStatus, force: bool = False, **kwargs) -> Task | None:
     """改状态。终态 (DONE/FAILED/ROLLED_BACK) 只允许 _TERMINAL_EXIT 白名单内的流转,
     其余改判拒绝并返回 None (force=True 可绕过, 仅 GATE3 打回这类显式重置用)。"""
     with _LOCK:
@@ -392,8 +392,9 @@ def transition(task_id: str, new_status: TaskStatus, force: bool = False, **kwar
 def _push_task_event(task_id: str, status: str, desc: str = "") -> None:
     """推送任务状态变更到 SSE 队列。"""
     try:
-        from singularity.scheduler._types import _pending_sse_events
         import time as _time
+
+        from singularity.scheduler._types import _pending_sse_events
         # 读取完整任务获取 project_id
         pid = ""
         try:

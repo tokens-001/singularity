@@ -13,21 +13,19 @@ from __future__ import annotations
 
 import json
 import time
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
-# ── 队列调度所需 (精简后) ──────────────────────────────────
-from singularity.scheduler._types import _pending_sse_events
+from singularity.scheduler import config, tracker, witness
+from singularity.scheduler import pre_search as pre_mod
+from singularity.scheduler import router as router_mod
+from singularity.scheduler import snapshot as snap_mod
 from singularity.scheduler._exec import _save_trace
-from singularity.scheduler._worktree import _release_ref, cleanup_task_artifacts
 from singularity.scheduler._planner import _maybe_complete_parents
 from singularity.scheduler._task_runner import TaskRunner, _archive_task_outcome
 
-from singularity.scheduler import config
-from singularity.scheduler import tracker
-from singularity.scheduler import router as router_mod
-from singularity.scheduler import snapshot as snap_mod
-from singularity.scheduler import witness
-from singularity.scheduler import pre_search as pre_mod
+# ── 队列调度所需 (精简后) ──────────────────────────────────
+from singularity.scheduler._types import _pending_sse_events
+from singularity.scheduler._worktree import _release_ref, cleanup_task_artifacts
 from singularity.scheduler.tracker import TaskStatus
 
 try:
@@ -191,8 +189,7 @@ def _salvage_timed_out(task, elapsed_s: float, snap=None):
     # 执行器每 dispatch 一次落一盘（`_exec._persist_partial_usage`），这里读回来。
     # ⚠️ 它是**下界**：超时那一刻正在飞的那次模型调用不在里面。
     # 一条都没落（比如第一轮就超时）才如实留 None —— None 是"不知道"，不是"没花钱"。
-    from singularity.scheduler._exec import (
-        read_partial_usage, read_partial_tool_events, read_partial_started_at)
+    from singularity.scheduler._exec import read_partial_started_at, read_partial_tool_events, read_partial_usage
     _partial_tokens, _partial_model = read_partial_usage(task.id)
     # **进没进过 dispatch** —— 它决定下面那句"用量未知"该说哪一种（§59 的边界）。
     _started_at = read_partial_started_at(task.id)
@@ -202,8 +199,9 @@ def _salvage_timed_out(task, elapsed_s: float, snap=None):
 
     try:
         import subprocess
-        from singularity.scheduler.project import repo_root_for
+
         from singularity.scheduler._git_worktree import _worktrees_dir
+        from singularity.scheduler.project import repo_root_for
         try:
             from singularity.scheduler.validator import _diff_base
             base = _diff_base(snap)
@@ -1064,8 +1062,8 @@ def _decompose_and_create_tasks(proj, agents: dict) -> None:
         #   ② route_level 取 t["suggested_level"]，而那是"层"(impl/backend)不是档位；
         #   ③ 不绑 route_role → 角色提示词不会注入（那条链路本来就死过两个半月）；
         #   ④ 旧 task_ids 不清 —— 与重规划那条同一个病（见 _workflow_phases）。
-        from singularity.scheduler.roles import get_phase_role
         from singularity.scheduler.project import Phase
+        from singularity.scheduler.roles import get_phase_role
         role_key = get_phase_role(Phase.EXECUTING) or "implementer"
         proj.task_ids = []
         id_map: dict[str, str] = {}
@@ -1219,6 +1217,7 @@ def _run_integration_merge(proj) -> tuple[bool, str]:
     """
     import subprocess
     from pathlib import Path as _Path
+
     from singularity.scheduler.project import repo_dir as _repo_dir
     # 修复: 原来取 config.PROJECT_ROOT = 奇点自己的仓库 —— 于是集成检查的是奇点的工作区
     # (你正在改奇点时项目会被无理由打回), 跑的是奇点的 test_cases.json。
@@ -1343,10 +1342,11 @@ def _run_delivery(proj) -> tuple[bool, str]:
     返回 (ok, detail)。
     ponytail: 不自动部署到生产 — 部署风险高且涉及用户基础设施。
     """
-    import subprocess
     import json as _json
-    from pathlib import Path as _Path
+    import subprocess
     from datetime import datetime as _dt
+    from pathlib import Path as _Path
+
     from singularity.scheduler.project import repo_dir as _repo_dir
     # 修复: 原来是奇点自己的仓库 —— tag 打在奇点上, 产物探测读的是奇点的 pyproject.toml
     root = str(_repo_dir(proj.id))

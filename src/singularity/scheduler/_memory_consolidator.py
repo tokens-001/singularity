@@ -1,12 +1,16 @@
-from singularity.scheduler._memory_core import *  # noqa: F401,F403
-from singularity.scheduler import config as sched_config
-from singularity.scheduler import witness
-from singularity.scheduler import tracker
-from singularity.scheduler._types import _pending_sse_events
-import json, os, re, time, logging
-from pathlib import Path
-from dataclasses import dataclass, field
+import json
+import logging
+import os
+import re
+import time
 from collections import defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from singularity.scheduler import config as sched_config
+from singularity.scheduler import tracker, witness
+from singularity.scheduler._memory_core import *  # noqa: F401,F403
+from singularity.scheduler._types import _pending_sse_events
 
 __all__ = ['_llm_judge_causal', '_resolve_causal_direction', 'consolidate_memory',
            'abstract_trajectory', 'backfill_abstractions', 'adapt_experience']
@@ -156,8 +160,7 @@ def consolidate_memory() -> int:
         # `add_inferred_causal_edge` 原来**也没导入** —— 跟上面那两个同一形状：
         # 定义在 `_memory_graph`，本模块只星号 import `_memory_core`，拿不到。
         # 于是**高置信那支一进去就抛 NameError**，整个"潜因果边"步骤 `return 0`。
-        from singularity.scheduler._memory_graph import (
-            find_candidate_latent_edges, add_inferred_causal_edge)
+        from singularity.scheduler._memory_graph import add_inferred_causal_edge, find_candidate_latent_edges
         candidates = find_candidate_latent_edges()
         added = 0
         tier3_all = [c for c in candidates if 0.55 <= c.get("semantic_sim", 0) < 0.85]

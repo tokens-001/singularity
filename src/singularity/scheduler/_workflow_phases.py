@@ -1,21 +1,30 @@
 __all__ = ['_run_execution', '_run_planning', '_run_research', '_validate_architecture']
 
-import json, os, time, logging
+import json
+import logging
+import os
+import time
 
-from singularity.scheduler import tracker
 from singularity.scheduler import dispatcher as disp_mod
-from singularity.scheduler.project import ProjectState, Phase, save, load, _projects_dir
-from singularity.scheduler.tracker import TaskStatus
+from singularity.scheduler import orchestrator, tracker
 from singularity.scheduler._io import try_parse_json
-from singularity.scheduler import orchestrator
+from singularity.scheduler.project import Phase, ProjectState, _projects_dir, load, save
 from singularity.scheduler.roles import get_phase_role
-
+from singularity.scheduler.tracker import TaskStatus
 from singularity.scheduler.workflow import (
-    _safe_dispatch, _needs_research, _should_skip, _collect_changed_files,
-    _phase_output_path, _save_phase_output, _read_phase_output,
-    _ARCHITECT_CONTEXT, _RESEARCHER_CONTEXT,
-    _arch_tasks_are_unordered, _flag_unordered_architecture,
+    _ARCHITECT_CONTEXT,
+    _RESEARCHER_CONTEXT,
+    _arch_tasks_are_unordered,
+    _collect_changed_files,
+    _flag_unordered_architecture,
+    _needs_research,
+    _phase_output_path,
+    _read_phase_output,
+    _safe_dispatch,
+    _save_phase_output,
+    _should_skip,
 )
+
 
 def _unconsumed_feedback(project: ProjectState, reject_actions: tuple, done_action: str) -> str:
     """人工打回后、**还没被任何一次重跑消费掉**的那句理由。没有就是 `""`。
@@ -82,8 +91,8 @@ def _materialize_test_cases(project: ProjectState, arch: dict) -> None:
     ⚠️ 架构里**没有** `test_cases` 时**不写空文件**（别造一个假的"有"），但要**出声** ——
     静默正是这个坑的成因。
     """
-    from singularity.scheduler import witness      # 本模块的惯例：懒导入
     from singularity.scheduler import project as project_mod
+    from singularity.scheduler import witness  # 本模块的惯例：懒导入
     tc = arch.get("test_cases") if isinstance(arch, dict) else None
     if not isinstance(tc, dict) or not tc:
         witness.warn("workflow",
@@ -622,7 +631,7 @@ def _validate_architecture(arch: dict) -> list[str]:
         issues.append("tasks 为空或格式错误")
     else:
         for i, t in enumerate(tasks):
-            tid = t.get("id", f"?")
+            tid = t.get("id", "?")
             for f in ["id", "title", "description", "complexity", "layer", "acceptance"]:
                 if not t.get(f):
                     issues.append(f"任务 {tid}: 缺少 {f}")

@@ -11,25 +11,24 @@ Section 分组:
   - Memory / Conflict
 """
 from __future__ import annotations
+
 import json
 import logging
 import os
 import shutil
 import subprocess
 import time
-
 from pathlib import Path
 from typing import Optional
 
-from singularity.scheduler import config
-from singularity.scheduler import tracker
-from singularity.scheduler.tracker import TaskStatus
-from singularity.scheduler import witness
-from singularity.scheduler import orchestrator
+from singularity.scheduler import config, orchestrator, tracker, witness
 from singularity.scheduler._worktree import (
-    cleanup_task_artifacts as _cleanup_task_artifacts, _release_ref,
+    _release_ref,
 )
-
+from singularity.scheduler._worktree import (
+    cleanup_task_artifacts as _cleanup_task_artifacts,
+)
+from singularity.scheduler.tracker import TaskStatus
 
 # ═══════════════════════════════════════════════════════════════
 
@@ -48,7 +47,6 @@ def salvageable_refs() -> dict[str, str]:
     ⚠️ 仓库根用 `_project_repo_roots()` —— pending ref 打在**项目仓**上，不是奇点仓
     （"读错仓库"这一族本仓踩过三次）。
     """
-    import subprocess
     from singularity.scheduler._git_worktree import _project_repo_roots
     out: dict[str, str] = {}
     for root in _project_repo_roots():
@@ -80,7 +78,7 @@ def _list_all_tasks() -> list[dict]:
     return result
 
 
-def _read_task_file(path: Path) -> Optional[dict]:
+def _read_task_file(path: Path) -> dict | None:
     try: return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         try: witness.warn('_api', 'read_task_file')
@@ -616,8 +614,8 @@ def task_rollback(task_id: str, push_event=None) -> tuple[dict, int]:
 
 def task_supervise(task_id: str, data: dict, push_event=None) -> tuple[dict, int]:
     """POST /api/tasks/<id>/supervise — 监督者介入。"""
-    from .supervisor import supervise
     from .project import repo_root_for
+    from .supervisor import supervise
     task = tracker.read_task(task_id)
     if task is None:
         return {"error": "任务不存在"}, 404

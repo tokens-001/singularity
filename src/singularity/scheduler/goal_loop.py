@@ -19,10 +19,10 @@ from dataclasses import dataclass, field
 import httpx
 
 from singularity.scheduler import dispatcher as disp_mod
-from singularity.scheduler._types import RunContext
-from singularity.scheduler._exec import _run_with_retry
 from singularity.scheduler import snapshot as snap_mod
 from singularity.scheduler import tracker
+from singularity.scheduler._exec import _run_with_retry
+from singularity.scheduler._types import RunContext
 from singularity.scheduler.tracker import TaskStatus
 
 

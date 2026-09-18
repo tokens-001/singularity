@@ -6,6 +6,7 @@ D1: 审查失败上限 (auto-fix max 2轮) + 超时一律判FAIL + 安全项标�
 """
 
 from __future__ import annotations
+
 import os
 import subprocess
 import time
@@ -156,7 +157,8 @@ def _review_requirements(task) -> str:
     proj = None
     if pid:
         try:
-            from .project import load as _load_proj, constraint_text
+            from .project import constraint_text
+            from .project import load as _load_proj
             proj = _load_proj(pid)
         except Exception:
             proj = None
@@ -193,9 +195,10 @@ def run_post_exec_checks(*, validation, quality, exec_result,
     S2: 超时检测改为真实 (用 ThreadPoolExecutor 带 timeout 包装耗时操作)。
     S3: reviewer_models 用 _all_agents_list 取全池, 去重复分支。
     """
+    import concurrent.futures
+
     from . import dispatcher as disp_mod
     from . import validator as val_mod
-    import concurrent.futures
 
     start_time = time.time()
     project_id = getattr(task, 'project_id', '')

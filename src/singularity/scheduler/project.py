@@ -5,12 +5,13 @@ ProjectState 是整个工作流的单一真相源。存盘到 .qidian/projects/{
 """
 
 from __future__ import annotations
+
+import dataclasses
 import json
 import os
 import re
 import threading
 import time
-import dataclasses
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -122,7 +123,7 @@ class ProjectState:
         return d
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ProjectState":
+    def from_dict(cls, d: dict) -> ProjectState:
         """反序列化。**对未知键容错** —— 别让多余的一个键把整个项目弄丢。
 
         原来结尾是裸的 `cls(**d)`：文件里多一个当前代码不认识的键
@@ -184,7 +185,7 @@ class ProjectState:
     # ── Phase 流转 ──
 
     def confirm_gate(self, gate: Phase, decision: str,
-                     feedback: str = "") -> Optional[Phase]:
+                     feedback: str = "") -> Phase | None:
         """Owner 批 Gate。自动推进 phase。返回下一个 phase 或 None。
 
         `feedback` 是**打回理由**（人工写的那一句），只对 rejected 有意义。
@@ -259,7 +260,7 @@ class ProjectState:
         if len(self.lineage) > 1000:
             self.lineage = self.lineage[-1000:]
 
-    def set_phase(self, phase: "Phase", reason: str = "") -> None:
+    def set_phase(self, phase: Phase, reason: str = "") -> None:
         """**阶段流转的唯一入口** —— 顺带自动留痕。
 
         以前是 21 处 `proj.phase = X` 散在 4 个文件里，两套驱动各写各的：
@@ -438,7 +439,7 @@ def set_projects_root(path: str) -> Path:
     # （2026-09-14 外派⑦ 实测复现：`user_theme` 等键全没，只剩 `projects_root`）。
     data, writable = load_for_rewrite(p)
     if not writable:
-        from . import witness          # 本文件的约定：函数内懒导入
+        from . import witness  # 本文件的约定：函数内懒导入
         witness.warn("project",
                      "save_skipped: settings.json 损坏，拒绝拿空表整份重建"
                      "（会把别的用户设置一起抹掉）；人工恢复备份后重试",
@@ -636,7 +637,7 @@ def save(project: ProjectState) -> None:
     _push_project_event(project)
 
 
-def _push_project_event(proj: "ProjectState") -> None:
+def _push_project_event(proj: ProjectState) -> None:
     """推送项目状态变更到 SSE (两个通道: pending queue + 直接广播)。"""
     try:
         import json as _json
@@ -670,7 +671,7 @@ def effective_constraints(proj) -> list:
     return list(getattr(proj, "constraints_checklist", None) or [])
 
 
-def load(project_id: str) -> Optional[ProjectState]:
+def load(project_id: str) -> ProjectState | None:
     p = _path(project_id)
     if not p.exists():
         return None
@@ -764,7 +765,7 @@ class FlowDecision(NamedTuple):
         return "light" if not (self.research or self.committee) else "heavy"
 
 
-def resolve_flow(project: "ProjectState") -> FlowDecision:
+def resolve_flow(project: ProjectState) -> FlowDecision:
     """流程重量判据的**唯一入口**。其他入口一律转发到这里，不自行推导（§5）。
 
     ⚠️ **刻意的非对称：auto 只决定调研，永不否决委员会。**
@@ -790,7 +791,7 @@ def resolve_flow(project: "ProjectState") -> FlowDecision:
     return FlowDecision(False, True, "auto", "自动: 描述无调研触发词")
 
 
-def suggest_flow(project: "ProjectState") -> FlowDecision | None:
+def suggest_flow(project: ProjectState) -> FlowDecision | None:
     """**只建议，不生效**（§47）。返回 None = 没什么可说的。
 
     误判的代价 = 用户不点那一下 —— 因为这里**不写任何状态**，

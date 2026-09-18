@@ -8,6 +8,7 @@
 """
 
 from __future__ import annotations
+
 import json
 import os
 import re
@@ -20,11 +21,9 @@ from typing import Optional
 
 import httpx
 
-from singularity.scheduler.executors.base import (BaseExecutor, ExecutorResult,
-    is_blocked_path, is_dangerous_command)
-from singularity.scheduler import witness
-from singularity.scheduler import config
+from singularity.scheduler import config, witness
 from singularity.scheduler._types import _pending_sse_events
+from singularity.scheduler.executors.base import BaseExecutor, ExecutorResult, is_blocked_path, is_dangerous_command
 
 # ── 重试策略（Temporal 五字段语义，见 _api_call）──
 # 以前网络错误/超时一次就判任务失败 —— 一次抖动整轮白跑。
@@ -147,7 +146,7 @@ _RETRY_TOTAL_BUDGET = float(os.environ.get("QIDIAN_RETRY_TOTAL_BUDGET", "600"))
 _SLOW_CALL_LOG_S = float(os.environ.get("QIDIAN_SLOW_CALL_LOG_S", "20"))
 
 
-def _slow_calls_path() -> "Path":
+def _slow_calls_path() -> Path:
     """慢调用的分诊账（`.qidian/llm_calls_slow.jsonl`）。
 
     ⚠️ 放在 `.qidian/` 下是**有意**的：那里**不在版本控制里**，是运行期产物，
@@ -1322,7 +1321,7 @@ class OpenAIAgentExecutor(BaseExecutor):
 
 # ── 全局 httpx 客户端 (连接池复用) ──
 
-_HTTPX_CLIENT: "Optional[httpx.Client]" = None
+_HTTPX_CLIENT: httpx.Client | None = None
 
 
 def _get_http_client() -> httpx.Client:
@@ -1446,7 +1445,6 @@ def _run_command(args: dict, cwd, extra_env: dict | None = None) -> str:
     `extra_env` = agent 配置里的 `env`（`BaseExecutor._agent_env`），
     合并进子进程环境后**再统一脱敏**（`_is_sensitive_env`）。
     """
-    import subprocess
     cmd = args.get("command", "")
     if not cmd:
         return "请指定 command"

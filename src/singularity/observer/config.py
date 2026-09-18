@@ -9,7 +9,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-
 # ── 网络服务 ──────────────────────────────────────────────
 # 🔴 **默认必须是回环地址**（2026-09-14 改，原为 `0.0.0.0`）：Observer WS **全文没有任何
 # 鉴权**（`observer/server.py` 里没有 token 判定），绑 `0.0.0.0` = 同网段任何机器都能连上来

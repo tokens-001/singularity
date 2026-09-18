@@ -14,7 +14,6 @@ import threading
 import tomllib
 from pathlib import Path
 
-
 # 🔴 **tmp 名要带 pid、写的时候要拿锁 —— 两样缺一不可**（2026-09-14，外派 J 审
 # `防御模式.md` §46 时抓到：那条的修法**只落在 `project.py:479`**，这个共用入口没跟着改）。
 #   · **不带 pid**：两个独立进程写同一个文件时共用同一个确定性 `<name>.tmp` ——
@@ -263,10 +262,7 @@ def _repair_truncated_json(raw: str) -> dict | None:
         body += '"'
     while depth > 0:
         stripped = body.rstrip()
-        if stripped.endswith("]"):
-            body += "}"
-            depth -= 1
-        elif stripped.endswith("}") or stripped.endswith('"'):
+        if stripped.endswith("]") or stripped.endswith("}") or stripped.endswith('"'):
             body += "}"
             depth -= 1
         else:
@@ -401,7 +397,7 @@ def _prune_corrupt_backups(path: Path) -> None:
     **清掉的都是同一份坏文件的旧快照**（最新那份永远留着），所以证据没丢 ——
     要的是"最近一次现场的原始字节"，不是它的编年史。
     """
-    from .log import warn as _log_warn   # 函数体内 import，理由同 `_quarantine_corrupt`
+    from .log import warn as _log_warn  # 函数体内 import，理由同 `_quarantine_corrupt`
     try:
         siblings = [p for p in path.parent.glob(f"{path.name}.corrupt*")
                     if p.name == f"{path.name}.corrupt"
@@ -429,7 +425,8 @@ def _quarantine_corrupt(path: Path, reason: str) -> None:
     """
     import shutil
     import time as _time
-    from .log import warn as _log_warn   # 函数体内 import：witness→tracker→_io 是现成的环
+
+    from .log import warn as _log_warn  # 函数体内 import：witness→tracker→_io 是现成的环
 
     # ⚠️ **登记必须在最前面**（2026-09-14 改）：它记的是"**我判定你坏了**"，
     # 而下面的备份/剪枝是**善后**。原来登记在最后 ⇒ 备份或剪枝中途抛（哪怕是
@@ -547,7 +544,7 @@ def load_toml_for_rewrite(path: Path):
     return got, not is_quarantined(path)
 
 
-def load_toml_or_quarantine(path: Path) -> "dict | None":
+def load_toml_or_quarantine(path: Path) -> dict | None:
     """`load_json_or_quarantine` 的 TOML 版。
 
     ⚠️ 既有的 `load_toml`（损坏 = 原样抛）**保留不动** —— `web/app.py` 的 fusion 读写靠它自己兜。

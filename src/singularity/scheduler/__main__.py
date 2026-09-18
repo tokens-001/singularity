@@ -10,18 +10,17 @@
 """
 
 from __future__ import annotations
+
 import json
+import signal
 import sys
 import time
-import signal
 
-from singularity.scheduler import config
+from singularity.scheduler import config, orchestrator, tracker
 from singularity.scheduler import dispatcher as disp_mod
 from singularity.scheduler import snapshot as snap_mod
-from singularity.scheduler import orchestrator
-from singularity.scheduler import tracker
-from singularity.scheduler.tracker import TaskStatus
 from singularity.scheduler.project import Phase
+from singularity.scheduler.tracker import TaskStatus
 
 # `_LOOP_POLL_SECS` 已挪到 `_cli_tasks.py` —— `_cmd_loop` 在那个模块，而本模块是
 # **单向** import 它（`from _cli_tasks import *`），常量放这儿那边看不见 →
@@ -84,10 +83,9 @@ def main(argv: list = None) -> int:
 # _parse_concurrent 已挪到 _cli_tasks.py —— _cli_memory 也要用它,
 # 原位置(这里)只有本模块能看见, 那边调它必 NameError。下面星号导入带回来。
 
-from singularity.scheduler._cli_tasks import *  # noqa: F401,F403
 from singularity.scheduler._cli_memory import *  # noqa: F401,F403
 from singularity.scheduler._cli_projects import *  # noqa: F401,F403
-
+from singularity.scheduler._cli_tasks import *  # noqa: F401,F403
 
 if __name__ == "__main__":
     sys.exit(main())

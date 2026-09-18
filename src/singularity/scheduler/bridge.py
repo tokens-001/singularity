@@ -7,11 +7,12 @@
 T5: 集成 Observer Server，提供统一启动入口与调度事件钩子。
 """
 from __future__ import annotations
+
 import asyncio
 import json
+import logging
 import threading
 import time
-import logging
 from concurrent.futures import ThreadPoolExecutor
 
 _log = logging.getLogger("ws")
@@ -134,7 +135,7 @@ async def _ws_handler(ws):
 
         async for _ in ws:
             pass
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pass
     except Exception:
         pass
@@ -148,6 +149,7 @@ def start_ws_server(host: str = "127.0.0.1", port: int = 5051):
 
     async def _serve():
         import websockets
+
         from singularity.scheduler._auth import ws_allowed_origins
         global _WS_STOP
         _WS_LOOP = asyncio.get_event_loop()

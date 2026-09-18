@@ -4,12 +4,13 @@ EWMA 指标追踪 + Hedge 权重 + 冷启动 + 候选集加权。
 集成到 router.py 的静态规则内，不破坏现有 RouteResult 接口。
 """
 from __future__ import annotations
+
 import json
 import threading
 import time
-from pathlib import Path
-from dataclasses import dataclass, field
 from collections import defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from singularity.scheduler import config
 from singularity.scheduler._io import atomic_write_json
@@ -123,7 +124,7 @@ class RouteLearner:
                 for k, s in self._stats.items()}
 
     @classmethod
-    def from_dict(cls, d: dict) -> "RouteLearner":
+    def from_dict(cls, d: dict) -> RouteLearner:
         rl = cls()
         for k, v in d.items():
             s = LearnerStats(

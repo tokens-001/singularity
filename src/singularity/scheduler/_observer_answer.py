@@ -10,10 +10,18 @@ import time
 import httpx
 
 from singularity.scheduler._observer_definition import (
-    _get_observer_cfg, _build_status_context, DIRECT_SYSTEM_PROMPT, project_section,
-    _detect_definition_intent, _any_project_at_gate3, _get_definition_context,
-    _execute_observer_tool, _definition_role_prompt,
-    project_at_gate3, verdict_schema_text, parse_verdict_rollup,
+    DIRECT_SYSTEM_PROMPT,
+    _any_project_at_gate3,
+    _build_status_context,
+    _definition_role_prompt,
+    _detect_definition_intent,
+    _execute_observer_tool,
+    _get_definition_context,
+    _get_observer_cfg,
+    parse_verdict_rollup,
+    project_at_gate3,
+    project_section,
+    verdict_schema_text,
 )
 from singularity.scheduler._observer_tools import OBSERVER_SYSTEM_PROMPT, OBSERVER_TOOLS
 
@@ -265,7 +273,9 @@ def _answer_question_inner(question: str, project_id: str = "") -> str:
             if reply == "approved":
                 session["phase"] = "done"
                 try:
-                    from singularity.scheduler.project import load as load_project, Phase, save as save_project
+                    from singularity.scheduler.project import Phase
+                    from singularity.scheduler.project import load as load_project
+                    from singularity.scheduler.project import save as save_project
                     proj = load_project(project_id)
                     if proj:
                         proj.confirm_gate(Phase.GATE1, "approved")
@@ -281,7 +291,9 @@ def _answer_question_inner(question: str, project_id: str = "") -> str:
     # GATE2/GATE3 确认检测
     if project_id:
         try:
-            from singularity.scheduler.project import load as load_project, Phase, save as save_project
+            from singularity.scheduler.project import Phase
+            from singularity.scheduler.project import load as load_project
+            from singularity.scheduler.project import save as save_project
             proj = load_project(project_id)
             if proj:
                 reply = _is_gate_reply(question)

@@ -62,7 +62,7 @@ class SkillDef:
     raw: str = ""               # 原始 SKILL.md 全文
 
     # ── 运行时生成的 ──
-    function_def: Optional[dict] = None   # OpenAI function calling 定义
+    function_def: dict | None = None   # OpenAI function calling 定义
     errors: list[str] = field(default_factory=list)
 
     def to_function_def(self) -> dict:
@@ -188,7 +188,7 @@ def load_skills(include_flow: bool = False) -> dict[str, SkillDef]:
     return skills
 
 
-def _load_one(skill_file: Path, source: str) -> Optional[SkillDef]:
+def _load_one(skill_file: Path, source: str) -> SkillDef | None:
     """加载单个 SKILL.md 文件。"""
     try:
         content = skill_file.read_text(encoding="utf-8")
@@ -201,7 +201,7 @@ def _load_one(skill_file: Path, source: str) -> Optional[SkillDef]:
     return skill
 
 
-def _build_function_def(skill: SkillDef) -> Optional[dict]:
+def _build_function_def(skill: SkillDef) -> dict | None:
     """为 type=tool 的 skill 生成 function calling 定义。"""
     if skill.type != "tool":
         return None
@@ -319,6 +319,7 @@ def set_agent_skills(agent_level: str, agent_model: str, skill_names: list[str],
     if not agent_model and not phase:
         return True
     import json
+
     from singularity.scheduler import _io
     custom_file = _qidian_dir() / "agents_custom.json"
     # ⚠️ **读在前、判在后**：判据是「这次读出来的是什么」，不是 `_io.is_quarantined` ——

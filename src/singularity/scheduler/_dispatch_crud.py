@@ -1,9 +1,10 @@
-from singularity.scheduler.dispatcher import load_agents, _ESCALATION
+from singularity.scheduler.dispatcher import _ESCALATION, load_agents
 
 __all__ = ['_custom_agents_path', '_load_custom_agents', '_notify_agent_change', '_save_custom_agents', 'add_agent', 'escalate', 'remove_agent', 'purge_disabled', 'update_agent']
 # ── Agent CRUD (写入自定义 JSON overlay) ──
 
 import json as _json
+
 
 def _custom_agents_path():
     from . import config
@@ -25,8 +26,7 @@ def _load_custom_agents() -> dict:
     return data if data is not None else {}
 
 def _save_custom_agents(data: dict) -> None:
-    from . import config
-    from . import _io, witness
+    from . import _io, config, witness
     p = _custom_agents_path()
     # ⚠️ **要"这次读一遍"再判**（2026-09-14 修）：原来只问 `is_quarantined`（路径标记），
     # 而那个标记**要有人先读过坏文件才有** ⇒ 第一次触碰（进程刚起、还没人读过）时
@@ -157,8 +157,9 @@ def purge_disabled(model: str) -> bool:
 def _notify_agent_change():
     """推送 agent 变更事件到待刷新队列。loop 运行时会广播; loop 未运行时由 API handler 直接推。"""
     try:
-        from singularity.scheduler._types import _pending_sse_events
         import time
+
+        from singularity.scheduler._types import _pending_sse_events
         _pending_sse_events.append({"kind": "agent_change", "msg": "agent config updated", "ts": time.time()})
     except Exception:
         pass

@@ -1,16 +1,25 @@
 __all__ = ['_load_mcp_for_agent', '_load_skills_for_agent', '_make_permission_checker', '_ntilc_filter', 'invalidate_mcp_cache', 'invalidate_skill_cache']
 
-from singularity.scheduler.dispatcher import (
-    load_agents, _ensure_agent_type, _build_agent_from_registry,
-    DispatchResult, _CACHE_LOCK, _SKILL_CACHE, _MCP_CACHE,
-)
-from singularity.scheduler import config
-from singularity.scheduler import tracker as _tracker
-from singularity.scheduler import witness
-from singularity.scheduler._types import _pending_sse_events
-from singularity.scheduler.log import timed
-import os, json, time, logging
+import json
+import logging
+import os
+import time
 from pathlib import Path
+
+from singularity.scheduler import config, witness
+from singularity.scheduler import tracker as _tracker
+from singularity.scheduler._types import _pending_sse_events
+from singularity.scheduler.dispatcher import (
+    _CACHE_LOCK,
+    _MCP_CACHE,
+    _SKILL_CACHE,
+    DispatchResult,
+    _build_agent_from_registry,
+    _ensure_agent_type,
+    load_agents,
+)
+from singularity.scheduler.log import timed
+
 
 def _ntilc_filter(task_desc: str, skills: dict) -> dict:
     """NTILC 工具检索: 语义匹配过滤无关 skill，省 ~95% 上下文。
@@ -22,7 +31,7 @@ def _ntilc_filter(task_desc: str, skills: dict) -> dict:
 
     # 尝试 embedding 语义匹配
     try:
-        from singularity.scheduler.memory import _embed, _cosine_sim
+        from singularity.scheduler.memory import _cosine_sim, _embed
         task_emb = _embed(task_desc)
         if task_emb:
             scored = []
@@ -76,7 +85,10 @@ def _load_skills_for_agent(level: str, model: str, task_desc: str = "",
             return tools, prompt, skills
     try:
         from singularity.skills.skill_loader import (
-            load_skills, get_tool_definitions, get_prompt_additions, get_agent_skills,
+            get_agent_skills,
+            get_prompt_additions,
+            get_tool_definitions,
+            load_skills,
         )
         skill_names = get_agent_skills(level, model, phase)
         if skill_names:
@@ -141,7 +153,7 @@ def invalidate_mcp_cache() -> None:
 def _make_permission_checker() -> callable:
     """创建权限检查回调。"""
     try:
-        from .permission import check_tool, check_path, check_command, needs_approval
+        from .permission import check_command, check_path, check_tool, needs_approval
         def _check(tool_name, args, agent_level, agent_model, task_id):
             ok, reason = check_tool(agent_level, agent_model, tool_name)
             if not ok:

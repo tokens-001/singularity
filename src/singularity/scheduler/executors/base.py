@@ -13,17 +13,23 @@ v1 边界:
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Optional
+
+from singularity.scheduler._sensitive import (
+    BLOCKED_COMMANDS as _BLOCKED_COMMANDS,
+)
 
 # ⚠️ **敏感路径 / 危险命令这两张表搬到 `scheduler/_sensitive.py` 了**（2026-09-14）。
 # 它们原来**还抄了一份**在 `permission.SANDBOXED` 里当"profile 的拦截承诺"，
 # 两份已经不一致（`id_rsa` 只有这份有、`rm -rf` 只有那份有），而界面显示的是那份
 # ⇒ 承诺和实拦对不上。现在**一份表、两处 import**（见那个模块的 docstring）。
 # 名字保持不变：全仓有别的模块 `from ...executors.base import _BLOCKED_PATTERNS`。
-from singularity.scheduler._sensitive import (      # noqa: E402
+from singularity.scheduler._sensitive import (  # noqa: E402
     BLOCKED_PATH_PATTERNS as _BLOCKED_PATTERNS,
-    BLOCKED_COMMANDS as _BLOCKED_COMMANDS,
+)
+from singularity.scheduler._sensitive import (
     is_blocked_path,
     is_dangerous_command,
 )
@@ -34,7 +40,7 @@ class ExecutorResult:
     success: bool                       # executor 本身是否成功 (非 validate 结论)
     raw_output: str = ""                # 原始输出 (cli stdout / api content)
     changed_files: list = field(default_factory=list)  # 相对项目根的路径
-    patch_path: Optional[str] = None    # E+ 智谱产出暂存路径 (未 apply)
+    patch_path: str | None = None    # E+ 智谱产出暂存路径 (未 apply)
     elapsed: float = 0.0
     token_count: int = 0                # token 消耗 (0=未获取)
     error: str = ""                     # 失败原因 (超时/限流/格式异常)
@@ -112,13 +118,13 @@ class BaseExecutor:
     # 权限检查回调。由 `_dispatch_exec._run_executor` 注入（见那里的注释）；
     # 类属性而不是构造参数，理由同 `budget_s`：各执行器签名不一。
     # `None` = 没人注入 ⇒ `_check_permission` 放行，但会**出声**（见下）。
-    _permission_checker: "callable | None" = None
+    _permission_checker: callable | None = None
 
     # 这次执行**还能花多少秒**（调用方按任务级死线倒推后传进来，见 `_run_executor`）。
     # 由 `_dispatch_exec._run_executor` 构造后赋值，所以放在**类属性**上而不是
     # `__init__` 参数里 —— 各执行器的签名不一（有的不吃 `**kwargs`），改构造签名
     # 会波及测试里的直接构造。`None` = 调用方不管 ⇒ 子类退回各自的老行为。
-    budget_s: "float | None" = None
+    budget_s: float | None = None
 
     def __init__(self, agent_cfg: dict, task: str, task_id: str,
                  baseline_ref: str = "", cwd: str = "",

@@ -5,6 +5,7 @@ project_lineup 支持项目级自定义编组。
 """
 
 from __future__ import annotations
+
 import importlib
 import logging
 import threading
@@ -12,12 +13,16 @@ import time
 from dataclasses import dataclass
 
 from singularity.scheduler import config, witness
-from singularity.scheduler.log import timed
 from singularity.scheduler._types import _pending_sse_events
 from singularity.scheduler.executors import (
-    BaseExecutor, ExecutorResult,
-    ClaudeCliExecutor, ZhipuApiExecutor, OpenAIAgentExecutor, AnthropicApiExecutor,
+    AnthropicApiExecutor,
+    BaseExecutor,
+    ClaudeCliExecutor,
+    ExecutorResult,
+    OpenAIAgentExecutor,
+    ZhipuApiExecutor,
 )
+from singularity.scheduler.log import timed
 
 # 档位 → 下一档 的映射表。**故意为空**：两档制已合并成单档("any")，
 # 没有"下一档"可升。`escalate()` 因此恒返回 None（详见它的 docstring）。
@@ -110,8 +115,8 @@ def _ensure_agent_type(agent_cfg: dict) -> dict:
     need_fill = not agent_cfg.get("type") or not agent_cfg.get("api_key_env")
     if need_fill and model:
         try:
-            from . import model_registry as mr
             from . import api_store
+            from . import model_registry as mr
             m = mr.get(model)
             if m:
                 apis = api_store.list_all()
@@ -256,8 +261,8 @@ def agent_api_available(agent_cfg: dict) -> bool:
 def _build_agent_from_registry(model_name: str) -> dict | None:
     """模型不在 agents.toml 时，从 model_registry + api_store 自动构造配置。"""
     try:
-        from . import model_registry as mr
         from . import api_store
+        from . import model_registry as mr
         m = mr.get(model_name)
         if not m:
             return None

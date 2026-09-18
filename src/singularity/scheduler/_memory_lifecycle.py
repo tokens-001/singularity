@@ -1,11 +1,16 @@
-from singularity.scheduler._memory_core import *  # noqa: F401,F403
+import json
+import logging
+import os
+import re
+import time
+from collections import defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
+
 from singularity.scheduler import config as sched_config
 from singularity.scheduler import witness
+from singularity.scheduler._memory_core import *  # noqa: F401,F403
 from singularity.scheduler._types import _pending_sse_events
-import json, os, re, time, logging
-from pathlib import Path
-from dataclasses import dataclass, field
-from collections import defaultdict
 
 __all__ = ['_COLD_MAX', '_HOT_WINDOW', '_insights_path', '_WARM_WINDOW', '_get_age_tier', '_load_insights', '_save_insights', 'auto_maintain', 'get_insights', 'lifecycle_stats', 'prune_expired', 'rebuild_from_traces', 'stats', 'system2_extract']
 # 维护

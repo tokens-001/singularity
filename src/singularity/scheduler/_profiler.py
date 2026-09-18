@@ -10,6 +10,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
 from singularity.scheduler import config, witness
 
 

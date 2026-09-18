@@ -16,14 +16,15 @@ v1 边界:
 """
 
 from __future__ import annotations
+
 import os
 import re
 import shlex
 import subprocess
 import time
 
-from singularity.scheduler.executors.base import BaseExecutor, ExecutorResult
 from singularity.scheduler import config
+from singularity.scheduler.executors.base import BaseExecutor, ExecutorResult
 
 # 从 stdout/stderr 中尝试匹配 token 数 (多模型格式不同, 尽力解析)
 _TOKEN_PATTERNS = [

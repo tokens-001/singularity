@@ -8,12 +8,12 @@
   _observer_worker.py     — worker线程+start/stop (4 functions)
 """
 
-from singularity.scheduler._observer_tools import *       # noqa: F401,F403
-from singularity.scheduler._observer_definition import *   # noqa: F401,F403
-from singularity.scheduler._observer_answer import *       # noqa: F401,F403
-from singularity.scheduler._observer_client import *       # noqa: F401,F403
-from singularity.scheduler._observer_worker import *       # noqa: F401,F403
+from singularity.scheduler._observer_answer import *  # noqa: F401,F403
+from singularity.scheduler._observer_client import *  # noqa: F401,F403
+from singularity.scheduler._observer_definition import *  # noqa: F401,F403
+from singularity.scheduler._observer_definition import _execute_observer_tool  # noqa: F401
+from singularity.scheduler._observer_tools import *  # noqa: F401,F403
 
 # 星号 import 不导出下划线名，但 observer/mcp_server.py 要用这两个 —— 必须显式再导出
-from singularity.scheduler._observer_tools import _TOOL_REGISTRY              # noqa: F401
-from singularity.scheduler._observer_definition import _execute_observer_tool  # noqa: F401
+from singularity.scheduler._observer_tools import _TOOL_REGISTRY  # noqa: F401
+from singularity.scheduler._observer_worker import *  # noqa: F401,F403

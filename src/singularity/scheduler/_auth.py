@@ -7,14 +7,15 @@ Token-based auth + 三级角色 (admin/operator/viewer)。
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
-import json
 import secrets
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
 from singularity.scheduler import config, witness
 
 _TOKEN_TTL = 30 * 86400  # 30 天过期
@@ -34,7 +35,7 @@ class User:
                 "role": self.role, "created_at": self.created_at}
 
     @classmethod
-    def from_dict(cls, d: dict) -> "User":
+    def from_dict(cls, d: dict) -> User:
         token_hash = d.get("token_hash", "")
         # 向后兼容: 旧格式有明文 token 无 hash → 现场哈希
         if not token_hash and d.get("token"):
@@ -123,7 +124,7 @@ class AuthStore:
         print(f"[auth] 管理员 token（仅此一次显示，请立刻保存）:\n  {token}")
         return admin
 
-    def rotate_token(self, user_id: str) -> Optional[User]:
+    def rotate_token(self, user_id: str) -> User | None:
         """给已有用户换发新 token。明文只随返回值给出一次，调用方负责显示。
 
         这是 token 过期/丢失后的**唯一自助恢复通道**：TTL 是 30 天且不做滑动续期
@@ -147,7 +148,7 @@ class AuthStore:
         self._save()
         return u
 
-    def authenticate(self, token: str) -> Optional[User]:
+    def authenticate(self, token: str) -> User | None:
         """哈希比对 + 过期检查。v2 优先，v1 兼容 → 命中后自动迁移。"""
         if not token:
             # 空/None 一律拒。除了 None.encode() 会炸，更重要的是：若某条记录
@@ -211,7 +212,7 @@ def get_auth() -> AuthStore:
     return _auth
 
 
-def require_auth(request) -> tuple[Optional[User], Optional[str]]:
+def require_auth(request) -> tuple[User | None, str | None]:
     """验证请求。返回 (user, error_msg)。"""
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -223,7 +224,7 @@ def require_auth(request) -> tuple[Optional[User], Optional[str]]:
     return user, None
 
 
-def require_write(request) -> tuple[Optional[User], Optional[str]]:
+def require_write(request) -> tuple[User | None, str | None]:
     user, err = require_auth(request)
     if err:
         return None, err

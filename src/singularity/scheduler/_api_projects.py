@@ -11,22 +11,18 @@ Section 分组:
   - Memory / Conflict
 """
 from __future__ import annotations
+
 import json
 import os
 import shutil
 import subprocess
 import threading
 import time
-
 from pathlib import Path
 from typing import Optional
 
-from singularity.scheduler import config
-from singularity.scheduler import tracker
+from singularity.scheduler import config, orchestrator, tracker, witness
 from singularity.scheduler.tracker import TaskStatus
-from singularity.scheduler import witness
-from singularity.scheduler import orchestrator
-
 
 # ═══════════════════════════════════════════════════════════════
 
@@ -121,7 +117,6 @@ def projects_root_set(path: str) -> tuple[dict, int]:
 
 def fs_list(path: str = "") -> tuple[dict, int]:
     """GET /api/fs/ls —— 列出目录的子目录（目录选择器用）。"""
-    from pathlib import Path
     base = Path(path or str(Path.home())).expanduser()
     if not base.is_dir():
         return {"error": f"目录不存在: {base}"}, 404
@@ -134,7 +129,6 @@ def fs_list(path: str = "") -> tuple[dict, int]:
 
 def fs_mkdir(path: str, name: str) -> tuple[dict, int]:
     """POST /api/fs/mkdir —— 在 path 下新建目录 name。"""
-    from pathlib import Path
     base = Path(path).expanduser()
     name = (name or "").strip()
     if not name or "/" in name or "\\" in name:
@@ -148,7 +142,6 @@ def fs_mkdir(path: str, name: str) -> tuple[dict, int]:
 
 def fs_pick() -> tuple[dict, int]:
     """POST /api/fs/pick —— 用 macOS Finder 原生对话框选择文件夹。"""
-    import subprocess
     import sys
     if sys.platform != "darwin":
         return {"error": "仅支持 macOS"}, 400
@@ -202,8 +195,8 @@ def project_gate_confirm(project_id: str, gate: str = "", decision: str = "",
         #   · executing / integrating / delivering —— 归调度循环，**不能在这儿推**，
         #     推了就是两套驱动抢着写同一个 phase。
         if next_p == Phase.PLANNING:
-            from . import workflow as wf_mod
             from . import dispatcher as disp_mod
+            from . import workflow as wf_mod
             _start_background(project_id, "planning", wf_mod.run_phase,
                               disp_mod.load_agents())
             return {"ok": True, "gate": gate, "decision": "approved",
@@ -221,8 +214,8 @@ def project_gate_confirm(project_id: str, gate: str = "", decision: str = "",
                 "next_phase": proj.phase.value}
         # GATE3 打回: D出修复方案
         if gate_phase == Phase.GATE3:
-            from . import workflow as wf_mod
             from . import dispatcher as disp_mod
+            from . import workflow as wf_mod
             agents = disp_mod.load_agents()
             result = wf_mod.handle_gate3_reject(proj, agents, feedback)
             resp = {"ok": True, "gate": "gate3", "decision": "rejected",
@@ -235,8 +228,8 @@ def project_gate_confirm(project_id: str, gate: str = "", decision: str = "",
         # 这一段同时覆盖 GATE3 的 design 路由（`handle_gate3_reject` 把 phase 设成
         # PLANNING 之后原本同样没人点）。
         if proj.phase in (Phase.RESEARCHING, Phase.PLANNING):
-            from . import workflow as wf_mod
             from . import dispatcher as disp_mod
+            from . import workflow as wf_mod
             started = _start_background(project_id, proj.phase.value,
                                         wf_mod.run_phase,
                                         disp_mod.load_agents())
@@ -254,9 +247,9 @@ def project_run_phase(project_id: str, phase_name: str = "",
                       task_desc: str = "", agent_override: str = "",
                       push_event=None) -> tuple[dict, int]:
     """POST /api/projects/<id>/run-phase"""
+    from . import dispatcher as disp_mod
     from . import project as proj_mod
     from . import workflow as wf_mod
-    from . import dispatcher as disp_mod
     proj = proj_mod.load(project_id)
     if proj is None:
         return {"error": "项目不存在"}, 404
@@ -343,9 +336,9 @@ def _start_background(project_id: str, label: str, fn, agents: dict) -> bool:
 
 def project_start(project_id: str, push_event=None) -> tuple[dict, int]:
     """POST /api/projects/<id>/start"""
+    from . import dispatcher as disp_mod
     from . import project as proj_mod
     from . import workflow as wf_mod
-    from . import dispatcher as disp_mod
     proj = proj_mod.load(project_id)
     if proj is None:
         return {"error": "项目不存在"}, 404
@@ -424,8 +417,8 @@ def project_lineage(project_id: str) -> tuple[dict, int]:
 
 def project_snapshot(project_id: str) -> tuple[dict, int]:
     """POST /api/projects/<id>/snapshot — 快照项目 repo (修复 #1 遗漏: 原先快照的是奇点仓库)。"""
-    from . import snapshot as snap_mod
     from . import project as proj_mod
+    from . import snapshot as snap_mod
     snap = snap_mod.take(project_id, repo_root=proj_mod.repo_dir(project_id))
     return {"ok": True, "snapshot_id": snap.id, "ref": snap.ref}, 200
 

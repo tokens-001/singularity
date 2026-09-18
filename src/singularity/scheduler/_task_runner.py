@@ -16,48 +16,74 @@ import re as _re
 import time
 from pathlib import Path
 
-# ── 内部模块 (执行链) ──────────────────────────────────────
-from singularity.scheduler._types import (
-    RunContext, BatchOutput, _SnapProxy, _MAX_DEPTH, _pending_sse_events,
-)
 from singularity.scheduler._exec import (
-    _PLANNER_PREAMBLE, _inject_memory, _build_project_context,
-    run, decompose, _run_with_retry,
-    _save_trace, _save_planner_patch, _read_planner_patch,
-)
-from singularity.scheduler._worktree import (
-    _maybe_create_worktree, _cleanup_wt, _lock_wt, _unlock_wt,
-    _anchor_ref, _release_ref, _build_merge_request,
+    _PLANNER_PREAMBLE,
+    _build_project_context,
+    _inject_memory,
+    _read_planner_patch,
+    _run_with_retry,
+    _save_planner_patch,
+    _save_trace,
+    decompose,
+    run,
 )
 from singularity.scheduler._planner import (
-    materialize_plan, _topo_sort, _materialize_in_main,
+    _materialize_in_main,
     _maybe_complete_parents,
+    _topo_sort,
+    materialize_plan,
+)
+
+# ── 内部模块 (执行链) ──────────────────────────────────────
+from singularity.scheduler._types import (
+    _MAX_DEPTH,
+    BatchOutput,
+    RunContext,
+    _pending_sse_events,
+    _SnapProxy,
+)
+from singularity.scheduler._worktree import (
+    _anchor_ref,
+    _build_merge_request,
+    _cleanup_wt,
+    _lock_wt,
+    _maybe_create_worktree,
+    _release_ref,
+    _unlock_wt,
 )
 from singularity.scheduler.goal_loop import GoalLoop
 
 _GOAL_RE = _re.compile(r'^\[Goal\]\s*(.+?)\n', _re.ASCII)
 
 # ── 画像 ──────────────────────────────────────────
-from singularity.scheduler._token_budget import record_tokens, get_usage_stats
-from singularity.scheduler._profiler import get_perf_stats
+from singularity.scheduler import chancellor as chan_mod
 
 # ── 业务依赖 ────────────────────────────────────────────
-from singularity.scheduler import config
+from singularity.scheduler import config, tracker, witness
 from singularity.scheduler import dispatcher as disp_mod
+from singularity.scheduler import memory as mem_mod
+from singularity.scheduler import neijinglu as nj_mod
+from singularity.scheduler import pre_search as pre_mod
+from singularity.scheduler import route_learner as rl_mod
 from singularity.scheduler import router as router_mod
 from singularity.scheduler import snapshot as snap_mod
-from singularity.scheduler import tracker
 from singularity.scheduler import validator as val_mod
-from singularity.scheduler import neijinglu as nj_mod
-from singularity.scheduler import witness
-from singularity.scheduler import memory as mem_mod
-from singularity.scheduler import route_learner as rl_mod
-from singularity.scheduler import pre_search as pre_mod
-from singularity.scheduler import chancellor as chan_mod
 from singularity.scheduler._git_worktree import (
-    Worktree, create as wt_create, cleanup as wt_cleanup,
-    merge_back as wt_merge_back, commit_wt, changed_files_between,
+    Worktree,
+    changed_files_between,
+    commit_wt,
 )
+from singularity.scheduler._git_worktree import (
+    cleanup as wt_cleanup,
+)
+from singularity.scheduler._git_worktree import (
+    create as wt_create,
+)
+from singularity.scheduler._git_worktree import (
+    merge_back as wt_merge_back,
+)
+from singularity.scheduler._profiler import get_perf_stats
+from singularity.scheduler._token_budget import get_usage_stats, record_tokens
 from singularity.scheduler.tracker import TaskStatus
 
 # ═══════════════════════════════════════════════════════════════
@@ -320,8 +346,8 @@ class TaskRunner:
         # 再花这笔钱纯属浪费，结论也没人会看。
         if not qa_verdict and not cancelled:
             try:
-                from .supervisor import supervise, qa_context
                 from .project import repo_root_for
+                from .supervisor import qa_context, supervise
                 changed = disp_result.executor_result.changed_files if disp_result else []
                 constraints, checklist = qa_context(task)
                 sv = supervise(task.description, changed, constraints, checklist,
@@ -334,7 +360,7 @@ class TaskRunner:
         if qa_verdict == "fail":
             qa_blocked = qa_fail = True
             tracker.transition(task.id, TaskStatus.FAILED,
-                             error=f"QA:fail: " + "; ".join(qa_issues[:2]))
+                             error="QA:fail: " + "; ".join(qa_issues[:2]))
         elif qa_verdict and qa_verdict != "pass":
             qa_blocked = True
             # 修复 reap bug 根因#2: QA 中间态(retry/escalate/block)转 PENDING 重新入队,

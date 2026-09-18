@@ -1,21 +1,20 @@
 from __future__ import annotations
+
 # Singularity Agent 调度平台 — Web 控制台
 # Flask 后端：查看调度状态、提交任务、处理合并冲突
 # v2: 调度循环后台线程，面板即控制中心
-
 import gzip
 import json
 import os
-import sys
-import time
-import threading
 import queue
+import sys
+import threading
+import time
 from collections import deque
 from pathlib import Path
-
 from urllib.parse import urlparse
 
-from flask import Flask, Response, g, request, jsonify
+from flask import Flask, Response, g, jsonify, request
 
 # ── 加载 .env ──────────────────────────────────────────────
 _ENV_PATH = Path(__file__).resolve().parents[3] / ".env"
@@ -55,24 +54,25 @@ def _write_env(key: str, value: str) -> None:
 
 
 # ── 调度器模块路径 ──────────────────────────────────────────
-from singularity.scheduler import tracker
-from singularity.scheduler.tracker import TaskStatus
+from singularity.scheduler import bridge as ws_bridge
 from singularity.scheduler import config as sched_config
 from singularity.scheduler import dispatcher as disp_mod
-from singularity.scheduler import witness
-from singularity.scheduler import orchestrator
-from singularity.scheduler import project as proj_mod
-from singularity.scheduler.project import Phase
-from singularity.scheduler.log import (info as _log_info, warn as _log_warn,
-                                       get_logger, _get_file_logger as _get_file_log)
 from singularity.scheduler import mcp as mcp_mod
-from singularity.scheduler import bridge as ws_bridge
+from singularity.scheduler import orchestrator, tracker, witness
+from singularity.scheduler import project as proj_mod
+from singularity.scheduler._auth import auth_enabled as _auth_enabled
+
 # ⚠️ **本机来源判定只有一份**（2026-09-14）：这个名字**就是** `_auth.is_local_origin`
 # 本身（不是"另写一个长得一样的"）。原来这里自己写了一份 urlparse 版本，
 # 而 WS 门（`_auth.ws_allowed_origins` 的正则）是另一份、内容不同 ⇒ 同一个来源
 # 在两个门上判定可以不同，而"挡任意网页删任务"只靠 Origin 校验（见 `_auth` 那段说明）。
 from singularity.scheduler._auth import is_local_origin as _is_local_origin
-from singularity.scheduler._auth import auth_enabled as _auth_enabled
+from singularity.scheduler.log import _get_file_logger as _get_file_log
+from singularity.scheduler.log import get_logger
+from singularity.scheduler.log import info as _log_info
+from singularity.scheduler.log import warn as _log_warn
+from singularity.scheduler.project import Phase
+from singularity.scheduler.tracker import TaskStatus
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
@@ -108,6 +108,7 @@ app.secret_key = _secret_key
 _CSRF_TOKEN = os.environ.get("QIDIAN_CSRF_TOKEN") or os.urandom(16).hex()
 
 import logging as _al
+
 _audit_logger = _al.getLogger("qidian.audit")
 _audit_ready = False
 
@@ -176,6 +177,7 @@ _VALID_FLOW_WEIGHTS = frozenset({"auto", "light", "heavy"})
 _VALID_DECISIONS = frozenset({"approved", "rejected"})
 
 import re as _re_valid
+
 _TASK_ID_RE = _re_valid.compile(r"^\d{13,20}$")  # task_id 格式：13-20 位数字
 
 def _validate_task_id(task_id: str) -> bool:
@@ -591,7 +593,8 @@ def _loop_worker():
                     # 任务失败时推送桌面通知
                     if verdict != "pass":
                         try:
-                            import subprocess, sys
+                            import subprocess
+                            import sys
                             subprocess.run([
                                 "osascript", "-e",
                                 f'display notification "任务 {tracker.short_id(tid)} {verdict}" with title "Singularity Dispatch"'
@@ -791,6 +794,7 @@ def stop_loop():
 # scheduler 不 import web（分层倒挂）；循环控制 + SSE 广播反向注册到 _hooks，
 # 供观察者工具和 project.py 调用。未注册时 scheduler 降级为保守默认值。
 from singularity.scheduler import _hooks as _hooks_mod  # noqa: E402
+
 _hooks_mod.register_loop(start_loop, stop_loop,
                          lambda: {"running": _loop_running, "concurrent": _loop_concurrent})
 _hooks_mod.register_event_sink(_sse_broadcast)
@@ -1177,7 +1181,7 @@ def api_task_submit():
         return jsonify({"error": f"depends_on 不能超过 {_MAX_DEPENDS_ON}"}), 400
     route_level = data.get("route_level", "")
     if route_level and route_level not in _VALID_LEVELS:
-        return jsonify({"error": f"route_level 必须是 any"}), 400
+        return jsonify({"error": "route_level 必须是 any"}), 400
     route_type = data.get("route_type", "")
     # ⚠️ **词表从分类器那边引，别在这儿再抄一份**（2026-09-14）：这里原来手写着
     # 6 个值，比 `router.VALID_TASK_TYPES` 多一个 `fusion` —— 而 `fusion`
@@ -1369,7 +1373,8 @@ def _project_repo_root(project_id: str):
 @app.route("/api/projects/<project_id>/files")
 def api_project_files(project_id):
     """列出项目文件树 (git ls-files)。"""
-    import subprocess, os
+    import os
+    import subprocess
     root = _project_repo_root(project_id)
     if root is None:
         return jsonify({"files": [], "error": "项目不存在或仓库未创建"}), 404
@@ -1418,7 +1423,7 @@ def api_project_file_content(project_id, filepath):
             return jsonify({"content": "", "error": "forbidden"}), 403
         if not os.path.isfile(fpath):
             return jsonify({"content": "", "error": "file not found"}), 404
-        with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
+        with open(fpath, encoding='utf-8', errors='replace') as f:
             content = f.read()[:50000]
         return jsonify({"content": content})
     except Exception as e:
@@ -1427,7 +1432,8 @@ def api_project_file_content(project_id, filepath):
 @app.route("/api/projects/<project_id>/diff")
 def api_project_diff(project_id):
     """最近的 git diff (HEAD~1..HEAD)。"""
-    import subprocess, os
+    import os
+    import subprocess
     root = _project_repo_root(project_id)
     if root is None:
         return jsonify({"stat": "", "diff": "", "error": "项目不存在或仓库未创建"}), 404
@@ -1462,9 +1468,10 @@ def api_project_snapshot(project_id):
 @app.route("/api/projects/<project_id>/traceability", methods=["GET"])
 def api_project_traceability(project_id):
     """GATE3: 返回需求追溯表 + 符合性检查结果。"""
-    from singularity.scheduler.supervisor import check_requirement_conformance
-    from singularity.scheduler.project import _projects_dir
     import json as _json
+
+    from singularity.scheduler.project import _projects_dir
+    from singularity.scheduler.supervisor import check_requirement_conformance
     # 读追溯表
     tp = _projects_dir() / f"{project_id}.traceability.json"
     traceability = []
@@ -1538,8 +1545,8 @@ def api_observer_chat():
         text = (payload.get("params") or {}).get("text", "")
         _push_event("observer_answer", json.dumps({"client_id": cid, "answer": text}))
     try:
-        from singularity.scheduler.observer_agent import submit_question
         from singularity.scheduler._observer_tools import set_exec_mode
+        from singularity.scheduler.observer_agent import submit_question
         set_exec_mode(exec_mode)  # 硬设执行模式，绕开关键词检测的软链路
         submit_question(cid, question, _on_reply, project_id=project_id)
         return jsonify({"ok": True, "client_id": cid, "question": question})
@@ -1636,9 +1643,9 @@ def api_agents_update(level, model):
     if data.get("entry") and not _is_safe_api_url(data["entry"]):
         return jsonify({"error": "不允许的 entry URL"}), 400
     if "type" in data and data["type"] not in _VALID_AGENT_TYPES:
-        return jsonify({"error": f"type 不合法"}), 400
+        return jsonify({"error": "type 不合法"}), 400
     if "sandbox" in data and data["sandbox"] not in _VALID_SANDBOXES:
-        return jsonify({"error": f"sandbox 不合法"}), 400
+        return jsonify({"error": "sandbox 不合法"}), 400
     if "max_turns" in data:
         try:
             mt = int(data["max_turns"])
@@ -1735,7 +1742,8 @@ def api_observer_status():
     ⚠️ 2026-09-17 真机：那晚它一个任务卡了 50 分钟没吭声，而没有任何地方能看出它聋了。
     """
     import time as _t
-    from singularity.scheduler._observer_worker import read_state, is_running
+
+    from singularity.scheduler._observer_worker import is_running, read_state
     st = read_state()
     last = (st or {}).get("last_beat") or 0
     age = (_t.time() - last) if last else None
@@ -1904,7 +1912,7 @@ def api_model_price_set(model_id):
 @app.route("/api/roles")
 def api_roles():
     """返回所有角色定义 + 人格面具列表。"""
-    from singularity.scheduler.roles import ROLES, PERSONAS
+    from singularity.scheduler.roles import PERSONAS, ROLES
     roles = {}
     for k, r in ROLES.items():
         roles[k] = {
@@ -2399,7 +2407,7 @@ if __name__ == "__main__":
     # ── 启动自检 ──
     _startup_log.info("Singularity Dispatch面板 → http://127.0.0.1:5050")
     try:
-        from singularity.scheduler import model_registry, api_store
+        from singularity.scheduler import api_store, model_registry
         models = model_registry.load_models()
         available = sum(1 for m in models.values() if api_store.is_available(m.provider))
         _startup_log.info("模型: %d 注册, %d 可用", len(models), available)

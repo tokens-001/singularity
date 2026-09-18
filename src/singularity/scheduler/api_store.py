@@ -7,6 +7,7 @@
 """
 
 from __future__ import annotations
+
 import json
 import os
 import time
@@ -38,7 +39,7 @@ class APIEntry:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "APIEntry":
+    def from_dict(cls, d: dict) -> APIEntry:
         return cls(**{k: d.get(k, "" if k not in ("created_at", "updated_at") else 0.0)
                        for k in ["id", "provider", "base_url", "api_key_env", "status", "notes",
                                   "created_at", "updated_at"]})
@@ -55,7 +56,7 @@ def _store_path() -> Path:
 _CORRUPT = False
 
 
-def _read_store() -> "dict | None":
+def _read_store() -> dict | None:
     """读 api_store.json。**三态**（委托 `_io.load_json_or_quarantine`）：
 
       文件不存在 → `{}`（真的空）
@@ -222,7 +223,7 @@ def list_all() -> dict[str, APIEntry]:
     return _load()
 
 
-def get(api_id: str) -> Optional[APIEntry]:
+def get(api_id: str) -> APIEntry | None:
     return _load().get(api_id)
 
 
@@ -277,7 +278,7 @@ def remove(api_id: str) -> bool:
     return True
 
 
-def set_status(api_id: str, status: str, notes: str = "") -> Optional[APIEntry]:
+def set_status(api_id: str, status: str, notes: str = "") -> APIEntry | None:
     """更新 API 状态: active | quota_exhausted | rate_limited | disabled"""
     entries = _load()
     entry = entries.get(api_id)

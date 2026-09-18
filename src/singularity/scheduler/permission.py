@@ -47,7 +47,7 @@ class PermissionProfile:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "PermissionProfile":
+    def from_dict(cls, d: dict) -> PermissionProfile:
         return cls(
             name=d.get("name", ""),
             description=d.get("description", ""),
@@ -79,9 +79,11 @@ READ_ONLY = PermissionProfile(
 # 这份有 `rm -rf`（无空格版）而地板只拦 `rm -rf /`、`~`、`.`。
 # 而界面上"沙箱拦截了哪些"显示的**是这份** ⇒ 承诺 ≠ 实拦。
 # 现在 = **地板 ∪ profile 额外**：profile 只会比地板更严，不会再出现"更松"。
-from singularity.scheduler._sensitive import (        # noqa: E402
-    BLOCKED_PATH_PATTERNS as _FLOOR_PATHS,
+from singularity.scheduler._sensitive import (
     BLOCKED_COMMANDS as _FLOOR_COMMANDS,
+)
+from singularity.scheduler._sensitive import (  # noqa: E402
+    BLOCKED_PATH_PATTERNS as _FLOOR_PATHS,
 )
 
 SANDBOXED = PermissionProfile(

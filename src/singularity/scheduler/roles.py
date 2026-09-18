@@ -15,11 +15,12 @@
 """
 
 from __future__ import annotations
+
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
 from pathlib import Path
+from typing import Optional
 
 from singularity.scheduler import config as sched_config
 
@@ -112,7 +113,7 @@ ROLES: dict[str, Role] = {}  # 模块加载时填充
 # 工具函数
 # ═══════════════════════════════════════════════════════════
 
-def get_role(key: str) -> Optional[Role]:
+def get_role(key: str) -> Role | None:
     return ROLES.get(key)
 
 

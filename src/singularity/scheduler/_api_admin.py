@@ -11,22 +11,18 @@ Section 分组:
   - Memory / Conflict
 """
 from __future__ import annotations
+
 import json
 import logging
 import os
 import shutil
 import subprocess
 import time
-
 from pathlib import Path
 from typing import Optional
 
-from singularity.scheduler import config
-from singularity.scheduler import tracker
+from singularity.scheduler import config, orchestrator, tracker, witness
 from singularity.scheduler.tracker import TaskStatus
-from singularity.scheduler import witness
-from singularity.scheduler import orchestrator
-
 
 # ═══════════════════════════════════════════════════════════════
 
@@ -182,7 +178,7 @@ def models_import(models: list[dict], auto_assign: bool = False):
 
 
 def model_list():
-    from . import model_registry, api_store, model_prices
+    from . import api_store, model_prices, model_registry
     from . import dispatcher as disp_mod
     # 前端模型目录只显示扫描导入的模型(models_custom); 内置能力快照(models.toml)只供调度/扫描填能力, 不出现在目录
     custom_ids = set(model_registry._load_custom().keys())
@@ -200,7 +196,7 @@ def model_list():
 
 
 def model_list_for_tier(tier):
-    from . import model_registry, api_store
+    from . import api_store, model_registry
     models = model_registry.for_tier(tier, available_only=False)
     return [{"id": m.id, "provider": m.provider, "display": m.display,
         "cost": m.cost, "speed": m.speed, "api_available": api_store.is_available(m.provider)} for m in models], 200
@@ -216,7 +212,7 @@ def model_add(model_id, provider="", display="", recommended_for=None, speed="me
 
 
 def model_remove(model_id):
-    from . import model_registry, dispatcher
+    from . import dispatcher, model_registry
     ok = model_registry.remove_model(model_id)
     # 两档后: 从全池移除, 不按层级
     dispatcher.remove_agent("", model_id)
@@ -235,7 +231,8 @@ def model_remove(model_id):
 
 
 def model_update(model_id, data):
-    from . import model_registry, dispatcher as disp_mod
+    from . import dispatcher as disp_mod
+    from . import model_registry
     models = model_registry.load_models()
     if model_id not in models: return {"error": "模型不存在"}, 404
     m = models[model_id]
@@ -270,6 +267,7 @@ def model_price_set(model_id, data):
     `null` / 空串 = 清除（回到"未配置价格"），不是设成 0。
     """
     import math
+
     from . import model_prices
     if not model_id or not str(model_id).strip():
         return {"error": "缺模型 id"}, 400
@@ -315,6 +313,7 @@ def skill_list():
 
 def skill_add(name, description="", skill_type="prompt", args=None, body=""):
     from singularity.skills.skill_loader import create_user_skill
+
     from . import dispatcher as disp_mod
     create_user_skill(name, description, skill_type, args or [], body)
     disp_mod.invalidate_skill_cache(); return {"ok": True, "name": name}, 200
@@ -322,6 +321,7 @@ def skill_add(name, description="", skill_type="prompt", args=None, body=""):
 
 def skill_delete(name):
     from singularity.skills.skill_loader import delete_user_skill
+
     from . import dispatcher as disp_mod
     ok = delete_user_skill(name); disp_mod.invalidate_skill_cache(); return {"ok": ok}, 200
 
@@ -333,7 +333,7 @@ def agent_skill_list(level, model="", phase=""):
     返回实际生效的技能 —— 界面要显示的就是"这家伙现在真会什么"。
     传入 phase="" 时行为与旧版逐字节一致。
     """
-    from singularity.skills.skill_loader import get_agent_skills, load_skills, _qidian_dir
+    from singularity.skills.skill_loader import _qidian_dir, get_agent_skills, load_skills
     names = get_agent_skills(level, model, phase)
     # 🔴 **回 200 + 空表 = 撒谎**（2026-09-14 外派⑦ 抓到）：
     # `agents_custom.json` 读不出来时 `get_agent_skills` 降级成 `[]`，端点照回 200 ——
@@ -353,6 +353,7 @@ def agent_skill_list(level, model="", phase=""):
 
 def agent_skill_update(level, model="", skill_names=None, phase=""):
     from singularity.skills.skill_loader import set_agent_skills
+
     from . import dispatcher as disp_mod
     # 🔴 `set_agent_skills` 拒写时返回 False，**必须看** —— 原来这个返回值被丢掉、
     # 端点照回 `{"ok": True}`：界面高亮成功 → 刷新即回退 → 一个字都不报
@@ -373,7 +374,7 @@ def agent_skill_update(level, model="", skill_names=None, phase=""):
 
 def approvals_list():
     """GET /api/approvals —— 还等着人应答的工具级审批请求。"""
-    from .permission import list_pending_approvals, APPROVAL_TIMEOUT_SEC
+    from .permission import APPROVAL_TIMEOUT_SEC, list_pending_approvals
     return {"approvals": list_pending_approvals(),
             "timeout_sec": APPROVAL_TIMEOUT_SEC}, 200
 
@@ -383,7 +384,7 @@ def perm_profiles():
 
 
 def perm_profiles_add(name, profile):
-    from .permission import get_store, PermissionProfile
+    from .permission import PermissionProfile, get_store
     try:
         get_store().save_profile(PermissionProfile.from_dict({**(profile or {}), "name": name}))
     except ValueError as e:  # 内置 profile 不可覆盖

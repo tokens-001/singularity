@@ -22,11 +22,9 @@ import threading
 from collections import deque
 from dataclasses import dataclass, field
 
-from singularity.scheduler import config
-from singularity.scheduler import tracker
-from singularity.scheduler import witness
-from singularity.scheduler.tracker import TaskStatus
+from singularity.scheduler import config, tracker, witness
 from singularity.scheduler._git_worktree import merge_ref, merge_tree_probe
+from singularity.scheduler.tracker import TaskStatus
 
 
 @dataclass
@@ -49,7 +47,7 @@ class MergeRequest:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "MergeRequest":
+    def from_dict(cls, d: dict) -> MergeRequest:
         return cls(
             task_id=d["task_id"], branch=d["branch"],
             base_ref=d.get("base_ref", ""),

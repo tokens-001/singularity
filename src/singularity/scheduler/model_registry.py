@@ -7,13 +7,14 @@
 """
 
 from __future__ import annotations
+
 import json
-from singularity.scheduler._io import load_toml
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from singularity.scheduler import config
+from singularity.scheduler._io import load_toml
 
 
 @dataclass
@@ -45,7 +46,7 @@ class ModelEntry:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ModelEntry":
+    def from_dict(cls, d: dict) -> ModelEntry:
         # backward compat: read old "tiers" key or new "recommended_for"
         rf = _safe_list(d.get("recommended_for") or d.get("tiers"))
         return cls(
@@ -83,8 +84,8 @@ def _load_custom() -> dict[str, ModelEntry]:
 
 
 def _save_custom(models: dict[str, ModelEntry]) -> None:
-    from singularity.scheduler._io import load_for_rewrite
     from singularity.scheduler import witness
+    from singularity.scheduler._io import load_for_rewrite
     path = _custom_path()
     # ⚠️ **要"这次读一遍"再判**（2026-09-14 修）：原来问的 `is_quarantined` 是
     # 路径标记，**要有人先读过坏文件才有** ⇒ 第一次触碰时闸门形同虚设、整份重建照写。
@@ -238,7 +239,7 @@ def for_tier(tier: str = "", available_only: bool = True) -> list[ModelEntry]:
     return for_phase(tier, available_only)
 
 
-def get(model_id: str) -> Optional[ModelEntry]:
+def get(model_id: str) -> ModelEntry | None:
     return load_models().get(model_id)
 
 

@@ -9,8 +9,12 @@ from typing import Any
 
 from singularity.scheduler import config, tracker, witness
 from singularity.scheduler._observer_tools import (
-    _TOOL_REGISTRY, _tool_get_system_status, _tool_list_tasks,
-    _tool_list_stalled_tasks, _tool_get_judge_stats, _tool_get_recent_events,
+    _TOOL_REGISTRY,
+    _tool_get_judge_stats,
+    _tool_get_recent_events,
+    _tool_get_system_status,
+    _tool_list_stalled_tasks,
+    _tool_list_tasks,
 )
 
 _log = logging.getLogger("observer")
@@ -191,7 +195,7 @@ def _get_definition_context(role_key: str = "", include_verdict_schema: bool = F
 def _any_project_at_gate3() -> bool:
     """检查是否有项目处于 GATE3 阶段 (需要 verdict schema)。"""
     try:
-        from singularity.scheduler.project import list_all, Phase
+        from singularity.scheduler.project import Phase, list_all
         return any(p.phase == Phase.GATE3 for p in list_all())
     except Exception:
         return False
@@ -207,7 +211,7 @@ def project_at_gate3(project_id: str) -> bool:
     if not project_id:
         return False
     try:
-        from singularity.scheduler.project import load, Phase
+        from singularity.scheduler.project import Phase, load
         p = load(project_id)
         return bool(p and p.phase == Phase.GATE3)
     except Exception:

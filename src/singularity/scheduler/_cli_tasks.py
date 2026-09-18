@@ -1,13 +1,16 @@
 __all__ = ['_cmd_add', '_cmd_apply', '_cmd_auth', '_cmd_loop', '_cmd_merge', '_cmd_rollback', '_cmd_run', '_cmd_status', '_drain_queue', '_is_merged_to_main', '_parse_concurrent', '_release_pending_ref']
 
 """CLI sub-commands."""
-import json, os, signal, sys, time
+import json
+import os
+import signal
+import sys
+import time
 from pathlib import Path
-from singularity.scheduler import config, tracker
+
+from singularity.scheduler import config, orchestrator, tracker
 from singularity.scheduler import dispatcher as disp_mod
-from singularity.scheduler import orchestrator
 from singularity.scheduler import snapshot as snap_mod
-from singularity.scheduler import tracker
 from singularity.scheduler.tracker import TaskStatus
 
 # 队列空时的轮询间隔。**必须定义在本模块** —— `_cmd_loop` 就在这里，而

@@ -1,14 +1,17 @@
 __all__ = ['_cmd_project', '_cmd_project_advance', '_cmd_project_create', '_cmd_project_delete', '_cmd_project_list', '_cmd_project_reject', '_cmd_project_show', '_phase_agent_level', '_phase_will_run']
 
 """CLI sub-commands."""
-import json, os, sys, time
+import json
+import os
+import sys
+import time
 from pathlib import Path
-from singularity.scheduler import config, tracker
+
+from singularity.scheduler import config, orchestrator, tracker
 from singularity.scheduler import dispatcher as disp_mod
-from singularity.scheduler import orchestrator
-from singularity.scheduler import tracker
 from singularity.scheduler.project import Phase
 from singularity.scheduler.tracker import TaskStatus
+
 
 def _cmd_project(argv: list) -> int:
     if not argv:
@@ -37,7 +40,7 @@ def _cmd_project(argv: list) -> int:
 
 
 def _cmd_project_create(args: list) -> int:
-    from .project import create, TEMPLATES
+    from .project import TEMPLATES, create
     name = args[0]
     template = "product_dev"
     budget = 5.0
@@ -135,8 +138,9 @@ def _cmd_project_show(project_id: str) -> int:
 
 
 def _cmd_project_advance(project_id: str, approve: bool = False, yes: bool = False) -> int:
-    from .project import load as load_proj, save as save_proj
-    from .workflow import start_project_workflow, run_phase
+    from .project import load as load_proj
+    from .project import save as save_proj
+    from .workflow import run_phase, start_project_workflow
     proj = load_proj(project_id)
     if proj is None:
         print(f"项目不存在: {project_id}", file=sys.stderr)
@@ -168,8 +172,8 @@ def _cmd_project_advance(project_id: str, approve: bool = False, yes: bool = Fal
         print(f"  项目预算: ${proj.token_budget_total:.2f}")
         if spent > proj.token_budget_total:
             # 只陈述已发生的事实，不做"将超支"的预测（那是没有依据的）
-            print(f"  ⚠ 今日花费已超过项目预算", file=sys.stderr)
-        print(f"\n  确认执行? 加上 --yes 跳过此提示")
+            print("  ⚠ 今日花费已超过项目预算", file=sys.stderr)
+        print("\n  确认执行? 加上 --yes 跳过此提示")
         return 1
 
     agents = disp_mod.load_agents()
@@ -225,7 +229,8 @@ def _project_today_cost(project_id: str) -> tuple[float, bool]:
 
 
 def _cmd_project_reject(project_id: str) -> int:
-    from .project import load as load_proj, save as save_proj
+    from .project import load as load_proj
+    from .project import save as save_proj
     proj = load_proj(project_id)
     if proj is None:
         print(f"项目不存在: {project_id}", file=sys.stderr)
@@ -241,7 +246,8 @@ def _cmd_project_reject(project_id: str) -> int:
 
 
 def _cmd_project_delete(project_id: str) -> int:
-    from .project import load as load_proj, delete as delete_proj
+    from .project import delete as delete_proj
+    from .project import load as load_proj
     proj = load_proj(project_id)
     if proj is None:
         print(f"项目不存在: {project_id}", file=sys.stderr)

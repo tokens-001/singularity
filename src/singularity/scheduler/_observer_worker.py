@@ -8,11 +8,17 @@ import queue
 import threading
 import time
 
-from singularity.scheduler._observer_shared import _log, _chat_queue, _stop_event, _worker_thread, _pending_replies, _replies_lock
-from singularity.scheduler._observer_client import _check_anomalies
-from singularity.scheduler._observer_answer import _answer_question
 from singularity.scheduler import witness
-
+from singularity.scheduler._observer_answer import _answer_question
+from singularity.scheduler._observer_client import _check_anomalies
+from singularity.scheduler._observer_shared import (
+    _chat_queue,
+    _log,
+    _pending_replies,
+    _replies_lock,
+    _stop_event,
+    _worker_thread,
+)
 
 # ═══════════════════════════════════════════════════════════════
 # 告警出口 + 活性痕迹（2026-09-17 真机加）

@@ -14,18 +14,26 @@ v1 边界:
 """
 
 from __future__ import annotations
+
+import builtins
 import json
 import os
 import re
 import ssl
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 
-import builtins
-from singularity.scheduler.executors.base import (BaseExecutor, ExecutorResult,
-    is_blocked_path, RateLimitError, FormatError, TimeoutError, ExecError)
 from singularity.scheduler import config
+from singularity.scheduler.executors.base import (
+    BaseExecutor,
+    ExecError,
+    ExecutorResult,
+    FormatError,
+    RateLimitError,
+    TimeoutError,
+    is_blocked_path,
+)
 
 
 class ZhipuApiExecutor(BaseExecutor):

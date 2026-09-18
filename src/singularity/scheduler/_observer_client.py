@@ -8,17 +8,21 @@ import os
 import queue
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import httpx
 
 from singularity.scheduler import config, tracker, witness
 from singularity.scheduler._observer_shared import (
-    _log, _chat_queue, _pending_replies, _replies_lock,
-    _alert_history, _alert_lock,
+    _alert_history,
+    _alert_lock,
+    _chat_queue,
+    _log,
+    _pending_replies,
+    _replies_lock,
 )
-
 
 # ═══════════════════════════════════════════════════════════════
 # 只读查询工具（纯 Python 函数，直接读取现有数据）

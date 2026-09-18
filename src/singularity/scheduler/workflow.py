@@ -7,24 +7,29 @@
 """
 
 from __future__ import annotations
+
 import json
 import re
+
 # `Path` 只出现在 `_phase_output_path`/`_save_phase_output` 的**返回注解**里。
 # 文件有 `from __future__ import annotations`，注解运行时不求值 —— 所以它一直没炸，
 # 但名字确实不在本模块作用域里（2026-09-13 被星号 import 盲区补丁抓出来的）。
 from pathlib import Path
 
-from singularity.scheduler import config
-from singularity.scheduler import tracker
+from singularity.scheduler import config, tracker
 from singularity.scheduler import dispatcher as disp_mod
+from singularity.scheduler._io import try_parse_json
 from singularity.scheduler.project import (
-    ProjectState, Phase, save, _projects_dir, resolve_flow,
+    Phase,
+    ProjectState,
+    _projects_dir,
+    resolve_flow,
+    save,
+)
+from singularity.scheduler.project import (
     effective_constraints as _effective_constraints,  # §60 容错读法
 )
 from singularity.scheduler.tracker import TaskStatus
-
-from singularity.scheduler._io import try_parse_json
-
 
 # ═══════════════════════════════════════════════════════════
 # Prompt 模板
@@ -970,8 +975,8 @@ def _read_observer_rollup(project_id: str) -> str | None:
     猜错的代价是清空架构重走 GATE2（那条转圈在下面注释里记着）。
     """
     try:
-        from singularity.scheduler.project import get_project_dir
         from singularity.scheduler._observer_definition import VERDICT_FIX_ROUTES
+        from singularity.scheduler.project import get_project_dir
         path = get_project_dir(project_id) / "observer_rollup.json"
         if not path.exists():
             return None
@@ -1055,7 +1060,7 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
     elif fix_route == "note":
         # 仅记录, 不阻断 (保持当前阶段, 等人再次确认)
         project.add_lineage({"action": "gate3_route", "route": "note", "source": route_source})
-        msg = f"GATE3 问题仅记录 (suggestion), 不阻断交付"
+        msg = "GATE3 问题仅记录 (suggestion), 不阻断交付"
     else:
         # design: 回规划重做架构
         project.set_phase(Phase.PLANNING, f"GATE3 打回(design): {feedback[:60]}")

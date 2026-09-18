@@ -14,6 +14,7 @@ v1 边界:
 """
 
 from __future__ import annotations
+
 import json
 import shutil
 import subprocess
@@ -241,7 +242,8 @@ def _purge_old_copies() -> None:
 
 def purge_old_snapshot_meta(keep: int = 200) -> int:
     """清理旧的快照元数据 .json 文件，保留最近 keep 个。返回清理数。"""
-    import os as _os, time as _time
+    import os as _os
+    import time as _time
     from collections import defaultdict
     files = sorted(config.SNAPSHOT_DIR.glob("*.json"),
                    key=lambda p: _os.path.getmtime(p), reverse=True)

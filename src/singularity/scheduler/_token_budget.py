@@ -11,6 +11,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
 from singularity.scheduler import config, model_prices, witness
 from singularity.scheduler._io import atomic_write_json
 
@@ -68,7 +69,7 @@ def _day_key(ts: float) -> str:
     return time.strftime("%Y-%m-%d", time.localtime(ts))
 
 
-def _bucket(rows: list["UsageRecord"]) -> dict:
+def _bucket(rows: list[UsageRecord]) -> dict:
     """一组记录 → 当天的聚合桶。
 
     ⚠️ **桶里每个字段都必须对行集合单调不减** —— 这是 `_bump` 用 max 合并的前提。
@@ -516,7 +517,8 @@ def _range_start(range_: str, today: str, earliest: str) -> str:
     - `week`  → 本周：**周一**起（中文习惯；Python 的 weekday() 就是周一=0）
     - `today` → 当天：只有今天一格
     """
-    from datetime import date as _date, timedelta as _td
+    from datetime import date as _date
+    from datetime import timedelta as _td
 
     if range_ == "all":
         return earliest
@@ -535,7 +537,8 @@ def history(range_: str = "all") -> dict:
 
     非法 range 抛 ValueError，由 handler 转 400。
     """
-    from datetime import date as _date, timedelta as _td
+    from datetime import date as _date
+    from datetime import timedelta as _td
 
     if range_ not in _RANGES:
         raise ValueError(f"range 只支持 {'/'.join(_RANGES)}")

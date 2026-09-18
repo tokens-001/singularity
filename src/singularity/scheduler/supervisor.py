@@ -7,6 +7,7 @@ Opus二审核心设计: PASS必须落在非LLM硬证据上。
 """
 
 from __future__ import annotations
+
 import json
 import re
 import subprocess

@@ -8,8 +8,8 @@
   _api_memory.py  — memory/conflicts (5 functions)
 """
 
-from singularity.scheduler._api_tasks import *     # noqa: F401,F403
-from singularity.scheduler._api_projects import *   # noqa: F401,F403
-from singularity.scheduler._api_admin import *      # noqa: F401,F403
-from singularity.scheduler._api_monitor import *    # noqa: F401,F403
-from singularity.scheduler._api_memory import *     # noqa: F401,F403
+from singularity.scheduler._api_admin import *  # noqa: F401,F403
+from singularity.scheduler._api_memory import *  # noqa: F401,F403
+from singularity.scheduler._api_monitor import *  # noqa: F401,F403
+from singularity.scheduler._api_projects import *  # noqa: F401,F403
+from singularity.scheduler._api_tasks import *  # noqa: F401,F403

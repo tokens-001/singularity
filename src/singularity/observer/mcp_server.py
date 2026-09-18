@@ -5,6 +5,7 @@ ponytail: JSON-RPC 2.0 over stdio, 复用 observer_agent 的工具注册表。
 """
 
 from __future__ import annotations
+
 import json
 import sys
 import traceback

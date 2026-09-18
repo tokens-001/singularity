@@ -3,7 +3,12 @@
 v2: contextvars trace_id, JSON output, log_event().
 """
 from __future__ import annotations
-import json as _json, logging, os, time, uuid
+
+import json as _json
+import logging
+import os
+import time
+import uuid
 from contextvars import ContextVar
 from functools import wraps
 

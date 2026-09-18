@@ -15,14 +15,12 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Optional
 
-from singularity.scheduler._types import RunContext, BatchOutput, _MAX_DEPTH, _pending_sse_events
-from singularity.scheduler._exec import _run_with_retry, decompose
-from singularity.scheduler import config
-from singularity.scheduler import tracker
+from singularity.scheduler import config, tracker, witness
 from singularity.scheduler import dispatcher as disp_mod
 from singularity.scheduler import validator as val_mod
+from singularity.scheduler._exec import _run_with_retry, decompose
+from singularity.scheduler._types import _MAX_DEPTH, BatchOutput, RunContext, _pending_sse_events
 from singularity.scheduler.tracker import TaskStatus
-from singularity.scheduler import witness
 
 
 def _materialize_in_main(batch: BatchOutput, parent_task) -> None:
@@ -172,7 +170,7 @@ def estimate_tokens(subtasks: list[dict], parent_desc: str = "") -> dict:
     }
 
 
-def _topo_sort(subtasks: list[dict]) -> "Optional[list[int]]":
+def _topo_sort(subtasks: list[dict]) -> list[int] | None:
     """按 depends_on_local_id 拓扑排序。有环返回 None。"""
     n = len(subtasks)
     in_deg = [0] * n
@@ -185,7 +183,6 @@ def _topo_sort(subtasks: list[dict]) -> "Optional[list[int]]":
                 adj[dep].append(i)
                 in_deg[i] += 1
     # Kahn
-    from collections import deque
     q = deque(i for i in range(n) if in_deg[i] == 0)
     order = []
     while q:

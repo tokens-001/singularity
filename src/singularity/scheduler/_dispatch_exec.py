@@ -1,25 +1,34 @@
 __all__ = ['_build_synthesis_prompt', '_dispatch_committee', '_run_executor', 'dispatch']
 
-from singularity.scheduler.dispatcher import (
-    load_agents, _ensure_agent_type, pick_agent_fallback_chain,
-    agent_api_available, _build_agent_from_registry, DispatchResult,
-    _EXECUTOR_BY_TYPE,
-)
+import json
+import logging
+import os
+import threading
+import time
+
+from singularity.scheduler import _model_breaker, config, model_registry, tracker, witness
 from singularity.scheduler._dispatch_skills import (
-    _load_skills_for_agent, _load_mcp_for_agent, _make_permission_checker,
+    _load_mcp_for_agent,
+    _load_skills_for_agent,
+    _make_permission_checker,
 )
-from singularity.scheduler import tracker, config
-from singularity.scheduler.tracker import TaskStatus
+from singularity.scheduler._io import _parse_patch_ops, apply_json_patch
+from singularity.scheduler.dispatcher import (
+    _EXECUTOR_BY_TYPE,
+    DispatchResult,
+    _build_agent_from_registry,
+    _ensure_agent_type,
+    agent_api_available,
+    load_agents,
+    pick_agent_fallback_chain,
+)
+
 # `BaseExecutor` 只用在下面那句局部变量注解上（`executor: BaseExecutor = …`）。
 # 局部注解**运行时不求值**，所以少这个 import 不会炸 —— 但 F821 会一直报，
 # 把"真有未定义名"的信号淹没掉。补上，让这条检查能当守卫用。
 from singularity.scheduler.executors.base import BaseExecutor
-from singularity.scheduler import witness
 from singularity.scheduler.log import timed
-from singularity.scheduler._io import apply_json_patch, _parse_patch_ops
-from singularity.scheduler import model_registry
-from singularity.scheduler import _model_breaker
-import json, os, time, logging, threading
+from singularity.scheduler.tracker import TaskStatus
 
 # ── 委员会收集初稿的时间预算 ──
 # 单次模型调用本身有上限（claude-cli 300s / openai-agent 240s），所以一波的耗时
@@ -60,7 +69,7 @@ def _committee_allowed(task: str, chain: list, route_role: str,
     ``allow_committee=False`` = 项目被判为轻量（见 `project.resolve_flow`）。
     默认一路传 True —— **拿不准就开委员会**（防御模式 §47 fail-closed）。
     """
-    from .execution_judge import _is_architecture_task   # 与 dispatch 内部同一个延迟导入
+    from .execution_judge import _is_architecture_task  # 与 dispatch 内部同一个延迟导入
     return bool(
         allow_committee
         and len(chain) >= 2

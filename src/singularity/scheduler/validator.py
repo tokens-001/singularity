@@ -1,8 +1,13 @@
 """validator.py — validation pipeline. v2: run_project_tests + crossover_review."""
 from __future__ import annotations
-import json, logging, re, subprocess
+
+import json
+import logging
+import re
+import subprocess
 from dataclasses import dataclass, field
 from typing import Optional
+
 from singularity.scheduler import config
 from singularity.scheduler.snapshot import Snapshot
 
@@ -26,7 +31,7 @@ _HUMAN_REVIEW_PATTERNS = [
 class ValidationReport:
     verdict: str = "未知"; action: str = "pass"
     validate_verdict: str = ""; validate_reason: str = ""
-    gate_passed: Optional[bool] = None; gate_message: str = ""
+    gate_passed: bool | None = None; gate_message: str = ""
     human_review_required: bool = False
     unverified: list = field(default_factory=list)
     evidence: dict = field(default_factory=dict)
@@ -103,7 +108,7 @@ def _run_gate():
         p = subprocess.run(["python3",str(config.EVAL_SCRIPT),"--gate","--json"], capture_output=True,text=True,timeout=config.GATE_TIMEOUT)
         d = json.loads(p.stdout) if p.stdout else {}; g = d.get("gate",{})
         return {"passed":g.get("passed",False),"message":g.get("message",f"exit={p.returncode}")}
-    except subprocess.TimeoutExpired: return {"passed":False,"message":f"gate timeout"}
+    except subprocess.TimeoutExpired: return {"passed":False,"message":"gate timeout"}
     except Exception as e: return {"passed":False,"message":f"gate error:{e}"}
 
 def _gate_check_by_files(changed_files):
@@ -176,7 +181,9 @@ def tests_failed_msg(tr: dict) -> str:
 
 def run_project_tests(cwd=None):
     """Run project test suite (pytest->unittest->npm). Returns {passed,total,failures,output,runner}."""
-    import sys, os as _os, re as _re
+    import os as _os
+    import re as _re
+    import sys
     root = cwd or str(config.PROJECT_ROOT)
     result = {"passed":True,"total":0,"failures":0,"output":"","runner":"",
               # ⚠️ **退出码单独存**：它**不是**"失败数"（2026-09-14 登记的那条）。
@@ -417,7 +424,7 @@ def crossover_review(task_desc, raw_output, changed_files, writer_level, writer_
 
     files_list = ", ".join(changed_files[:10])
     # 角色定位/审查重点在 roles.toml [reviewer]（页面上可改）；这里只填动态内容和输出契约
-    from .roles import get_role, get_phase_role
+    from .roles import get_phase_role, get_role
     review_role = get_role(get_phase_role("reviewing") or "reviewer")
     role_prompt = review_role.get_full_prompt() if review_role else "你是代码审查者。"
     _cl = _defense_checklist(f"{task_desc[:400]} {files_list} {diff_text[:1200]}")
@@ -477,7 +484,8 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
         {issues:[{model,severity,line,detail}], verdicts:[{model,verdict}],
          summaries:[{model,summary}], models_used:[str], elapsed:float}
     """
-    import concurrent.futures, time as _time
+    import concurrent.futures
+    import time as _time
     from pathlib import Path as _Path
 
     root = cwd or str(config.PROJECT_ROOT)
@@ -548,7 +556,7 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
     # 并行审查
     reviews = []
     start_time = _time.time()
-    
+
     def review_chunk(chunk_data, cfg):
         chunk_label, chunk_content = chunk_data
         model_name = cfg.get("model", "unknown")
@@ -567,11 +575,11 @@ Check: logic errors, security, style, performance, correctness; AND requirement 
 Output ONLY JSON: {{"issues":[{{"severity":"critical|warning|info","line":approx,"detail":"..."}}],"verdict":"pass|retry|abort","summary":"one line"}}
 No issues? {{"issues":[],"verdict":"pass","summary":"no issues"}}
 JSON:"""
-            
+
             result = _disp.dispatch(chunk_prompt, review_level, f"mmr_{model_name[:8]}",
                                    {review_level:[cfg]}, cwd=root, no_tools=True)
             raw = result.executor_result.raw_output if result and result.executor_result else ""
-            
+
             d = _extract_json_obj(raw)
             if d:
                 return {"model": model_name,
@@ -609,18 +617,18 @@ JSON:"""
         _executor.shutdown(wait=False)
 
     elapsed = _time.time() - start_time
-    
+
     # 汇总结果
     all_issues = []
     all_verdicts = []
     all_summaries = []
     models_used = list(set(r["model"] for r in reviews))
-    
+
     for r in reviews:
         all_issues.extend([{"model": r["model"], **issue} for issue in r["issues"]])
         all_verdicts.append({"model": r["model"], "verdict": r["verdict"]})
         all_summaries.append({"model": r["model"], "summary": r["summary"]})
-    
+
     return {
         "issues": all_issues,
         "verdicts": all_verdicts,
@@ -653,10 +661,10 @@ def security_review(code: str, file_path: str = "", severity_filter: str = "all"
         {"pattern": r"sql\s*[+=].*|execute\s*\(", "severity": "warning", "desc": "SQL查询执行"},
         {"pattern": r"(allow_|enable_|skip_|disable_)(auth|verify|check)", "severity": "critical", "desc": "安全检查绕过"},
     ]
-    
+
     issues = []
     lines = code.split('\n')
-    
+
     for i, line in enumerate(lines, 1):
         for pattern_info in security_patterns:
             if re.search(pattern_info["pattern"], line, re.IGNORECASE):
@@ -666,18 +674,18 @@ def security_review(code: str, file_path: str = "", severity_filter: str = "all"
                         continue
                     if severity_filter == "high" and severity not in ["critical", "high"]:
                         continue
-                
+
                 issues.append({
                     "severity": severity,
                     "line": i,
                     "detail": f"{pattern_info['desc']}: {line.strip()}",
                     "pattern": pattern_info["pattern"]
                 })
-    
+
     # 如果有高危模式，需要人工复核
     critical_issues = [i for i in issues if i["severity"] == "critical"]
     verdict = "abort" if critical_issues else "pass"
-    
+
     return {
         "issues": issues,
         "verdict": verdict,
@@ -762,8 +770,8 @@ def qa_acceptance_review(constraints, diff_text, cwd, requirements=""):
     Returns:
         {"verdict": "accepted|needs_fix", "verifications": [...], "summary": str}
     """
-    from .roles import get_role
     from . import dispatcher as _disp
+    from .roles import get_role
 
     qa = get_role('qa_engineer')
     if not qa:
@@ -830,8 +838,8 @@ def security_audit_review(diff_text, cwd, requirements=""):
     Returns:
         {"verdict": "clean|needs_fix", "findings": [...], "summary": str}
     """
-    from .roles import get_role
     from . import dispatcher as _disp
+    from .roles import get_role
 
     sa = get_role('security_auditor')
     if not sa:

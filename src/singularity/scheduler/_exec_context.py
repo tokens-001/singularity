@@ -11,8 +11,7 @@ import time
 
 import httpx
 
-from singularity.scheduler import config
-from singularity.scheduler import witness
+from singularity.scheduler import config, witness
 from singularity.scheduler import memory as mem_mod
 
 _PLANNER_PREAMBLE = """\
@@ -113,7 +112,8 @@ def _build_project_context(task) -> str:
     if not pid:
         return ""
     try:
-        from .project import load as _load_proj, constraint_text
+        from .project import constraint_text
+        from .project import load as _load_proj
         proj = _load_proj(pid)
         if not proj:
             return ""

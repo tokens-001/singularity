@@ -7,37 +7,53 @@ from __future__ import annotations
 
 import json
 import time
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from pathlib import Path
 
-from singularity.scheduler._types import RunContext, BatchOutput, _SnapProxy, _pending_sse_events
-from singularity.scheduler._worktree import (
-    _maybe_create_worktree, _cleanup_wt, _lock_wt, _unlock_wt,
-    _anchor_ref, _build_merge_request,
-)
-from singularity.scheduler import config
+from singularity.scheduler import chancellor as chan_mod
+from singularity.scheduler import config, tracker, witness
 from singularity.scheduler import dispatcher as disp_mod
+from singularity.scheduler import memory as mem_mod
+from singularity.scheduler import neijinglu as nj_mod
+from singularity.scheduler import pre_search as pre_mod
 from singularity.scheduler import router as router_mod
 from singularity.scheduler import snapshot as snap_mod
-from singularity.scheduler import tracker
 from singularity.scheduler import validator as val_mod
-from singularity.scheduler import neijinglu as nj_mod
-from singularity.scheduler import witness
-from singularity.scheduler import memory as mem_mod
-from singularity.scheduler import pre_search as pre_mod
-from singularity.scheduler import chancellor as chan_mod
-from singularity.scheduler.log import timed
-from singularity.scheduler._git_worktree import (
-    Worktree, create as wt_create, cleanup as wt_cleanup,
-    merge_back as wt_merge_back, commit_wt, changed_files_between,
-)
-from singularity.scheduler.tracker import TaskStatus
 
 # ponytail: context 函数提取到 _exec_context.py, 此文件 re-export 保持兼容
 from singularity.scheduler._exec_context import (
-    _PLANNER_PREAMBLE, _inject_memory, _build_project_context,
-    _CONSTRUCT_WINDOW, _summarize_events, _construct_context,
+    _CONSTRUCT_WINDOW,
+    _PLANNER_PREAMBLE,
+    _build_project_context,
+    _construct_context,
+    _inject_memory,
+    _summarize_events,
 )
+from singularity.scheduler._git_worktree import (
+    Worktree,
+    changed_files_between,
+    commit_wt,
+)
+from singularity.scheduler._git_worktree import (
+    cleanup as wt_cleanup,
+)
+from singularity.scheduler._git_worktree import (
+    create as wt_create,
+)
+from singularity.scheduler._git_worktree import (
+    merge_back as wt_merge_back,
+)
+from singularity.scheduler._types import BatchOutput, RunContext, _pending_sse_events, _SnapProxy
+from singularity.scheduler._worktree import (
+    _anchor_ref,
+    _build_merge_request,
+    _cleanup_wt,
+    _lock_wt,
+    _maybe_create_worktree,
+    _unlock_wt,
+)
+from singularity.scheduler.log import timed
+from singularity.scheduler.tracker import TaskStatus
 
 # 全局底线：所有任务的约束，首轮无条件注入（原 karpathy-rules 技能，从技能层提升到全局层）
 _GLOBAL_CONSTRAINTS = """全局底线（所有任务必须遵守）：
@@ -235,7 +251,7 @@ def _mark_dispatch_started(task_id: str) -> None:
         pass    # 落盘失败不该把任务带崩
 
 
-def read_partial_started_at(task_id: str) -> "float | None":
+def read_partial_started_at(task_id: str) -> float | None:
     """dispatch 开始过的时刻；**从没进过 dispatch** 才返回 `None`。"""
     try:
         p = config.PARTIAL_USAGE_DIR / f"{task_id}.json"
@@ -276,7 +292,7 @@ def read_partial_tool_events(task_id: str) -> list:
         return []
 
 
-def _check_cancelled(task, all_tool_events: list) -> "BatchOutput | None":
+def _check_cancelled(task, all_tool_events: list) -> BatchOutput | None:
     """检查"停"标记。返回 BatchOutput 表示该停; None 表示继续。
 
     ⚠️ **这个标记有两个来源，必须分开报**（2026-09-19）：
@@ -710,7 +726,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                         _, level, turn, disp_result, all_tool_events, reason = pm_signal
                     else:
                         last_validation = val_mod.ValidationReport(verdict="阻断", action="abort",
-                            unverified=[f"内部错误: 意外的 _process_planner_or_merge 返回类型"])
+                            unverified=["内部错误: 意外的 _process_planner_or_merge 返回类型"])
                         break  # 跳出 for turn 循环，走 escalation 路径
                     last_validation = val_mod.ValidationReport(
                         verdict="阻断", action="abort",
@@ -775,7 +791,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 # 只拦 verdict=fail (硬证据); escalate/retry 是软信号, 不拦, 仅 SSE 通知 Owner。
                 if pending_merge_req is not None:
                     try:
-                        from .supervisor import supervise, qa_context
+                        from .supervisor import qa_context, supervise
                         _cons, _check = qa_context(task)
                         # 改动文件在 worktree (cwd) 里, 不在项目 repo 根 —— 传错根
                         # 会让 _check_artifact 的 py_compile/ruff 因 (root/f).exists()

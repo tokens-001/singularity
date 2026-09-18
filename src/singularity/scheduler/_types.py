@@ -29,7 +29,7 @@ class RunContext:
     # 这个 ref 能不能当 diff 基准（validator._diff_base），丢了它基准就恒为空。
     snapshot_method: str = "git"
     worktree_base: str = ""
-    merge_queue: "Optional[MergeQueue]" = None
+    merge_queue: MergeQueue | None = None
     # 任务级"死亡时刻"（墙钟绝对值）。**这是唯一的那把尺** —— orchestrator 到点砍人
     # （`_reap_futures` 的 `now - submitted_at > TASK_DEADLINE_S`）用的也是这个原点，
     # 所以执行器的提前收尾余量必须从**同一个绝对值**倒推，不能各自 `time.time()` 起算。
@@ -46,7 +46,7 @@ class BatchOutput:
     dispatch_result: object = None
     term_reason: str = ""
     validation: object = None
-    merge_request: "Optional[MergeRequest]" = None
+    merge_request: MergeRequest | None = None
     planner_decomposed: bool = False
     planner_subtasks: list = field(default_factory=list)  # worker 分解结果, 主线程直接用
     pre_search_skipped: bool = False

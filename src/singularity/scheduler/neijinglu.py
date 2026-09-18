@@ -17,6 +17,7 @@ v1 输出字段:
 """
 
 from __future__ import annotations
+
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +26,7 @@ from typing import Optional
 from singularity.scheduler.router import RouteResult
 from singularity.scheduler.snapshot import Snapshot
 from singularity.scheduler.validator import ValidationReport
+
 from .executors.base import ExecutorResult
 
 
@@ -79,7 +81,7 @@ class DeliveryReport:
     stored_tool_batches: dict = None
 
     @classmethod
-    def from_dict(cls, d: dict) -> "DeliveryReport":
+    def from_dict(cls, d: dict) -> DeliveryReport:
         """从 JSON dict 重建 (简化版, 仅字段映射)。"""
         route_data = d.get("route", {})
         # ⚠️ **别加 `level=`** —— `RouteResult` 两档之后就不带这个字段了
@@ -223,9 +225,7 @@ def build_report(
     )
 
     # 最终状态判定 (审计 1.3: 通过≠已验证)
-    if rolled_back:
-        report.final_status = "rolled_back"
-    elif validation.action == "rollback":
+    if rolled_back or validation.action == "rollback":
         report.final_status = "rolled_back"
     elif validation.action in ("abort",):
         report.final_status = "blocked"
@@ -329,8 +329,9 @@ def _is_redundant_failure(data: dict, lookback: int = 3) -> bool:
     2. 最近 lookback 条同 task_type 的 trace 中，
        有 ≥ lookback 条具有相同的 failure 特征（task_type + validation 一致）
     """
-    from . import config
     import os as _os
+
+    from . import config
 
     trace_dir = config.TRACE_DIR
     if not trace_dir.exists():

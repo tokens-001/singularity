@@ -9,6 +9,7 @@ MCP 允许 Agent 发现和调用外部工具服务器提供的工具。
 """
 
 from __future__ import annotations
+
 import json
 import os
 import queue
@@ -23,9 +24,9 @@ from typing import Optional
 
 import httpx
 
-from singularity.scheduler import config
-from singularity.scheduler import witness
-from singularity.scheduler.log import info as _log_info, warn as _log_warn
+from singularity.scheduler import config, witness
+from singularity.scheduler.log import info as _log_info
+from singularity.scheduler.log import warn as _log_warn
 
 _TAG = "mcp"
 
@@ -67,8 +68,8 @@ class MCPClient:
 
     def __init__(self, cfg: MCPServerConfig):
         self.cfg = cfg
-        self._proc: Optional[subprocess.Popen] = None
-        self._http_client: Optional[httpx.Client] = None
+        self._proc: subprocess.Popen | None = None
+        self._http_client: httpx.Client | None = None
         self._initialized = False
         self._tools: list[MCPTool] = []
         # stdio 是**一条字节流**，没有多路复用：两个线程同时收发会互相读到对方的响应
@@ -76,7 +77,7 @@ class MCPClient:
         # 跟协议本身对齐。见 `_rpc_stdio` / `_recv_stdio`。
         self._stdio_lock = threading.RLock()
         # stdout 由**一个专用线程**独占读，读到的行进这个队列（见 `_ensure_reader`）。
-        self._stdout_q: "queue.Queue | None" = None
+        self._stdout_q: queue.Queue | None = None
         self._reader_proc = None
 
     # ── 连接管理 ──────────────────────────────────────────────────
@@ -218,7 +219,7 @@ class MCPClient:
 
     # ── JSON-RPC 核心 ─────────────────────────────────────────────
 
-    def _rpc(self, method: str, params: dict) -> Optional[dict]:
+    def _rpc(self, method: str, params: dict) -> dict | None:
         """发送 JSON-RPC 请求, 返回 result 或 None。"""
         if self.cfg.transport == "stdio":
             return self._rpc_stdio(method, params)
@@ -226,7 +227,7 @@ class MCPClient:
             return self._rpc_http(method, params)
         return None
 
-    def _rpc_stdio(self, method: str, params: dict) -> Optional[dict]:
+    def _rpc_stdio(self, method: str, params: dict) -> dict | None:
         if not self._proc or self._proc.poll() is not None:
             return None
         req_id = _next_id()
@@ -261,7 +262,7 @@ class MCPClient:
         """
         if self._stdout_q is not None and self._reader_proc is self._proc:
             return
-        q: "queue.Queue" = queue.Queue()
+        q: queue.Queue = queue.Queue()
         proc = self._proc
         self._stdout_q, self._reader_proc = q, proc
 
@@ -280,8 +281,8 @@ class MCPClient:
         threading.Thread(target=_pump, daemon=True,
                          name=f"mcp-reader-{self.cfg.name}").start()
 
-    def _recv_stdio(self, want_id: Optional[int] = None,
-                    timeout: float = 30.0) -> Optional[dict]:
+    def _recv_stdio(self, want_id: int | None = None,
+                    timeout: float = 30.0) -> dict | None:
         """读到**这一次请求**的响应为止 —— 按 `id` 认领，不认的丢掉继续等。
 
         ⚠️ 原来是"`readline` 一行就返回、`json.loads` 完就交差"，**从不看 `id`**
@@ -324,7 +325,7 @@ class MCPClient:
                 continue          # 通知 / 上一次的迟到响应 —— 丢掉，继续等这一次的
             return msg
 
-    def _rpc_http(self, method: str, params: dict) -> Optional[dict]:
+    def _rpc_http(self, method: str, params: dict) -> dict | None:
         if not self._http_client:
             return None
         req = {"jsonrpc": "2.0", "id": _next_id(), "method": method, "params": params}
@@ -503,7 +504,7 @@ class MCPRegistry:
 
 # ── 全局单例 ───────────────────────────────────────────────────────
 
-_registry: Optional[MCPRegistry] = None
+_registry: MCPRegistry | None = None
 
 
 def get_registry() -> MCPRegistry:
@@ -613,7 +614,7 @@ def _toml_dumps(data: dict) -> str:
     lines = []
     servers = data.get("servers", [])
     for i, s in enumerate(servers):
-        lines.append(f"[[servers]]")
+        lines.append("[[servers]]")
         for k, v in s.items():
             lines.append(_toml_kv(k, v))
         if i < len(servers) - 1:

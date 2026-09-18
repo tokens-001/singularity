@@ -18,19 +18,20 @@ Dual-Stream:
 """
 
 from __future__ import annotations
+
 import json
 import os
 import re
 import threading
 import time
-from pathlib import Path
-from dataclasses import dataclass, field
 from collections import defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from singularity.scheduler import config as sched_config
 from singularity.scheduler import witness
-from singularity.scheduler._types import _pending_sse_events
 from singularity.scheduler._io import atomic_write_json
+from singularity.scheduler._types import _pending_sse_events
 
 # 「完整产出」单条存储上限（字符）。不参与 embedding，只在 depth>=3 展开时读。
 # 16000 覆盖实测最大的一条 agent_output（15,782 字），超出即截断。
@@ -122,7 +123,7 @@ class EventNode:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "EventNode":
+    def from_dict(cls, d: dict) -> EventNode:
         return cls(
             task_id=d["task_id"],
             content=d.get("content", ""),
@@ -168,6 +169,7 @@ _EMBED_LOCK = __import__("threading").RLock()
 
 # 模块加载时抑制HF/transformers日志
 import logging as _hf_log
+
 _hf_log.getLogger("sentence_transformers").setLevel(_hf_log.ERROR)
 _hf_log.getLogger("transformers").setLevel(_hf_log.ERROR)
 def _get_embed_model():
@@ -186,11 +188,14 @@ def _load_embed_model():
     """真正的加载（**不加锁** —— 调用方 `_get_embed_model` 已经持锁）。"""
     global _EMBED_MODEL
     if _EMBED_MODEL is None:
-        import os, time
+        import os
+        import time
         if os.environ.get("QIDIAN_SKIP_EMBED", "") == "1":
             _EMBED_MODEL = False
             return None
-        import sys, io, logging as _log
+        import io
+        import logging as _log
+        import sys
         _log.getLogger("sentence_transformers").setLevel(_log.ERROR)
         _log.getLogger("transformers").setLevel(_log.ERROR)
         _stderr = sys.stderr

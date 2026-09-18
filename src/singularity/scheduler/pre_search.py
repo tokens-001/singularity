@@ -11,6 +11,7 @@ v2 升级 (MAGMA 多图记忆):
 """
 
 from __future__ import annotations
+
 import json
 import subprocess
 from dataclasses import dataclass, field
@@ -56,8 +57,9 @@ def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True,
           （agent_output）也取回来。贵（多几条 × 数千字），默认关。
           调用方按需传 True；也可以设 `QIDIAN_MEMORY_DEEP=1` 全局强开（排障用）。
     """
-    from . import witness  # 原缺: 函数内 import 使名字整个作用域变局部, L104 早于它执行会 UnboundLocalError
     import os as _os
+
+    from . import witness  # 原缺: 函数内 import 使名字整个作用域变局部, L104 早于它执行会 UnboundLocalError
     deep = deep or _os.environ.get("QIDIAN_MEMORY_DEEP") == "1"
     res = PreSearchResult()
 
@@ -155,8 +157,9 @@ def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True,
 
     # ── Step 3: codegraph 代码结构上下文 ──
     try:
-        from . import codegraph
         import re as _re
+
+        from . import codegraph
         file_refs = _re.findall(r'\b([\w/]+\.py)\b', task)
         if file_refs:
             g = codegraph.load_graph()

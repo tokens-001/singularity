@@ -8,11 +8,22 @@ from __future__ import annotations
 import os
 import stat
 import subprocess as _sp
+
 from singularity.scheduler import config
 from singularity.scheduler import tracker as _tracker
 from singularity.scheduler._git_worktree import (
-    Worktree, create as wt_create, cleanup as wt_cleanup,
-    merge_back as wt_merge_back, commit_wt, changed_files_between,
+    Worktree,
+    changed_files_between,
+    commit_wt,
+)
+from singularity.scheduler._git_worktree import (
+    cleanup as wt_cleanup,
+)
+from singularity.scheduler._git_worktree import (
+    create as wt_create,
+)
+from singularity.scheduler._git_worktree import (
+    merge_back as wt_merge_back,
 )
 
 try:
@@ -21,7 +32,7 @@ except ImportError:
     MergeRequest = None  # type: ignore
 
 
-def _build_merge_request(task, branch_ref: str, base_ref: str, repo_root=None) -> "MergeRequest":
+def _build_merge_request(task, branch_ref: str, base_ref: str, repo_root=None) -> MergeRequest:
     changed = set(changed_files_between(base_ref, branch_ref, repo_root=repo_root))
     deps = list(task.depends_on) if task.depends_on else []
     return MergeRequest(
@@ -33,7 +44,6 @@ def _build_merge_request(task, branch_ref: str, base_ref: str, repo_root=None) -
 
 def _anchor_ref(task_id: str, commit_sha: str, repo_root=None) -> bool:
     """给悬空 commit 打锚定 ref, 防 git gc 回收。返回是否成功。"""
-    import subprocess as _sp
     root = repo_root or config.PROJECT_ROOT
     ref = f"refs/qidian/pending/{task_id}"
     r = _sp.run(
@@ -49,7 +59,6 @@ def _anchor_ref(task_id: str, commit_sha: str, repo_root=None) -> bool:
 
 def _release_ref(task_id: str, repo_root=None) -> bool:
     """清理锚定 ref。返回是否成功。"""
-    import subprocess as _sp
     root = repo_root or config.PROJECT_ROOT
     ref = f"refs/qidian/pending/{task_id}"
     r = _sp.run(
@@ -174,7 +183,6 @@ def _lock_wt(wt: Worktree) -> None:
     """只读锁: 文件 r--r--r--, 目录 r-xr-xr-x (防遍历但可进入子路径)。"""
     if wt is None:
         return
-    import stat, subprocess as _sp
     r = _sp.run(["git", "ls-files"], cwd=str(wt.path), capture_output=True, text=True)
     if r.returncode != 0:
         return
@@ -193,7 +201,6 @@ def _unlock_wt(wt: Worktree) -> None:
     """解锁: 文件 rw-r--r--, 目录 rwxr-xr-x。"""
     if wt is None:
         return
-    import stat, subprocess as _sp
     r = _sp.run(["git", "ls-files"], cwd=str(wt.path), capture_output=True, text=True)
     if r.returncode != 0:
         return
