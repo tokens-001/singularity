@@ -4,6 +4,24 @@ from collections import defaultdict
 
 from singularity.scheduler._memory_core import *  # noqa: F401,F403
 
+# ⚠️ 上面那行 `import *` 是**门面再导出**（别的模块从本模块拿它导出的名字），
+# 不能删。但**本文件自己用到**的名字要显式导一遍 —— 否则 ruff F405 报
+# "may be undefined"，而且真出事时（源模块改名/删名）是运行期 NameError，
+# 不是导入期报错。2026-09-19 补。
+from singularity.scheduler._memory_core import (  # noqa: F401
+    _INTENT_EDGE_WEIGHTS,
+    EdgeType,
+    EventNode,
+    _cosine_sim,
+    _embed,
+    _entity_idx_path,
+    _load_edges,
+    _load_events,
+    _read_json,
+    _save_edges,
+    detect_intent,
+)
+
 __all__ = ['_expand_node', '_rrf_anchors', 'add_inferred_causal_edge', 'find_by_files', 'find_candidate_latent_edges', 'find_causal_chain', 'find_similar', 'query', 'synthesize', 'traverse']
 # Stage 2: Multi-Signal Anchor Identification (RRF)
 # ═══════════════════════════════════════════════════════════
