@@ -96,10 +96,27 @@ def test_删除任务仍然释放锚(tmp_path, monkeypatch):
     assert released == ["T1"], f"删除不再释放锚了（现状被改坏了？）: {released}"
 
 
-def test_重试仍然释放锚(tmp_path, monkeypatch):
-    """**重试**是"取代"：旧锚指着的那次尝试已经被这次取代了。
+def test_重试不释放锚(tmp_path, monkeypatch):
+    """**重试 ≠ 产物已进仓**。
 
-    不松手的话，界面会对着一个正在重跑的任务说"有可打捞的产物"，指的却是上一版。
+    🔵 **2026-09-19 反过来了** —— 这条原来是 `test_重试仍然释放锚`，钉的是相反的行为。
+
+    原来的理由：「重试是"取代" ⇒ 旧锚已被取代 ⇒ 留着界面会说'有可打捞的产物'，
+    指的却是上一版」。**它和本文件头的原则是矛盾的** —— 头里刚说完
+    「**merged 是唯一**让'产物已经安全进项目仓了'这句话成立的分支」，
+    而重试那一刻什么都没进仓。
+
+    为什么反过来：
+      · 「被取代」在点下重试那一瞬是**假设、不是事实** —— 要真跑起来、真产出，
+        旧锚才真的被取代。而 `_anchor_ref` 用 `git update-ref ref <sha>`
+        **无条件覆盖** ⇒ **新尝试一旦产出，旧锚自己就被盖掉，不必提前松手。**
+      · ⇒ 提前释放只在「**重试没跑成**」时产生差别（调度循环没开 / 预算耗尽 /
+        被取消 / 重启）—— 那时旧产物**既没被取代、又被释放**，纯丢。
+        而"产物在、只是没进仓"恰恰是本仓最常见的形态（09-18 一天 62 次被 240s 掐断）。
+      · 原来那句"界面会指上一版"**不是误报** —— 产物确实还在，那正是
+        `salvageable_refs` 的定义。要消除歧义该改**标签**，不是删产物。
+
+    ⚠️ 状态必须是 FAILED —— 别的一律早退 400，那这条测试就变成"什么都没验"。
     """
     from singularity.scheduler import _api_tasks as A
 
@@ -107,13 +124,14 @@ def test_重试仍然释放锚(tmp_path, monkeypatch):
     monkeypatch.setattr(A, "_release_ref", lambda tid, repo_root=None: released.append(tid))
     monkeypatch.setattr(A, "_cleanup_task_artifacts", lambda *a, **k: 0)
     monkeypatch.setattr(A, "_supersede_trace", lambda tid: None)
-    # ⚠️ 状态必须是 FAILED —— 别的一律早退 400，那这条测试就变成"什么都没验"。
     monkeypatch.setattr(A, "tracker",
                         _FakeTracker(tmp_path, status=tracker.TaskStatus.FAILED))
     monkeypatch.setattr("singularity.scheduler.project.repo_root_for", lambda t: tmp_path)
 
     A.task_retry("T1")
-    assert released == ["T1"], f"重试不再释放锚了: {released}"
+    assert released == [], (
+        f"重试把锚释放了 —— 那是在断言「产物已进仓」这句假话。"
+        f"重试一旦没跑成，旧产物既没被取代、又被释放，纯丢: {released}")
 
 
 # ═══════════════════════════════════════════════════════════════

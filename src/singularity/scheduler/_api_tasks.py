@@ -524,17 +524,28 @@ def task_retry(task_id: str) -> tuple[dict, int]:
     except Exception:
         repo_root = config.PROJECT_ROOT
     _cleanup_task_artifacts(task_id, repo_root)
-    # 锚定 ref 也一起松手（2026-09-18 从 `cleanup_task_artifacts` 里挪出来的）。
-    # 这条路的理由和删除**不一样**：重试是**新的一次尝试**（跟下面 `_supersede_trace`
-    # 同一件事）⇒ 旧锚指着的那次尝试已经被取代，留着它界面会对着一个正在重跑的
-    # 任务说"有可打捞的产物"，指的还是上一版。
-    # ⚠️ 不松手的风险也不是零：重试若中途又挂了，这份旧产物就没人引用了。
-    #    取舍按"取代"这一侧的语义算 —— 要留旧产物就别重试。
-    try:
-        _release_ref(task_id, repo_root=repo_root)
-    except Exception as e:
-        witness.warn('_api', f'release_ref_retry:{task_id}:{type(e).__name__}:{e}'[:100],
-                     key="task_retry_release_ref_failed")
+    # 🔵 **锚定 ref 在这里「不」松手**（2026-09-19 反过来；这里原来是显式 `_release_ref`）。
+    #
+    # 释放的语义只有一种读法（`_worktree.cleanup_task_artifacts` 的 docstring 写明）：
+    # **释放 = 断言"这个任务的产物已经安全进项目仓了"**。
+    # 而重试那一刻这句**恰恰是假的** —— 不然重试什么？
+    # `test_anchor_ref_lifecycle.py` 的文件头也是这么定的：「merged 是**唯一**让这句话
+    # 成立的分支」。原来这次释放和那条原则是矛盾的。
+    #
+    # 原来的理由：「重试 = 新的一次尝试 ⇒ 旧锚已被取代」。但「被取代」在点下重试那一瞬
+    # 是**假设、不是事实**：要真跑起来、真产出，旧锚才真的被取代。而 `_anchor_ref` 用的是
+    # `git update-ref ref <sha>` —— **无条件覆盖** ⇒ **新尝试一旦产出，旧锚自己就被盖掉，
+    # 根本不需要提前松手。**
+    #
+    # ⇒ 提前释放只在一种情况下产生差别：**重试没跑成**（调度循环没开 / 预算耗尽 /
+    #   被取消 / 进程重启）—— 那时旧产物**既没被取代、又被释放**，纯丢。
+    #   而"产物在、只是没进仓"恰恰是本仓最常见的形态（09-18 一天 62 次被 240s 掐断）。
+    #
+    # 重试成功那条路完全不受影响：有产出 ⇒ 新锚覆盖旧锚；真合并进仓 ⇒
+    # `_release_ref` 由**知道产物落没落地**的那条路（merge）来做。
+    # ⚠️ 代价（如实记）：重试中途挂掉时，界面会对着这个任务说"有可打捞的产物"，
+    #   指的是**上一版**。**那不是误报 —— 产物确实还在**，正是 `salvageable_refs` 的定义。
+    #   要消除这个歧义该改的是**标签**，不是删产物。
     # 重试 = **新的一次尝试** ⇒ 旧 trace 必须先让位，否则这一趟白跑（见上面 docstring）
     _supersede_trace(task_id)
     tracker.transition(task_id, TaskStatus.PENDING, error="", retry_count=0)
