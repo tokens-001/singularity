@@ -966,8 +966,22 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                     })
             elif proj.phase.value == "reviewing":
                 # P3: 验收阶段 — 直接推GATE3等人审（FIXING 已删，状态不可达）
-                from singularity.scheduler.workflow import run_test_fix_loop
-                run_test_fix_loop(proj, agents)
+                #
+                # ⚠️ **必须防重入**（2026-09-18 外派评审抓出，逐行核过）。
+                # `_run_integration_merge_async` **自己就调** `run_test_fix_loop`：
+                # 它先 `set_phase(REVIEWING)` + `save`，**再**调 —— 而那里面是两次
+                # LLM 调用加最多 10 条子进程检查，**窗口是分钟级**。这里是
+                # **调度循环每一 tick** 扫一遍，扫到 `reviewing` 就再调一次 ⇒
+                # **同一个项目的验收同时跑两遍**：两份钱，各自 `issues = []` 再填，
+                # 最后 `save()` 整对象覆盖（`project.save` 的 RLock 只防"同时写"，
+                # **防不住丢更新**）。
+                #
+                # 守卫跟隔壁 `integrating` 分支**共用同一个** —— `_merge_inflight`
+                # 的作用域碰巧正好对：`add` 在提交时、`discard` 在 `finally`，
+                # 覆盖了整个验收期间。别另起一个 set。
+                if proj.id not in _merge_inflight:
+                    from singularity.scheduler.workflow import run_test_fix_loop
+                    run_test_fix_loop(proj, agents)
             elif proj.phase.value == "integrating":
                 # 重启恢复: 若没在跑则提交 (已在跑的跳过防重入)
                 if proj.id not in _merge_inflight:
