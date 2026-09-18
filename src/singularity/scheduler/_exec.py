@@ -827,6 +827,31 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
         deadline_wrapup=deadline_wrapup,
     )
 
+def _batch_has_facts(b) -> bool:
+    """这一批交回来的东西里，有没有**磁盘上真发生过的事实**。
+
+    判据是"**有没有产物 / 花没花过钱**"，不是"成没成功"，**也不是"轮次 > 0"**：
+
+    ⚠️ **`turn_count` 不能当判据** —— 预算 6 秒那次**确实发起了**一轮，
+    `turn_count` 会是 1，而它交回 0 文件 0 token。拿轮次当判据就等于把那个
+    空壳原样放回去，**而"空壳顶掉真结果"正是要修的东西**。
+
+    ⚠️ `token_count` 的 `None` 是"**不知道**"（§59）不是"没花钱"，所以按 `or 0` 折成 0 ——
+    宁可把"不知道花没花钱"的那一批当空壳留着上一份（更保守的一侧）。
+
+    ⚠️ **只收"产物/钱"这三样，不收 `tool_events`**：只读文件、改了又回滚的那些轮
+    确实"发生了点什么"，但拿它去换掉一份**真交了文件**的账，是净亏。
+    """
+    if getattr(b, "merge_request", None) is not None:
+        return True                       # worktree 里已 commit —— 最硬的事实
+    er = getattr(getattr(b, "dispatch_result", None), "executor_result", None)
+    if er is None:
+        return False
+    if getattr(er, "changed_files", None):
+        return True
+    return int(getattr(er, "token_count", 0) or 0) > 0
+
+
 def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
     """worker 线程入口: 纯执行 + 重试。
 
@@ -847,7 +872,20 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
             return prev_batch
         ctx.retry_count = retry  # ponytail: 传入 run() 用于 force_premium 判定
         batch = run(task, ctx, agents)
-        prev_batch = batch
+        # 🔴 **空壳不许顶掉真结果**（2026-09-18，和上面那道 guard 是**同一件事的另一半**）。
+        #
+        # 上面那道 guard 拦的是「**下一轮**什么都不发起」；这一句拦的是
+        # 「**这一轮**发起了、但什么都没干出来」—— 两者交回的空壳长得一模一样，
+        # 而 `prev_batch` 原来是**无条件**赋值的 ⇒ 空壳一进来就把真账换走了，
+        # 下一轮 guard 再忠实地把**空壳**交出去。**下半句修了、上半句没修。**
+        #
+        # 真机形状（2026-09-18 §77.8 复查）：预算是 `6s` 这种**正数**时
+        # `_budget_exhausted` 不拦（它只拦 `≤0`）⇒ 照常发起 ⇒ 活着 39 毫秒、
+        # 交回 0 文件 0 token。第 1 轮那份真干出来的账就是这么丢的。
+        # ⇒ 这就是"太小也是没有"那个区间的**伤害面**：不去猜"多小算小"（没数据，见 OPEN.md），
+        #    而是让"小到白跑"这件事**不再有后果** —— 浪费几秒可以接受，丢掉真账不行。
+        if prev_batch is None or _batch_has_facts(batch):
+            prev_batch = batch
 
         # ── 执行后钩子 ──
         try:
