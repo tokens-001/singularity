@@ -152,12 +152,60 @@ def _hb_path(task_id: str, agent_level: str) -> Path:
 
 
 def heartbeat(task_id: str, agent_level: str, status: str = "running", detail: str = "") -> None:
-    """写入心跳。异常时 status="error" + detail。"""
+    """写入心跳。异常时 status="error" + detail。
+
+    ⚠️ **走 `atomic_write_json`，不再裸 `write_text`**（2026-09-19）——
+    它原来是全 `.qidian` 里**唯一**一个不走 `_io.atomic_write_json` 的状态写入，
+    而**裸写的代价在这个文件上格外重**：读侧见到半截 JSON 会直接 `unlink`
+    （见 `_drop_corrupt_heartbeat`）。写侧是**每个 turn 一次**、进程被杀 /
+    磁盘满 / 并发都可能撕 ⇒ **一次撕裂就足以让一个真卡死的任务从告警系统里消失**。
+    撕裂本身在写侧堵死，比事后在读侧补救便宜得多。
+    """
+    from singularity.scheduler._io import atomic_write_json
     p = _hb_path(task_id, agent_level)
     payload = {"task_id": task_id, "level": agent_level, "last_beat": time.time(), "status": status}
     if detail:
         payload["detail"] = detail[:2000]
-    p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(p, payload)
+
+
+def _drop_corrupt_heartbeat(p: Path, exc: Exception) -> None:
+    """删掉一个读不出来的心跳文件 —— **必须出声**（2026-09-19）。
+
+    ⚠️ 这**不只是"清垃圾"**。心跳文件是"这个任务还在跑"的**唯一**凭据，而删它的
+    正当理由**只有一条**：任务已经终态/被删（`_cleanup_terminal_heartbeat`）。
+    ⇒ 一个心跳文件**本来就该一直留到任务终态为止**。
+
+    旧代码里调用方是 `except: p.unlink()` **一声不吭** ⇒ **一次撕裂 = 一个真卡死的
+    任务从告警系统里消失**，之后"没心跳" = "不在跑" = **看起来正常**
+    （`check_stalled` 扫的正是这个目录，文件没了它自然什么都不报）。
+    这跟 §77 那一族是同一个形状：**量的是"声明在不在"，不是"实际跑没跑"。**
+
+    撕裂已在写侧堵住（`heartbeat()` 现在原子写），所以走到这里是**异常情况**
+    —— 磁盘有问题，或出现了绕过 `heartbeat()` 的写者。那种事必须留痕。
+
+    文件名是 `_hb_path` 拼的 `<task_id>_<level>.json`，坏掉的 JSON 里取不到
+    task_id，所以从**文件名**取；真取不到就原样报，别为了让报告好看而漏掉这条。
+    """
+    tid = p.name.rsplit("_", 1)[0] if "_" in p.name else p.stem
+    try:
+        p.unlink()
+    except OSError as del_err:
+        # 删不掉**不许**影响调用方（`check_stalled` 还要往下扫别的文件），
+        # 但也不许沉默：删不掉 = 它下一轮还会被读到、还会走到这里 ⇒ 会变成一个
+        # **每轮重复**的循环。走 logging 不走 witness.warn —— 上面那条告警已经
+        # 说过"这个文件坏了"，这里补的是"而且我没能清掉"，是同一件事的补充，
+        # 不该再占一个聚合键（同族：把"持续状态"塞进事件流会糊筛子）。
+        logging.getLogger("witness").info(
+            "损坏心跳 %s 没删成（下一轮还会读到）: %s: %s",
+            p.name, type(del_err).__name__, del_err)
+    # 走本模块的 `warn()`（这里就在 witness.py 里，没有 `witness.` 这个名字可调）。
+    # ⚠️ 这条告警的消费方是**告警系统**（alerts.jsonl → observer 讲给用户听），
+    # 所以必须走 `warn` 而不是只 logging —— "静默删输入"这个毛病本身说的就是
+    # **告警通道没收到**，换成日志等于没修。
+    warn("heartbeat",
+         f"corrupt_heartbeat_dropped:{tid}:{type(exc).__name__}"[:200],
+         key="corrupt_heartbeat")
 
 
 def _cleanup_terminal_heartbeat(p: Path, tid: str) -> bool:
@@ -186,9 +234,8 @@ def force_cleanup_heartbeats() -> tuple[int, int]:
     for p in _heartbeat_dir().glob("*.json"):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            try: p.unlink()
-            except OSError: pass
+        except (json.JSONDecodeError, OSError) as e:
+            _drop_corrupt_heartbeat(p, e)   # 同一个形状，同一个理由
             n_hb += 1
             continue
         tid = data.get("task_id", "")
@@ -219,9 +266,8 @@ def check_stalled(timeout_seconds: float = STALLED_AFTER_S) -> list[str]:
     for p in _heartbeat_dir().glob("*.json"):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            try: p.unlink()  # 损坏的心跳文件直接清理
-            except OSError: pass
+        except (json.JSONDecodeError, OSError) as e:
+            _drop_corrupt_heartbeat(p, e)   # 损坏的心跳文件清理 —— **要出声**，见该函数
             continue
         tid = data.get("task_id", "")
         if tid and _cleanup_terminal_heartbeat(p, tid):
@@ -251,9 +297,8 @@ def _heartbeat_task_levels() -> dict[str, int]:
     for p in _heartbeat_dir().glob("*.json"):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            try: p.unlink()  # 损坏的心跳文件直接清理
-            except OSError: pass
+        except (json.JSONDecodeError, OSError) as e:
+            _drop_corrupt_heartbeat(p, e)   # 同上：同一个形状，同一个理由
             continue
         tid = data.get("task_id", "")
         if tid and _cleanup_terminal_heartbeat(p, tid):

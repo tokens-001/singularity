@@ -5,6 +5,7 @@
 就判孤儿 unlink。实测写两条、查一次状态就全没了，所以 heartbeats 目录永远是空的。
 """
 import json
+from pathlib import Path
 
 import pytest
 
@@ -220,3 +221,93 @@ class TestAlertSummary:
         witness.warn("claude_cli", "collect_changes:no_baseline_ref（跟 HEAD 比，已提交的看不见）")
         s = witness.alert_summary(chronic_min=2)
         assert len(s) == 1 and s[0]["key"] == "collect_changes" and s[0]["n"] == 2, s
+
+
+# ── 心跳文件的完整性 ────────────────────────────────────
+# 🔴 心跳是「这个任务还在跑」的**唯一**凭据，删它的**正当理由只有一条**：
+# 任务已经终态（`_cleanup_terminal_heartbeat`）。⇒ 一个**读不出来**的心跳文件被
+# 悄悄 unlink，意味着**可能有一个真卡死的任务从告警系统里消失** —— 之后
+# "没心跳" = "不在跑" = 看起来正常（`check_stalled` 扫的正是这个目录）。
+#
+# 这一族原来两头都漏：
+#   · **写侧**：`heartbeat()` 是全 `.qidian` 里唯一一个**裸 `write_text`** 的状态写入
+#     ⇒ 能撕（进程被杀 / 磁盘满 / 并发）。撕一次就够了，不要求反复发生。
+#   · **读侧**：三处 `except: p.unlink()` **一声不吭**。
+
+def test_写到一半崩掉不会留下半截心跳(qdir, monkeypatch):
+    """原子写的**可测行为**：把"写到一半就崩"造出来，正式文件必须还是**崩之前那一份**。
+
+    变异：把 `heartbeat()` 改回 `p.write_text(json.dumps(...))` → 红
+    （半截内容直接落在**正式文件**上，读侧下一轮就会把它 unlink 掉）。
+    """
+    tid = "1700000000001"
+    p = qdir / "heartbeats" / f"{tid}_any.json"
+    witness.heartbeat(tid, "any")
+    assert json.loads(p.read_text(encoding="utf-8"))["task_id"] == tid
+
+    real_write_text = Path.write_text
+
+    def _torn(self, data, *a, **kw):
+        real_write_text(self, str(data)[:10], *a, **kw)   # 只落前 10 个字符
+        raise OSError("模拟写到一半进程被杀")
+
+    # 用 context() 而不是裸 monkeypatch：`monkeypatch.undo()` 会把 qdir fixture
+    # 指的那个 QIDIAN_DIR 一起撤掉，后面读的就是生产目录了。
+    with monkeypatch.context() as m:
+        m.setattr(Path, "write_text", _torn)
+        with pytest.raises(OSError):
+            witness.heartbeat(tid, "any")
+
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["task_id"] == tid, f"正式文件被写坏了: {data!r}"
+    assert data["status"] == "running"
+
+
+class TestCorruptHeartbeatLeavesATrace:
+    """🔴 损坏的心跳被删时**必须留痕**（2026-09-19）。三处同形状的现场都钉一遍。
+
+    变异：把任一处改回 `except: p.unlink()` 不吭声 → 对应的参数化用例红。
+    """
+
+    def _seed_torn(self, qdir, tid="1700000000002", level="any") -> Path:
+        d = qdir / "heartbeats"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / f"{tid}_{level}.json"
+        p.write_text('{"task_id": "1700000', encoding="utf-8")   # 写了一半
+        return p
+
+    @pytest.mark.parametrize("call", [
+        "check_stalled",             # 判"卡住"那条路
+        "_heartbeat_task_levels",    # 状态面板那条路
+        "force_cleanup_heartbeats",  # 启动时那条路
+    ])
+    def test_三处现场都留痕(self, qdir, call):
+        p = self._seed_torn(qdir)
+        getattr(witness, call)()
+
+        msgs = [a["msg"] for a in witness.read_alerts()]
+        assert any("corrupt_heartbeat_dropped" in m for m in msgs), \
+            f"{call} 把损坏的心跳删了却一声不吭 —— 真卡死的任务就这么消失了: {msgs}"
+        assert any("1700000000002" in m for m in msgs), \
+            f"告警没带上 task_id（文件名里有，坏掉的 JSON 里取不到）: {msgs}"
+        assert not p.exists(), "损坏的心跳文件没被清掉"
+
+    def test_没坏就不许报(self, qdir):
+        """命门：正常心跳**不许**触发这条告警 —— 否则它又成一条糊筛子的常驻噪声。
+
+        ⚠️ 必须**先有一个还在跑的任务文件**：任务文件不在的心跳本来就会被
+        `_cleanup_terminal_heartbeat` 当孤儿删掉（那是**有意**的，别去掉）。
+        这里要钉的是另一半：任务还在跑 ⇒ 心跳**留着**、且**不报警**。
+        """
+        tid = "1700000000003"
+        tasks = qdir / "tasks"
+        tasks.mkdir(parents=True, exist_ok=True)
+        (tasks / f"{tid}.json").write_text(
+            json.dumps({"id": tid, "status": "running"}), encoding="utf-8")
+
+        witness.heartbeat(tid, "any")
+        witness.check_stalled()
+        witness._heartbeat_task_levels()
+        assert [a["msg"] for a in witness.read_alerts()] == []
+        assert (qdir / "heartbeats" / f"{tid}_any.json").exists(), \
+            "还在跑的任务的心跳被误删了 —— check_stalled 再也看不见它"
