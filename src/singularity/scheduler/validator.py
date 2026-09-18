@@ -142,10 +142,7 @@ def _run_gate():
 def _gate_check_by_files(changed_files):
     if not changed_files:
         return False
-    for f in changed_files:
-        if f.rsplit("/",1)[-1] in config.GATE_TRIGGER_FILES:
-            return True
-    return False
+    return any(f.rsplit("/", 1)[-1] in config.GATE_TRIGGER_FILES for f in changed_files)
 
 # 有专门"未验证"标注的三类（下面那三条 if），以及**明确不需要标注**的两类。
 # 剩下的任何值都是"框架不认识的任务类型" —— 那件事**必须说出来**，不能静默少做
@@ -702,12 +699,12 @@ JSON:"""
 
 def security_review(code: str, file_path: str = "", severity_filter: str = "all") -> dict:
     """专门的安全审查函数。
-    
+
     Args:
         code: 代码内容
         file_path: 文件路径(用于上下文)
         severity_filter: "all", "high", "critical"
-        
+
     Returns:
         安全审查结果
     """

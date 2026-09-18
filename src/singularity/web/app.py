@@ -383,10 +383,7 @@ def _guard_rate_limit():
         _RATE_BUCKETS[ip] = [t for t in _RATE_BUCKETS[ip] if t > window_start]
 
         # 选择限制阈值
-        if request.method in ("POST", "PUT", "DELETE", "PATCH"):
-            limit = _RATE_LIMIT_WRITE
-        else:
-            limit = _RATE_LIMIT_READ
+        limit = _RATE_LIMIT_WRITE if request.method in ("POST", "PUT", "DELETE", "PATCH") else _RATE_LIMIT_READ
 
         if len(_RATE_BUCKETS[ip]) >= limit:
             return jsonify({
@@ -452,10 +449,7 @@ def _is_safe_api_url(url: str) -> bool:
         except ValueError:
             pass  # 不是 IP 地址，继续检查 hostname
         # 只允许已知 API 厂商
-        for allowed in _ALLOWED_API_HOSTS:
-            if hostname == allowed or hostname.endswith("." + allowed):
-                return True
-        return False
+        return any(hostname == allowed or hostname.endswith("." + allowed) for allowed in _ALLOWED_API_HOSTS)
     except Exception:
         return False
 
@@ -718,7 +712,7 @@ def _push_event(kind: str, msg: str, ts: float = None, extra: dict = None):
     # T5: 同步推送到 Observer WS（前端 subscribe 后接收）
     if kind in _WS_CHANNEL_MAP:
         try:
-            count = ws_bridge.broadcast_observer(kind, {"msg": msg}, channels=_WS_CHANNEL_MAP[kind])
+            ws_bridge.broadcast_observer(kind, {"msg": msg}, channels=_WS_CHANNEL_MAP[kind])
         except Exception as e:
             _al.getLogger("ws").warning("broadcast_observer failed for %s: %s", kind, e)
 

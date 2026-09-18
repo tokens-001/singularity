@@ -200,7 +200,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
     from . import dispatcher as disp_mod
     from . import validator as val_mod
 
-    start_time = time.time()
+    time.time()
     project_id = getattr(task, 'project_id', '')
 
     def _record_review_failure(reason: str):

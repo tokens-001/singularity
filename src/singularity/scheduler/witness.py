@@ -276,9 +276,8 @@ def check_stalled(timeout_seconds: float = STALLED_AFTER_S) -> list[str]:
         if tid and _cleanup_terminal_heartbeat(p, tid):
             continue
         last = data.get("last_beat", 0)
-        if now - last > timeout_seconds:
-            if tid:
-                stalled.append(tid)
+        if now - last > timeout_seconds and tid:
+            stalled.append(tid)
     return stalled
 
 

@@ -532,7 +532,6 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     disp_result = None
     term_reason = "未执行"
     pending_merge_req = None
-    planner_decomposed = False
     all_tool_events: list[dict] = []  # 收集所有 turn 的工具调用事件
     final_turn = 0                     # 实际推理轮次
     qa_verdict = ""                    # worker 内 QA 门禁判定, 随 batch 带回给 finalize 复用

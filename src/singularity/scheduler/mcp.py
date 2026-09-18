@@ -169,9 +169,8 @@ class MCPClient:
 
     def discover_tools(self) -> list[MCPTool]:
         """从服务器获取工具列表。"""
-        if not self._initialized:
-            if not self.connect():
-                return []
+        if not self._initialized and not self.connect():
+            return []
         result = self._rpc("tools/list", {})
         if result is None:
             return []
@@ -191,9 +190,8 @@ class MCPClient:
 
     def call_tool(self, name: str, arguments: dict) -> str:
         """调用 MCP 工具并返回文本结果。"""
-        if not self._initialized:
-            if not self.connect():
-                return f"MCP 服务器 [{self.cfg.name}] 未连接"
+        if not self._initialized and not self.connect():
+            return f"MCP 服务器 [{self.cfg.name}] 未连接"
         result = self._rpc("tools/call", {"name": name, "arguments": arguments})
         if result is None:
             return f"MCP 工具 [{name}] 调用失败"

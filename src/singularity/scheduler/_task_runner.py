@@ -158,14 +158,13 @@ class TaskRunner:
         pre = pre_mod.pre_search(task.description, route, deep=task.retry_count > 0)
         pre_mod.apply_escalation(route, pre)
         # 模型排名
-        project_phase = None
         try:
             pid = getattr(task, "project_id", "")
             if pid:
                 from . import project as proj_mod
                 proj = proj_mod.load(pid)
                 if proj:
-                    project_phase = proj.phase.value
+                    pass
         except Exception as e:
             witness.warn('orch', f'{e}')
         # 快照 (修复 #1: 项目任务快照项目 repo)

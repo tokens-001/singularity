@@ -233,7 +233,7 @@ def model_update(model_id, data):
         return {"error": "模型不存在"}, 404
     m = models[model_id]
     # backward compat: read old "tiers" or new "recommended_for"
-    old_rf = set(m.recommended_for or [])
+    set(m.recommended_for or [])
     new_rf = set((data.get("recommended_for") or data.get("tiers") or m.recommended_for) or [])
 
     model_registry.add_model(

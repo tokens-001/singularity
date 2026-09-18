@@ -53,7 +53,7 @@ def _rrf_anchors(
 
     # Signal 2: Lexical (keyword substring + file path overlap)
     lex_scores: dict[str, float] = {}
-    query_lower = query_text.lower()
+    query_text.lower()
     # 提取查询中的关键词 (中文双字 + 英文单词)
     q_keywords = set()
     for seg in re.findall(r"[一-鿿]{2,}", query_text):
@@ -653,7 +653,7 @@ def find_candidate_latent_edges() -> list[dict]:
     """
     events = _load_events()
     edges = _load_edges()
-    entity_idx: dict[str, list[str]] = _read_json(_entity_idx_path()) or {}
+    _read_json(_entity_idx_path()) or {}
 
     # 现有因果边集合 (无向, 用于判断是否已有边)
     existing_causal: set[tuple[str, str]] = set()

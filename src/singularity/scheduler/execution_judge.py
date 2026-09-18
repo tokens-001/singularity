@@ -958,7 +958,13 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
         return ""
 
     for attempt in range(2):
-        def _check(m):
+        # ⚠️ `draft=draft` 这个默认参数**不是多余的**（ruff B023，2026-09-19）。
+        # 循环体末尾会 `draft = _cm(...) or draft` 重绑，而 `_check` 闭包捕获的是
+        # **变量**不是值 ⇒ 现在恰好因为 `_parallel` 在本轮内立即求值才对。
+        # 哪天 `_parallel` 变成延迟执行（线程池、批量提交），第二轮确认就会拿
+        # **新一轮的稿子**去核对**上一轮的问题列表** —— 而那是静默的：确认"通过"，
+        # 但核对的是错的东西。默认参数把值钉死在定义那一刻。
+        def _check(m, draft=draft):
             c = _cm(_V2_CONFIRM.format(checker=m, writer=writer, task=task, draft=draft),
                             m, max_tokens=_FUSION_MAX_TOKENS)
             if not c:
@@ -1026,7 +1032,7 @@ def decompose_architecture(arch_json: dict) -> list[dict]:
 
     result = []
     for t in tasks:
-        tid = t.get("id", "")
+        t.get("id", "")
         title = t.get("title", "")
         desc = t.get("description", "")
         layer = t.get("layer", "")

@@ -516,10 +516,7 @@ def _is_major_model(model_id: str) -> bool:
         r'^qwen3\.\d+-(max|plus)$', r'^qwen3-coder', r'^qwen-(max|plus|turbo|coder)',  # Qwen major
         r'^qwen3\.\d+-\d+b',  # Qwen 3.X with explicit params
     ]
-    for p in patterns:
-        if re.match(p, m):
-            return True
-    return False
+    return any(re.match(p, m) for p in patterns)
 
 
 def _infer_model_provider(model_id: str, fallback: str = "") -> str:

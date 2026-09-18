@@ -42,7 +42,6 @@ def _materialize_in_main(batch: BatchOutput, parent_task) -> None:
 
 def _maybe_complete_parents(task_id: str) -> None:
     """task 完成后冒泡触发父聚合, 递归到根 (修复 重要 #4: 嵌套分解不冒泡)。"""
-    changed = False
     for p in tracker.tasks_dir().glob("*.json"):
         try:
             parent = tracker.Task.from_dict(json.loads(p.read_text(encoding="utf-8")))

@@ -568,8 +568,19 @@ class OpenAIAgentExecutor(BaseExecutor):
                 if _xml_calls:
                     msg["tool_calls"] = _xml_calls
                 if _xml_calls is not None:
+                    # ⚠️ **这里原来有一句函数内的 `from singularity.scheduler import witness`，
+                    # 2026-09-19 删掉了 —— 那不是省略，是个真 bug。**
+                    # Python 把函数内任何赋值/import 都当作**整个函数的局部绑定**，
+                    # 于是本函数里**所有** `witness.*` 都变成引用局部变量 `witness`，
+                    # 而它只在走到这一行时才被绑上 ⇒ 它**上面**那些 `witness.warn`
+                    # 跑到就抛 `UnboundLocalError`。
+                    # 挨的那一处正是「模型不吃思考参数 → 摘掉重试」的告警
+                    # （本文件 `:519`），也就是**最该留痕的那条路径**反而炸掉。
+                    # 本模块 `:21` 早就有模块级 `from singularity.scheduler import config, witness`，
+                    # 这句局部 import 一直是多余且有害的。
+                    # 逮住它的是 `ruff --select=E,F` 的 **F823** —— 它在这仓的 757 条里
+                    # 躺了很久没被看见，因为 CI 的门从来没绿过（见 `docs/CI与发布审计-20260919.md`）。
                     try:
-                        from singularity.scheduler import witness
                         witness.warn("oa_exec", (f"xml_tool_calls_{_scope}:"
                                                  f"{len(_xml_calls)}:"
                                                  f"{(_xml_calls[0]['function']['name'] if _xml_calls else '-')}"
