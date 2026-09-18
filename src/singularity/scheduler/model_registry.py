@@ -128,11 +128,16 @@ def load_models() -> dict[str, ModelEntry]:
         if m.recommended_for:  # 有推荐 → 覆盖/新增
             if mid in models:
                 toml = models[mid]
-                if not m.rating: m.rating = toml.rating
-                if not m.provider: m.provider = toml.provider
-                if not m.display or m.display == mid: m.display = toml.display
-                if not m.strengths: m.strengths = toml.strengths
-                if not m.notes: m.notes = toml.notes
+                if not m.rating:
+                    m.rating = toml.rating
+                if not m.provider:
+                    m.provider = toml.provider
+                if not m.display or m.display == mid:
+                    m.display = toml.display
+                if not m.strengths:
+                    m.strengths = toml.strengths
+                if not m.notes:
+                    m.notes = toml.notes
             models[mid] = m
         elif mid in models:  # 空推荐 → 删除标记
             del models[mid]

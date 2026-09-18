@@ -343,7 +343,9 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                     witness.warn("review",
                                  f"single_reviewer:{writer_model}:pool={len(all_pool)}"[:80])
             if reviewer_models:
-                rev_files = []; rev_models = []; all_issues = []
+                rev_files = []
+                rev_models = []
+                all_issues = []
                 review_failed = False
                 if len(changed) > 3:
                     # 只审前 3 个文件 —— 改得多时后面的没人看（成本控制：每个文件都要多模型

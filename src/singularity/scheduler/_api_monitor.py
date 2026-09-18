@@ -41,7 +41,8 @@ def _cleanup_orphan_worktrees() -> int:
 
 
 def token_usage():
-    from ._token_budget import get_usage_stats; return get_usage_stats(), 200
+    from ._token_budget import get_usage_stats
+    return get_usage_stats(), 200
 
 
 def usage_history(range="30d"):
@@ -65,7 +66,8 @@ def token_budget_set(budget):
 
 
 def perf_stats():
-    from ._profiler import get_perf_stats; return get_perf_stats(), 200
+    from ._profiler import get_perf_stats
+    return get_perf_stats(), 200
 
 
 def dag_metrics():
@@ -73,11 +75,13 @@ def dag_metrics():
 
 
 def reports_critical():
-    from . import chancellor as chan_mod; return chan_mod.recent_critical(), 200
+    from . import chancellor as chan_mod
+    return chan_mod.recent_critical(), 200
 
 
 def reports_list():
-    from . import chancellor as chan_mod; return {"reports": chan_mod.list_reports(limit=30)}, 200
+    from . import chancellor as chan_mod
+    return {"reports": chan_mod.list_reports(limit=30)}, 200
 
 
 def template_list():

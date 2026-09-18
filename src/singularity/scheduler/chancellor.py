@@ -164,6 +164,9 @@ def dismiss_report(report_id: str) -> bool:
     """删除指定奏报。"""
     p = _reports_dir() / f"{report_id}.json"
     if p.exists():
-        try: p.unlink(); return True
-        except OSError: pass
+        try:
+            p.unlink()
+            return True
+        except OSError:
+            pass
     return False

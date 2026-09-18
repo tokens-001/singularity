@@ -281,18 +281,22 @@ _READONLY_ENDPOINTS = {
 
 @app.before_request
 def _guard_csrf():
-    if request.method in ("GET", "HEAD", "OPTIONS"): return None
-    if not request.path.startswith("/api/"): return None
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return None
+    if not request.path.startswith("/api/"):
+        return None
     # CSRF 核心防线：浏览器跨站写请求必带 Origin，非本机 origin 直接拒绝。
     # 恶意网页 <form> POST 会带 Origin: http://evil.com，即便 remote_addr 是回环也被拦。
     origin = request.headers.get("Origin", "")
     if origin and not _is_local_origin(origin):
         return jsonify({"error": "CSRF origin rejected"}), 403
     # 本地请求免 CSRF (开发/调试 + 浏览器未带 JS header)
-    if request.remote_addr in ("127.0.0.1", "::1"): return None
+    if request.remote_addr in ("127.0.0.1", "::1"):
+        return None
     t = request.headers.get("X-CSRF-Token", "")
     x = request.headers.get("X-Requested-With", "")
-    if t == _CSRF_TOKEN or x == "XMLHttpRequest": return None
+    if t == _CSRF_TOKEN or x == "XMLHttpRequest":
+        return None
     return jsonify({"error": "CSRF token required"}), 403
 
 

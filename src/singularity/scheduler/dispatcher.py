@@ -229,7 +229,8 @@ def agent_api_available(agent_cfg: dict) -> bool:
                 if not api_store.is_model_available(model):
                     return False
         except Exception as e:
-            from . import witness; witness.warn("dispatch", f"api_check:{e}")
+            from . import witness
+            witness.warn("dispatch", f"api_check:{e}")
 
     # 硬限制：OpenAI 模型除非在 _order 显式列出或有显式配置，否则不可用
     if provider == "openai":
@@ -276,7 +277,8 @@ def _build_agent_from_registry(model_name: str) -> dict | None:
             "request_template": {"model": model_name, "max_tokens": config.MODEL_MAX_TOKENS},
         }
     except Exception as e:
-        from . import witness; witness.warn("dispatch", f"build_agent:{e}")
+        from . import witness
+        witness.warn("dispatch", f"build_agent:{e}")
         return None
 
 
@@ -317,7 +319,8 @@ def pick_agent_fallback_chain(agents: dict, level: str,
         if not cands:
             return []
         excl = exclude or set()
-        res = []; s = set()
+        res = []
+        s = set()
         lineup = (project_lineup or {}).get(tier, [])
         if lineup:
             for mn in lineup:
@@ -325,12 +328,15 @@ def pick_agent_fallback_chain(agents: dict, level: str,
                 for a in cands:
                     k = a.get("model","")
                     if k == mn and k not in s and k not in excl and agent_api_available(a):
-                        found = a; break
+                        found = a
+                        break
                 if not found:
                     cross = _find_agent_by_model(agents, mn)
-                    if cross and agent_api_available(cross): found = cross
+                    if cross and agent_api_available(cross):
+                        found = cross
                 if found:
-                    res.append(found); s.add(found.get("model",""))
+                    res.append(found)
+                    s.add(found.get("model",""))
             if restrict_to_lineup:
                 if res:
                     restricted = True
@@ -344,7 +350,8 @@ def pick_agent_fallback_chain(agents: dict, level: str,
         for a in cands:
             k = a.get("model","")
             if k not in s and k not in excl and agent_api_available(a):
-                res.append(a); s.add(k)
+                res.append(a)
+                s.add(k)
         return res
 
     # 两档后: level 为空时从全池收集
@@ -370,7 +377,8 @@ def pick_agent_fallback_chain(agents: dict, level: str,
     for a in result:
         k = a.get("model", "")
         if k not in seen:
-            deduped.append(a); seen.add(k)
+            deduped.append(a)
+            seen.add(k)
 
     # ── 路由学习者权重排序 ──
     # 按模型在所有任务类型下的平均 Hedge 权重降序,

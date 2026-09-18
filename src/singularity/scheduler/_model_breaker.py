@@ -154,7 +154,8 @@ def _self_check() -> None:
         _loaded = True          # 挡住 _load()，用内存态测
     m = "__self_check_model__"
     assert is_available(m), "健康模型应可用"
-    record_failure(m); record_failure(m)
+    record_failure(m)
+    record_failure(m)
     assert is_available(m), "挂 2 次还没到阈值"
     record_failure(m)
     assert not is_available(m), "挂 3 次应熔断"

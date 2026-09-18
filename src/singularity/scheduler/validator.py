@@ -27,13 +27,17 @@ _HUMAN_REVIEW_PATTERNS = [
 
 @dataclass
 class ValidationReport:
-    verdict: str = "未知"; action: str = "pass"
-    validate_verdict: str = ""; validate_reason: str = ""
-    gate_passed: bool | None = None; gate_message: str = ""
+    verdict: str = "未知"
+    action: str = "pass"
+    validate_verdict: str = ""
+    validate_reason: str = ""
+    gate_passed: bool | None = None
+    gate_message: str = ""
     human_review_required: bool = False
     unverified: list = field(default_factory=list)
     evidence: dict = field(default_factory=dict)
-    turns_used: int = 0; confidence: float = 0.0
+    turns_used: int = 0
+    confidence: float = 0.0
     quality_signals: dict = field(default_factory=dict)
     # D3: GATE3 分级路由 (QA 建议, Observer 裁定)
     fix_route: str = ""  # impl|design|note
@@ -42,8 +46,10 @@ def validate(candidate, gate_required, task_type, changed_files, snap, turn, max
     report = ValidationReport(turns_used=turn)
     for pat in _DANGEROUS_PATTERNS:
         if pat.search(candidate):
-            report.verdict = "阻断"; report.action = "abort"
-            report.unverified.append(f"L1: {pat.pattern}"); return report
+            report.verdict = "阻断"
+            report.action = "abort"
+            report.unverified.append(f"L1: {pat.pattern}")
+            return report
     # 修复 #2: 执行器未产出任何文件 → 硬判失败逼重试, 不默认通过
     if not changed_files:
         report.verdict = "信息不足"
@@ -51,16 +57,23 @@ def validate(candidate, gate_required, task_type, changed_files, snap, turn, max
         report.unverified.append("执行器未产出任何文件 (changed_files 空)")
         return report
     if gate_required or _gate_check_by_files(changed_files):
-        g = _run_gate(); report.gate_passed = g.get("passed"); report.gate_message = g.get("message","")
+        g = _run_gate()
+        report.gate_passed = g.get("passed")
+        report.gate_message = g.get("message","")
         if not g.get("passed"):
-            report.verdict = "gate失败"; report.action = "rollback" if turn >= max_turns else "retry"
-            report.unverified.append(f"gate failed: {report.gate_message}"); return report
+            report.verdict = "gate失败"
+            report.action = "rollback" if turn >= max_turns else "retry"
+            report.unverified.append(f"gate failed: {report.gate_message}")
+            return report
     for pat in _HUMAN_REVIEW_PATTERNS:
         if pat.search(candidate):
             report.human_review_required = True
-            report.unverified.append(f"L3: {pat.pattern}"); break
+            report.unverified.append(f"L3: {pat.pattern}")
+            break
     v = _run_validate(candidate)
-    report.validate_verdict = v.get("verdict","未知"); report.validate_reason = v.get("verdict_reason",""); report.evidence = v
+    report.validate_verdict = v.get("verdict","未知")
+    report.validate_reason = v.get("verdict_reason","")
+    report.evidence = v
     _annotate_unverified(report, task_type, changed_files)
     # ── 硬规则检查 (非 LLM) ──
     # cwd 必须是任务执行的 worktree 路径, 不是主仓库根——否则新建的 test_*.py 会被误判"已删除"
@@ -73,46 +86,65 @@ def validate(candidate, gate_required, task_type, changed_files, snap, turn, max
         for iss in hard["issues"]:
             report.unverified.append(f"HardRule[{iss['rule']}]: {iss['summary']}")
         if not hard.get("passed"):
-            report.verdict = "阻断"; report.action = "abort"
+            report.verdict = "阻断"
+            report.action = "abort"
             return report
 
-    if report.human_review_required: report.verdict = "阻断"; report.action = "abort"
-    elif report.validate_verdict == "人工复核": report.verdict = "人工复核"; report.action = "retry" if turn < max_turns else "abort"
-    elif report.validate_verdict == "信息不足": report.verdict = "信息不足"; report.action = "retry" if turn < max_turns else "abort"
+    if report.human_review_required:
+        report.verdict = "阻断"
+        report.action = "abort"
+    elif report.validate_verdict == "人工复核":
+        report.verdict = "人工复核"
+        report.action = "retry" if turn < max_turns else "abort"
+    elif report.validate_verdict == "信息不足":
+        report.verdict = "信息不足"
+        report.action = "retry" if turn < max_turns else "abort"
     elif report.validate_verdict == "未知":
         # S5: 校验脚本超时/解析失败/不存在 → 不默认通过, 重试或阻断 (D1: 安全项绝不放行)
-        report.verdict = "未知"; report.action = "retry" if turn < max_turns else "abort"
+        report.verdict = "未知"
+        report.action = "retry" if turn < max_turns else "abort"
         report.unverified.append(f"validate 未知结果: {report.validate_reason}")
     elif report.validate_verdict in ("注意", "通过"):
-        report.verdict = "通过"; report.action = "pass"
+        report.verdict = "通过"
+        report.action = "pass"
     else:
         # 兜底不再无条件放行: 意外 verdict 值 → 保守判未知, 不默认通过
-        report.verdict = "未知"; report.action = "retry" if turn < max_turns else "abort"
+        report.verdict = "未知"
+        report.action = "retry" if turn < max_turns else "abort"
         report.unverified.append(f"validate 意外结果: {report.validate_reason}")
     return report
 
 def _run_validate(candidate):
-    if not config.VALIDATE_SCRIPT.exists(): return {"verdict":"未知","verdict_reason":"validate.py not found"}
+    if not config.VALIDATE_SCRIPT.exists():
+        return {"verdict":"未知","verdict_reason":"validate.py not found"}
     try:
         p = subprocess.run(["python3",str(config.VALIDATE_SCRIPT),candidate,"--json"], capture_output=True,text=True,timeout=config.VALIDATE_TIMEOUT)
         return json.loads(p.stdout) if p.returncode==0 else {"verdict":"未知","verdict_reason":f"exit={p.returncode}"}
-    except subprocess.TimeoutExpired: return {"verdict":"未知","verdict_reason":"timeout"}
-    except (json.JSONDecodeError,Exception): return {"verdict":"未知","verdict_reason":"parse error"}
+    except subprocess.TimeoutExpired:
+        return {"verdict":"未知","verdict_reason":"timeout"}
+    except (json.JSONDecodeError,Exception):
+        return {"verdict":"未知","verdict_reason":"parse error"}
 
 def _run_gate():
     # 保守化: eval.py 不存在 = gate 未执行, 不是 gate 通过; 缺 passed 字段也默认不通过
-    if not config.EVAL_SCRIPT.exists(): return {"passed":False,"message":"eval.py 不存在 (gate 未执行)"}
+    if not config.EVAL_SCRIPT.exists():
+        return {"passed":False,"message":"eval.py 不存在 (gate 未执行)"}
     try:
         p = subprocess.run(["python3",str(config.EVAL_SCRIPT),"--gate","--json"], capture_output=True,text=True,timeout=config.GATE_TIMEOUT)
-        d = json.loads(p.stdout) if p.stdout else {}; g = d.get("gate",{})
+        d = json.loads(p.stdout) if p.stdout else {}
+        g = d.get("gate",{})
         return {"passed":g.get("passed",False),"message":g.get("message",f"exit={p.returncode}")}
-    except subprocess.TimeoutExpired: return {"passed":False,"message":"gate timeout"}
-    except Exception as e: return {"passed":False,"message":f"gate error:{e}"}
+    except subprocess.TimeoutExpired:
+        return {"passed":False,"message":"gate timeout"}
+    except Exception as e:
+        return {"passed":False,"message":f"gate error:{e}"}
 
 def _gate_check_by_files(changed_files):
-    if not changed_files: return False
+    if not changed_files:
+        return False
     for f in changed_files:
-        if f.rsplit("/",1)[-1] in config.GATE_TRIGGER_FILES: return True
+        if f.rsplit("/",1)[-1] in config.GATE_TRIGGER_FILES:
+            return True
     return False
 
 # 有专门"未验证"标注的三类（下面那三条 if），以及**明确不需要标注**的两类。
@@ -126,35 +158,55 @@ _NO_ANNOTATION_NEEDED = {"docs", "default"}
 
 def _annotate_unverified(report, task_type, changed_files):
     t = (task_type or "").strip()
-    if t == "bugfix": report.unverified.append("bugfix: no regression test")
-    if t == "refactor": report.unverified.append("refactor: impact analysis skipped")
-    if t == "feature": report.unverified.append("feature: diff_review v2 enabled")
+    if t == "bugfix":
+        report.unverified.append("bugfix: no regression test")
+    if t == "refactor":
+        report.unverified.append("refactor: impact analysis skipped")
+    if t == "feature":
+        report.unverified.append("feature: diff_review v2 enabled")
     if t and t not in _ANNOTATED_TYPES and t not in _NO_ANNOTATION_NEEDED:
         # 防御模式 §44：承诺类字段的"没发生"必须能被查出来。
         report.unverified.append(
             f"route_type={t}: 框架不认识这个任务类型，本类型的未验证标注一条都没发生")
-    if not changed_files: report.unverified.append("no changed files")
+    if not changed_files:
+        report.unverified.append("no changed files")
 
 def pre_execution_hook(task, snap): return []
 
 def post_execution_hook(exec_result, snap):
     warnings, signals = [], {}
     conf = 0.5
-    if exec_result is None: return {"warnings":["no result"],"quality_signals":{},"confidence":0.0,"failure_kind":"no_result"}
-    raw = exec_result.raw_output or ""; changed = exec_result.changed_files or []
-    out_len = len(raw); signals["output_length"] = out_len
-    if out_len < 80: warnings.append("output <80 chars"); conf -= 0.2
-    elif out_len > 500: conf += 0.1
-    fc = len(changed); signals["changed_files_count"] = fc
-    if fc > 10: warnings.append(f"too many files({fc})"); conf -= 0.15
+    if exec_result is None:
+        return {"warnings":["no result"],"quality_signals":{},"confidence":0.0,"failure_kind":"no_result"}
+    raw = exec_result.raw_output or ""
+    changed = exec_result.changed_files or []
+    out_len = len(raw)
+    signals["output_length"] = out_len
+    if out_len < 80:
+        warnings.append("output <80 chars")
+        conf -= 0.2
+    elif out_len > 500:
+        conf += 0.1
+    fc = len(changed)
+    signals["changed_files_count"] = fc
+    if fc > 10:
+        warnings.append(f"too many files({fc})")
+        conf -= 0.15
     errs = sum(raw.count(m) for m in ["Traceback","Error:","error:","FAILED","Exception","exit=1"])
     signals["error_marker_count"] = errs
     fk = "error_output" if errs>3 else ("ok" if errs==0 else "uncertain")
-    if errs>3: warnings.append(f"{errs} error markers"); conf -= 0.2
-    elif errs>0: conf -= 0.05*errs
-    if any(kw in raw for kw in ["passed","PASSED","exit=0"]): signals["has_verification"] = True; conf += 0.15
-    if conf<0.3: fk = "low_quality"
-    elif conf<0.5 and fk=="ok": fk = "uncertain"
+    if errs>3:
+        warnings.append(f"{errs} error markers")
+        conf -= 0.2
+    elif errs>0:
+        conf -= 0.05*errs
+    if any(kw in raw for kw in ["passed","PASSED","exit=0"]):
+        signals["has_verification"] = True
+        conf += 0.15
+    if conf<0.3:
+        fk = "low_quality"
+    elif conf<0.5 and fk=="ok":
+        fk = "uncertain"
     return {"warnings":warnings,"quality_signals":signals,"confidence":max(0.0,min(1.0,conf)),"failure_kind":fk}
 
 
@@ -230,7 +282,9 @@ def run_project_tests(cwd=None):
                 # 这里**只拿到了退出码，数不出失败个数** ⇒ failures 保持 0（不知道就是不知道），
                 # 退出码另存一格，让消费端说真话（见 `tests_failed_msg`）。
                 result["exit_code"] = r.returncode
-                result["output"] = output; result["runner"] = name; return result
+                result["output"] = output
+                result["runner"] = name
+                return result
             if name == "pytest" and r.returncode == 0:
                 mp = _re.search(r'(\d+)\s+passed', output)
                 mf = _re.search(r'(\d+)\s+failed', output)
@@ -238,11 +292,17 @@ def run_project_tests(cwd=None):
                     result["total"] = int(mp.group(1)) + (int(mf.group(1)) if mf else 0)
                     result["failures"] = int(mf.group(1)) if mf else 0
                     result["passed"] = result["failures"] == 0
-                result["output"] = output; result["runner"] = name; return result
+                result["output"] = output
+                result["runner"] = name
+                return result
             if r.returncode == 0:
-                result["output"] = output; result["runner"] = name; return result
-        except FileNotFoundError: continue
-        except Exception: continue
+                result["output"] = output
+                result["runner"] = name
+                return result
+        except FileNotFoundError:
+            continue
+        except Exception:
+            continue
     # **"跑不起来"和"没找到测试"要分开说** —— 两者的排查方向完全不同：
     # 前者查环境，后者查"测试文件在不在"。2026-09-12 探路2 的 T4 实测：
     # 报的是"无可用 runner (pytest/unittest/npm 均不可用)"，而真相是
@@ -514,7 +574,8 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
         code = fpath.read_text()
         mode = "full"
 
-    lines = code.split('\n'); total_lines = len(lines)
+    lines = code.split('\n')
+    total_lines = len(lines)
     from . import dispatcher as _disp
     agents = _disp.load_agents()
 

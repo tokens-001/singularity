@@ -211,16 +211,20 @@ def _cleanup_terminal_heartbeat(p: Path, tid: str) -> bool:
     """清理终态任务的心跳文件。返回 True 表示已清理。"""
     task_file = tracker.tasks_dir() / f"{tid}.json"
     if not task_file.exists():
-        try: p.unlink()
-        except OSError: pass
+        try:
+            p.unlink()
+        except OSError:
+            pass
         return True
     try:
         data = json.loads(task_file.read_text(encoding="utf-8"))
         # ⚠️ 用状态机那份判据，别手写集合（同族：`task_timeline` 自己抄了一份、
         # 还多抄了两个非终态 ⇒ 给没跑完的任务画了终点。见 `tracker.is_terminal`）。
         if tracker.is_terminal(data.get("status")):
-            try: p.unlink()
-            except OSError: pass
+            try:
+                p.unlink()
+            except OSError:
+                pass
             return True
     except (json.JSONDecodeError, OSError):
         pass

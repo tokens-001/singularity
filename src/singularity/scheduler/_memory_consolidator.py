@@ -109,7 +109,8 @@ def _mark_heavy_done(ok: bool) -> None:
 
 
 def consolidate_memory() -> int:
-    global _consolidate_calls; _consolidate_calls += 1
+    global _consolidate_calls
+    _consolidate_calls += 1
     now = time.time()
     if _consolidate_calls > 1 and now - getattr(consolidate_memory, '_last_run', 0) < 300:
         return 0
@@ -167,7 +168,9 @@ def consolidate_memory() -> int:
             tier3_capped = {id(c) for c in tier3_all[_MAX_LLM:]}
 
         for c in candidates:
-            sim = c["semantic_sim"]; gap = c["time_gap_hours"]; shared = c["shared_files"]
+            sim = c["semantic_sim"]
+            gap = c["time_gap_hours"]
+            shared = c["shared_files"]
             if sim >= 0.85 and gap < 4.0 and len(shared) >= 1:
                 src, dst = _resolve_causal_direction(c)
                 if src:
@@ -175,18 +178,23 @@ def consolidate_memory() -> int:
                         reason=f"high_conf:shared:{','.join(shared)} sim={sim:.2f} gap={gap:.1f}h")
                     added += 1
                 continue
-            if sim < 0.55: continue
-            if id(c) in tier3_capped: continue
+            if sim < 0.55:
+                continue
+            if id(c) in tier3_capped:
+                continue
             src, dst = _resolve_causal_direction(c)
-            if not src: continue
+            if not src:
+                continue
             judge = _llm_judge_causal(c, src, dst)
             if judge.get("is_causal"):
                 add_inferred_causal_edge(src, dst, reason=f"llm:{judge.get('reason','')}")
                 added += 1
         return added
     except Exception as e:
-        try: witness.warn("memory", f"consolidate:{e}")
-        except Exception: pass
+        try:
+            witness.warn("memory", f"consolidate:{e}")
+        except Exception:
+            pass
         return 0
 
 
@@ -450,8 +458,10 @@ def backfill_abstractions(limit: int = 3) -> int:
 def _resolve_causal_direction(c: dict) -> tuple:
     a, b = c["task_a"], c["task_b"]
     events = _load_events()
-    node_a = events.get(a); node_b = events.get(b)
-    if not node_a or not node_b: return None, None
+    node_a = events.get(a)
+    node_b = events.get(b)
+    if not node_a or not node_b:
+        return None, None
     return (a, b) if node_a.timestamp <= node_b.timestamp else (b, a)
 
 
@@ -485,6 +495,9 @@ If task A caused task B, is_causal=true. Otherwise false. When unsure, false."""
         m = re.search(r'\{.*\}', raw, re.S)   # 嵌套 JSON：不能用 [^}]+
         return json.loads(m.group()) if m else {"is_causal": False, "reason": "parse_error"}
     except Exception as e:
-        try: import logging; logging.getLogger("qidian").warning("llm_judge_causal: %s", e)
-        except Exception: pass
+        try:
+            import logging
+            logging.getLogger("qidian").warning("llm_judge_causal: %s", e)
+        except Exception:
+            pass
         return {"is_causal": False, "reason": f"llm_error:{e}"}

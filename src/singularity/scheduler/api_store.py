@@ -525,13 +525,20 @@ def _is_major_model(model_id: str) -> bool:
 def _infer_model_provider(model_id: str, fallback: str = "") -> str:
     """从模型 ID 推断真实 provider（处理模型网关代理多家的情况）。"""
     m = model_id.lower().replace("_", "").replace("/", "")
-    if "qwen" in m: return "dashscope_api_key"
-    if "glm" in m or "zhipu" in m: return "zhipu"
-    if "kimi" in m or "moonshot" in m: return "kimi"
-    if "deepseek" in m or "vanchin" in m: return "deepseek"
-    if "siliconflow" in m: return "siliconflow"
-    if "gpt" in m or "openai" in m or model_id.startswith("o") and model_id[1:].isdigit(): return "openai_api_key"
-    if "claude" in m or "anthropic" in m: return "anthropic"
+    if "qwen" in m:
+        return "dashscope_api_key"
+    if "glm" in m or "zhipu" in m:
+        return "zhipu"
+    if "kimi" in m or "moonshot" in m:
+        return "kimi"
+    if "deepseek" in m or "vanchin" in m:
+        return "deepseek"
+    if "siliconflow" in m:
+        return "siliconflow"
+    if "gpt" in m or "openai" in m or model_id.startswith("o") and model_id[1:].isdigit():
+        return "openai_api_key"
+    if "claude" in m or "anthropic" in m:
+        return "anthropic"
     return fallback
 
 

@@ -932,8 +932,10 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 if post_warnings and post_warnings.get("warnings"):
                     batch.term_reason += f"; post_hook: {', '.join(post_warnings['warnings'])}"
         except Exception as e:
-            try: witness.warn(task.id, f"post_hook:{e}")
-            except Exception: pass
+            try:
+                witness.warn(task.id, f"post_hook:{e}")
+            except Exception:
+                pass
 
         if batch.ok or batch.planner_decomposed:
             return batch
@@ -1095,8 +1097,10 @@ def _declared_files_for(task) -> list[str]:
 
 def _safe_dep_list(v):
     """depends_on_local_id: int or list[int] → list[int]."""
-    if isinstance(v, int): return [v]
-    if isinstance(v, list): return v
+    if isinstance(v, int):
+        return [v]
+    if isinstance(v, list):
+        return v
     return []
 
 

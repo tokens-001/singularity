@@ -396,7 +396,8 @@ def _push_task_event(task_id: str, status: str, desc: str = "") -> None:
         pid = ""
         try:
             t = read_task(task_id)
-            if t: pid = getattr(t, 'project_id', '') or ''
+            if t:
+                pid = getattr(t, 'project_id', '') or ''
         except Exception:
             pass
         _pending_sse_events.append({

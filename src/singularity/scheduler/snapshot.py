@@ -275,8 +275,11 @@ def purge_old_snapshot_meta(keep: int = 200) -> int:
                 _release_snapshot_ref(meta.get("id") or f.stem, meta.get("repo_root", ""))
             except Exception:  # noqa: BLE001
                 pass
-            try: f.unlink(); n += 1
-            except OSError: pass
+            try:
+                f.unlink()
+                n += 1
+            except OSError:
+                pass
     return n
 
 

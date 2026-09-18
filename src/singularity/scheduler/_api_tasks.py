@@ -65,20 +65,25 @@ def salvageable_refs() -> dict[str, str]:
 
 def _list_all_tasks() -> list[dict]:
     tasks_dir = tracker.tasks_dir()
-    if not tasks_dir.exists(): return []
+    if not tasks_dir.exists():
+        return []
     result = []
     for f in sorted(tasks_dir.glob("*.json"), reverse=True):
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
-            data["_filename"] = f.stem; result.append(data)
-        except Exception as e: witness.warn('_api', f'{e}')
+            data["_filename"] = f.stem
+            result.append(data)
+        except Exception as e:
+            witness.warn('_api', f'{e}')
     return result
 
 
 def _read_task_file(path: Path) -> dict | None:
-    try: return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        try: witness.warn('_api', 'read_task_file')
+        try:
+            witness.warn('_api', 'read_task_file')
         except Exception as _e:
             logging.getLogger(__name__).warning("task file read failed: %s", _e)
         return None

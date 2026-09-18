@@ -933,8 +933,10 @@ class OpenAIAgentExecutor(BaseExecutor):
             # 降级路径要**出声**：拿不到基线时 `_git_changed_files` 会退回裸 diff，
             # 那就又会漏掉已提交的部分 —— 静默降级正是这个 bug 的一半。
             if not self.baseline_ref:
-                try: witness.warn('oa_exec', 'collect_changes:no_baseline_ref（判据不完整）'[:120])
-                except Exception: pass
+                try:
+                    witness.warn('oa_exec', 'collect_changes:no_baseline_ref（判据不完整）'[:120])
+                except Exception:
+                    pass
             from singularity.scheduler.executors.claude_cli import _git_changed_files
             for f in _git_changed_files(self.baseline_ref, str(self._cwd)):
                 # 过滤构建产物 (__pycache__/.pyc), 不算交付文件
@@ -944,8 +946,10 @@ class OpenAIAgentExecutor(BaseExecutor):
                     continue
                 self._changed_files.append(f)
         except Exception as e:
-            try: witness.warn('oa_exec', f'collect_changes:{e}'[:80])
-            except Exception: pass
+            try:
+                witness.warn('oa_exec', f'collect_changes:{e}'[:80])
+            except Exception:
+                pass
 
     def _fail_result(self, error: str, started: float) -> ExecutorResult:
         """失败返回 —— **已经改过的文件必须跟着交回去**。
@@ -1234,8 +1238,10 @@ class OpenAIAgentExecutor(BaseExecutor):
         if bad_frames:
             # 坏帧被跳过了 ⇒ 这轮内容可能**少了一截**，必须可查 ——
             # 否则"模型输出莫名其妙变短"永远找不到原因。
-            try: witness.warn('oa_exec', f'sse_chunk_unparsed:{bad_frames}'[:80])
-            except Exception: pass
+            try:
+                witness.warn('oa_exec', f'sse_chunk_unparsed:{bad_frames}'[:80])
+            except Exception:
+                pass
 
         if _over_budget:
             # 同上，而且更该说：这是**我们主动断的**，不是模型答完了。
@@ -1494,7 +1500,11 @@ def _search_code(args: dict, cwd) -> str:
 
 # ── 错误类型 ──
 
-class _RateLimitError(Exception): pass
-class _FormatError(Exception): pass
-class _NetworkError(Exception): pass
-class _TransientError(Exception): pass     # 5xx —— 可重试（429 由 _RateLimitError 单独走）
+class _RateLimitError(Exception):
+    pass
+class _FormatError(Exception):
+    pass
+class _NetworkError(Exception):
+    pass
+class _TransientError(Exception):
+    pass     # 5xx —— 可重试（429 由 _RateLimitError 单独走）

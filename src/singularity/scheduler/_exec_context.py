@@ -96,8 +96,10 @@ def _inject_memory(description: str, pyramid_level: int = 1, token_budget: int =
         lines.append("参考以上历史任务的改动方案。\n")
         return "\n".join(lines)
     except Exception as e:
-        try: witness.warn("memory", f"inject_memory:{e}")
-        except Exception: pass
+        try:
+            witness.warn("memory", f"inject_memory:{e}")
+        except Exception:
+            pass
         return ""
 
 def _build_project_context(task) -> str:

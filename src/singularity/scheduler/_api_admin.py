@@ -109,13 +109,15 @@ def api_store_add(api_id, provider="", base_url="", api_key_env="", notes=""):
 
 
 def api_store_remove(api_id):
-    from . import api_store; return {"ok": api_store.remove(api_id)}, 200
+    from . import api_store
+    return {"ok": api_store.remove(api_id)}, 200
 
 
 def api_store_set_status(api_id, status, notes=""):
     from . import api_store
     entry = api_store.set_status(api_id, status, notes)
-    if not entry: return {"error": f"API {api_id} 不存在"}, 404
+    if not entry:
+        return {"error": f"API {api_id} 不存在"}, 404
     return {"ok": True, "entry": entry.to_dict()}, 200
 
 
@@ -227,7 +229,8 @@ def model_remove(model_id):
 def model_update(model_id, data):
     from . import model_registry
     models = model_registry.load_models()
-    if model_id not in models: return {"error": "模型不存在"}, 404
+    if model_id not in models:
+        return {"error": "模型不存在"}, 404
     m = models[model_id]
     # backward compat: read old "tiers" or new "recommended_for"
     old_rf = set(m.recommended_for or [])
@@ -301,7 +304,8 @@ def skill_list():
         all_skills = load_skills()
         return {"skills": [{"name": s.name, "description": s.description, "type": s.type,
             "args": s.arguments, "source": s.source, "body": s.body[:200]} for s in all_skills.values()]}, 200
-    except Exception as e: return {"error": str(e)}, 500
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 
 def skill_add(name, description="", skill_type="prompt", args=None, body=""):
@@ -309,14 +313,17 @@ def skill_add(name, description="", skill_type="prompt", args=None, body=""):
 
     from . import dispatcher as disp_mod
     create_user_skill(name, description, skill_type, args or [], body)
-    disp_mod.invalidate_skill_cache(); return {"ok": True, "name": name}, 200
+    disp_mod.invalidate_skill_cache()
+    return {"ok": True, "name": name}, 200
 
 
 def skill_delete(name):
     from singularity.skills.skill_loader import delete_user_skill
 
     from . import dispatcher as disp_mod
-    ok = delete_user_skill(name); disp_mod.invalidate_skill_cache(); return {"ok": ok}, 200
+    ok = delete_user_skill(name)
+    disp_mod.invalidate_skill_cache()
+    return {"ok": ok}, 200
 
 
 def agent_skill_list(level, model="", phase=""):
@@ -373,7 +380,8 @@ def approvals_list():
 
 
 def perm_profiles():
-    from .permission import get_store; return {"profiles": get_store().list_profiles()}, 200
+    from .permission import get_store
+    return {"profiles": get_store().list_profiles()}, 200
 
 
 def perm_profiles_add(name, profile):
@@ -392,11 +400,15 @@ def perm_profiles_delete(name):
 
 
 def perm_bind(level, model, profile):
-    from .permission import get_store; get_store().bind_agent(level, model, profile); return {"ok": True}, 200
+    from .permission import get_store
+    get_store().bind_agent(level, model, profile)
+    return {"ok": True}, 200
 
 
 def perm_unbind(level, model):
-    from .permission import get_store; get_store().unbind_agent(level, model); return {"ok": True}, 200
+    from .permission import get_store
+    get_store().unbind_agent(level, model)
+    return {"ok": True}, 200
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -404,7 +416,9 @@ def perm_unbind(level, model):
 # ═══════════════════════════════════════════════════════════════
 
 def mcp_server_list():
-    from . import mcp as m; configs = m.load_mcp_configs(); reg = m.get_registry()
+    from . import mcp as m
+    configs = m.load_mcp_configs()
+    reg = m.get_registry()
     servers = []
     for c in configs:
         connected = c.name in reg._clients
@@ -439,19 +453,26 @@ def _validate_mcp_command(command: str) -> str | None:
 
 def mcp_server_add(data):
     from . import mcp as m
-    if not data or not data.get("name"): return {"error": "缺少 name"}, 400
+    if not data or not data.get("name"):
+        return {"error": "缺少 name"}, 400
     # 安全校验：stdio command 防命令注入（shell 解释器 / 内联执行）
     cmd = data.get("command", "")
     if cmd:
         err = _validate_mcp_command(cmd)
         if err:
             return {"error": err}, 400
-    configs = m.load_mcp_configs(); found = False
+    configs = m.load_mcp_configs()
+    found = False
     for c in configs:
         if c.name == data["name"]:
-            c.transport = data.get("transport", c.transport); c.command = data.get("command", c.command)
-            c.url = data.get("url", c.url); c.enabled = data.get("enabled", c.enabled)
-            c.timeout = data.get("timeout", c.timeout); c.env = data.get("env", c.env); found = True; break
+            c.transport = data.get("transport", c.transport)
+            c.command = data.get("command", c.command)
+            c.url = data.get("url", c.url)
+            c.enabled = data.get("enabled", c.enabled)
+            c.timeout = data.get("timeout", c.timeout)
+            c.env = data.get("env", c.env)
+            found = True
+            break
     if not found:
         configs.append(m.MCPServerConfig(name=data["name"], transport=data.get("transport","stdio"),
             command=data.get("command",""), url=data.get("url",""), enabled=data.get("enabled",True),
@@ -469,7 +490,8 @@ def mcp_server_add(data):
 
 
 def mcp_server_delete(name):
-    from . import mcp as m; configs = m.load_mcp_configs()
+    from . import mcp as m
+    configs = m.load_mcp_configs()
     m.save_mcp_configs([c for c in configs if c.name != name])
     # ⚠️ **光删配置文件不够**（2026-09-14 扫bug-03）：`get_registry()` 是全局单例，
     # 注册表里的客户端和工具**原样还在** ⇒ 下次装配 agent 时旧工具照旧回来，
@@ -479,7 +501,9 @@ def mcp_server_delete(name):
 
 
 def mcp_server_reconnect(name):
-    from . import mcp as m; configs = m.load_mcp_configs(); reg = m.get_registry()
+    from . import mcp as m
+    configs = m.load_mcp_configs()
+    reg = m.get_registry()
     for c in configs:
         if c.name == name:
             # 🔴 **必须喂全量 configs**（2026-09-14 我自己核出来的）：原来这里是
@@ -494,13 +518,16 @@ def mcp_server_reconnect(name):
 
 
 def mcp_tool_list():
-    from . import mcp as m; reg = m.get_registry()
+    from . import mcp as m
+    reg = m.get_registry()
     return {"tools": [{"name": f"mcp__{t.server_name}__{t.name}", "server": t.server_name,
         "tool": t.name, "description": t.description, "inputSchema": t.inputSchema} for t in reg.get_all_tools()]}, 200
 
 
 def mcp_refresh():
-    from . import mcp as m; configs = m.load_mcp_configs(); m.get_registry().load_configs(configs)
+    from . import mcp as m
+    configs = m.load_mcp_configs()
+    m.get_registry().load_configs(configs)
     return {"ok": True, "servers": m.get_registry().server_count, "tools": m.get_registry().tool_count}, 200
 
 
@@ -525,8 +552,10 @@ def auth_status(include_users: bool = False):
 
 
 def auth_bootstrap():
-    from ._auth import get_auth; a = get_auth()
-    if a._users: return {"ok": False, "error": "已有用户"}, 403
+    from ._auth import get_auth
+    a = get_auth()
+    if a._users:
+        return {"ok": False, "error": "已有用户"}, 403
     admin = a.bootstrap()
     # ⚠️ 原来回的是 `f"Admin token: {admin.token[:8]}..."` —— **打前缀等于没给**：
     # 盘上只存哈希、`to_dict()` 不含明文，这里是**唯一**一次能看到完整 token 的机会
@@ -537,7 +566,8 @@ def auth_bootstrap():
 
 
 def auth_add_user(uid, name="", role="viewer"):
-    from ._auth import get_auth; return {"ok": True, "user": get_auth().add_user(uid, name, role).to_dict()}, 200
+    from ._auth import get_auth
+    return {"ok": True, "user": get_auth().add_user(uid, name, role).to_dict()}, 200
 
 
 def auth_remove_user(uid):
@@ -549,14 +579,17 @@ def status_overview():
     from . import dispatcher as disp_mod
     from . import project as proj_mod
     config.ensure_dirs()
-    counts = witness._count_by_status(); loads = witness._heartbeat_task_levels()
-    pw, dd = witness._timing_stats(); tt = witness._token_stats()
+    counts = witness._count_by_status()
+    loads = witness._heartbeat_task_levels()
+    pw, dd = witness._timing_stats()
+    tt = witness._token_stats()
     stalled = witness.check_stalled()   # 用默认阈值，见 witness.STALLED_AFTER_S
     agents = {}
     try:
         for level, cfgs in disp_mod.load_agents().items():
             agents[level] = [{"model": c.get("model",""), "roles": c.get("roles",[])} for c in cfgs]
-    except Exception as e: witness.warn('_api', f'{e}')
+    except Exception as e:
+        witness.warn('_api', f'{e}')
     return {"counts": counts, "heartbeat_levels": loads, "running_total": sum(loads.values()),
         "avg_wait": f"{sum(pw)/len(pw):.1f}s" if pw else "--",
         "avg_done": f"{sum(dd)/len(dd):.1f}s" if dd else "--",
@@ -575,7 +608,8 @@ def cleanup():
     # 不影响各自的 `__globals__`。原来直接裸调 → `/api/cleanup` 必 500。
     from ._api_monitor import _cleanup_orphan_worktrees
     n_wt = _cleanup_orphan_worktrees()
-    from . import snapshot as snap_mod; n_snap = snap_mod.purge_old_snapshot_meta()
+    from . import snapshot as snap_mod
+    n_snap = snap_mod.purge_old_snapshot_meta()
     return {"ok": True, "cleaned": {"heartbeats": n_hb, "worktrees": n_wt, "snapshots": n_snap, "tasks": n_tasks}}, 200
 
 

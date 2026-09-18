@@ -541,7 +541,8 @@ def delete(project_id: str) -> bool:
     # 删除关联产出文件
     for f in _projects_dir().glob(f"{project_id}.*"):
         try:
-            f.unlink(); deleted = True
+            f.unlink()
+            deleted = True
         except Exception as e:
             # 不能静默：项目记录删了但这些产出文件还在 → 磁盘上留下查不到归属的孤儿，
             # 事后也解释不了"为什么删了项目还占着空间"。

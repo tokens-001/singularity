@@ -59,9 +59,13 @@ def _cmd_memory(argv: list) -> int:
         i = 0
         while i < len(argv):
             if argv[i] == "--beam" and i + 1 < len(argv):
-                beam = int(argv[i+1]); i += 2; continue
+                beam = int(argv[i+1])
+                i += 2
+                continue
             if argv[i] == "--hops" and i + 1 < len(argv):
-                hops = int(argv[i+1]); i += 2; continue
+                hops = int(argv[i+1])
+                i += 2
+                continue
             i += 1
         result = mem_mod.traverse(query_text, beam_width=beam, max_hops=hops)
         narrative = mem_mod.synthesize(result, query_text)

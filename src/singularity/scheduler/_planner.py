@@ -170,8 +170,10 @@ def _topo_sort(subtasks: list[dict]) -> list[int] | None:
     adj: dict[int, list[int]] = {i: [] for i in range(n)}
     for i, st in enumerate(subtasks):
         for dep in st.get("depends_on_local_id", []):
-            try: dep = int(dep)  # 容错: JSON 可能是字符串
-            except (ValueError, TypeError): continue
+            try:
+                dep = int(dep)  # 容错: JSON 可能是字符串
+            except (ValueError, TypeError):
+                continue
             if 0 <= dep < n and dep != i:  # 自环不算
                 adj[dep].append(i)
                 in_deg[i] += 1

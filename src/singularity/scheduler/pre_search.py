@@ -113,7 +113,8 @@ def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True,
             res.skipped = True
             res.reason = f"超时 {config.PRE_SEARCH_TIMEOUT}s"
             try:
-                if 'proc' in dir(): proc.kill()
+                if 'proc' in dir():
+                    proc.kill()
             except Exception as e:
                 witness.warn('pre_search', f'{e}')
         except (json.JSONDecodeError, KeyError) as e:
@@ -173,7 +174,8 @@ def pre_search(task: str, route_result: RouteResult, use_hybrid: bool = True,
                 if not match_keys and not match_mods:
                     continue
                 for mk in match_keys[:2]:
-                    if mk in seen: continue
+                    if mk in seen:
+                        continue
                     seen.add(mk)
                     finfo = g["files"].get(mk, {})
                     classes = finfo.get("classes", [])
