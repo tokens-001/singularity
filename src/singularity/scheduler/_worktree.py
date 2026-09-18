@@ -63,9 +63,24 @@ def _release_ref(task_id: str, repo_root=None) -> bool:
 
 
 def cleanup_task_artifacts(task_id: str, repo_root) -> int:
-    """清任务衍生残留 (patch/snapshot/worktree/pending ref)，不动任务本体 json。返回删除数。
+    """清任务衍生残留 (patch/snapshot/worktree/标记/累计用量)，不动任务本体 json。返回删除数。
 
     从 _api_tasks 下沉到此，供 orchestrator 终态清理复用（避免循环 import）。
+
+    🔴 **这里不碰锚定 ref**（2026-09-18 改）。原来最后一步是 `_release_ref` ——
+    而那个 ref 的语义**只有一种读法**，写在 `_api_tasks.salvageable_refs` 的 docstring 里：
+
+        成功合并那条路会 `_release_ref` 删掉它 ⇒ **ref 还在 = 这个任务有可打捞的产物**
+
+    也就是说 **释放 = 断言"这个任务的产物已经安全进项目仓了"**。而"清临时残留"跟
+    "产物进没进仓"是两件毫不相干的事，混在一起就是**把断言藏在清垃圾里**。
+
+    实测代价（2026-09-18 02:1x）：删 21 个任务 ⇒ **3 个"判失败但产物还在"的锚当场没了**
+    （`1789658497832` / `1789658497834` / `1789662504534`，靠 git 还没 gc 才按 SHA 捞回来）。
+    ⚠️ **同一形状不止删任务这一处**：超时 / worker 异常 / 合并冲突那三条路也松过手 ——
+    而它们恰恰是"产物在、只是没进仓"最多的地方（09-18 那天 62 次被 240s 掐断全走这条）。
+    ⇒ 释放改由**知道产物落没落地**的调用方显式做，见 `_api_tasks.task_delete` /
+    `task_retry` / `orchestrator._drain_pending`。
     """
     from singularity.scheduler import witness
     from singularity.scheduler._git_worktree import _worktrees_dir
@@ -107,13 +122,7 @@ def cleanup_task_artifacts(task_id: str, repo_root) -> int:
     except Exception as e:
         witness.warn('_api', f'wt_del:{e}')
 
-    # 锚定 ref (refs/qidian/pending/{task_id})
-    try:
-        _release_ref(task_id, repo_root=repo_root)
-    except Exception as e:
-        # 静默 = 锚定 ref 残留，下次清理对不上号
-        from singularity.scheduler import witness
-        witness.warn('_api', f'release_ref:{task_id}:{e}'[:80])
+    # ⚠️ 锚定 ref **不在这里释放** —— 见本函数 docstring。调用方要释放得自己显式调。
     return deleted
 
 

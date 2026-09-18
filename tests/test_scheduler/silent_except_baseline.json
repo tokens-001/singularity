@@ -167,7 +167,7 @@
  "scheduler/model_prices.py::load_prices": 1,
  "scheduler/neijinglu.py::_is_redundant_failure": 2,
  "scheduler/orchestrator.py::<module>": 1,
- "scheduler/orchestrator.py::_account_salvaged": 4,
+ "scheduler/orchestrator.py::_account_salvaged": 3,
  "scheduler/orchestrator.py::_auto_trigger_test_fix": 1,
  "scheduler/orchestrator.py::_decompose_and_create_tasks": 1,
  "scheduler/orchestrator.py::_dispatch_ready": 1,

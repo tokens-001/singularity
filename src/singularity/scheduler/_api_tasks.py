@@ -26,7 +26,9 @@ from singularity.scheduler import tracker
 from singularity.scheduler.tracker import TaskStatus
 from singularity.scheduler import witness
 from singularity.scheduler import orchestrator
-from singularity.scheduler._worktree import cleanup_task_artifacts as _cleanup_task_artifacts
+from singularity.scheduler._worktree import (
+    cleanup_task_artifacts as _cleanup_task_artifacts, _release_ref,
+)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -420,6 +422,21 @@ def task_delete(task_id: str) -> tuple[dict, int]:
 
     deleted = _cleanup_task_artifacts(task_id, repo_root)
 
+    # 🔴 **锚定 ref 在这里显式释放**（2026-09-18 从 `cleanup_task_artifacts` 里挪出来的）。
+    # 它不再藏在"清垃圾"里，是因为**释放 = 断言"产物已经安全进项目仓了"**，
+    # 而删除这条路的理由完全不同、且是个取舍：
+    #   · 任务文件马上就没了 ⇒ `salvageable_refs()` 那个 `{task_id: sha}` 表**没有行能挂**，
+    #     界面按任务 id 去查（`_list_all_tasks` 里 `salvage.get(t.get("id"))`）⇒
+    #     ref 留着就是**盘上有、界面看不见**的孤儿 —— 正是另一条待办
+    #     「清理孤儿 pending ref」要定义的东西。
+    #   · 代价是真丢：删一个"判失败但产物还在"的任务，那份产物**没人引用、gc 会收走**
+    #     （2026-09-18 实测掉过 3 个）。**用户要留就先别删任务。**
+    try:
+        _release_ref(task_id, repo_root=repo_root)
+    except Exception as e:
+        witness.warn('_api', f'release_ref:{task_id}:{type(e).__name__}:{e}'[:100],
+                     key="task_delete_release_ref_failed")
+
     # 任务本体/取消/暂停/parking/扣留 单文件 (delete 一并清, retry 不动)
     def _rm(p: Path) -> None:
         nonlocal deleted
@@ -507,6 +524,17 @@ def task_retry(task_id: str) -> tuple[dict, int]:
     except Exception:
         repo_root = config.PROJECT_ROOT
     _cleanup_task_artifacts(task_id, repo_root)
+    # 锚定 ref 也一起松手（2026-09-18 从 `cleanup_task_artifacts` 里挪出来的）。
+    # 这条路的理由和删除**不一样**：重试是**新的一次尝试**（跟下面 `_supersede_trace`
+    # 同一件事）⇒ 旧锚指着的那次尝试已经被取代，留着它界面会对着一个正在重跑的
+    # 任务说"有可打捞的产物"，指的还是上一版。
+    # ⚠️ 不松手的风险也不是零：重试若中途又挂了，这份旧产物就没人引用了。
+    #    取舍按"取代"这一侧的语义算 —— 要留旧产物就别重试。
+    try:
+        _release_ref(task_id, repo_root=repo_root)
+    except Exception as e:
+        witness.warn('_api', f'release_ref_retry:{task_id}:{type(e).__name__}:{e}'[:100],
+                     key="task_retry_release_ref_failed")
     # 重试 = **新的一次尝试** ⇒ 旧 trace 必须先让位，否则这一趟白跑（见上面 docstring）
     _supersede_trace(task_id)
     tracker.transition(task_id, TaskStatus.PENDING, error="", retry_count=0)

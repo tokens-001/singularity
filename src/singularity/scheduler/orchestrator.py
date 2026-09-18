@@ -357,12 +357,18 @@ def _account_salvaged(t, salvaged, elapsed_s: float) -> None:
             witness.warn("orch", f"salvage_index_task:{type(_e).__name__}"[:120])
         except Exception:
             pass
-    # 释放 worktree 引用（留不下会影响下一次派发）
-    try:
-        from singularity.scheduler.project import repo_root_for
-        _release_ref(t.id, repo_root=repo_root_for(t))
-    except Exception:
-        pass
+    # 🔴 **这里不再释放锚定 ref**（2026-09-18 删）。
+    # 原来最后一步是 `_release_ref(t.id, ...)`，注释写的是"释放 worktree 引用
+    # （留不下会影响下一次派发）" —— 但 `_release_ref` 删的是
+    # `refs/qidian/pending/{task_id}`，**就是"产物可打捞"那根绳子**，不是什么 worktree
+    # 引用；而且按 task_id 命名，重派时 `_anchor_ref` 走 `update-ref` 直接覆盖，
+    # 根本不会冲突。注释和代码说的不是一件事。
+    #
+    # 后果正好砸在这条路上：**超时 / worker 异常**是"活干了一半"最多的地方
+    # （2026-09-18 一天 62 次被 240s 硬顶掐断全走这儿），产物只有这一根绳子拴着 ——
+    # 而它在 `_salvage_timed_out` 刚把"改了哪些文件、提交了哪个 commit"记进 trace 之后
+    # **立刻被剪断**。账上写着"产物在"，盘上却没人引用了。
+    # ⇒ 要释放，也只有"产物真进了项目仓"那条路（`_drain_pending` 的 merged 分支）。
 
 
 def _flag_killed_without_wrapup(tid: str) -> None:
@@ -665,6 +671,15 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
                     # 两处都写会 DONE→DONE 重复推一次 SSE，而且**"状态落在哪"会有两个答案** ——
                     # 那条路本来就漏过一次（人工 resolve 不走这里 ⇒ 永远停在 conflict_held）。
                     _maybe_complete_parents(t.id)
+                    # 🔴 **只有这一条路能释放锚定 ref**（2026-09-18 挪进来的，原来在下面
+                    # 三个分支外面）。`refs/qidian/pending/{task_id}` 的语义就一句话
+                    # （写在 `_api_tasks.salvageable_refs`）：**ref 还在 = 这个任务有
+                    # 可打捞的产物** ⇒ 释放 = 断言"产物已经安全进项目仓了"。**merged 是
+                    # 唯一让这句话成立的分支。** 原先挂在分支外，conflict 和 merge 失败
+                    # 也会顺手松手 —— 那两条恰恰是"产物没进仓"的典型。
+                    # ⚠️ 别挪回去：这三件共用的只是参数长得像，**成不成立是两回事**。
+                    _best_effort("release_ref", _release_ref, t.id,
+                                 repo_root=repo_root_for(t))
                     results.append((t.id, f"merged: {mr.new_head[:8]}", batch.validation))
                     failure_mode = ""
                 elif mr.status == "conflict":
@@ -683,11 +698,12 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
                 _strand_guard(t, _e, "drain_pending")
                 continue
 
-            # ── 收尾三件：**每件各自 try**（2026-09-14 改，见 `_best_effort`）──
+            # ── 收尾两件：**每件各自 try**（2026-09-14 改，见 `_best_effort`）──
             # 原来它们和上面的 `transition` 挤在**同一个 try** 里 ⇒ 第一件一抛，
             # 后面几件静默全跳过，而 `_strand_guard` 报的只是第一件。
-            # ⚠️ 这三件在三个分支里**参数完全一样**，所以顺势提到分支外，顺带去掉两份重复。
-            _best_effort("release_ref", _release_ref, t.id, repo_root=repo_root_for(t))
+            # ⚠️ 这两件在三个分支里**参数完全一样**，所以顺势提到分支外，顺带去掉两份重复。
+            # ⚠️ `release_ref` **不在这两件里了**（2026-09-18）：它只在 merged 分支成立，
+            #    参数长得一样不等于成不成立一样，见上面 merged 分支里那段。
             _best_effort("save_trace", _save_trace, t, route, snap,
                          batch.dispatch_result, batch.validation, False,
                          pre_search_skipped=batch.pre_search_skipped,
