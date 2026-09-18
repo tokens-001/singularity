@@ -488,6 +488,34 @@ def __getattr__(name: str):
     ⚠️ 全仓**没有任何地方**用 `from dispatcher import *`（2026-09-14 扫过），
     所以不需要保留"再导出"那层语义；`dispatcher.X` 这种属性访问照常работает。
     """
+    # 🔴 **dunder 一律直接拒，不进循环**（2026-09-18 修，这才是 `lazy_spoke_import_failed` 的根）。
+    #
+    # 症状：`lazy_spoke_import_failed:_dispatch_exec:cannot import name
+    # '_load_skills_for_agent' from partially initialized module '_dispatch_skills'`，
+    # 跨三天报了 80+ 次，2026-09-16 加锁**没治好**（因为根本不是竞态）。
+    #
+    # 真机制（探针实测，不是推断）：`from singularity.scheduler.dispatcher import X`
+    # 这条**普通 import 语句**，importlib 会先执行 `_handle_fromlist`，而它第一件事是
+    # `hasattr(module, "__path__")`（判断是不是包）。本模块有 PEP 562 的模块级
+    # `__getattr__` ⇒ **这一问被转发进来**，于是**每一次 from-import 都白白跑一遍
+    # 惰性循环**（实测一次测试跑：`__path__` 64 次 + `__test__` 26 次 + `__bases__` 13 次）。
+    # 而最毒的一次是**重入**：`_dispatch_skills` 模块体第 3 行自己就是一条
+    # `from singularity.scheduler.dispatcher import (...)` ⇒ 它开始导入时又问了句
+    # `__path__` ⇒ 循环里 `import_module("_dispatch_skills")` 拿到**半成品**（它正在被导入）
+    # ⇒ 往下走 `_dispatch_exec` ⇒ 它第 8 行 `from _dispatch_skills import _load_skills_for_agent`
+    # ⇒ 名字还不存在 ⇒ 炸。**同一个线程自己绕回来，RLock 是同线程放行的，锁挡不住这个形状。**
+    #
+    # 危害：告警刷屏只是表面 —— 更坏的是**把 `.qidian/alerts.jsonl` 变成不可信的账本**
+    # （它正是查故障用的那份），而且每次 `lazy_spoke_import_failed` 都会**白导一遍**
+    # 三兄弟。修在门口之后实测：一次全量测试 0 条。
+    # ⚠️ 拒掉不会丢东西：三个辐条的 `__all__` 里**没有** dunder —— 唯一存在的
+    # `__annotate__` / `__conditional_annotations__` 是 **Python 3.14 (PEP 649) 给模块
+    # 自动加的**，不是辐条自己导出的，而且**没有任何调用方从 `dispatcher` 上取它们**
+    # （取也是取某个函数/类的，不走模块转发）。`test_lazy_spoke_dunder.py` 里有一条
+    # 守卫盯着这件事 —— 哪天有辐条真导出 dunder，它会红。
+    if name.startswith("__") and name.endswith("__"):
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
     # 整个循环互斥 —— 见 `_LAZY_SPOKES_LOCK` 上面那段（半成品模块那个洞）。
     with _LAZY_SPOKES_LOCK:
         for _mod in _LAZY_SPOKES:

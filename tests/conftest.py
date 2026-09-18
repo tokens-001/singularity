@@ -1,6 +1,30 @@
 """共享 fixtures — Singularity 单元测试。"""
-import os, tempfile, pytest
+import atexit, os, shutil, tempfile, pytest
 from pathlib import Path
+
+
+# ═══════════════════════════════════════════════════════════════
+# 🔴 **收集期也要隔离**（2026-09-18 补）—— 下面那个 autouse 夹具**只覆盖用例执行期**
+# ═══════════════════════════════════════════════════════════════
+# pytest **导入测试模块**（收集）发生在任何 fixture 生效**之前**，而测试模块顶层往往就是
+# 一句 `from singularity.scheduler.dispatcher import ...` ⇒ 那一刻里面任何
+# `witness.warn` / `tracker` 落盘**直接写进真 `.qidian/`**。
+#
+# 实测（不是推断）：2026-09-18 一次 `pytest tests/` 就往真的 `.qidian/alerts.jsonl`
+# 追加 **1 条 `lazy_spoke_import_failed`**（根因见 `dispatcher.__getattr__` 那段）。
+# 危害不在这一条，而在**那个文件是查故障用的账本** —— 我当天差点拿它算出
+# "后端空转时反复失败"这种错误结论（那几条全是我自己跑测试写的）。
+# 同一个形状下面那段注释里已经记过一次（"整套测试追加 12 行"），**这是第二次**。
+#
+# ⇒ 在**导入期**先把 `QIDIAN_DIR` 指到临时目录；用例再各自用 `tmp_path` 覆盖，
+#   用例结束 `monkeypatch` 撤销时**回到这里设的值**，不会再漏到真目录。
+_COLLECT_TMP = Path(tempfile.mkdtemp(prefix="qidian-collect-"))
+atexit.register(lambda: shutil.rmtree(_COLLECT_TMP, ignore_errors=True))
+from singularity.scheduler import config as _cfg  # noqa: E402
+_cfg.QIDIAN_DIR = _COLLECT_TMP
+for _n in ("SNAPSHOT_DIR", "PATCH_DIR", "TRACE_DIR", "HOLD_DIR", "CANCEL_DIR",
+           "PAUSE_DIR", "PARKED_DIR", "PARTIAL_USAGE_DIR"):
+    setattr(_cfg, _n, _COLLECT_TMP / getattr(_cfg, _n).name)
 
 
 @pytest.fixture(autouse=True)

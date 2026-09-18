@@ -7,9 +7,6 @@
 
 这些测试**钉接线**：删掉对应的那一行判据，测试必须红（每条 docstring 里写了删哪行）。
 """
-import pytest
-
-
 def _hist(project_id, filename):
     from singularity.scheduler.workflow import _phase_history_dir
     d = _phase_history_dir(project_id)
