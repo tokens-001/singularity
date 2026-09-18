@@ -10,6 +10,7 @@
   这两个必须分得开（§44 承诺类字段三态可分）。把"不知道"写成 0，
   等于让最需要排查的场景留下一份**看起来正常**的假账。
 """
+import json
 import subprocess
 
 from singularity.scheduler import orchestrator as orch
@@ -260,3 +261,66 @@ class TestTimeoutAlsoIndexesIntoMemory:
                            "created_at": 1.0})()
         running = {Future(): (t, None, None, None, 0.0)}
         orch._reap_futures(running, {}, None, None, [])   # 不抛就算过
+
+
+# ═══════════════════════════════════════════════════════════════
+# 超时写的那个"停"标记：必须自报来历（2026-09-19）
+#
+# 调度器超时会写 `CANCEL_DIR/<task_id>.json` 让执行线程在下一 turn 边界提前
+# 收手（`fut.cancel()` 拦不住已经开始跑的 future，那时它还在烧 token）。
+# 而 `_exec._check_cancelled` 是它**唯一**的消费者 —— 那里原来只会读成
+# `cancelled_by_user` ⇒ **我们自己的超时被记成"用户取消了"**，用户那一下
+# 根本没发生（账记在用户头上）。
+#
+# 这里钉的是**接线**：`_exec` 那边认得 `by: "timeout"`（test_exec_internals
+# 钉了），但"orchestrator 真的写这个 body 吗"是另一回事 —— 只钉一头，
+# 另一头改回 `"{}"` 照样全绿。
+# ═══════════════════════════════════════════════════════════════
+
+class TestTimeoutMarkerTellsItsOrigin:
+    """变异：把超时分支的 body 改回 `"{}"` → `test_写出来的标记认得出是超时` 红。"""
+
+    def _drive_timeout(self, monkeypatch, tmp_path) -> object:
+        """跑一遍 `_reap_futures` 的超时分支，返回它落下的那个标记文件。"""
+        monkeypatch.setattr(orch, "wait", lambda *a, **k: None)      # 别白等 10s
+        monkeypatch.setattr(orch.config, "CANCEL_DIR", tmp_path)
+        monkeypatch.setattr(orch.config, "ensure_dirs", lambda: None)
+        monkeypatch.setattr(orch.tracker, "transition", lambda *a, **k: None)
+        # `_flag_killed_without_wrapup` 会去 `tracker.read_task` 读**真**的 tasks
+        # 目录（"读也不安全"），这里不打桩就会在生产 .qidian 上读一把。
+        monkeypatch.setattr(orch, "_flag_killed_without_wrapup", lambda *a, **k: None)
+
+        class _NeverDone:
+            def done(self): return False
+            def cancel(self): return False     # 已经开始跑 ⇒ 取消不掉（真实现也这样）
+
+        t = type("T", (), {"id": "t-timeout", "route_type": "default"})()
+        # submitted_at=0.0 ⇒ now - 0 > deadline，必走超时分支
+        orch._reap_futures({_NeverDone(): (t, None, None, None, 0.0)}, {}, None, None, [])
+        return tmp_path / "t-timeout.json"
+
+    def test_写出来的标记认得出是超时(self, monkeypatch, tmp_path):
+        p = self._drive_timeout(monkeypatch, tmp_path)
+        assert p.exists(), "超时没写「停」标记 —— 执行线程会一路烧到自己的预算尽头"
+        assert json.loads(p.read_text(encoding="utf-8")).get("by") == "timeout", \
+            f"标记没自报来历，消费者只能猜（猜出来就是「用户取消了」）：{p.read_text(encoding='utf-8')!r}"
+
+    def test_和用户取消的标记区分得开(self, monkeypatch, tmp_path):
+        """同一个文件、同一个消费者 —— 唯一能区分的就只有 body。"""
+        t = type("T", (), {"id": "t-user", "route_type": "default"})()
+        monkeypatch.setattr(orch, "wait", lambda *a, **k: None)
+        monkeypatch.setattr(orch.config, "CANCEL_DIR", tmp_path)
+        monkeypatch.setattr(orch.config, "ensure_dirs", lambda: None)
+        monkeypatch.setattr(orch.tracker, "transition", lambda *a, **k: None)
+        monkeypatch.setattr(orch, "_flag_killed_without_wrapup", lambda *a, **k: None)
+
+        class _NeverDone:
+            def done(self): return False
+            def cancel(self): return False
+        orch._reap_futures({_NeverDone(): (t, None, None, None, 0.0)}, {}, None, None, [])
+        ours = json.loads((tmp_path / "t-user.json").read_text(encoding="utf-8"))
+
+        # 用户取消写的那个标记（不真调 API，直接照它写的形状造）
+        theirs = {"task_id": "t-user", "cancelled_at": 1.0}
+        assert ours.get("by") != theirs.get("by"), \
+            "两边 body 长得一样 ⇒ 消费者分不出是谁写的"

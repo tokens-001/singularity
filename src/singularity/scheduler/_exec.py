@@ -277,20 +277,57 @@ def read_partial_tool_events(task_id: str) -> list:
 
 
 def _check_cancelled(task, all_tool_events: list) -> "BatchOutput | None":
-    """检查人工取消标记。返回 BatchOutput 表示已取消; None 表示继续。"""
+    """检查"停"标记。返回 BatchOutput 表示该停; None 表示继续。
+
+    ⚠️ **这个标记有两个来源，必须分开报**（2026-09-19）：
+
+    · **用户点的**（`_api_tasks.task_cancel` 写）→ `cancelled_by_user`
+    · **调度器超时写的**（`orchestrator._reap_futures` 写，body 带 `by: "timeout"`）
+      → `cancelled_by_timeout`
+
+    它们**共用同一个文件和同一个消费者**：超时那条也要靠这个标记让执行线程在下一
+    turn 边界提前收手（`fut.cancel()` 拦不住已经开始跑的 future，那时它还在烧 token）。
+    但后果不一样 —— 把超时读成"用户取消"，就是**账记在用户头上而他什么都没做**。
+
+    ⚠️ 两种都保留 `"cancelled"` 前缀：全仓的消费方（`_exec._run_with_retry`、
+    `goal_loop`、`_task_runner`）判的是这个前缀，语义都是"**用户叫停，别重试**"。
+    超时中断同样不该在这条路里重试 —— 外层已经把这轮判死了，重试只是再烧一遍。
+
+    读不出 `by`（旧格式 / 空 body / 文件坏了）→ **按用户取消处理**，即旧行为。
+    那是最保险的一侧：宁可把一次超时记成用户取消，也不要把用户取消咽掉。
+    """
     cancel_path = config.CANCEL_DIR / f"{task.id}.json"
-    if cancel_path.exists():
-        cancel_path.unlink()
+    if not cancel_path.exists():
+        return None
+    try:
+        body = json.loads(cancel_path.read_text(encoding="utf-8"))
+        by = body.get("by", "") if isinstance(body, dict) else ""
+    except (json.JSONDecodeError, OSError) as e:
+        # 不静默：读不出来只能退到旧行为，而"退到旧行为"正是这个洞的成因。
+        witness.warn("exec", f"cancel_marker_unreadable:{task.id}:{type(e).__name__}"[:180],
+                     key="cancel_marker_unreadable")
+        by = ""
+    cancel_path.unlink()
+
+    if by == "timeout":
         return BatchOutput(
             ok=False, task_id=task.id,
-            term_reason="cancelled_by_user",
+            term_reason="cancelled_by_timeout",
             validation=val_mod.ValidationReport(
                 verdict="阻断", action="abort",
-                unverified=["用户手动取消"],
+                unverified=["调度器超时中断（不是用户取消）"],
             ),
             tool_events=all_tool_events, turn_count=0,
         )
-    return None
+    return BatchOutput(
+        ok=False, task_id=task.id,
+        term_reason="cancelled_by_user",
+        validation=val_mod.ValidationReport(
+            verdict="阻断", action="abort",
+            unverified=["用户手动取消"],
+        ),
+        tool_events=all_tool_events, turn_count=0,
+    )
 
 
 def _check_paused(task) -> bool:

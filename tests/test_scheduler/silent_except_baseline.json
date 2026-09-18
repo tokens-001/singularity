@@ -173,7 +173,7 @@
  "scheduler/orchestrator.py::_dispatch_ready": 1,
  "scheduler/orchestrator.py::_drain_pending": 1,
  "scheduler/orchestrator.py::_flag_killed_without_wrapup": 1,
- "scheduler/orchestrator.py::_reap_futures": 9,
+ "scheduler/orchestrator.py::_reap_futures": 8,
  "scheduler/orchestrator.py::_record_ledger": 1,
  "scheduler/orchestrator.py::_run_delivery": 1,
  "scheduler/orchestrator.py::_run_integration_merge": 4,

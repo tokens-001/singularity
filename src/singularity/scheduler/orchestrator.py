@@ -525,11 +525,35 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
             # 没有"主动收尾"），**而当时没有任何告警**。
             _flag_killed_without_wrapup(t.id)
             try:
-                # 协作式中断: 写取消标记, 让执行线程在下一 turn 边界自行退出
+                # 协作式中断: 写一个"停"标记, 让执行线程在下一 turn 边界自行退出。
+                #
+                # 🔴 **标记必须自报来历**（2026-09-19）。它和「人工取消」走的是
+                # **同一个文件、同一个消费者**（`_exec._check_cancelled`），而那个
+                # 消费者只会把它读成 `cancelled_by_user` —— 于是**我们自己的超时
+                # 被记成"用户取消了"**，而用户那一下根本没发生。
+                # 原来写的是 `"{}"`（全仓唯一一个空 body 的取消标记：`task_cancel`
+                # 写的那个带 `{"task_id", "cancelled_at"}`）—— 空 body 里没有
+                # 任何东西能区分这两件事，只能靠猜。
+                #
+                # ⚠️ **不是**"超时不该写这个标记"：执行线程还活着（`fut.cancel()`
+                # 拦不住已经开始跑的 future），这个标记正是让它**提前收手**、
+                # 不再往下烧 token 的唯一手段。要修的是它**冒充用户**这件事。
+                #
+                # 🔵 泄漏面已核（本条原来标着"没核完"）：标记留着不消费的话，
+                # 谁会把 FAILED 任务重新派下去？`task_retry` 会 —— 但它开头就调
+                # `cleanup_task_artifacts`，标记在那儿被删掉；`handle_gate3_reject`
+                # 只重置 **DONE**；`tracker.recover` 只捞 `_INFLIGHT`
+                # （ROUTED/DISPATCHED/RUNNING/VALIDATING，**不含 FAILED**）。
+                # ⇒ 现存三条重排队路都够不着它。
                 config.ensure_dirs()
-                (config.CANCEL_DIR / f"{t.id}.json").write_text("{}", encoding="utf-8")
-            except Exception:
-                pass
+                (config.CANCEL_DIR / f"{t.id}.json").write_text(
+                    json.dumps({"by": "timeout", "at": time.time()}), encoding="utf-8")
+            except Exception as _e3:
+                # 写不成 ⇒ 执行线程收不到"停"，会一路烧到自己的预算尽头。
+                # 那是钱，不是整洁问题 —— 不许静默。
+                witness.warn("orch", f"timeout_marker_write_failed:{t.id}:"
+                                     f"{type(_e3).__name__}:{_e3}"[:180],
+                             key="timeout_marker_write_failed")
             try:
                 fut.cancel()
             except Exception:

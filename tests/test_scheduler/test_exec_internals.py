@@ -289,6 +289,57 @@ class TestCheckCancelled:
         assert result.ok is False
         assert not (tmp / "will_cancel.json").exists(), "取消文件应被删除"
 
+    # ── "停"标记有两个来源，必须分开报（2026-09-19）──────────────────
+    # 超时那条也要靠这个标记让执行线程提前收手（`fut.cancel()` 拦不住已经开始跑的
+    # future，那时它还在烧 token），所以它们**共用同一个文件和同一个消费者**。
+    # 而消费者原来只会读成 `cancelled_by_user` ⇒ **我们自己的超时被记成
+    # "用户取消了"**，而用户那一下根本没发生。
+
+    def test_超时写的标记读成超时不是用户取消(self, monkeypatch):
+        tmp = Path(tempfile.mkdtemp())
+        monkeypatch.setattr("singularity.scheduler._exec.config.CANCEL_DIR", tmp)
+        (tmp / "timed_out.json").write_text(json.dumps({"by": "timeout", "at": 1.0}))
+        result = _check_cancelled(_task(id="timed_out"), [])
+        assert result is not None
+        assert result.term_reason == "cancelled_by_timeout", \
+            f"超时被读成用户取消了 —— 账记在用户头上: {result.term_reason}"
+        assert result.term_reason.startswith("cancelled"), \
+            "前缀丢了 ⇒ `_run_with_retry` / goal_loop / _task_runner 三处判据会漏掉它"
+        assert not (tmp / "timed_out.json").exists(), "标记应被消费掉"
+
+    def test_旧格式和空body仍然按用户取消(self, monkeypatch, tmp_path):
+        """**命门**：修着修着不许把真的用户取消也改了。
+
+        旧格式（`{}` / 空文件 / 坏 JSON）读不出 `by` ⇒ **退回用户取消**，即旧行为。
+        那是最保险的一侧：宁可把一次超时记成用户取消，也不要把用户取消咽掉
+        （咽掉 = 用户点了取消，任务继续烧钱）。
+        ⚠️ `QIDIAN_DIR` 必须一起指到 tmp —— 坏 JSON 会触发 `witness.warn`，
+        不指的话那条告警会写进**生产**的 `alerts.jsonl`。
+        """
+        cfgmod = "singularity.scheduler._exec.config"
+        monkeypatch.setattr(cfgmod + ".QIDIAN_DIR", tmp_path)
+        monkeypatch.setattr(cfgmod + ".CANCEL_DIR", tmp_path / "cancels")
+        (tmp_path / "cancels").mkdir()
+
+        for tid, body in [("empty_body", "{}"), ("blank", ""), ("broken", "{oops")]:
+            (tmp_path / "cancels" / f"{tid}.json").write_text(body, encoding="utf-8")
+            r = _check_cancelled(_task(id=tid), [])
+            assert r is not None and r.term_reason == "cancelled_by_user", \
+                f"{tid}（body={body!r}）没退回旧行为: {getattr(r, 'term_reason', None)}"
+
+    def test_坏标记要留痕(self, monkeypatch, tmp_path):
+        """读不出来只能退旧行为 —— 而"退旧行为"正是这个洞的成因，所以要说一声。"""
+        from singularity.scheduler import witness
+        cfgmod = "singularity.scheduler._exec.config"
+        monkeypatch.setattr(cfgmod + ".QIDIAN_DIR", tmp_path)
+        monkeypatch.setattr(cfgmod + ".CANCEL_DIR", tmp_path / "cancels")
+        (tmp_path / "cancels").mkdir()
+        (tmp_path / "cancels" / "bad.json").write_text("{oops", encoding="utf-8")
+
+        _check_cancelled(_task(id="bad"), [])
+        msgs = [a["msg"] for a in witness.read_alerts()]
+        assert any("cancel_marker_unreadable" in m for m in msgs), f"坏标记被静默吞了: {msgs}"
+
 
 # ═══════════════════════════════════════════════════════════════
 # _save_planner_patch / _read_planner_patch — 规划方案持久化
