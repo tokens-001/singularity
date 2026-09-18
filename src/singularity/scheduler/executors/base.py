@@ -29,14 +29,25 @@ from dataclasses import dataclass, field
 #   `is_blocked_path`     ← `openai_agent.py` / `zhipu_api.py`
 #   `is_dangerous_command`← `openai_agent.py`
 #
-# ⚠️ **`as <同名>` 不是多余的** —— 那是给 ruff 看的"这是再导出"标记。
-# 少了它，`ruff check --fix`（F401）会把这几行当死 import 删掉，
-# 然后 **53 个测试文件当场 ImportError**（2026-09-19 实测，全部只因为这一个名字）。
-# **ruff 不读上面这段注释。** 想删它们，先全仓搜一遍 `from ...executors.base import`。
-from singularity.scheduler._sensitive import (
+# ⚠️ 下面四行的标记**不是懒惰，是必须的** —— 它们是再导出，
+# 而 ruff **看不见跨模块的用途**。2026-09-19 一天踩了两次同一个坑：
+#   · 完全没标记：`ruff check --fix` 把四行全删 ⇒ **53 个测试文件 ImportError**
+#   · 只用 `as <同名>`（ruff 文档里认的"再导出"写法）：**改过名的那两个还是被删**
+#     —— `is_blocked_path as is_blocked_path` 留住了，而
+#     `BLOCKED_PATH_PATTERNS as _BLOCKED_PATTERNS` 被删。
+#     ⇒ **ruff 的再导出识别要求别名和原名相同**，改名的一律当普通 import。
+# ⇒ 改名的那两行只能挂一条**抑制注释**（见下面那两行的行尾标记）。
+#   ⚠️ 这段说明本身**故意不写出那条指令的字面串** —— 写了的话 ruff 会把
+#   **注释**也当成指令去解析，然后报一条 "Invalid noqa directive" 的假警告。
+#
+# 最后一道防线是本仓自己的守卫 `test_no_undefined_names.py::test_from_import_targets_exist`
+# （扫全仓 `from M import N`，判 N 在不在 M 里）—— 但它**只扫 `src/`**，
+# 测试目录里的引用它看不见，所以它只是兜底、不是保证。
+# **想删这几行：先 `grep -rn "from .*executors.base import"`，再删。**
+from singularity.scheduler._sensitive import (  # noqa: F401
     BLOCKED_COMMANDS as _BLOCKED_COMMANDS,
 )
-from singularity.scheduler._sensitive import (
+from singularity.scheduler._sensitive import (  # noqa: F401
     BLOCKED_PATH_PATTERNS as _BLOCKED_PATTERNS,
 )
 from singularity.scheduler._sensitive import (
