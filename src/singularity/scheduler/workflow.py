@@ -402,9 +402,70 @@ def _phase_output_path(project_id: str, filename: str) -> Path:
     return _projects_dir() / f"{project_id}.{filename}"
 
 
+def _phase_history_dir(project_id: str) -> Path:
+    """阶段产出的历史版本目录。
+
+    ⚠️ 放**子目录**而不是同级 `projects/{project_id}.{filename}.2`：同级是**平铺命名空间**，
+    `list_all()` 每轮 `glob("*.json")` 扫它，靠 `_OUTPUT_SUFFIXES` 那个 `endswith` 白名单
+    把阶段产出挡在外面 —— 而**那个白名单本来就不全**：`.qa_report.json`（`app.py` 写）
+    和 `.executable_tasks.json`（`_workflow_phases` 写）也落在这个目录里，两个都不在名单上，
+    现在每轮被读进来、再靠 `"phase" not in data` 丢掉。再往里塞历史版本，就是把这个
+    已经补得不全的名单扩成 N 份。
+    子目录 `glob("*.json")` 天然看不见；而且 `project.delete()` 会连 `projects/<id>/`
+    整棵树一起删，不留"查不到归属的孤儿"（那条注释就写在 `delete()` 里）。
+    """
+    return _projects_dir() / project_id / "history"
+
+
+def _archive_phase_output(project_id: str, filename: str, old_text: str) -> Path:
+    """把**上一版**阶段产出存进 history/，返回落盘路径。"""
+    d = _phase_history_dir(project_id)
+    d.mkdir(parents=True, exist_ok=True)
+    n = 1
+    for f in d.glob(f"{filename}.*"):
+        # 用 isdigit 挡，不用 try/except：这里不需要异常路径，而静默 except 棘轮
+        # 会把它记成一笔（`except: continue` 正是那类"出了事没人知道"的形状）。
+        tail = f.name.rsplit(".", 1)[-1]
+        if tail.isdigit():
+            n = max(n, int(tail) + 1)
+    p = d / f"{filename}.{n}"
+    p.write_text(old_text, encoding="utf-8")
+    return p
+
+
 def _save_phase_output(project_id: str, filename: str, content: str) -> Path:
-    """保存阶段产出到文件。"""
+    """保存阶段产出到文件。**覆盖前先把上一版归档进 history/**。
+
+    🔴 为什么要（2026-09-17 用户当场想看对比）：这里原来是裸 `write_text`，
+    而"打回重做"的**全部意义就是对比改进** —— 覆盖掉等于每次都在盲点。
+    实测那次 `architecture.md` 和项目 json 里的 `architecture` 同时被换掉，
+    打回前后两版只剩一版。同族的 `research.md` 一样（`research-raw` 那个入口
+    只解决"这一版看得到全文"，**不解决跨版本**）。
+
+    ⚠️ **只在内容真的变了才归档**：重跑同一阶段常常逐字相同，不比就存 = 每次重跑
+    多一份一模一样的副本。
+    ⚠️ 归档的是**上一版**、不是当前版 —— 当前版永远在主路径上（`_read_phase_output` 读它）。
+    ⚠️ 归档的是模型吐的**原文**（`architecture` 那个 dict 就是从它 `try_parse_json` 出来的），
+    比解析后的 dict 更忠实。
+    ponytail: 版本号一路往上加、不设上限（一个项目重规划几次也就几份、每份几十 KB）。
+    """
     p = _phase_output_path(project_id, filename)
+    old = None
+    try:
+        if p.exists():
+            old = p.read_text(encoding="utf-8")
+    except OSError as e:
+        # 旧版读不出来就不归档 —— 但**新内容照写**：这里不是"损坏=没有"要拦的场景，
+        # 为归档失败把这一版也丢掉才是真丢东西。
+        from singularity.scheduler import witness
+        witness.warn("workflow", f"phase_out_unreadable:{filename}:{type(e).__name__}"[:140])
+    if old is not None and old != content:
+        try:
+            _archive_phase_output(project_id, filename, old)
+        except Exception as e:      # noqa: BLE001 —— 归档塌了不该连累主路径，但不能不出声
+            from singularity.scheduler import witness
+            witness.warn("workflow", f"phase_archive_failed:{filename}:{type(e).__name__}:{e}"[:140],
+                         key="phase_archive_failed")
     p.write_text(content, encoding="utf-8")
     return p
 
