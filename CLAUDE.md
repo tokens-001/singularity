@@ -32,7 +32,11 @@
 
 ### 验证
 
-- `pytest tests/test_scheduler/ -q`（~11s，全绿基线；全量 `pytest tests/` 是 823）
+- **`make check`**（= `lint` + `test-fast`，退出码 0 = 全绿）—— **本地判据，和 CI 同一条 lint 命令**。
+  ⚠️ 2026-09-19 才修好：它原来调裸 `python3`/`ruff`，而系统 python3 没装 singularity、
+  `ruff` 只在 `.venv/bin/` ⇒ **这条"完成判据"从来跑不起来**（审计见 `docs/CI与发布审计-20260919.md`）。
+- `pytest tests/test_scheduler/ -q`（**~48s**，1670 条；全量 `pytest tests/` **1677 条**）
+  （⚠️ 2026-09-19 更正：原来这儿写"~11s / 全量 823"，是旧的）
 - `.venv/bin/python tests/test_exec_run.py`（`_exec.run()` 退出路径，桩测试不碰真 API）
 - `.venv/bin/python tests/test_review_gate.py`（门禁能不能看到改动 —— 真 git + 真快照，不 mock；桩测试测不出这个时序）
 - `.venv/bin/python tests/smoke_test.py`（走 HTTP，40 项；需先 `.venv/bin/python -m singularity.web.app` 起后端）
@@ -55,3 +59,13 @@
 它们正是 2026-09-14 §64 那个「用了没导入的名字（被 `import *` 挡住 ruff）」事故之后加的守卫，
 **跳过就等于没装**。2026-09-14 实测：本机 ruff 一直没装，那三条**从未运行过**、
 而 pytest 汇总只显示 "3 skipped"，没人会去看。（外派⑬ 报的，已装并复跑：6 条全绿。）
+
+> ⚠️ **本机 `pypi.org` 不通**（curl 返回 000；阿里云镜像 200）⇒ `pip install` 会报
+> "No matching distribution found"。要装东西加 `-i https://mirrors.aliyun.com/pypi/simple/`。
+> 2026-09-19 实测：`pytest-cov` / `mypy` / `pre-commit` 之所以一直没装上，就是因为这个。
+
+> ✅ **CI 的门 2026-09-19 才第一次全绿**（此前 120 次运行全 failure，红在第 2 步 ruff，
+> 后面 `pytest` 那几步**每次都被 skip** —— 也就是说"测试全绿"以前从没被第三方复核过）。
+> 现在 `.github/workflows/test.yml` 是 `lint` / `test` **两个 job**，别合回去。
+> lint 债已清到 0，四条豁免在 `pyproject.toml` 里、**每条都写了具体理由**。
+> **别为了让门变绿改成 `|| true` / `continue-on-error`** —— 那是把红藏起来（§78：假门比没门坏）。
