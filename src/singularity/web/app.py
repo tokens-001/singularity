@@ -19,7 +19,18 @@ from flask import Flask, Response, g, request, jsonify
 
 # ── 加载 .env ──────────────────────────────────────────────
 _ENV_PATH = Path(__file__).resolve().parents[3] / ".env"
-if _ENV_PATH.exists():
+# ⚠️ `QIDIAN_SKIP_DOTENV=1` ⇒ **不读** `.env`（测试用，设在 `tests/conftest.py`）。
+#
+# 为什么非要有这个开关：读 `.env` 发生在 **import 期**，于是
+# **「这台机器上有没有 `.env`」会静默改变测试结果**。
+# 2026-09-19 实测（根因，不是推断）：`test_dispatch_pool_gate.py` 那两条
+#   · 本机**单跑该文件** ⇒ 没 import app ⇒ 变量不在 ⇒ **红**
+#   · 本机**跑全量** ⇒ 先跑到的 `test_defense_patterns.py` import 了 app
+#     ⇒ 真 key 被塞进 `os.environ` ⇒ **绿**
+#   · **CI 里没有 `.env`**（gitignored）⇒ 怎么跑都红
+# 也就是说同一份代码在三种环境下三种结果。**这个假绿藏了很久，唯一原因是
+# CI 的门从来没跑到测试**（见 `docs/CI与发布审计-20260919.md`）。
+if not os.environ.get("QIDIAN_SKIP_DOTENV") and _ENV_PATH.exists():
     for _line in _ENV_PATH.read_text().splitlines():
         _line = _line.strip()
         if _line and not _line.startswith("#") and "=" in _line:

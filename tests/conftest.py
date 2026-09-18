@@ -2,6 +2,28 @@
 import atexit, os, shutil, tempfile, pytest
 from pathlib import Path
 
+# ═══════════════════════════════════════════════════════════════
+# 🔴 **别让测试读到真的 `.env`**（2026-09-19 补 —— 和下面那段是同一个道理）
+# ═══════════════════════════════════════════════════════════════
+# `web/app.py` 在 **import 期**把仓库根的 `.env` 读进 `os.environ`
+# （`os.environ.setdefault`）。于是「**这台机器上有没有 `.env`**」会静默改变测试结果。
+#
+# 实测（根因，不是推断）—— `test_dispatch_pool_gate.py` 那两条：
+#   · 本机**单跑该文件** ⇒ 没 import app ⇒ 变量不在 ⇒ **红**
+#   · 本机**跑全量** ⇒ 先跑到的 `test_defense_patterns.py` import 了 app
+#     ⇒ 真 key 被塞进 `os.environ` ⇒ **绿**
+#   · **CI 里没有 `.env`**（gitignored）⇒ 怎么跑都红
+# 同一份代码三种结果。**这个假绿藏了很久，唯一原因是 CI 的门从来没跑到测试**
+# （117 次全 failure，红在第 2 步 ruff，见 `docs/CI与发布审计-20260919.md`）。
+#
+# ⚠️ **必须在任何 singularity 模块被导入之前设** —— 下面第 23 行那句
+#    `from singularity.scheduler import config` 就是 import，所以它排在那句**前面**。
+#    `conftest.py` 在测试模块之前加载，够早。
+#
+# ⚠️ 这不只是"让本机和 CI 一致"：它同时挡住**测试进程里出现真 key** ——
+#    哪条测试路径真去调 API，就是真花钱。
+os.environ["QIDIAN_SKIP_DOTENV"] = "1"
+
 
 # ═══════════════════════════════════════════════════════════════
 # 🔴 **收集期也要隔离**（2026-09-18 补）—— 下面那个 autouse 夹具**只覆盖用例执行期**

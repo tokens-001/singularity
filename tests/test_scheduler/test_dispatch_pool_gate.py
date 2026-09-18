@@ -26,7 +26,33 @@
 """
 import json
 
+import pytest
+
 from singularity.scheduler import config, dispatcher, model_registry
+
+
+@pytest.fixture(autouse=True)
+def _钉住_api_key(monkeypatch):
+    """把 `DEEPSEEK_API_KEY` 钉成一个哑值 —— **必需，不是保险**。
+
+    `agent_api_available` 的最后一跳是 `bool(os.environ.get(api_key_env, ""))`
+    （`dispatcher.py:249`），而本文件只在阵容里**声明**了变量名、从没设过它的值。
+    ⇒ 没有这个夹具时，**本文件的结果取决于跑测试的那台机器上有没有这个变量**：
+
+    | 环境 | 结果 |
+    |---|---|
+    | 本机单跑本文件 | 红（没 import app，变量不在） |
+    | 本机跑全量 | **绿**（先跑到的 `test_defense_patterns.py` import 了 app，`.env` 里的真 key 被塞进 os.environ） |
+    | CI | 红（没有 `.env`，也没人 export 过） |
+
+    2026-09-19：CI 拆完 job、测试第一次真的跑起来时，**红的正是本文件这两条**，
+    而我一直以为它们在本机绿 = 在 CI 也绿。根因和完整时间线见
+    `docs/CI与发布审计-20260919.md`。
+
+    ⚠️ 用 `monkeypatch.setenv` 而不是直接写 `os.environ` —— 用例结束要能撤销干净，
+    否则又会变成"谁先跑谁污染别人"（上一版就是栽在这个形状上）。
+    """
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-not-a-real-key")
 
 
 def _seed_api():
@@ -35,6 +61,10 @@ def _seed_api():
     ⚠️ **不配的话这些测试会绿得莫名其妙**：`agent_api_available` 会因为
     "没有可用 API" 返回 False —— 真因是没 key，不是闸门。那样删掉闸门测试照样绿，
     等于什么都没钉住（本仓 §"测试要钉接线" 的原形状）。
+
+    ⚠️ 但这里只配得上**一半** —— `api_store.add(api_key_env=...)` 声明的是
+    "去读哪个环境变量"，**值还是从真环境读的**。补上另一半的是上面的
+    `_钉住_api_key` 夹具；少了它，本文件就是环境的函数。
     """
     from singularity.scheduler import api_store
     api_store.add(api_id="deepseek", provider="DeepSeek",
