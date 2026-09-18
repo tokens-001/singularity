@@ -1231,7 +1231,7 @@ def _run_integration_merge(proj) -> tuple[bool, str]:
         r = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, timeout=10, cwd=root)
         if r.returncode != 0:
             return False, f"git status 失败: {r.stderr[:100]}"
-        dirty = [l for l in (r.stdout or "").split("\n") if l.strip() and not l.startswith("??")]
+        dirty = [line for line in (r.stdout or "").split("\n") if line.strip() and not line.startswith("??")]
         if dirty:
             return False, f"工作区不干净 ({len(dirty)} 个变更)"
     except Exception as e:

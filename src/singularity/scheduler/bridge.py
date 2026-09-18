@@ -87,17 +87,17 @@ def broadcast_json(data: dict) -> int:
     return count
 
 
-_WS_LOOP: asyncio.AbstractEventLoop | None = None
+_ws_loop: asyncio.AbstractEventLoop | None = None
 _WS_THREAD: threading.Thread | None = None
 # 停服信号（见 start_ws_server 里那段说明：原来用 `await asyncio.Future()`，永不完成）
 _WS_STOP: asyncio.Event | None = None
 
 
 def _get_loop() -> asyncio.AbstractEventLoop:
-    global _WS_LOOP
-    if _WS_LOOP is None:
-        _WS_LOOP = asyncio.new_event_loop()
-    return _WS_LOOP
+    global _ws_loop
+    if _ws_loop is None:
+        _ws_loop = asyncio.new_event_loop()
+    return _ws_loop
 
 
 async def _ws_handler(ws):
@@ -145,14 +145,14 @@ async def _ws_handler(ws):
 
 def start_ws_server(host: str = "127.0.0.1", port: int = 5051):
     """在独立线程启动 WebSocket 服务器。"""
-    global _WS_THREAD, _WS_LOOP, _WS_STOP
+    global _WS_THREAD, _ws_loop, _WS_STOP
 
     async def _serve():
         import websockets
 
         from singularity.scheduler._auth import ws_allowed_origins
         global _WS_STOP
-        _WS_LOOP = asyncio.get_event_loop()
+        _ws_loop = asyncio.get_event_loop()
         _WS_STOP = asyncio.Event()
         # 同 observer 那条：回环绑定挡不住浏览器，`Origin` 才是那道门。允许项见
         # `ws_allowed_origins`（含 `None`，否则不带 Origin 的非浏览器客户端会被一起拒）。
@@ -186,7 +186,7 @@ def start_ws_server(host: str = "127.0.0.1", port: int = 5051):
 
 
 def stop_ws_server():
-    global _WS_LOOP, _WS_STOP
+    global _ws_loop, _WS_STOP
     with _ws_lock:
         for c in list(_ws_clients):
             try:
@@ -194,11 +194,11 @@ def stop_ws_server():
             except Exception:
                 pass
         _ws_clients.clear()
-    if _WS_LOOP and _WS_STOP is not None:
+    if _ws_loop and _WS_STOP is not None:
         try:
             # 让 `_serve` 正常退出 `async with` ⇒ server 被 close、端口放掉、线程自然结束。
-            # **不要**再 `call_soon_threadsafe(_WS_LOOP.stop)` —— 那正是上面那串红字的来源。
-            _WS_LOOP.call_soon_threadsafe(_WS_STOP.set)
+            # **不要**再 `call_soon_threadsafe(_ws_loop.stop)` —— 那正是上面那串红字的来源。
+            _ws_loop.call_soon_threadsafe(_WS_STOP.set)
         except Exception:
             pass
     if _WS_THREAD is not None and _WS_THREAD.is_alive():

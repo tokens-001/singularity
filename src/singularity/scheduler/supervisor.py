@@ -267,9 +267,9 @@ def _check_constraints(
         cl = rule.lower()
         for f in changed_files:
             # 约束中提到的文件是否被改了
-            if f.lower() in cl or Path(f).name.lower() in cl:
-                if "不改" in rule or "禁止" in rule or "冻结" in rule or "不可改" in rule:
-                    violations.append(f"约束'{rule}'禁改,但修改了{f}")
+            if (f.lower() in cl or Path(f).name.lower() in cl) and (
+                    "不改" in rule or "禁止" in rule or "冻结" in rule or "不可改" in rule):
+                violations.append(f"约束'{rule}'禁改,但修改了{f}")
 
     if violations:
         return CheckResult(

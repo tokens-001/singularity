@@ -811,9 +811,9 @@ def suggest_flow(project: ProjectState) -> FlowDecision | None:
 def list_all() -> list[ProjectState]:
     projects = []
     # ponytail: 跳过阶段产出文件 (traceability.json 等)
-    _OUTPUT_SUFFIXES = {".traceability.json", ".research.md", ".architecture.md", ".test-plan.md"}
+    _output_suffixes = {".traceability.json", ".research.md", ".architecture.md", ".test-plan.md"}
     for p in sorted(_projects_dir().glob("*.json"), reverse=True):
-        if any(str(p).endswith(s) for s in _OUTPUT_SUFFIXES):
+        if any(str(p).endswith(s) for s in _output_suffixes):
             continue
         try:
             data = json.loads(p.read_text(encoding="utf-8"))

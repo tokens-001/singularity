@@ -644,7 +644,7 @@ def dag_metrics() -> dict:
     # ω: 最大反链 ≈ 最大 BFS level 宽度
     # 用距离作 level，统计每层节点数
     level_counts: dict[int, int] = {}
-    for tid, d in dist.items():
+    for d in dist.values():
         level_counts[d] = level_counts.get(d, 0) + 1
     omega = max(level_counts.values()) if level_counts else 1
 

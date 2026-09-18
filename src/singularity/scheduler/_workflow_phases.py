@@ -623,7 +623,7 @@ def _validate_architecture(arch: dict) -> list[str]:
     if not isinstance(tasks, list) or len(tasks) == 0:
         issues.append("tasks 为空或格式错误")
     else:
-        for i, t in enumerate(tasks):
+        for t in tasks:
             tid = t.get("id", "?")
             for f in ["id", "title", "description", "complexity", "layer", "acceptance"]:
                 if not t.get(f):

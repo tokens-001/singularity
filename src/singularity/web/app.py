@@ -610,7 +610,7 @@ def _loop_worker():
 
                 # 项目工作流推进: 检查已完成的任务是否属于某个项目
                 try:
-                    for tid, reason, validation in results:
+                    for tid, _reason, _validation in results:
                         for proj in proj_mod.recover_all():
                             if tid not in proj.task_ids:
                                 continue

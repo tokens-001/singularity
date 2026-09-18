@@ -1097,9 +1097,9 @@ def decompose_architecture(arch_json: dict) -> list[dict]:
             # 尝试从 test_cases 匹配
             for tc_type in ("unit", "integration", "e2e"):
                 for tc in test_cases.get(tc_type, []):
-                    if tc.get("target_module", "") in title or tc.get("name", "") in title:
-                        if not acceptance:
-                            acceptance = tc.get("expected", "")
+                    if (tc.get("target_module", "") in title
+                            or tc.get("name", "") in title) and not acceptance:
+                        acceptance = tc.get("expected", "")
 
         result.append({
             "desc": f"{title}: {desc}" if title else desc,

@@ -192,9 +192,9 @@ class TaskRunner:
             })
             loop = GoalLoop(agents)
             g_result = loop.run(task, goal, max_iter=5)
-            from ._types import BatchOutput as _BO
-            from .executors.base import ExecutorResult as _ER
-            batch = _BO(ok=g_result.success, task_id=task.id,
+            from ._types import BatchOutput
+            from .executors.base import ExecutorResult
+            batch = BatchOutput(ok=g_result.success, task_id=task.id,
                         term_reason=f"goal_{'met' if g_result.success else 'exhausted'}_{g_result.iterations}iter",
                         tool_events=[], turn_count=g_result.iterations,
                         validation=val_mod.ValidationReport(
@@ -202,7 +202,7 @@ class TaskRunner:
                             action="pass" if g_result.success else "abort",
                             unverified=[f"Goal循环 {g_result.iterations}轮, 满足={g_result.success}"]))
             batch.dispatch_result = type('obj', (object,), {
-                'executor_result': _ER(success=g_result.success, raw_output=g_result.final_output),
+                'executor_result': ExecutorResult(success=g_result.success, raw_output=g_result.final_output),
                 'agent_cfg': {}, 'level': ''})()
         else:
             # 两档后: 从全池选 agent, 不按层级

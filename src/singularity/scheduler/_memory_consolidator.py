@@ -124,7 +124,7 @@ def consolidate_memory() -> int:
     if _consolidate_calls > 1 and now - getattr(consolidate_memory, '_last_run', 0) < 300:
         return 0
     consolidate_memory._last_run = now
-    _MAX_LLM = 5
+    _max_llm = 5
 
     if _heavy_due():
         # ⚠️ 这两个原来**没导入** —— `auto_maintain`/`system2_extract` 定义在
@@ -172,9 +172,9 @@ def consolidate_memory() -> int:
         added = 0
         tier3_all = [c for c in candidates if 0.55 <= c.get("semantic_sim", 0) < 0.85]
         tier3_capped = set()
-        if len(tier3_all) > _MAX_LLM:
+        if len(tier3_all) > _max_llm:
             tier3_all.sort(key=lambda x: -x["semantic_sim"])
-            tier3_capped = {id(c) for c in tier3_all[_MAX_LLM:]}
+            tier3_capped = {id(c) for c in tier3_all[_max_llm:]}
 
         for c in candidates:
             sim = c["semantic_sim"]

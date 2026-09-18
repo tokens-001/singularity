@@ -251,8 +251,8 @@ def purge_old_snapshot_meta(keep: int = 200) -> int:
     week_ago = now - 7 * 86400
     kept = 0
     per_group: defaultdict[str, int] = defaultdict(int)
-    MAX_PER_GROUP = 30  # 每组最多保留
-    OVERALL_CAP = 500   # 总量上限
+    max_per_group = 30  # 每组最多保留
+    overall_cap = 500   # 总量上限
 
     # 从新到老遍历，决定哪些保留
     to_keep = set()
@@ -260,7 +260,7 @@ def purge_old_snapshot_meta(keep: int = 200) -> int:
         group = f.stem.split("_", 1)[1] if "_" in f.stem else f.stem
         mtime = _os.path.getmtime(f)
         # 保留条件: 7天内 OR 该组未满30个 OR 总量未满500
-        if mtime > week_ago or per_group[group] < MAX_PER_GROUP or kept < OVERALL_CAP:
+        if mtime > week_ago or per_group[group] < max_per_group or kept < overall_cap:
             to_keep.add(f)
             kept += 1
             per_group[group] += 1

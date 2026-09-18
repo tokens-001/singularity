@@ -128,9 +128,9 @@ def estimate_tokens(subtasks: list[dict], parent_desc: str = "") -> dict:
        level_breakdown: {level: {tokens}}, parent_tokens}
     """
     # 估算参数
-    TOKENS_PER_CHAR = 0.6          # 中英混合平均
-    OVERHEAD = {"any": 2000}       # 每任务固定开销 (两档后统一 any; 未知 level 走默认 2000)
-    RESPONSE_MULTIPLIER = 2.0      # prompt + completion + retry buffer
+    tokens_per_char = 0.6          # 中英混合平均
+    overhead = {"any": 2000}       # 每任务固定开销 (两档后统一 any; 未知 level 走默认 2000)
+    response_multiplier = 2.0      # prompt + completion + retry buffer
 
     # 只估 token，**不估钱**。这里根本不知道子任务会落到哪个模型上，
     # 而各模型单价差几十倍 —— 任何"均价"都是编的（原来是 `total/1e6*0.5`，
@@ -142,8 +142,8 @@ def estimate_tokens(subtasks: list[dict], parent_desc: str = "") -> dict:
         desc = st.get("desc", "")
         level = st.get("phase_hint", "")
         chars = len(desc)
-        tokens = int(chars * TOKENS_PER_CHAR + OVERHEAD.get(level, 2000))
-        tokens = int(tokens * RESPONSE_MULTIPLIER)
+        tokens = int(chars * tokens_per_char + overhead.get(level, 2000))
+        tokens = int(tokens * response_multiplier)
         total += tokens
         per_task.append({"desc": desc[:80], "level": level, "tokens": tokens})
         if level not in breakdown:
@@ -151,7 +151,7 @@ def estimate_tokens(subtasks: list[dict], parent_desc: str = "") -> dict:
         breakdown[level]["tokens"] += tokens
 
     # 父任务 tokens (调度开销)
-    parent_tokens = int(len(parent_desc) * TOKENS_PER_CHAR * RESPONSE_MULTIPLIER) if parent_desc else 0
+    parent_tokens = int(len(parent_desc) * tokens_per_char * response_multiplier) if parent_desc else 0
 
     return {
         "total_tokens": total,

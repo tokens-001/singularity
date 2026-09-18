@@ -423,14 +423,14 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
     # 真正有效的是辩论轮（盲评 +3~5 分），别把两者搞混。
     # QIDIAN_COMMITTEE_PERSPECTIVE=1 可重新打开（保留做后续 A/B）。
     if os.environ.get("QIDIAN_COMMITTEE_PERSPECTIVE") == "1":
-        _PERSPECTIVES = [
+        _perspectives = [
             "你关注: 风险点、边界条件、回滚策略。方案必须稳健,不能炸。",
             "你关注: 有没有完全不同的思路?业界最新实践是什么?大胆提替代方案。",
             "你关注: 这方案能落地吗?需要多少个文件?现有代码风格兼容吗?复杂度实际是多少?",
             "你关注: 和现有架构的一致性。不要引入不兼容的变更。",
         ]
     else:
-        _PERSPECTIVES = [None, None, None, None]
+        _perspectives = [None, None, None, None]
 
     # 并行派发初稿 (禁工具, 直接输出 JSON 方案)
     outputs = []
@@ -451,7 +451,7 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
             full_task = task
             if feedback:
                 full_task = f"{task}\n\n---\n[上一轮校验反馈]\n{feedback}"
-            perspective = _PERSPECTIVES[i % len(_PERSPECTIVES)]
+            perspective = _perspectives[i % len(_perspectives)]
             if perspective:
                 full_task = f"{full_task}\n\n[你的视角] {perspective}"
             futures[_ex.submit(_run_no_tools, a, full_task,

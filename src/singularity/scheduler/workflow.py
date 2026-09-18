@@ -681,14 +681,14 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     # 运行前提：人在 **GATE2 批架构时就看过这些命令**（面板上明写"批准后会实际执行"）。
     # 安全护栏在 `_machine_checks`：argv 数组不过 shell / argv[0] 白名单 /
     # 解释器只许 -m pytest / cwd 锁项目仓 / 超时 / 环境洗掉 key 与代理。
-    _MAX_MACHINE_CHECKS = 10      # 有上限就明说，别静默截断
+    _max_machine_checks = 10      # 有上限就明说，别静默截断
     try:
         from singularity.scheduler import _machine_checks as mchk
         runnable = [c for c in (constraints or [])
                     if isinstance(c, dict) and mchk.validate_check(c.get("check"))[0]]
         if runnable:
             root = _phase_cwd(project)
-            picked, dropped = runnable[:_MAX_MACHINE_CHECKS], runnable[_MAX_MACHINE_CHECKS:]
+            picked, dropped = runnable[:_max_machine_checks], runnable[_max_machine_checks:]
             results = []
             for c in picked:
                 r = mchk.run_check(c.get("check"), root)
@@ -696,7 +696,7 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
             passed = sum(1 for r in results if r.get("passed"))
             note = f"机械检查 {passed}/{len(results)} 条通过"
             if dropped:
-                note += f"（另有 {len(dropped)} 条超出上限 {_MAX_MACHINE_CHECKS}，本轮未跑）"
+                note += f"（另有 {len(dropped)} 条超出上限 {_max_machine_checks}，本轮未跑）"
             project.issues = [i for i in project.issues if i.get("type") != "machine_checks"]
             project.issues.append({"type": "machine_checks", "detail": note})
             project.add_lineage({"action": "machine_checks", "ran": len(results),
@@ -884,7 +884,7 @@ def _flag_file_overlap(project: ProjectState) -> None:
             tasks.append((tid, t))
     mine = {tid: _files_named_in(getattr(t, "description", "")) for tid, t in tasks}
     overlaps = []
-    for tid, t in tasks:
+    for tid, _t in tasks:
         changed = _changed_files_of(tid)
         if not changed:
             continue

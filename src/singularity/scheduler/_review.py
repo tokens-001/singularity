@@ -144,7 +144,7 @@ def _is_trivial_change(changed: list[str], cwd: str, base_ref: str = "") -> bool
     try:
         r = subprocess.run(_diff_cmd(base_ref, changed[0]),
                          capture_output=True, text=True, timeout=10, cwd=cwd)
-        line_count = len([l for l in (r.stdout or "").split("\n") if l])
+        line_count = len([line for line in (r.stdout or "").split("\n") if line])
         return line_count < 50
     except Exception:
         return False

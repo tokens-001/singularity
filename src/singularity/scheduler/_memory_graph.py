@@ -669,7 +669,7 @@ def find_candidate_latent_edges() -> list[dict]:
             file_tasks[fp].append(tid)
 
     seen_pairs: set[tuple[str, str]] = set()
-    for fp, tid_list in file_tasks.items():
+    for _fp, tid_list in file_tasks.items():
         for i in range(len(tid_list)):
             for j in range(i + 1, len(tid_list)):
                 pair = tuple(sorted([tid_list[i], tid_list[j]]))

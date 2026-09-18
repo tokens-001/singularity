@@ -255,15 +255,15 @@ def project_run_phase(project_id: str, phase_name: str = "",
     # run_phase 对这几档只会"等人"就 break（`workflow.run_phase` 的 TEMPLATE / GATE 分支），
     # 后台线程跑了等于没跑 —— 而返回 `{"ok":true,"started":true}` 会让调用方以为开始了。
     # 防御模式 §28：**返回 200 不等于动了手**。（前端没调这个接口，改它不影响 UI。）
-    _WAITING = {
+    _waiting = {
         "template": "template 阶段不自推 —— 先填好需求，用 POST /api/projects/<id>/start 立项",
         "gate1": "gate1 是人工门，用 POST /api/projects/<id>/gate-confirm 批",
         "gate2": "gate2 是人工门，用 POST /api/projects/<id>/gate-confirm 批",
         "gate3": "gate3 是人工门，用 POST /api/projects/<id>/gate-confirm 批",
     }
-    if phase in _WAITING:
+    if phase in _waiting:
         return {"ok": False, "phase": phase, "started": False,
-                "error": _WAITING[phase]}, 409
+                "error": _waiting[phase]}, 409
 
     agents = disp_mod.load_agents()
     if not _start_background(project_id, phase, wf_mod.run_phase, agents):

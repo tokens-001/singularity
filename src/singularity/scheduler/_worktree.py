@@ -60,10 +60,8 @@ def _release_ref(task_id: str, repo_root=None) -> bool:
         ["git", "update-ref", "-d", ref],
         cwd=str(root), capture_output=True, timeout=15,
     )
-    if r.returncode != 0:
-        # 可能 ref 已不存在（被 gc 或已释放），不算错误
-        return False
-    return True
+    # returncode != 0 ⇒ 可能 ref 已不存在（被 gc 或已释放），不算错误
+    return r.returncode == 0
 
 
 def cleanup_task_artifacts(task_id: str, repo_root) -> int:

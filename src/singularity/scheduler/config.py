@@ -116,9 +116,9 @@ def ensure_dirs() -> None:
     """启动前建好产物目录; 剩余空间不足 fail fast (审计 4.4)。"""
     import shutil
 
-    MEMORY_DIR = QIDIAN_DIR / "memory"
-    WORKTREES_DIR = QIDIAN_DIR / "worktrees"
-    for d in (QIDIAN_DIR, SNAPSHOT_DIR, PATCH_DIR, TRACE_DIR, HOLD_DIR, CANCEL_DIR, PAUSE_DIR, PARKED_DIR, MEMORY_DIR, WORKTREES_DIR, PARTIAL_USAGE_DIR):
+    memory_dir = QIDIAN_DIR / "memory"
+    worktrees_dir = QIDIAN_DIR / "worktrees"
+    for d in (QIDIAN_DIR, SNAPSHOT_DIR, PATCH_DIR, TRACE_DIR, HOLD_DIR, CANCEL_DIR, PAUSE_DIR, PARKED_DIR, memory_dir, worktrees_dir, PARTIAL_USAGE_DIR):
         d.mkdir(parents=True, exist_ok=True)
     free = shutil.disk_usage(QIDIAN_DIR).free / (1024 * 1024)
     if free < MIN_DISK_MB:

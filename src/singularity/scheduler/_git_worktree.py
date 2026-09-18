@@ -301,8 +301,8 @@ def _cleanup_worktree_dirs(root: Path) -> int:
     if known.returncode != 0:
         return 0
     # git 输出 realpath，必须同口径比
-    known_paths = {os.path.realpath(l.split(maxsplit=1)[1])
-                   for l in known.stdout.splitlines() if l.startswith("worktree ")}
+    known_paths = {os.path.realpath(line.split(maxsplit=1)[1])
+                   for line in known.stdout.splitlines() if line.startswith("worktree ")}
     cleaned = 0
     for d in wtd.iterdir():
         if d.is_dir() and os.path.realpath(str(d)) not in known_paths:

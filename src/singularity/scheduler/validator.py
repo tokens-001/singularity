@@ -385,8 +385,8 @@ def _hard_diff_rules(changed_files: list[str], diff_text: str = "", cwd=None, ba
                             timeout=15, cwd=str(root))
                 if r.returncode == 0:
                     diff = r.stdout
-                    removed_auth = [l for l in diff.splitlines()
-                                   if l.startswith("-") and any(kw in l for kw in
+                    removed_auth = [line for line in diff.splitlines()
+                                   if line.startswith("-") and any(kw in line for kw in
                                    ("require_auth", "csrf_token", "require_write", "permission"))]
                     if removed_auth:
                         issues.append({"severity": "warning",
