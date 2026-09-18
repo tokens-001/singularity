@@ -559,8 +559,60 @@ def delete(project_id: str) -> bool:
     return deleted
 
 
+# `updated_at` 与文件 mtime 之间允许的抖动（秒）。正常情形下 mtime ≥ updated_at，
+# 差的就是 `tmp.replace()` 那点写延迟（毫秒级）；取 1 秒是留给慢盘 / 高负载的余量。
+# ⚠️ 代价：**两次写入相隔不到 1 秒的并发写会漏报**。这是有意的取舍 ——
+# 误报会把 witness 糊成筛子（本仓踩过），而漏报的代价只是"少看见一次"。
+_STALE_WRITE_SKEW_S = 1.0
+
+
+def _warn_if_stale_write(project: ProjectState, p: Path) -> None:
+    """写盘前问一句：**盘上那份是不是比我手里这份新？**
+
+    `save()` 是 `to_dict()` **整份覆盖写** —— 没有字段级合并、没有版本号。
+    所以"我手里这份比盘上旧"的时候一写，就把他这期间的改动**整份抹掉**，
+    而被抹掉的那一方常常是**人的动作**（`owner_confirm` 里点的批准）。
+
+    **判据不新增字段**，拿已有的持久化字段 `updated_at` 当版本令牌：
+      · 盘上文件的 mtime = "盘上最后一次被写的时刻"
+      · `project.updated_at` = "我这份已知的最后一次写的时刻"
+      · 盘上明显更新 ⇒ 中间有人写过 ⇒ 我这一写会抹掉他
+    为什么不加字段：`to_dict()` 派生自 `dataclasses.fields()`（见它的 docstring），
+    加一个字段就会被写进盘；而存量文件没有它，`from_dict()` 又会把它当未知键
+    丢掉并告警 —— 为一个运行时概念污染持久化格式，不划算。
+
+    ⚠️ **只报不改**（本仓一贯做法，见 `_gate3_admission` 那族）。拦需要"合并"或
+    "重放"，动的是状态机核心，代价远大于收益；而**这一类今天完全是静默的** ——
+    先让它可见，再谈拦不拦。
+
+    ⚠️ `updated_at` 为 0（手工构造的 / 从没存过盘）⇒ **没有基线可比，直接放过**，
+    否则任何"库存文件 + 新建对象"的正常路径都会误报。
+    """
+    if not project.updated_at:
+        return
+    # 盘上还没有（首次保存）⇒ 没得比。
+    # ⚠️ 紧跟着的 `stat()` **故意不包 try**：`exists()` 与 `stat()` 之间文件被删，
+    # 是极窄的 TOCTOU；那时**上抛**比静默放过好 —— 本仓对静默 except 的态度见
+    # `tests/test_scheduler/test_no_silent_except.py` 那道棘轮（"要么出声、要么上抛"）。
+    if not p.exists():
+        return
+    disk_mtime = p.stat().st_mtime
+    if disk_mtime <= project.updated_at + _STALE_WRITE_SKEW_S:
+        return
+    # 不包 try：`witness.warn` 自己内部就接住一切（它还留了 logging 第二通道），
+    # 外面再包一层只会把"告警系统自己挂了"这件事也盖住。
+    from singularity.scheduler import witness
+    phase = project.phase.value if hasattr(project.phase, "value") else str(project.phase)
+    witness.warn(
+        "project",
+        f"stale_write:{project.id}: 盘上比手里这份新 "
+        f"{disk_mtime - project.updated_at:.1f}s (phase={phase}) "
+        f"—— 这一写会抹掉这期间别人的改动"[:200],
+        key="stale_write",
+    )
+
+
 def save(project: ProjectState) -> None:
-    project.updated_at = time.time()
     p = _path(project.id)
     # tmp 路径带 pid: _LOCK 是 threading 锁, 只挡得住同进程的线程 —— 而后端调度循环
     # 和 tests/integration/role_probe.py 这类**独立进程**会同时 save 同一个项目。
@@ -571,6 +623,10 @@ def save(project: ProjectState) -> None:
     # 锁仍需要: 同进程内多线程(A 调度循环 / B _merge_executor / C Flask 请求线程)
     # 会共用同一个 pid 的 tmp。tracker.py 同类保存已加锁, 这里当初漏了。
     with _LOCK:
+        _warn_if_stale_write(project, p)
+        # ⚠️ **必须在上面那道检查之后**才更新 —— `updated_at` 就是它的版本令牌，
+        # 先更新的话令牌永远是"现在"，检查恒不触发（自己把判据废掉）。
+        project.updated_at = time.time()
         tmp.write_text(
             json.dumps(project.to_dict(), ensure_ascii=False, indent=2),
             encoding="utf-8",
