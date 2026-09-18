@@ -205,7 +205,7 @@ def project_gate_confirm(project_id: str, gate: str = "", decision: str = "",
             from . import workflow as wf_mod
             from . import dispatcher as disp_mod
             _start_background(project_id, "planning", wf_mod.run_phase,
-                              proj, disp_mod.load_agents())
+                              disp_mod.load_agents())
             return {"ok": True, "gate": gate, "decision": "approved",
                     "next_phase": next_p.value, "started_phase": "planning"}, 200
         return {"ok": True, "gate": gate, "decision": "approved",
@@ -238,7 +238,7 @@ def project_gate_confirm(project_id: str, gate: str = "", decision: str = "",
             from . import workflow as wf_mod
             from . import dispatcher as disp_mod
             started = _start_background(project_id, proj.phase.value,
-                                        wf_mod.run_phase, proj,
+                                        wf_mod.run_phase,
                                         disp_mod.load_agents())
             resp["started"] = started
             if not started:
@@ -278,7 +278,7 @@ def project_run_phase(project_id: str, phase_name: str = "",
                 "error": _WAITING[phase]}, 409
 
     agents = disp_mod.load_agents()
-    if not _start_background(project_id, phase, wf_mod.run_phase, proj, agents):
+    if not _start_background(project_id, phase, wf_mod.run_phase, agents):
         return {"ok": True, "phase": phase, "running": True,
                 "note": "该项目已有阶段在跑，本次未重复启动"}, 200
     if push_event:
@@ -294,8 +294,25 @@ _RUNNING_PHASES: set[str] = set()
 _PHASE_LOCK = threading.Lock()
 
 
-def _start_background(project_id: str, label: str, fn, *args) -> bool:
-    """在后台线程跑 fn(*args)。已有同名项目在跑 → 返回 False（不重复启动）。"""
+def _start_background(project_id: str, label: str, fn, agents: dict) -> bool:
+    """在后台线程跑 `fn(proj, agents)`。已有同名项目在跑 → 返回 False（不重复启动）。
+
+    ⚠️ **收 `project_id`，不收 `proj` 对象**（2026-09-18 外派评审第二轮坐实）。
+
+    原来四个调用点都把**请求线程 `load()` 出来的那个对象**直接交进后台线程 ——
+    而这线程是**分钟级**的（`run_phase` 里可能跑多模型委员会，实测 621 秒）。
+    而 `project.save()` 是 `to_dict()` **整份覆盖写**：没有字段级合并、没有版本号、
+    也不检查"盘上那份是不是比我新"。⇒ 后台线程一存盘，就把这整段时间里**别人写的一切**
+    （`owner_confirm` 里人的批准、`review_failures`/`integrate_failures` 的棘轮复位、
+    `task_ids`、`issues`、`phase`）**整份退回**；而 `set_phase` 还会给这次倒退
+    记一条 lineage —— **轨迹上看起来像有人推了它**。
+
+    隔壁 `orchestrator._run_integration_merge_async` 早就是这么写的（收 id、进线程
+    再 `load()`），注释里写明就是为这件事。**两条后台路，这条对齐那条。**
+
+    ⚠️ 这**只治"传对象"这一条路**，治不了"两个写入者各自 load 再整份 save" ——
+    那是同一个根的另一半，见 `docs/外派评审-第二轮-20260918.md` §S1。
+    """
     with _PHASE_LOCK:
         if project_id in _RUNNING_PHASES:
             return False
@@ -303,7 +320,16 @@ def _start_background(project_id: str, label: str, fn, *args) -> bool:
 
     def _worker():
         try:
-            fn(*args)
+            # **进线程之后再 load** —— 拿到的是"现在"那份，不是请求线程那份快照。
+            from . import project as proj_mod
+            proj = proj_mod.load(project_id)
+            if proj is None:
+                # 排队期间项目被删了。出声，别拿 None 去喂 fn（那会是一个
+                # 只在后台线程里炸、且和"没启动"长得一样的失败）。
+                witness.warn("workflow", f"{label}:project_gone:{project_id}"[:120],
+                             key="background_project_gone")
+                return
+            fn(proj, agents)
         except Exception as e:
             from singularity.scheduler import witness as _w
             _w.warn("workflow", f"{label}:{type(e).__name__}:{e}"[:120])
@@ -325,7 +351,7 @@ def project_start(project_id: str, push_event=None) -> tuple[dict, int]:
         return {"error": "项目不存在"}, 404
     agents = disp_mod.load_agents()
     if not _start_background(project_id, "start_workflow",
-                             wf_mod.start_project_workflow, proj, agents):
+                             wf_mod.start_project_workflow, agents):
         return {"ok": True, "running": True,
                 "note": "该项目已有流程在跑，本次未重复启动"}, 200
     if push_event:
