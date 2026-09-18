@@ -96,7 +96,7 @@ class ProjectState:
     lineage: list[dict] = field(default_factory=list)               # 血缘日志
     handoffs: list[dict] = field(default_factory=list)              # Agent 交接记录
     token_budget_total: float = 5.0        # $ (默认 $5)
-    fix_round: int = 0                      # 内循环修复轮次(上限3)
+    fix_round: int = 0                      # 内循环修复轮次 —— ⚠️ **无实现**：全仓只有 `= 0`，没有 `+= 1`，恒为 0
     review_failures: int = 0                # D1: 审查自动修失败计数 (上限 _REVIEW_MAX_AUTO_FIX)
     integrate_failures: int = 0             # D2: 集成合并失败计数 (上限 _INTEGRATE_MAX_RETRIES)
 

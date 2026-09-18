@@ -17,6 +17,18 @@ const GATE_LABELS: Record<string, string> = { '1': '定义完成·请审核PRD',
  * ⚠️ 短标签（`Projects.tsx` 的 `gate2:'G2确认'`）写死不碍事，**长文案写死才是误导**。
  */
 export function gateCopy(gateNum: string, info: any): { label: string; reason?: string } {
+  // **GATE3 也要读 lineage**（2026-09-19）：集成合并有两种"通过" ——
+  // 真跑过测试，和**项目里压根没有测试可跑**（pytest 退 5）。后端已在
+  // `orchestrator._note_integration` 记了结构化留痕，这里把它摆到门上，
+  // 否则「测过了」和「没测」在人眼里一模一样（本仓反复咬人的形状）。
+  // ⚠️ 判据同样是**状态不是措辞**：认 `tests_ran` 字段，不匹配 detail 文案。
+  if (gateNum === '3') {
+    const rows = Array.isArray(info?.lineage) ? info.lineage : []
+    const merged = [...rows].reverse().find((e: any) => e?.action === 'integration_merge')
+    return merged?.tests_ran === false
+      ? { label: '⚠️ 本轮集成没跑到测试就过了 —— 交付物里没有集成证据', reason: '' }
+      : { label: GATE_LABELS['3'], reason: '' }
+  }
   if (gateNum !== '2') return { label: GATE_LABELS[gateNum] || '等待审核', reason: '' }
   if (info?.owner_confirm?.gate2 !== 'approved') return { label: GATE_LABELS['2'], reason: '' }
   const entries = Array.isArray(info?.lineage) ? info.lineage : []

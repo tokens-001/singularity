@@ -174,3 +174,77 @@ def test_退一步全绿就通过(tmp_path, monkeypatch):
     seen = _stub_subprocess_seq(monkeypatch, [5, 0])
     ok, detail = orch._run_integration_merge(p)
     assert ok is True and len(seen["argv"]) == 2, (ok, detail)
+
+
+# ═══════════════════════════════════════════════════════════
+# 「集成通过」有两条来路 —— 真跑过测试 / 项目里压根没有测试可跑。
+# 后端只回 `ok` 的话这两者在门上长得一模一样（2026-09-19，外派评审 ③）。
+# ═══════════════════════════════════════════════════════════
+
+def _merge_note(p):
+    """取最后一次集成留痕。"""
+    rows = [e for e in (p.lineage or []) if e.get("action") == "integration_merge"]
+    assert rows, f"一条集成留痕都没记 —— 门上读不到「这轮跑没跑到测试」：{p.lineage}"
+    return rows[-1]
+
+
+def test_真跑过测试_留痕说跑到了(tmp_path, monkeypatch):
+    """**对照**：跑过就是跑过，detail 不许带上"没跑到"那句话。"""
+    p, _ = _mk(tmp_path, monkeypatch, [{"name": "test_x"}])
+    _stub_subprocess(monkeypatch, pytest_rc=0)
+    ok, detail = orch._run_integration_merge(p)
+
+    assert ok is True, detail
+    assert "没跑到" not in detail, f"跑过了却说没跑 —— 反着撒谎：{detail}"
+    assert _merge_note(p)["tests_ran"] is True, p.lineage
+
+
+def test_项目里没有测试_留痕说没跑到(tmp_path, monkeypatch):
+    """两条 pytest 都退 5（清单里的名字选不中 + 项目里一条测试都没有）⇒ 放行但**留痕**。
+
+    这条正是 2026-09-17 真机的处境：8 个集成用例压根没跑，报告上写着"集成通过"。
+    """
+    monkeypatch.setattr("singularity.scheduler.witness.warn", lambda *a, **k: None)
+    p, _ = _mk(tmp_path, monkeypatch, [{"name": "parse_ts 时区归一化"}])
+    _stub_subprocess_seq(monkeypatch, [5, 5])
+
+    ok, detail = orch._run_integration_merge(p)
+
+    assert ok is True, f"退 5 不该判失败（名字一变就误伤一整轮交付）：{detail}"
+    assert "没跑到" in detail, f"没跑测试却说得跟跑过一样：{detail}"
+    assert _merge_note(p)["tests_ran"] is False, p.lineage
+
+
+def test_清单里没声明集成用例_也留痕说没跑到(tmp_path, monkeypatch):
+    """`integration: []` ⇒ 压根没进过测试分支。**以前这种"没测"完全看不出来。**"""
+    p, _ = _mk(tmp_path, monkeypatch, [])
+    seen = _stub_subprocess(monkeypatch, pytest_rc=1)     # 真跑了就会红
+    ok, detail = orch._run_integration_merge(p)
+
+    assert ok is True and seen["pytest_argv"] is None, "没有集成用例却跑了 pytest"
+    assert "没跑到" in detail, detail
+    assert _merge_note(p)["tests_ran"] is False, p.lineage
+
+
+def test_调用方把detail摆到门上_不再写死(tmp_path, monkeypatch):
+    """**接线**：`_run_integration_merge_async` 的 ok 分支原来写死「集成合并通过」，
+    把刚拿到的那个区别当场丢掉 ⇒ 门上看不见。
+
+    ⚠️ 判据钉在**门上的理由**（`set_phase` 写进 lineage 的那条）上，不是"函数返回了什么"
+    —— 只测 `_run_integration_merge` 的话，调用方那行写死照样绿（假接线）。
+    """
+    p, _ = _mk(tmp_path, monkeypatch, [{"name": "test_x"}])
+    monkeypatch.setattr(orch, "_merge_inflight", set())
+    monkeypatch.setattr(proj_mod, "load", lambda _pid: p)
+    monkeypatch.setattr(proj_mod, "save", lambda _p: None)
+    monkeypatch.setattr(orch, "_run_integration_merge", lambda _p: (
+        True, "集成合并通过（这一轮没跑到集成测试）"))
+    from singularity.scheduler import workflow as wf
+    monkeypatch.setattr(wf, "run_test_fix_loop", lambda proj, agents: "ok")
+
+    orch._run_integration_merge_async(p.id, {})
+
+    assert p.phase == proj_mod.Phase.REVIEWING, p.phase
+    reason = p.lineage[-1].get("reason", "")
+    assert "没跑到" in reason, (
+        f"调用方又把 detail 丢了 —— 门上读到的还是那句写死的「集成合并通过」：{p.lineage[-1]}")

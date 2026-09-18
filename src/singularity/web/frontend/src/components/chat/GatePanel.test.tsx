@@ -232,6 +232,49 @@ describe('GATE2 兜底升上来时要说真话', () => {
 })
 
 /**
+ * GATE3 **两种"集成通过"长得一样** —— 真跑过测试，和项目里压根没有测试可跑
+ * （pytest 退 5）。后端 `orchestrator._note_integration` 记了 `tests_ran` 这道留痕，
+ * 这里把它摆到门上；不读它的话「测过了」和「没测」在人眼里一样，
+ * 而 GATE3 正是**唯一**决定放不放行的那个点。
+ */
+describe('GATE3 集成没跑到测试要说真话', () => {
+  const 留痕 = (tests_ran: boolean) => ({
+    lineage: [{ action: 'integration_merge', ok: true, tests_ran }],
+  })
+
+  it('真跑过测试 ⇒ 还是原来那句（别把修法改宽成谁都拦）', () => {
+    expect(gateCopy('3', 留痕(true)).label).toBe('验收完成·请审核交付物')
+  })
+
+  it('没跑到测试 ⇒ 改口', () => {
+    const c = gateCopy('3', 留痕(false))
+    expect(c.label).toContain('没跑到测试')
+    expect(c.label).not.toContain('验收完成·请审核交付物')
+  })
+
+  it('判据是字段不是措辞 —— 只有 tests_ran 才改口', () => {
+    // 同一条留痕，措辞换成"没测试"但字段是 true ⇒ 不许改口（文案会变，状态不会）
+    const c = gateCopy('3', { lineage: [
+      { action: 'integration_merge', ok: true, tests_ran: true, detail: '项目里没有测试可跑' },
+    ]})
+    expect(c.label).toBe('验收完成·请审核交付物')
+  })
+
+  it('老项目没有这条留痕 ⇒ 按原样显示', () => {
+    expect(gateCopy('3', { lineage: [{ action: 'phase', to: 'gate3' }] }).label)
+      .toBe('验收完成·请审核交付物')
+    expect(() => gateCopy('3', { lineage: '不是数组' })).not.toThrow()
+  })
+
+  it('面板上真的渲染出来了（接线，不只是函数对）', () => {
+    const text = render(<GatePanel info={留痕(false)} gateNum="3" gatePhase="gate3"
+                                   onGate={() => {}} />)
+    expect(text).toContain('没跑到测试')
+    expect(text).not.toContain('验收完成·请审核交付物')
+  })
+})
+
+/**
  * 调研报告**解析失败时不能是个空框** —— 2026-09-17 真机，用户原话「我怎么不能看报告」。
  *
  * 模型吐的 JSON 坏了（字符串里带裸换行）⇒ 后端 `try_parse_json` 走兜底

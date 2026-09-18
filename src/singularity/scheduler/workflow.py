@@ -132,7 +132,8 @@ Schema 规则:
 - 字段顺序就是输出顺序: tasks/risks 是下游拆任务唯一的依据, 先写它们 ——
   长输出万一被截断, 丢的必须是长尾而不是命根子
 - tasks 至少 1 个, 最多 20 个
-- complexity: low→廉价层, medium→中档层, high→强力层
+- complexity: 必填(low|medium|high), **只作记录** —— 两档已合并成单档,
+  所有任务**同池选人**, 填 low 不会给你派更便宜的模型。别为了选模型而调它
 - layer 标注任务所属层: frontend/backend/data/devops
 - depends_on 填其他任务的 id, 可为空数组
 - 每个任务改不相交的文件 (并行 merge 的前提)

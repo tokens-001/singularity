@@ -1167,12 +1167,15 @@ def _run_integration_merge_async(project_id: str, agents: dict) -> None:
                     "ts": time.time(), "task_id": proj.id,
                 })
             else:
-                proj.set_phase(proj_mod.Phase.REVIEWING, "集成合并通过")
+                # 用 `detail` 而不是写死一句话 —— 它区分得开"跑过测试"和
+                # "项目里没测试可跑"（`_note_integration`）。写死等于把刚拿到的
+                # 那个区别当场丢掉。
+                proj.set_phase(proj_mod.Phase.REVIEWING, detail)
                 proj_mod.save(proj)
                 from singularity.scheduler.workflow import run_test_fix_loop
                 msg = run_test_fix_loop(proj, agents)
                 _pending_sse_events.append({
-                    "kind": "system", "msg": f"集成合并通过 → REVIEWING {msg[:120]}",
+                    "kind": "system", "msg": f"{detail} → REVIEWING {msg[:120]}",
                     "ts": time.time(), "task_id": proj.id,
                 })
         else:
@@ -1235,6 +1238,11 @@ def _run_integration_merge(proj) -> tuple[bool, str]:
     except Exception as e:
         return False, f"git status 异常: {e}"
 
+    # 这轮集成**到底跑没跑到测试**。三种"没跑到"的处境（清单缺失 / 清单里没声明
+    # 用例 / 用例没写 name）下面各有一条告警，但**对门外的人来说它们是同一件事**：
+    # 交付物里没有集成证据。所以留痕只记这个布尔。
+    tests_ran = False
+
     # 2) 集成测试: 跑 test_cases.json 中**声明的** integration 用例
     tc_path = _Path(root) / "test_cases.json"
     if tc_path.exists():
@@ -1284,9 +1292,10 @@ def _run_integration_merge(proj) -> tuple[bool, str]:
                             witness.warn("orch",
                                          f"integration_no_tests_at_all:{root}"[:200],
                                          key="integration_no_tests")
-                            return True, "集成合并通过（项目里没有测试可跑）"
+                            return True, _note_integration(proj, tests_ran=False)
                     if r.returncode != 0:
                         return False, f"集成测试失败: {(r.stdout+r.stderr)[:200]}"
+                    tests_ran = True
         except Exception as e:
             return False, f"集成测试异常: {e}"
 
@@ -1302,7 +1311,30 @@ def _run_integration_merge(proj) -> tuple[bool, str]:
         except Exception as e:
             return False, f"冒烟构建异常: {e}"
 
-    return True, "集成合并通过"
+    return True, _note_integration(proj, tests_ran)
+
+
+def _note_integration(proj, tests_ran: bool) -> str:
+    """集成合并通过时留一条**结构化**痕，返回给人看的 detail。
+
+    为什么要有：`return True` 有两条完全不同的来路 —— **真跑过测试**，和
+    **项目里压根没有测试可跑**（pytest 退 5）。调用方只看 `ok` ⇒ 两者在界面上
+    一模一样，"测过了"和"没测"分不开（本仓反复咬人的形状）。见 `_run_integration_merge`。
+
+    ⚠️ **进 lineage，不进 `proj.issues`**：issues 在 `run_test_fix_loop` 开头被整体
+    清空（`workflow.py:497`），而集成合并**紧接着**就调它 ⇒ 放那儿活不到 GATE3。
+    这条教训 `workflow.py:1084` 已经写过一次。
+
+    ⚠️ 前端（`GatePanel.gateCopy`）**按 `tests_ran` 这个字段判**，不按 detail 的措辞
+    —— 文案会变，状态不会。
+    """
+    try:
+        proj.add_lineage({"action": "integration_merge", "ok": True,
+                          "tests_ran": bool(tests_ran)})
+    except Exception as e:      # noqa: BLE001
+        # 留痕失败不该把"集成通过了"这个结果改掉 —— 但也不能静默
+        witness.warn("orch", f"integration_note_failed:{type(e).__name__}"[:120])
+    return "集成合并通过" if tests_ran else "集成合并通过（这一轮没跑到集成测试）"
 
 
 def _run_delivery(proj) -> tuple[bool, str]:
