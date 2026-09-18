@@ -19,9 +19,8 @@ v1 输出字段:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from singularity.scheduler.router import RouteResult
 from singularity.scheduler.snapshot import Snapshot
@@ -329,7 +328,6 @@ def _is_redundant_failure(data: dict, lookback: int = 3) -> bool:
     2. 最近 lookback 条同 task_type 的 trace 中，
        有 ≥ lookback 条具有相同的 failure 特征（task_type + validation 一致）
     """
-    import os as _os
 
     from . import config
 

@@ -9,20 +9,16 @@ from __future__ import annotations
 import importlib
 import logging
 import threading
-import time
 from dataclasses import dataclass
 
 from singularity.scheduler import config, witness
-from singularity.scheduler._types import _pending_sse_events
 from singularity.scheduler.executors import (
     AnthropicApiExecutor,
-    BaseExecutor,
     ClaudeCliExecutor,
     ExecutorResult,
     OpenAIAgentExecutor,
     ZhipuApiExecutor,
 )
-from singularity.scheduler.log import timed
 
 # 档位 → 下一档 的映射表。**故意为空**：两档制已合并成单档("any")，
 # 没有"下一档"可升。`escalate()` 因此恒返回 None（详见它的 docstring）。

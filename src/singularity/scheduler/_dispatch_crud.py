@@ -3,7 +3,6 @@ from singularity.scheduler.dispatcher import _ESCALATION, load_agents
 __all__ = ['_custom_agents_path', '_load_custom_agents', '_notify_agent_change', '_save_custom_agents', 'add_agent', 'escalate', 'remove_agent', 'purge_disabled', 'update_agent']
 # ── Agent CRUD (写入自定义 JSON overlay) ──
 
-import json as _json
 
 
 def _custom_agents_path():

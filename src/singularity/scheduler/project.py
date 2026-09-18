@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 from singularity.scheduler import config
 

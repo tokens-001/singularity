@@ -14,14 +14,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Optional
 
-from singularity.scheduler import config, orchestrator, tracker, witness
+from singularity.scheduler import config, tracker, witness
 from singularity.scheduler._worktree import (
     _release_ref,
 )

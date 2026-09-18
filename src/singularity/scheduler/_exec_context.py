@@ -5,14 +5,12 @@
 
 from __future__ import annotations
 
-import json
 import os
-import time
 
 import httpx
 
-from singularity.scheduler import config, witness
 from singularity.scheduler import memory as mem_mod
+from singularity.scheduler import witness
 
 _PLANNER_PREAMBLE = """\
 [系统指令] 你是架构分析器 (只读 Planner)。

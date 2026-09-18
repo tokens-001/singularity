@@ -1,16 +1,9 @@
-import json
-import logging
-import os
 import re
 import time
-from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from singularity.scheduler import config as sched_config
-from singularity.scheduler import witness
 from singularity.scheduler._memory_core import *  # noqa: F401,F403
-from singularity.scheduler._types import _pending_sse_events
 
 __all__ = ['ExperienceRecord', '_experiences_path', '_failure_patterns_path', '_extract_keywords', '_load_failure_patterns', '_match_failure_pattern', '_save_failure_patterns', 'analyze_failures', 'archive_experience', 'find_similar_across_projects', 'get_experience_stats']
 # T1: 经验归档 + 失败模式识别 + 跨项目知识迁移 (ex _memory_experience.py)

@@ -20,18 +20,14 @@ Dual-Stream:
 from __future__ import annotations
 
 import json
-import os
-import re
 import threading
 import time
-from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from singularity.scheduler import config as sched_config
 from singularity.scheduler import witness
 from singularity.scheduler._io import atomic_write_json
-from singularity.scheduler._types import _pending_sse_events
 
 # 「完整产出」单条存储上限（字符）。不参与 embedding，只在 depth>=3 展开时读。
 # 16000 覆盖实测最大的一条 agent_output（15,782 字），超出即截断。
@@ -189,7 +185,6 @@ def _load_embed_model():
     global _EMBED_MODEL
     if _EMBED_MODEL is None:
         import os
-        import time
         if os.environ.get("QIDIAN_SKIP_EMBED", "") == "1":
             _EMBED_MODEL = False
             return None

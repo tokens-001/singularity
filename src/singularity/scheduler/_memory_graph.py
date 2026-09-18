@@ -1,16 +1,8 @@
-import json
-import logging
-import os
 import re
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
-from pathlib import Path
 
-from singularity.scheduler import config as sched_config
-from singularity.scheduler import witness
 from singularity.scheduler._memory_core import *  # noqa: F401,F403
-from singularity.scheduler._types import _pending_sse_events
 
 __all__ = ['_expand_node', '_rrf_anchors', 'add_inferred_causal_edge', 'find_by_files', 'find_candidate_latent_edges', 'find_causal_chain', 'find_similar', 'query', 'synthesize', 'traverse']
 # Stage 2: Multi-Signal Anchor Identification (RRF)

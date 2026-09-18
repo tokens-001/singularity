@@ -13,12 +13,10 @@ Skill 类型:
 
 from __future__ import annotations
 
-import fnmatch
 import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 import yaml
 
@@ -318,7 +316,6 @@ def set_agent_skills(agent_level: str, agent_model: str, skill_names: list[str],
     """
     if not agent_model and not phase:
         return True
-    import json
 
     from singularity.scheduler import _io
     custom_file = _qidian_dir() / "agents_custom.json"

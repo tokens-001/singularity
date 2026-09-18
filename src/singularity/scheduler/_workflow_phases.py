@@ -1,12 +1,8 @@
 __all__ = ['_run_execution', '_run_planning', '_run_research', '_validate_architecture']
 
 import json
-import logging
-import os
-import time
 
-from singularity.scheduler import dispatcher as disp_mod
-from singularity.scheduler import orchestrator, tracker
+from singularity.scheduler import tracker
 from singularity.scheduler._io import try_parse_json
 from singularity.scheduler.project import Phase, ProjectState, _projects_dir, load, save
 from singularity.scheduler.roles import get_phase_role
@@ -15,10 +11,7 @@ from singularity.scheduler.workflow import (
     _ARCHITECT_CONTEXT,
     _RESEARCHER_CONTEXT,
     _arch_tasks_are_unordered,
-    _collect_changed_files,
     _flag_unordered_architecture,
-    _needs_research,
-    _phase_output_path,
     _read_phase_output,
     _safe_dispatch,
     _save_phase_output,

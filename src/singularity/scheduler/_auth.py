@@ -13,8 +13,6 @@ import re
 import secrets
 import time
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Optional
 
 from singularity.scheduler import config, witness
 

@@ -2,14 +2,9 @@ __all__ = ['_cmd_memory']
 
 """CLI sub-commands."""
 import json
-import os
 import sys
-import time
-from pathlib import Path
 
-from singularity.scheduler import config, orchestrator, tracker
-from singularity.scheduler import dispatcher as disp_mod
-from singularity.scheduler.tracker import TaskStatus
+from singularity.scheduler import config
 
 
 def _cmd_memory(argv: list) -> int:

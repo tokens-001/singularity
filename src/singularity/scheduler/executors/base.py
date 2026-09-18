@@ -15,23 +15,35 @@ v1 边界:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
-
-from singularity.scheduler._sensitive import (
-    BLOCKED_COMMANDS as _BLOCKED_COMMANDS,
-)
 
 # ⚠️ **敏感路径 / 危险命令这两张表搬到 `scheduler/_sensitive.py` 了**（2026-09-14）。
 # 它们原来**还抄了一份**在 `permission.SANDBOXED` 里当"profile 的拦截承诺"，
 # 两份已经不一致（`id_rsa` 只有这份有、`rm -rf` 只有那份有），而界面显示的是那份
 # ⇒ 承诺和实拦对不上。现在**一份表、两处 import**（见那个模块的 docstring）。
 # 名字保持不变：全仓有别的模块 `from ...executors.base import _BLOCKED_PATTERNS`。
-from singularity.scheduler._sensitive import (  # noqa: E402
+#
+# 🔴 **下面这四行是再导出（re-export），不是死 import —— 别删**（2026-09-19）。
+# 本模块自己确实一个都不用它们；用它们的是**别的模块**：
+#   `_BLOCKED_PATTERNS`   ← `anthropic_api.py` + 2 个测试
+#   `_BLOCKED_COMMANDS`   ← 2 个测试
+#   `is_blocked_path`     ← `openai_agent.py` / `zhipu_api.py`
+#   `is_dangerous_command`← `openai_agent.py`
+#
+# ⚠️ **`as <同名>` 不是多余的** —— 那是给 ruff 看的"这是再导出"标记。
+# 少了它，`ruff check --fix`（F401）会把这几行当死 import 删掉，
+# 然后 **53 个测试文件当场 ImportError**（2026-09-19 实测，全部只因为这一个名字）。
+# **ruff 不读上面这段注释。** 想删它们，先全仓搜一遍 `from ...executors.base import`。
+from singularity.scheduler._sensitive import (
+    BLOCKED_COMMANDS as _BLOCKED_COMMANDS,
+)
+from singularity.scheduler._sensitive import (
     BLOCKED_PATH_PATTERNS as _BLOCKED_PATTERNS,
 )
 from singularity.scheduler._sensitive import (
-    is_blocked_path,
-    is_dangerous_command,
+    is_blocked_path as is_blocked_path,
+)
+from singularity.scheduler._sensitive import (
+    is_dangerous_command as is_dangerous_command,
 )
 
 

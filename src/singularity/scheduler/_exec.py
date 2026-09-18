@@ -7,38 +7,23 @@ from __future__ import annotations
 
 import json
 import time
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
-from pathlib import Path
 
-from singularity.scheduler import chancellor as chan_mod
 from singularity.scheduler import config, tracker, witness
 from singularity.scheduler import dispatcher as disp_mod
 from singularity.scheduler import memory as mem_mod
 from singularity.scheduler import neijinglu as nj_mod
-from singularity.scheduler import pre_search as pre_mod
-from singularity.scheduler import router as router_mod
 from singularity.scheduler import snapshot as snap_mod
 from singularity.scheduler import validator as val_mod
 
 # ponytail: context 函数提取到 _exec_context.py, 此文件 re-export 保持兼容
 from singularity.scheduler._exec_context import (
-    _CONSTRUCT_WINDOW,
     _PLANNER_PREAMBLE,
     _build_project_context,
     _construct_context,
     _inject_memory,
-    _summarize_events,
 )
 from singularity.scheduler._git_worktree import (
-    Worktree,
-    changed_files_between,
     commit_wt,
-)
-from singularity.scheduler._git_worktree import (
-    cleanup as wt_cleanup,
-)
-from singularity.scheduler._git_worktree import (
-    create as wt_create,
 )
 from singularity.scheduler._git_worktree import (
     merge_back as wt_merge_back,
@@ -50,10 +35,8 @@ from singularity.scheduler._worktree import (
     _cleanup_wt,
     _lock_wt,
     _maybe_create_worktree,
-    _unlock_wt,
 )
 from singularity.scheduler.log import timed
-from singularity.scheduler.tracker import TaskStatus
 
 # 全局底线：所有任务的约束，首轮无条件注入（原 karpathy-rules 技能，从技能层提升到全局层）
 _GLOBAL_CONSTRAINTS = """全局底线（所有任务必须遵守）：

@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import sys
 import traceback
-from typing import Any
 
 
 def _build_mcp_tools() -> list[dict]:

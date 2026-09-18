@@ -2,19 +2,10 @@
 
 from __future__ import annotations
 
-import json
-import logging
-import os
-import queue
-import threading
 import time
 from collections.abc import Callable
-from pathlib import Path
-from typing import Any
 
-import httpx
-
-from singularity.scheduler import config, tracker, witness
+from singularity.scheduler import config, witness
 from singularity.scheduler._observer_shared import (
     _alert_history,
     _alert_lock,

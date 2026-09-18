@@ -8,7 +8,6 @@ import logging
 import queue
 import threading
 from collections.abc import Callable
-from typing import Any
 
 _log = logging.getLogger("observer")
 

@@ -6,10 +6,8 @@ Docs: https://docs.anthropic.com/en/api/messages
 
 from __future__ import annotations
 
-import json
 import os
 import time
-from pathlib import Path
 
 from singularity.scheduler import config
 from singularity.scheduler.executors.base import BaseExecutor, ExecutorResult
@@ -26,7 +24,6 @@ class AnthropicApiExecutor(BaseExecutor):
     has_tool_surface = True      # `_execute_tool` 是本进程分发的 ⇒ 权限闸门在这儿
 
     def run(self) -> ExecutorResult:
-        import subprocess as _sp
 
         api_key_env = self.cfg.get("api_key_env", "ANTHROPIC_API_KEY")
         api_key = os.environ.get(api_key_env, "")

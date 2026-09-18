@@ -11,16 +11,7 @@
 
 from __future__ import annotations
 
-import json
-import signal
 import sys
-import time
-
-from singularity.scheduler import config, orchestrator, tracker
-from singularity.scheduler import dispatcher as disp_mod
-from singularity.scheduler import snapshot as snap_mod
-from singularity.scheduler.project import Phase
-from singularity.scheduler.tracker import TaskStatus
 
 # `_LOOP_POLL_SECS` 已挪到 `_cli_tasks.py` —— `_cmd_loop` 在那个模块，而本模块是
 # **单向** import 它（`from _cli_tasks import *`），常量放这儿那边看不见 →

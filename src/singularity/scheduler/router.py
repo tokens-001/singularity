@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from singularity.scheduler import config
 from singularity.scheduler.log import timed
 
 

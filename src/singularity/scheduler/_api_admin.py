@@ -12,17 +12,11 @@ Section 分组:
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
-import shutil
-import subprocess
 import time
-from pathlib import Path
-from typing import Optional
 
-from singularity.scheduler import config, orchestrator, tracker, witness
-from singularity.scheduler.tracker import TaskStatus
+from singularity.scheduler import config, witness
 
 # ═══════════════════════════════════════════════════════════════
 
@@ -231,7 +225,6 @@ def model_remove(model_id):
 
 
 def model_update(model_id, data):
-    from . import dispatcher as disp_mod
     from . import model_registry
     models = model_registry.load_models()
     if model_id not in models: return {"error": "模型不存在"}, 404

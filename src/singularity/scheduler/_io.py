@@ -97,7 +97,6 @@ def save_toml(path: Path, data: dict) -> None:
 
     ponytail: 手动序列化，不引入 toml 依赖。
     """
-    import json as _json
     lines = []
     def _write_section(d: dict, prefix: str):
         for k, v in d.items():

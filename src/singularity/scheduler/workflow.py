@@ -18,7 +18,6 @@ from pathlib import Path
 
 from singularity.scheduler import config, tracker
 from singularity.scheduler import dispatcher as disp_mod
-from singularity.scheduler._io import try_parse_json
 from singularity.scheduler.project import (
     Phase,
     ProjectState,

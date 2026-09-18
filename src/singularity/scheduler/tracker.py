@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import json
-import os
 import threading
 import time
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 from singularity.scheduler import config
 from singularity.scheduler._io import atomic_write_json

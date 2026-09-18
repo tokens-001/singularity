@@ -4,10 +4,9 @@ from __future__ import annotations
 import json
 import logging
 import os
-from pathlib import Path
 from typing import Any
 
-from singularity.scheduler import config, tracker, witness
+from singularity.scheduler import witness
 from singularity.scheduler._observer_tools import (
     _TOOL_REGISTRY,
     _tool_get_judge_stats,

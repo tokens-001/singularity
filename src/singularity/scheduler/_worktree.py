@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import os
 import stat
 import subprocess as _sp
 
@@ -14,16 +13,12 @@ from singularity.scheduler import tracker as _tracker
 from singularity.scheduler._git_worktree import (
     Worktree,
     changed_files_between,
-    commit_wt,
 )
 from singularity.scheduler._git_worktree import (
     cleanup as wt_cleanup,
 )
 from singularity.scheduler._git_worktree import (
     create as wt_create,
-)
-from singularity.scheduler._git_worktree import (
-    merge_back as wt_merge_back,
 )
 
 try:

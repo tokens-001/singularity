@@ -1,24 +1,15 @@
 __all__ = ['_load_mcp_for_agent', '_load_skills_for_agent', '_make_permission_checker', '_ntilc_filter', 'invalidate_mcp_cache', 'invalidate_skill_cache']
 
-import json
-import logging
-import os
 import time
-from pathlib import Path
 
-from singularity.scheduler import config, witness
 from singularity.scheduler import tracker as _tracker
+from singularity.scheduler import witness
 from singularity.scheduler._types import _pending_sse_events
 from singularity.scheduler.dispatcher import (
     _CACHE_LOCK,
     _MCP_CACHE,
     _SKILL_CACHE,
-    DispatchResult,
-    _build_agent_from_registry,
-    _ensure_agent_type,
-    load_agents,
 )
-from singularity.scheduler.log import timed
 
 
 def _ntilc_filter(task_desc: str, skills: dict) -> dict:

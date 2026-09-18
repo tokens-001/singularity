@@ -1,10 +1,7 @@
 import json
-import logging
 import os
 import re
 import time
-from collections import defaultdict
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from singularity.scheduler import config as sched_config

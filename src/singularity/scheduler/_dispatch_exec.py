@@ -1,25 +1,18 @@
 __all__ = ['_build_synthesis_prompt', '_dispatch_committee', '_run_executor', 'dispatch']
 
-import json
-import logging
 import os
-import threading
 import time
 
-from singularity.scheduler import _model_breaker, config, model_registry, tracker, witness
+from singularity.scheduler import _model_breaker, model_registry, witness
 from singularity.scheduler._dispatch_skills import (
     _load_mcp_for_agent,
     _load_skills_for_agent,
     _make_permission_checker,
 )
-from singularity.scheduler._io import _parse_patch_ops, apply_json_patch
 from singularity.scheduler.dispatcher import (
     _EXECUTOR_BY_TYPE,
     DispatchResult,
-    _build_agent_from_registry,
     _ensure_agent_type,
-    agent_api_available,
-    load_agents,
     pick_agent_fallback_chain,
 )
 
@@ -28,7 +21,6 @@ from singularity.scheduler.dispatcher import (
 # 把"真有未定义名"的信号淹没掉。补上，让这条检查能当守卫用。
 from singularity.scheduler.executors.base import BaseExecutor
 from singularity.scheduler.log import timed
-from singularity.scheduler.tracker import TaskStatus
 
 # ── 委员会收集初稿的时间预算 ──
 # 单次模型调用本身有上限（claude-cli 300s / openai-agent 240s），所以一波的耗时

@@ -14,42 +14,24 @@ from __future__ import annotations
 import logging
 import re as _re
 import time
-from pathlib import Path
 
 from singularity.scheduler._exec import (
-    _PLANNER_PREAMBLE,
-    _build_project_context,
-    _inject_memory,
     _read_planner_patch,
     _run_with_retry,
-    _save_planner_patch,
     _save_trace,
     decompose,
-    run,
 )
 from singularity.scheduler._planner import (
     _materialize_in_main,
     _maybe_complete_parents,
-    _topo_sort,
     materialize_plan,
 )
 
 # ── 内部模块 (执行链) ──────────────────────────────────────
 from singularity.scheduler._types import (
     _MAX_DEPTH,
-    BatchOutput,
     RunContext,
     _pending_sse_events,
-    _SnapProxy,
-)
-from singularity.scheduler._worktree import (
-    _anchor_ref,
-    _build_merge_request,
-    _cleanup_wt,
-    _lock_wt,
-    _maybe_create_worktree,
-    _release_ref,
-    _unlock_wt,
 )
 from singularity.scheduler.goal_loop import GoalLoop
 
@@ -60,30 +42,13 @@ from singularity.scheduler import chancellor as chan_mod
 
 # ── 业务依赖 ────────────────────────────────────────────
 from singularity.scheduler import config, tracker, witness
-from singularity.scheduler import dispatcher as disp_mod
 from singularity.scheduler import memory as mem_mod
-from singularity.scheduler import neijinglu as nj_mod
 from singularity.scheduler import pre_search as pre_mod
 from singularity.scheduler import route_learner as rl_mod
 from singularity.scheduler import router as router_mod
 from singularity.scheduler import snapshot as snap_mod
 from singularity.scheduler import validator as val_mod
-from singularity.scheduler._git_worktree import (
-    Worktree,
-    changed_files_between,
-    commit_wt,
-)
-from singularity.scheduler._git_worktree import (
-    cleanup as wt_cleanup,
-)
-from singularity.scheduler._git_worktree import (
-    create as wt_create,
-)
-from singularity.scheduler._git_worktree import (
-    merge_back as wt_merge_back,
-)
-from singularity.scheduler._profiler import get_perf_stats
-from singularity.scheduler._token_budget import get_usage_stats, record_tokens
+from singularity.scheduler._token_budget import record_tokens
 from singularity.scheduler.tracker import TaskStatus
 
 # ═══════════════════════════════════════════════════════════════

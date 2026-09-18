@@ -18,7 +18,6 @@ RabbitMQ 都砍了（ledger 1 + RabbitMQ 1）。所以这张表不能是旧的�
 """
 from __future__ import annotations
 
-import json
 import os
 import threading
 import time

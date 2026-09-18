@@ -7,19 +7,12 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import re as _re
 import time
-import urllib.request
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, wait
-from typing import Optional
 
-from singularity.scheduler import config, tracker, witness
-from singularity.scheduler import dispatcher as disp_mod
-from singularity.scheduler import validator as val_mod
-from singularity.scheduler._exec import _run_with_retry, decompose
-from singularity.scheduler._types import _MAX_DEPTH, BatchOutput, RunContext, _pending_sse_events
+from singularity.scheduler import tracker
+from singularity.scheduler._exec import decompose
+from singularity.scheduler._types import _MAX_DEPTH, BatchOutput, _pending_sse_events
 from singularity.scheduler.tracker import TaskStatus
 
 

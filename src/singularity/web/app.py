@@ -12,7 +12,6 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from urllib.parse import urlparse
 
 from flask import Flask, Response, g, jsonify, request
 
@@ -70,7 +69,6 @@ from singularity.scheduler._auth import is_local_origin as _is_local_origin
 from singularity.scheduler.log import _get_file_logger as _get_file_log
 from singularity.scheduler.log import get_logger
 from singularity.scheduler.log import info as _log_info
-from singularity.scheduler.log import warn as _log_warn
 from singularity.scheduler.project import Phase
 from singularity.scheduler.tracker import TaskStatus
 
@@ -251,7 +249,7 @@ def _guard_project_id():
 # 各读一遍环境变量就是"同一件事写两处"（2026-09-14 修 WS 逐连接鉴权时收的）。
 _AUTH_ENABLED = _auth_enabled()
 if _AUTH_ENABLED:
-    from singularity.scheduler._auth import get_auth, require_auth, require_write
+    from singularity.scheduler._auth import get_auth
     _admin = get_auth().bootstrap()
     # 别只打前缀: bootstrap 是唯一一次能看到完整 token 的机会，
     # 打 [:8] 等于给一个没法用的 token（同一族问题见 _auth.bootstrap）。
@@ -417,7 +415,6 @@ def _guard_body_size():
 
 # ── SSRF 防护：URL 验证 ─────────────────────────────────
 import ipaddress
-import re as _re_url
 
 # 已知 API 厂商域名（仅允许这些厂商的 API 调用）
 _ALLOWED_API_HOSTS = {
@@ -511,7 +508,6 @@ def _sse_pump_worker():
 def _loop_worker():
     """后台调度循环：持续取队 → 执行，面板可随时停止。"""
     global _loop_running
-    import signal
 
     sched_config.ensure_dirs()
     agents = disp_mod.load_agents()
@@ -594,7 +590,6 @@ def _loop_worker():
                     if verdict != "pass":
                         try:
                             import subprocess
-                            import sys
                             subprocess.run([
                                 "osascript", "-e",
                                 f'display notification "任务 {tracker.short_id(tid)} {verdict}" with title "Singularity Dispatch"'
@@ -1373,7 +1368,6 @@ def _project_repo_root(project_id: str):
 @app.route("/api/projects/<project_id>/files")
 def api_project_files(project_id):
     """列出项目文件树 (git ls-files)。"""
-    import os
     import subprocess
     root = _project_repo_root(project_id)
     if root is None:
@@ -1432,7 +1426,6 @@ def api_project_file_content(project_id, filepath):
 @app.route("/api/projects/<project_id>/diff")
 def api_project_diff(project_id):
     """最近的 git diff (HEAD~1..HEAD)。"""
-    import os
     import subprocess
     root = _project_repo_root(project_id)
     if root is None:

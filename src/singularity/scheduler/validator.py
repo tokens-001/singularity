@@ -6,10 +6,8 @@ import logging
 import re
 import subprocess
 from dataclasses import dataclass, field
-from typing import Optional
 
 from singularity.scheduler import config
-from singularity.scheduler.snapshot import Snapshot
 
 _KNOWN_VERDICTS = {"人工复核", "注意", "信息不足", "阻断"}
 

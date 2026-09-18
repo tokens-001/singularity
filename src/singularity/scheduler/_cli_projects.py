@@ -1,16 +1,12 @@
 __all__ = ['_cmd_project', '_cmd_project_advance', '_cmd_project_create', '_cmd_project_delete', '_cmd_project_list', '_cmd_project_reject', '_cmd_project_show', '_phase_agent_level', '_phase_will_run']
 
 """CLI sub-commands."""
-import json
-import os
 import sys
 import time
-from pathlib import Path
 
-from singularity.scheduler import config, orchestrator, tracker
 from singularity.scheduler import dispatcher as disp_mod
+from singularity.scheduler import tracker
 from singularity.scheduler.project import Phase
-from singularity.scheduler.tracker import TaskStatus
 
 
 def _cmd_project(argv: list) -> int:
