@@ -4,7 +4,7 @@ import json
 import os
 import threading
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -120,12 +120,36 @@ class Task:
         d.setdefault("project_id", "")
         d.setdefault("attrs", {})
         d.setdefault("execution_mode", "auto_edit")
+        # 🔴 **未知键：丢掉，而不是让 `cls(**d)` 抛**（2026-09-19）。
+        #
+        # `Task.from_dict` 是**全部**读路径的唯一入口（`read_task` / `ready_tasks` /
+        # `recover` / `_load_all_tasks`），它抛一次 = 这个任务**在整个系统里不存在**，
+        # 而文件**明明在盘上**。最毒的样子（09-18 独立复现）：一条 RUNNING 任务只要
+        # 多一个未知键 ⇒ 读成 None ⇒ `recover()` 永远不碰它 ⇒ 它**永远停在 RUNNING**，
+        # 同时任务列表里**根本不存在**。未知键的来源很平常：回滚到旧版本、
+        # 手工改过盘、迁移写了一半。
+        #
+        # ⚠️ **代价如实记**：`to_dict()` 是 `asdict(self)`，丢掉的键在下次整份覆盖写时
+        # 就**真的没了**。但那比现在轻得多 —— 现在丢的是**整条任务**。而且这条会说一声。
+        extra = [k for k in d if k not in _TASK_FIELDS]
+        for k in extra:
+            d.pop(k)
+        if extra:
+            _warn_task_once(
+                f"task_unknown_keys:{d.get('id', '')}",
+                f"task_unknown_keys:{d.get('id', '?')}:"
+                f"{','.join(sorted(extra))}（这些键会在下次写回时丢掉）",
+                key="task_unknown_keys")
         return cls(**d)
 
     def compute_starvation(self) -> float:
         """刷新 starvation_score = (now-created_at)/3600 * (1+priority)。"""
         self.starvation_score = (time.time() - self.created_at) / 3600 * (1 + self.priority)
         return self.starvation_score
+
+
+# `Task` 的字段名集合 —— `from_dict` 拿它判"哪些键是陌生的"。在类定义之后算一次。
+_TASK_FIELDS = frozenset(f.name for f in fields(Task))
 
 
 def tasks_dir() -> Path:
@@ -143,14 +167,68 @@ def _write(task: Task) -> None:
     atomic_write_json(p, task.to_dict())
 
 
-def read_task(task_id: str) -> Optional[Task]:
-    p = _path(task_id)
+# 「本进程已经报过」的记号 —— 见 `_warn_task_once`。
+_TASK_WARNED: set = set()
+
+
+def _warn_task_once(token: str, msg: str, key: str) -> None:
+    """同一个 token 只报一次。
+
+    ⚠️ **读侧去重是必须的，不是优化**：`ready_tasks` 每 2 秒把**全部**任务文件
+    扫一遍（`_TASK_SCAN_CACHE`），`_load_all_tasks` 同理。照搬"每读一次报一次"
+    ⇒ 一份坏文件**每 2 秒刷一条**告警。同族的账就在清单上：`drain_dep_blocked`
+    一天 1850 条，把真事故淹了（09-17「留痕写成每轮一条 = 又一条糊筛子的告警」）。
+
+    `witness.warn` 自己**从不抛**（失败走 logging 第二通道），所以这里不用包 try。
+    """
+    if token in _TASK_WARNED:
+        return
+    _TASK_WARNED.add(token)
+    from singularity.scheduler import witness   # 函数体内 import：witness → tracker 是现成的环
+    witness.warn("tracker", msg[:200], key=key)
+
+
+def _read_task_file(p: Path) -> Optional[Task]:
+    """读一个任务文件。**坏了要留痕** —— 四处读路径原来各自 `except: return None`
+    / `continue`，**零留痕**（2026-09-19）。
+
+    🔴 **为什么这条不能静默**：`Task.from_dict` 是**全部**读路径的唯一入口，
+    它抛一次 = 这个任务**在整个系统里不存在**，而文件**明明在盘上**。
+    最毒的样子（09-18 独立复现）：一条 RUNNING 任务只要多一个未知键
+    ⇒ 读成 None ⇒ `recover()` **永远不碰它** ⇒ 它**永远停在 RUNNING**，
+    同时在任务列表里**根本不存在** —— 探测器和界面都看不见它。
+    这跟 §77 那一族同形：**量的是"声明在不在"，不是"实际跑没跑"。**
+
+    走 `_io.load_json_or_quarantine`（09-14 就是为这个形状加的：原样 `.corrupt`
+    备份 + log/witness 双通道 + **拒绝当空**）；`Task.from_dict` 自己拒绝
+    （类型不对）也照样送去隔离 —— 那正是"未知键"那一种。
+
+    ⚠️ **`is_quarantined` 这道闸门是必须的**：`load_json_or_quarantine` 每次调用
+    都会**再备份一份、再报一条**，而上面说的扫频是 2 秒一次。
+    （写侧没有任何人拿 `is_quarantined` 挡任务文件 —— 已 grep 核实，
+    所以这里复用它只做去重，不会把任务变成"再也写不了"。）
+    """
+    from singularity.scheduler._io import is_quarantined, load_json_or_quarantine
+    # 文件不在了（glob 与删除竞态）→ 就当没有，这不是损坏
     if not p.exists():
         return None
+    if is_quarantined(p):
+        return None
+    d = load_json_or_quarantine(p)
+    if d is None:
+        return None      # 已经备份 + 双通道上报过了
     try:
-        return Task.from_dict(json.loads(p.read_text(encoding="utf-8")))
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return None  # 损坏/空文件 → 视为不存在
+        return Task.from_dict(d)
+    except (TypeError, ValueError) as e:
+        # 内容是真 JSON，但**不是**一个任务（未知键 / 缺必填 / 状态值不认识）。
+        # 同样送去隔离：要的是"最近一次现场的原始字节"，不是"看着没事"。
+        from singularity.scheduler._io import _quarantine_corrupt
+        _quarantine_corrupt(p, f"Task.from_dict 拒绝: {type(e).__name__}: {e}"[:80])
+        return None
+
+
+def read_task(task_id: str) -> Optional[Task]:
+    return _read_task_file(_path(task_id))
 
 
 _NEXT_ID_CACHE = 0
@@ -407,10 +485,9 @@ def ready_tasks(exclude: set[str] = None) -> list[Task]:
         else:
             all_tasks = []
             for p in tasks_dir().glob("*.json"):
-                try:
-                    all_tasks.append(Task.from_dict(json.loads(p.read_text(encoding="utf-8"))))
-                except (json.JSONDecodeError, TypeError, ValueError):
-                    continue
+                t = _read_task_file(p)      # 读坏会留痕（见该函数），不再静默 continue
+                if t is not None:
+                    all_tasks.append(t)
             _TASK_SCAN_CACHE["ts"] = now
             _TASK_SCAN_CACHE["tasks"] = all_tasks
         ready = []
@@ -488,9 +565,10 @@ def recover() -> int:
     count = 0
     with _LOCK:
         for p in tasks_dir().glob("*.json"):
-            try:
-                task = Task.from_dict(json.loads(p.read_text(encoding="utf-8")))
-            except (json.JSONDecodeError, TypeError, ValueError):
+            # ⚠️ 这里**尤其**不能静默：读不出来的若是一条 RUNNING 任务，
+            # 它就要靠这个循环被捞回去。读成 None = 它永远是个 RUNNING 幽灵。
+            task = _read_task_file(p)
+            if task is None:
                 continue
             if task.status in _INFLIGHT:
                 task.retry_count += 1
@@ -615,8 +693,7 @@ def _load_all_tasks() -> list[Task]:
     """加载所有任务 (供 DAG 分析)。"""
     tasks = []
     for p in tasks_dir().glob("*.json"):
-        try:
-            tasks.append(Task.from_dict(json.loads(p.read_text(encoding="utf-8"))))
-        except (json.JSONDecodeError, TypeError, ValueError):
-            continue
+        t = _read_task_file(p)      # 读坏会留痕（见该函数）
+        if t is not None:
+            tasks.append(t)
     return tasks
