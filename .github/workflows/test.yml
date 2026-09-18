@@ -2,7 +2,33 @@ name: Test
 
 on: [push, pull_request]
 
+# ⚠️ **拆成两个 job 是故意的，别merge回去**（2026-09-19 改）。
+#
+# 原来这 6 步串在**同一个 job** 里，而第 2 步 `ruff` 一红 ⇒ 后面 4 步**全部 skipped**。
+# 后果实测（`gh run list`）：**117 次运行全 failure**（09-04 → 09-18），
+# 其中 `pytest`、`test_exec_run`、`mypy` **一次都没跑过** ——
+# 「1645 条测试全绿」是一句**只在本机成立、第三方通过仓库自己的自动化复核不了**的话。
+#
+# 拆开之后：lint 的红**不再掩盖**测试的结果。lint 那一半仍然红（1021 条规则债，
+# 见 `docs/CI与发布审计-20260919.md`），但它是**诚实地红**，而且不再吃掉真信号。
+# ⚠️ 别为了让它变绿改成 `|| true` 或 `continue-on-error` —— 那是把红藏起来，
+#    本仓 `docs/防御模式.md` §78 自己写着「假门比没门坏」。
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      # 和 `Makefile:lint` **必须是同一条命令**（2026-09-19 统一）。
+      # 原来这里写的是 `ruff check src/ --select=E,F`，和本机那条三处都不一样：
+      #   路径 `src/` vs `src/singularity/` · 规则集 `--select` 手挑 vs 走 pyproject ·
+      #   **而且 `--select` 会重开项目自己 ignore 的 E501**（75 条，`pyproject.toml:51`）。
+      # ⇒ 两个入口互不预测，`make check` 于是恒不可运行。
+      - run: ruff check src/singularity/
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -11,8 +37,14 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
-      - run: ruff check src/ --select=E,F
       - run: QIDIAN_SKIP_EMBED=1 python3 tests/test_imports.py
       - run: QIDIAN_SKIP_EMBED=1 python3 -m pytest tests/test_scheduler/ -q --cov=singularity --cov-report=term --cov-fail-under=20
       - run: QIDIAN_SKIP_EMBED=1 python3 tests/test_exec_run.py
-      - run: mypy src/singularity/ --ignore-missing-imports || true
+      # mypy 那一步已删（2026-09-19），原因是它**结构上不可能失败**：
+      #   mypy src/singularity/ --ignore-missing-imports || true
+      # `|| true` 让它永远退出 0 —— 它从来不是「宽松的检查」，是个**假门**。
+      # 要加回来：① 先让它在**本机跑干净**（现在本机压根没装 mypy）② 再去掉 `|| true` 加回来；
+      # 加的时候**必须同时处理** `pyproject.toml` 的 `[tool.mypy] exclude` ——
+      # 它整块屏蔽 `executors/` / `neijinglu.py` / `supervisor.py`。
+      # ⚠️ 这两件事是**耦合**的：mypy 恒不卡时那个 exclude 一点后果都没有；
+      #    **只有 `|| true` 去掉之后，它才变成承重墙上的盲区**。分开修等于没修。

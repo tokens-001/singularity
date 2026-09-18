@@ -31,7 +31,11 @@ dev = [
     "pytest-cov>=6.0",
     "ruff>=0.9",
     "mypy>=1.14",
-    "pre-commit>=4.0",
+    # `pre-commit` 已删（2026-09-19）：根目录**从来没有** `.pre-commit-config.yaml`，
+    # `.git/hooks/` 里只有 sample、`core.hooksPath` 也没配 ⇒ 这条依赖声明的那个
+    # 「本地钩子门」**从未存在过**。要么给 config、要么删依赖，这里选删 ——
+    # ⚠️ 而现在**不该加 config**：lint 有 1021 条规则债，装了等于每次提交都在本地红，
+    # 那是把「假门」换成「堵死路的门」。等 lint 债还到能绿，再把两边一起加回来。
 ]
 
 [project.scripts]
