@@ -1,34 +1,42 @@
 .PHONY: install test lint typecheck build-frontend clean run
 
+# 🔴 **必须优先用仓库自己的 venv**（2026-09-19 修）。
+# 原来这里全是裸 `python3` / `ruff` —— 而系统的 python3 是 homebrew 的，
+# **没装 singularity**，直接跑就是 `ModuleNotFoundError`；`ruff` 也只在 `.venv/bin/` 里
+# ⇒ `make check`（仓库自己定义的"完成判据"）**从来跑不起来**。
+# 那正是 `docs/CI与发布审计-20260919.md` §三 说的"判据不可运行，所以它不指导任何日常动作"。
+PY   := $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
+RUFF := $(shell [ -x .venv/bin/ruff ]   && echo .venv/bin/ruff   || echo ruff)
+
 install:
 	pip install -e ".[dev]"
 	cd src/singularity/web/frontend && npm install
 
 run:
-	python3 -m singularity.web.app
+	$(PY) -m singularity.web.app
 
 test:
-	python3 -m pytest tests/test_scheduler/ -q --tb=short
+	$(PY) -m pytest tests/test_scheduler/ -q --tb=short
 
 test-fast:
-	python3 -m pytest tests/test_scheduler/test_core.py tests/test_scheduler/test_router.py tests/test_scheduler/test_model_registry.py tests/test_scheduler/test_project.py -q
+	$(PY) -m pytest tests/test_scheduler/test_core.py tests/test_scheduler/test_router.py tests/test_scheduler/test_model_registry.py tests/test_scheduler/test_project.py -q
 
 test-all:
-	python3 -m pytest tests/test_scheduler/ -q --tb=short
-	python3 tests/test_scheduler/test_step4_execution.py
-	python3 tests/test_scheduler/test_step5_verification.py
+	$(PY) -m pytest tests/test_scheduler/ -q --tb=short
+	$(PY) tests/test_scheduler/test_step4_execution.py
+	$(PY) tests/test_scheduler/test_step5_verification.py
 
 lint:
-	ruff check src/singularity/
+	$(RUFF) check src/singularity/
 
 lint-fix:
-	ruff check --fix src/singularity/
+	$(RUFF) check --fix src/singularity/
 
 typecheck:
-	mypy src/singularity/
+	$(PY) -m mypy src/singularity/
 
 format:
-	ruff format src/singularity/
+	$(RUFF) format src/singularity/
 
 build-frontend:
 	cd src/singularity/web/frontend && npm run build

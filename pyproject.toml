@@ -52,7 +52,32 @@ line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]
-ignore = ["E501", "B904"]
+# ⚠️ 每一条豁免都要有**具体理由**，不许为了"让门变绿"批量塞
+# （那是把红藏起来，本仓 `docs/防御模式.md` §78 写着"假门比没门坏"）。
+# 2026-09-19 把 lint 债从 1021 清到 0 时，逐条过了剩下的 93 条，
+# 下面四条是**判定不该按默认修法改**的，其余全部真修了。
+ignore = [
+    "E501",   # 行太长（原有）—— line-length 已在上面设成 120
+    "B904",   # raise ... from err（原有）
+    "E402",   # 「import 必须在顶部」—— 本仓**故意**不是：
+              #   · `web/app.py` 要先读 `.env` 再导调度器（调度器在 import 期读环境变量）
+              #   · `_api.py` / `observer_agent.py` / `memory.py` / `__main__.py` 用
+              #     **底部星号导入**做门面再导出（见那些文件顶部的说明）
+              #   · 多处要 `sys.path` 或常量先就位
+              #   挪到顶部会改变导入顺序，是**行为变更**不是风格
+    "SIM105", # 「try/except/pass 应换成 contextlib.suppress」—— **本仓改不了**：
+              #   本仓有一台自己的守卫管这件事（`tests/test_scheduler/test_no_silent_except.py`，
+              #   按 `(文件, 函数)` 计数的**静默 except 棘轮**，任何增减都红），
+              #   而它的 docstring 明写 **`contextlib.suppress` 同罪、一并计数**。
+              #   ⇒ 换成 suppress 等于把红从 ruff 挪到那台守卫上，**原地打转**。
+              #   留着这条至少还看得见；要动得先决定"这些吞噬到底该不该出声"。
+    "N815",   # mixedCase in class scope —— `mcp.py` 的 `inputSchema` 不是变量名，
+              #   是 **MCP 协议的字段名**，改名会破坏与客户端的协议
+    "UP042",  # `class Phase(str, Enum)` → `StrEnum` —— **那是行为变更**：
+              #   `str(Phase.X)` 从 `'Phase.X'` 变成 `'x'`。Phase 是核心枚举，
+              #   覆盖面靠测试保证不了（`project.py:607/645` 有 `str(phase)` 的兜底用法）。
+              #   要改得单独一轮 + 真机验，不该混在清 lint 债里顺手改。
+]
 
 [tool.ruff.format]
 quote-style = "double"
