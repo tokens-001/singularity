@@ -258,6 +258,104 @@ class TestResolveWhenPrimitiveRaises:
         assert any("resolve_merge_ref_failed" in w for w in warns), f"炸了没出声: {warns}"
 
 
+class TestParkedRecordWriteFailure:
+    """`_park` / `resolve(abort)` 的**落盘失败要出声**。
+
+    来历：`docs/静默except待修清单-20260913.md` 里 `merge.py:196` 那条
+    （"parked 未落盘，重启即丢" → `warn(key=parked_write_fail)`）09-13 就分好类了，
+    **一直没做**。同类里 `merge.py:95`（读回来失败）早就补上了。
+
+    为什么不是小事：`conflicts()` 读的是**内存**那份，而任务紧接着被 transition 成
+    `CONFLICT_HELD`；进程一重启只能靠盘上那个文件恢复 ⇒ 写失败的后果是"这个冲突
+    凭空消失、任务永久卡住"，正是本文件已经为它栽过两次的形状。
+    """
+
+    def test_落盘失败要出声_但内存那份照旧保留(self, tmp_path, monkeypatch):
+        from singularity.scheduler import config
+        from singularity.scheduler import merge as merge_mod
+        from singularity.scheduler.merge import MergeQueue, MergeRequest
+
+        monkeypatch.setattr(config, "PARKED_DIR", tmp_path)
+        monkeypatch.setattr(merge_mod.tracker, "transition", lambda *a, **k: None)
+        warns: list[str] = []
+        monkeypatch.setattr(merge_mod.witness, "warn",
+                            lambda scope, msg, **kw: warns.append((msg, kw)))
+
+        class _Boom:
+            def write_text(self, *a, **k):
+                raise OSError("模拟写不进去")
+
+        mq = MergeQueue()
+        monkeypatch.setattr(merge_mod, "_parked_path", lambda tid: _Boom())
+        mq._park(MergeRequest(task_id="t1", branch="refs/heads/wt-t1", base_ref="main"),
+                 [], reason="冲突")
+
+        assert any("parked_write_fail" in kw.get("key", "") for _, kw in warns), \
+            f"落盘失败没出声 ⇒ 重启后这个冲突凭空消失，没人知道为什么: {warns}"
+        assert [r.task_id for r in mq.conflicts()] == ["t1"], \
+            "只报不改：内存里那份必须还在（本轮还解得掉）"
+
+    def test_abort时删盘失败也要出声(self, tmp_path, monkeypatch):
+        from singularity.scheduler import config
+        from singularity.scheduler import merge as merge_mod
+        from singularity.scheduler.merge import MergeQueue, MergeRequest
+
+        monkeypatch.setattr(config, "PARKED_DIR", tmp_path)
+        monkeypatch.setattr(merge_mod.tracker, "transition", lambda *a, **k: None)
+        warns: list[str] = []
+        monkeypatch.setattr(merge_mod.witness, "warn",
+                            lambda scope, msg, **kw: warns.append((msg, kw)))
+
+        mq = MergeQueue()
+        mq._park(MergeRequest(task_id="t1", branch="refs/heads/wt-t1", base_ref="main"), [])
+
+        class _Boom:
+            def unlink(self, *a, **k):
+                raise OSError("模拟删不掉")
+
+        monkeypatch.setattr(merge_mod, "_parked_path", lambda tid: _Boom())
+        res = mq.resolve("t1", "abort")
+
+        assert res.status == "failed", res
+        assert any("parked_unlink_failed" in kw.get("key", "") for _, kw in warns), \
+            f"删不掉没出声 ⇒ 重启后一个已经放弃的冲突又列回 /api/conflicts: {warns}"
+
+
+class TestMergeLandedButStatusStuck:
+    """合并**真发生了**、任务状态却改不动 —— 这件事必须有人看得见。
+
+    形状：任务已经被取消/判失败，而它的 merge_request 还躺在队列里被 `drain` 捞起来。
+    `transition(FAILED→DONE)` 被终态白名单拒（`tracker._TERMINAL_EXIT`）⇒ 返回 None，
+    而 `_mark_merged` 原来**不看返回值** ⇒ 交付报告说失败、代码却在仓里。
+    ⚠️ 这里用**真的 `tracker.transition`**：要钉的就是"被拒返回 None"这个真实行为，
+    换成桩等于把被测的东西换成我以为的行为。
+    """
+
+    def test_合并落地但状态改不动_要出声(self, tmp_path, monkeypatch):
+        from singularity.scheduler import config, tracker
+        from singularity.scheduler import merge as merge_mod
+        from singularity.scheduler.merge import MergeQueue, MergeRequest
+        from singularity.scheduler.tracker import TaskStatus
+
+        monkeypatch.setattr(config, "PARKED_DIR", tmp_path)
+        warns: list = []
+        monkeypatch.setattr(merge_mod.witness, "warn",
+                            lambda scope, msg, **kw: warns.append((msg, kw)))
+        t = tracker.create("已被取消的任务")
+        tracker.transition(t.id, TaskStatus.FAILED, error="人工取消")
+
+        mq = MergeQueue()
+        res = mq._mark_merged(
+            MergeRequest(task_id=t.id, branch="refs/heads/wt-x", base_ref="main"), "newhead")
+
+        assert res.status == "merged", "git 那边真合了 ⇒ 结果照旧报 merged"
+        assert tracker.read_task(t.id).status == TaskStatus.FAILED, \
+            "不许 force 硬改 —— 那会把人的显式取消顶掉（更坏）"
+        assert any("merge_landed_but_transition_refused" in kw.get("key", "")
+                   for _, kw in warns), \
+            f"代码进仓了、账上说失败 —— 这件事没人看得见: {warns}"
+
+
 class TestResolveLandsTheStatus:
     """`resolve` 解完之后**状态要真的落下来** —— 否则任务永久卡 `conflict_held`。
 

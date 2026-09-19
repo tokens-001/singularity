@@ -251,7 +251,17 @@ class MergeQueue:
         req.status = "merged"
         self._merged.add(req.task_id)
         self._merged_files |= req.changed_files
-        tracker.transition(req.task_id, TaskStatus.DONE)
+        # `transition` **返回 None = 这次改判被拒**（终态白名单 `tracker._TERMINAL_EXIT`），
+        # 或者任务文件压根不在。常见的一种：任务已经被取消/判失败，而它的 merge_request
+        # 还躺在队列里被 drain 捞起来 —— **git 里真合进去了、状态却留在 FAILED**，
+        # 于是交付报告说失败、代码却在仓里。
+        # ⚠️ 这里**不用 `force=True` 硬改**：那会把人的显式取消顶掉（更坏）。
+        #    只出声 ——「代码进仓了但账上说失败」必须有人看得见（§44 那条：承诺的
+        #    "状态跟着走了"没发生时，得查得出来）。
+        if tracker.transition(req.task_id, TaskStatus.DONE) is None:
+            witness.warn("merge",
+                         f"merge_landed_but_transition_refused:{req.task_id}"[:160],
+                         key="merge_landed_but_transition_refused")
         # 合成功了 parking 记录就没用了 —— 留着只会让 `conflicts()` 列出一个**已经合掉**的"冲突"。
         # ⚠️ 删不掉要**出声**（静默 except 棘轮也会拦）：状态已经落成 DONE 了，
         # 删不掉只是让 `/api/conflicts` 多列一条**已经合完**的假冲突，不致命，但得让人看得见。
@@ -273,8 +283,17 @@ class MergeQueue:
                 json.dumps(req.to_dict(), ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-        except OSError:
-            pass
+        except OSError as e:
+            # 🔴 **落盘失败必须出声**（`docs/静默except待修清单-20260913.md` 里
+            # `merge.py:196` 那条，09-13 分好类、一直没做）。
+            # 后果不是"少了个文件"：`conflicts()` 读的是**内存**里那份，而任务下面
+            # 就被 transition 成 `CONFLICT_HELD` ⇒ 进程一重启，`_recover_parked`
+            # 从盘上读不到它 ⇒ 这个"有人在等的冲突"凭空消失，而任务**永久卡在
+            # `conflict_held`**（本文件已经为同一个形状栽过两次，见 `_mark_merged`
+            # 和 `resolve` 的 docstring）。内存里那份照旧保留 —— 只报，不改行为。
+            witness.warn("merge",
+                         f"parked_write_failed:{req.task_id}:{type(e).__name__}"[:160],
+                         key="parked_write_fail")
         tracker.transition(
             req.task_id, TaskStatus.CONFLICT_HELD,
             error=f"merge 冲突 parking: {reason or conflicts}",
@@ -320,8 +339,13 @@ class MergeQueue:
             tracker.transition(task_id, TaskStatus.FAILED, error="merge 冲突, 人工放弃")
             try:
                 _parked_path(task_id).unlink(missing_ok=True)
-            except OSError:
-                pass
+            except OSError as e:
+                # 同 `_mark_merged` 那处：任务状态已经落了（这里是 FAILED），删不掉只是
+                # 让重启后的 `_recover_parked` 把一个**已经放弃掉的**冲突又列回
+                # `/api/conflicts`。不致命，但"盘上有一条没人清得掉的假记录"得看得见。
+                witness.warn("merge",
+                             f"parked_unlink_failed:{task_id}:{type(e).__name__}"[:160],
+                             key="parked_unlink_failed")
             return MergeResult(task_id=task_id, status="failed")
 
         try:
