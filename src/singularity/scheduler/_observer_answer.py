@@ -214,6 +214,30 @@ def _gate_reject_reply(project_id: str, gate: str, feedback: str = "") -> str:
     return msg
 
 
+def _gate_approve_reply(project_id: str, gate: str, data: dict) -> str:
+    """聊天里说「通过」→ 按 `project_gate_confirm` 的**返回值**组织回话。
+
+    ⚠️ 批准这侧原来**没接返回值**（2026-09-19 外派评审 A5，逐行核过）：
+    三处都写成"自己 `confirm_gate` + `save_project`，然后硬编码一句 ✅ 已通过"。
+    打回那侧 2026-09-17 就收敛到 `project_gate_confirm` 了（见上面），批准这侧漏了，
+    于是同一个坑又踩一遍 —— 而且是更糟的半个：
+
+      · `confirm_gate` 返回 `None` = **没放行**（GATE2 架构无效时），却回"✅ 已通过"；
+      · 批准后**点火下一阶段**那一步（`_start_background(..., "planning")`）只有 HTTP
+        路径做了（那边的注释记着"实测空等 14 分钟"），聊天路径没点，回话却说
+        "已进入架构规划阶段"。
+
+    两件都是**把没发生的事说成发生了**（#28 / #70 同形）。回话只照返回值写。
+    """
+    nxt = data.get("next_phase") or "下一步"
+    msg = f"✅ {gate} 已通过，项目进入 **{nxt}**。"
+    if data.get("started_phase"):
+        msg += f"（已自动启动 {data['started_phase']}）"
+    if data.get("warning"):
+        msg += f"\n⚠️ {data['warning']}"
+    return msg
+
+
 def _answer_question_inner(question: str, project_id: str = "") -> str:
     cfg = _get_observer_cfg()
     api_key = cfg.get("api_key", "")
@@ -271,18 +295,13 @@ def _answer_question_inner(question: str, project_id: str = "") -> str:
         if session.get("phase") == "gate1_waiting":
             reply = _is_gate_reply(question)
             if reply == "approved":
+                # 走**和按钮同一条**批准路径（同 `_gate_reject_reply` 的理由）。
+                from singularity.scheduler._api_projects import project_gate_confirm
+                data, _code = project_gate_confirm(project_id, "gate1", "approved")
+                if not data.get("ok"):
+                    return f"⚠️ GATE1 没能放行：{data.get('error') or '未知原因'}"
                 session["phase"] = "done"
-                try:
-                    from singularity.scheduler.project import Phase
-                    from singularity.scheduler.project import load as load_project
-                    from singularity.scheduler.project import save as save_project
-                    proj = load_project(project_id)
-                    if proj:
-                        proj.confirm_gate(Phase.GATE1, "approved")
-                        save_project(proj)  # 必须落盘: confirm_gate 只改内存对象, load() 每次重新解析
-                except Exception:
-                    pass
-                return "✅ GATE1 已通过。定义阶段完成，已进入架构规划阶段。请在项目页推进架构设计（多模型委员会出方案）。"
+                return _gate_approve_reply(project_id, "gate1", data)
             elif reply == "rejected":
                 session["phase"] = "defining"
                 session["active_role"] = "product-manager"
@@ -293,29 +312,39 @@ def _answer_question_inner(question: str, project_id: str = "") -> str:
         try:
             from singularity.scheduler.project import Phase
             from singularity.scheduler.project import load as load_project
-            from singularity.scheduler.project import save as save_project
             proj = load_project(project_id)
             if proj:
                 reply = _is_gate_reply(question)
                 if proj.phase == Phase.GATE2:
                     if reply == "approved":
-                        proj.confirm_gate(Phase.GATE2, "approved")
-                        save_project(proj)
-                        return "✅ GATE2 已通过。进入实现阶段，前端/后端/数据/DevOps工程师将并行开发。"
+                        from singularity.scheduler._api_projects import project_gate_confirm
+                        data, _code = project_gate_confirm(project_id, "gate2", "approved")
+                        if not data.get("ok"):
+                            return f"⚠️ GATE2 没能放行：{data.get('error') or '未知原因'}"
+                        return _gate_approve_reply(project_id, "gate2", data)
                     elif reply == "rejected":
                         # 用户那句话里的理由跟着走 —— 见 `_reject_reason_from`。
                         return _gate_reject_reply(project_id, "gate2",
                                                   _reject_reason_from(question))
                 elif proj.phase == Phase.GATE3:
                     if reply == "approved":
-                        proj.confirm_gate(Phase.GATE3, "approved")
-                        save_project(proj)
-                        return "✅ GATE3 已通过。进入交付阶段，DevOps工程师将打包归档。"
+                        from singularity.scheduler._api_projects import project_gate_confirm
+                        data, _code = project_gate_confirm(project_id, "gate3", "approved")
+                        if not data.get("ok"):
+                            return f"⚠️ GATE3 没能放行：{data.get('error') or '未知原因'}"
+                        return _gate_approve_reply(project_id, "gate3", data)
                     elif reply == "rejected":
                         return _gate_reject_reply(project_id, "gate3",
                                                   _reject_reason_from(question))
-        except Exception:
-            pass
+        except Exception as e:
+            # 原来这里是 `pass` —— 而这一段管的是"人在聊天里回了 GATE 的话"，
+            # 静默吞掉就等于**人的批准/打回凭空消失**，回话还会接着编一句成功
+            # （2026-09-19 外派评审 A5 同族）。出声，别吞。
+            # （不再包一层 try：`witness.warn` 自己不会抛，多包一层只是凭空多一个
+            #   静默 except，而本仓有棘轮在数这个 —— 见 test_no_silent_except。）
+            from singularity.scheduler import witness as _w
+            _w.warn("observer", f"gate_reply_failed:{type(e).__name__}:{e}"[:160],
+                    key="gate_reply_failed")
 
     # Step 3: 检测定义层意图，注入角色 prompt
     def_role = _detect_definition_intent(question)

@@ -299,6 +299,16 @@ _FUSION_PLANS_TOTAL = int(os.environ.get("QIDIAN_FUSION_PLANS_TOTAL", "120000"))
 _FUSION_MAX_TOKENS = int(os.environ.get("QIDIAN_FUSION_MAX_TOKENS", "")
                          or config.MODEL_MAX_TOKENS)
 
+# 拆任务时给每条机器可跑约束配的说明 —— **只留一个出处**。
+# 从前这段字在 `decompose_architecture` 里写了两遍，第二份嵌在第一份的 `if _chk:`
+# 里面（连下面那段 2026-09-17 的注释也复制了一份）。后果不是"读起来啰嗦"：
+# 每个任务的 context_snippet 里每条约束都出现两次 —— 10 约束 × ~150 字 × 20 任务
+# ≈ 30K 字符纯重复 prompt，每个任务各付一遍，同时把真正要强调的那句
+# （"它引用的文件/路径必须存在"）稀释掉。2026-09-19 外派评审核出。
+_MACHINE_CHECK_HINT = (
+    "  ↳ 机器检查会真跑这条命令（退出码必须为 0）：`{cmd}`"
+    " —— 它引用的文件/路径**必须存在**（缺了就是判失败）。")
+
 # 定稿输出 schema。旧两阶段和新 v2 共用 —— 单花括号（这里不经过 .format）。
 # 字段顺序 = 输出顺序。tasks/risks 是下游拆任务的唯一依据，排前面 —— 实测融合稿
 # 被截断过三次，每次丢的都是排在最末尾的它们（brief 3 因此整个 tasks 段为 0 分）。
@@ -464,6 +474,9 @@ _V2_FINALIZE = """你是架构定稿人「{writer}」。下面是委员会的最
 【分歧结论（逐条已定，按此采用）】
 {resolved}
 
+【未裁决的分歧（**没有**达成结论 —— 不许采用任一方）】
+{unresolved}
+
 【采纳的独有做法】
 {adopted}
 
@@ -477,6 +490,11 @@ _V2_FINALIZE = """你是架构定稿人「{writer}」。下面是委员会的最
 
 要求:
 1. 分歧按结论采用对应立场 —— 不折中、不两个都写
+1b. **「未裁决的分歧」一条都不许采用任一方** —— 那几条辩论没走完，没有结论。
+   也不要折中编一个第三种做法。做法：把它写进 `risks`（risk 填「未裁决的分歧：<分歧点>
+   —— 各成员立场：…」），主方案里按**最小改动**的一侧走，并在 risk 里说明你选了哪侧。
+   🔴 判据是"有人真的投过票"，不是"看起来像定了"：没有确认票的分歧原来会被默认判给
+   发言方，于是产出读起来像有依据的裁决（2026-09-19 外派评审 A7）。
 2. 只写采纳的独有做法；驳回的一条都不要出现
 3. 长度控制在单份方案的 1.1~1.3 倍以内 —— 不取并集、不重复、不堆砌
 4. 逐条核对原始需求：modules / data_model / api_contracts / tasks 里的每一项都必须能
@@ -592,16 +610,6 @@ def _plans_block(plans: list[tuple[str, str]]) -> str:
         f"[{m}]\n{o if lim <= 0 else o[:lim]}" for m, o in plans)
 
 
-def _first_speaker(disagreements: list, members: list[str]) -> str:
-    """轮 1 发言方 = 提出分歧最多的一方；平手取 members 顺序靠前者。"""
-    cnt = {m: 0 for m in members}
-    for d in disagreements:
-        who = d.get("raised_by", "")
-        if who in cnt:
-            cnt[who] += 1
-    return max(members, key=lambda m: cnt[m])
-
-
 def _model_discipline() -> dict:
     """读模型范围纪律表：{model: {"violations": n, "audits": n}}。
 
@@ -623,17 +631,28 @@ def _model_discipline() -> dict:
 
 
 def _pick_writer(disagreements: list, members: list[str]) -> str:
-    """选定稿人：优先历史范围纪律好的，没数据回退「提分歧最多者」。
+    """选定稿人：优先历史范围纪律好的，没数据就取 `members[0]`。
 
     纪律 = 违例数 / 审计次数，越低越好。定稿人这个位置决定产物的范围纪律，
     而原来按「谁提分歧多」定 —— 跟纪律无关。
+
+    ⚠️ **没有纪律数据时的回退必须与分歧计数无关**（2026-09-19 外派评审 A7）。
+    原来回退到「轮 1 发言方 = 提分歧最多的一方」，而下一条裁决规则恰好是
+    **"分歧默认判给发言方"** —— 两条规则同源 ⇒ **自我强化的闭环**：
+    列分歧越多 → 越容易当上定稿人 → 越容易赢下每一个分歧 → 产出的稿子越像自己。
+    真机形态就是「2 席时融合稿 ≈ writer 原稿减去对方独有做法」，
+    辩论在数学上只能删掉别人的东西，不能把任何别人的东西变成结论。
+    ⇒ 这里退化成确定性选择（`members[0]`，与谁提了多少分歧无关）。
+
+    `_first_speaker` 已随这次改动删除 —— 它本身没错（"谁提得多"是个事实），
+    只是**不该**被用作定稿人的选拔规则。
     """
     disc = _model_discipline()
     scored = [(m, (disc.get(m) or {}).get("violations", 0) / max((disc.get(m) or {}).get("audits", 1), 1))
               for m in members if (disc.get(m) or {}).get("audits")]
     if scored:
         return min(scored, key=lambda kv: kv[1])[0]
-    return _first_speaker(disagreements, members)
+    return members[0] if members else ""
 
 
 def _j(obj) -> str:
@@ -911,28 +930,49 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
     # ponytail: 多个 insist 方各自立场不同时只记第一个 —— N>2 才有的歧义，
     # 实际分歧点几乎都是两家对立（spec 按两方设计）。
     resolved = []
+    unresolved = []
     for d in disagreements:
         did = str(d.get("id"))   # 与 _votes_into 的归一化对齐
         vs = [v for (m, i), v in resp_votes.items() if i == did]
-        winner = writer
         conf = conf_votes.get((writer, did))
+        if conf is None:
+            # 没有发言方的确认票 ⇒ **这一条没被裁决过**，不能默认判给发言方
+            # （2026-09-19 外派评审 A7）。原来这里走 `winner = writer` 只是加了个
+            # `basis="default_no_confirm_vote"` 的标注 —— 标是标了，**结论还是
+            # "发言方赢"**，而定稿人（和事后看产物的人）只读 `winner` 字段：
+            # "没人投过票"和"投票投出来的"在下游是同一个结果。
+            # ⇒ 判成 `winner=None` + 单列一段交给定稿人**不许采用任一方**。
+            # 只进 `unresolved`，**不进 `resolved`**：提示词里那一段的标题是
+            # 「分歧结论（逐条已定，按此采用）」，把"没定"的塞进去自相矛盾 ——
+            # 定稿人会照 winner 字段办事，那正是这次要修的东西。
+            unresolved.append({**d, "winner": None, "basis": "unresolved"})
+            continue
+        winner = writer
         if "insist" in vs and conf == "agree":
             winner = next((m for (m, i), v in resp_votes.items()
                            if i == did and v == "insist"), writer)
-        entry = {**d, "winner": winner}
-        if conf is None:
-            # 没有发言方的确认票 ≠ 发言方赢了 —— 只是"没人投过票，走默认"。
-            # 标出来，免得定稿人（和事后看产物的人）把它当成一个**有依据**的裁决。
-            entry["basis"] = "default_no_confirm_vote"
-        resolved.append(entry)
+        resolved.append({**d, "winner": winner, "basis": "voted"})
 
-    # 独有做法：全体 adopt 才采纳（保守 —— 长度就是膨胀的主因）
+    # 独有做法：**全体** adopt 才采纳（保守 —— 长度就是膨胀的主因）
     adopted = []
+    missing_votes = []
     for g in gains:
         stances = [v for (m, i), v in gain_votes.items() if i == str(g.get("id"))]
-        if stances and all(s == "adopt" for s in stances):
+        # ⚠️ 判据必须是"**全体成员**都投了 adopt"，不是"收到的票里全是 adopt"
+        # （2026-09-19 外派评审 A8）。原来写 `stances and all(...)`，缺票不算反对：
+        # writer 轮 1 的 JSON 解析失败（一票没有）或某个成员走了 `fusion_round2_json`
+        # 那条告警，**剩下几张 adopt 票就成了"全体"** —— 一条只有部分成员表过态的
+        # 做法被采纳，而 `rulings.adopted` 事后看是全体一致。
+        # 规则本身是对的（保守），是**实现没执行它**。
+        if len(stances) == len(members) and all(s == "adopt" for s in stances):
             adopted.append(g)
+        elif len(stances) < len(members):
+            missing_votes.append({**g, "votes": len(stances), "of": len(members)})
     rejected = [g for g in gains if g not in adopted]
+    if missing_votes:
+        # 缺票不是"跑了但没通过"，是"**没跑全**"——两者在产物里必须分得开
+        witness.warn("execution_judge",
+                     f"fusion_gain_missing_votes:{len(missing_votes)}"[:80])
 
     # 裁决记录出参（见 docstring）：落进 fusion_meta，GATE2 才查得到"凭什么长这样"。
     # 只放结构化事实，不放 transcript 全文（那是几万字的模型原文）。
@@ -941,14 +981,20 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
             "writer": writer,
             "rounds": rounds,
             "resolved": resolved,
+            # 没被裁决过的分歧单列 —— 它们是"辩论没走到"，不是"辩论判给了谁"。
+            # 混在 resolved 里的话，事后看产物的人分不出这两种（A7）。
+            "unresolved": unresolved,
             "adopted": adopted,
             "rejected": rejected,
+            # 缺票而落选的独有做法 —— 与"投了 reject"分开记（A8）
+            "missing_votes": missing_votes,
         })
 
     # ── ④ 定稿 + 确认 ──
     final_prompt = _V2_FINALIZE.format(
         writer=writer, task=task, consensus=_j(consensus), resolved=_j(resolved),
-        adopted=_j(adopted), rejected=_j(rejected), schema=_ARCH_SCHEMA,
+        unresolved=_j(unresolved), adopted=_j(adopted), rejected=_j(rejected),
+        schema=_ARCH_SCHEMA,
         # 原文必须给。只看「提取员转述」出来的结论，定稿人会凭空丢字段 ——
         # tasks/risks 就是这么整段丢过（提取员没提，它就真不写）。转述丢的
         # 东西定稿人补不回来，因为它根本没看到原稿。
@@ -1070,26 +1116,18 @@ def decompose_architecture(arch_json: dict) -> list[dict]:
             # **把"这条约束会被怎么机器检查"一起带上** —— 判据要的输入，必须和判据一起
             # 交给产出它的人（同 `<项目仓>/test_cases.json` 那条：三个读者都在等一份
             # **没人被要求写**的文件）。
+            # 🔴 **把"这条约束会被怎么机器检查"一起带上**（2026-09-17 真机）。
+            # 架构声明的 `constraints[].check.argv` 指定了**具体命令**（真机那轮是
+            # `python3 -m pytest -q tests/test_contract_normal.py` 这种），
+            # 而这里原来**只传了 `rule` 的文字** —— 干活的人从头到尾**没见过那个文件名**
+            # ⇒ 收尾时 10 条机器检查**10 条全失败**，全是
+            # `ERROR: file or directory not found: tests/test_contract_*.py`。
+            # ⇒ **判据的输入，必须和判据一起交给产出它的人**（同 `<项目仓>/test_cases.json`
+            #   那条：三个读者都在等一份**没人被要求写**的文件）。
             _chk = _argv_of(c)
             if _chk:
-                ctx_parts.append(
-                    "  ↳ 机器检查会真跑这条命令（退出码必须为 0）：`"
-                    + " ".join(str(x) for x in _chk)
-                    + "` —— 它引用的文件/路径**必须存在**（缺了就是判失败）。")
-                # 🔴 **把"这条约束会被怎么机器检查"一起带上**（2026-09-17 真机）。
-                # 架构声明的 `constraints[].check.argv` 指定了**具体命令**（真机那轮是
-                # `python3 -m pytest -q tests/test_contract_normal.py` 这种），
-                # 而这里原来**只传了 `rule` 的文字** —— 干活的人从头到尾**没见过那个文件名**
-                # ⇒ 收尾时 10 条机器检查**10 条全失败**，全是
-                # `ERROR: file or directory not found: tests/test_contract_*.py`。
-                # ⇒ **判据要的输入，必须和判据一起交给产出它的人**（同 `<项目仓>/test_cases.json`
-                #   那条：三个读者都在等一份**没人被要求写**的文件）。
-                _chk = _argv_of(c)
-                if _chk:
-                    ctx_parts.append(
-                        "  ↳ 机器检查会真跑这条命令（退出码必须为 0）：`"
-                        + " ".join(str(x) for x in _chk)
-                        + "` —— 它引用的文件/路径**必须存在**（缺了就是判失败）。")
+                ctx_parts.append(_MACHINE_CHECK_HINT.format(
+                    cmd=" ".join(str(x) for x in _chk)))
 
         # acceptance 来自 test_cases
         acceptance = t.get("acceptance", "")

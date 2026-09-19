@@ -436,6 +436,29 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     # 架构这一项 = 委员会席位。restrict 才限制得住：不限制的话 chain 还是全池，
     # 界面上配的"三家"会变成"池里所有模型各出一份初稿"。
     lineup, restrict = _phase_selection("planning", project)
+    # ── 委员会"静默不开"要出声（2026-09-19 外派评审 A6）──
+    # 开委员会的判据（`_dispatch_exec._committee_allowed`）要求 `len(chain) >= 2`，
+    # 而**席位只有一家时它一声不响地退化成单模型出稿** —— GATE2 上人看到的仍是一份
+    # "架构方案"，没有任何地方说"这份没碰撞过"。多模型碰撞是这套系统**唯一被实测
+    # 证实有价值**的能力，它没跑必须能被看见（防御模式 §44：承诺类字段的"没发生"
+    # 必须查得出来）。
+    # 判据用 `resolve_flow(project).committee`（"该不该开"）而不是 `restrict`
+    # （"限不限制在这份名单里"）—— 两者是不同的问题，别混。
+    # ⚠️ `lineup is None` 是**合法值**（= 不限制，用整个池），不是"零席位"。
+    # 判据写成 `len(lineup) < 2` 会当场 TypeError（`_phase_selection` 的契约就是
+    # 可能返回 None），而且**方向也错**：None 时候选是全场最多，委员会恰恰开得起来。
+    from singularity.scheduler import witness
+    from singularity.scheduler.project import resolve_flow
+    if lineup is not None and len(lineup) < 2 and resolve_flow(project).committee:
+        witness.warn("planning", f"committee_not_engaged:seats={len(lineup)}"[:80],
+                     key="committee_not_engaged")
+        if not any(i.get("kind") == "committee_not_engaged" for i in project.issues):
+            project.issues.append({
+                "kind": "committee_not_engaged",
+                "detail": (f"本阶段席位只有 {len(lineup)} 家，**委员会没有开**："
+                           f"这份架构是单个模型出的，没有多模型碰撞。"
+                           f"（在「模型」页把 planning 的候选加到 2 家以上可恢复）")})
+            save(project)
     # no_tools: 架构阶段的产出同样是 JSON 方案。委员会那条路自带禁工具，但**单模型**
     # 兜底那条没有 —— 席位只有一家时它会带着 write_file 去改磁盘。
     disp_result, err = _safe_dispatch(prompt, "any", task_id, agents, project,

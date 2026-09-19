@@ -69,8 +69,6 @@ from singularity.scheduler._auth import is_local_origin as _is_local_origin
 from singularity.scheduler.log import _get_file_logger as _get_file_log
 from singularity.scheduler.log import get_logger
 from singularity.scheduler.log import info as _log_info
-from singularity.scheduler.project import Phase
-from singularity.scheduler.tracker import TaskStatus
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
@@ -608,49 +606,30 @@ def _loop_worker():
                     witness.warn("loop", f"memory_consolidate_failed:{type(_e).__name__}:{_e}"[:160],
                                  key="memory_consolidate_failed")
 
-                # 项目工作流推进: 检查已完成的任务是否属于某个项目
-                try:
-                    for tid, _reason, _validation in results:
-                        for proj in proj_mod.recover_all():
-                            if tid not in proj.task_ids:
-                                continue
-                            if proj.phase != Phase.EXECUTING:
-                                continue
-                            # 检查是否所有子任务完成
-                            all_done = True
-                            for tid2 in proj.task_ids:
-                                t = tracker.read_task(tid2)
-                                if t and t.status not in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.ROLLED_BACK):
-                                    all_done = False
-                                    break
-                            if not all_done:
-                                continue
-
-                            from singularity.scheduler import workflow as wf_mod
-                            if proj.phase == Phase.EXECUTING:
-                                _push_event("workflow", f"项目 {proj.name[:20]}: 执行完成 → 内循环")
-                                msg = wf_mod.run_test_fix_loop(proj, agents)
-                                _push_event("workflow", f"项目 {proj.name[:20]}: {msg}")
-                                # auto_mode: 继续推进
-                                if proj.auto_mode:
-                                    try:
-                                        wf_mod.run_phase(proj, agents)
-                                    except Exception as _e:
-                                        # ⚠️ **auto_mode 下这一抛出 = 项目停在原地没人知道**
-                                        # （2026-09-13 外派分类抓到）。它正好是那类"看着像成功了"
-                                        # 的死法：批准之后以为会自己往下走，其实一步没动。
-                                        witness.warn("loop",
-                                                     f"run_phase_failed:{proj.id}:"
-                                                     f"{type(_e).__name__}:{_e}"[:160],
-                                                     key="run_phase_failed")
-                            # 这里原来还有个 `elif proj.phase == Phase.FIXING:` 分支
-                            # （"修复任务完成 → 回到审查"）—— **永远执行不到**：
-                            # FIXING 全仓无人赋值，那个状态根本进不去。已随枚举一并删除。
-                except Exception as _e:
-                    # ⚠️ 这一段是"任务跑完之后推进项目"的全部逻辑 —— 它一抛就 `pass`，
-                    # 项目会**无声地停在 executing**（2026-09-13 外派分类抓到）。
-                    witness.warn("loop", f"result_handling_failed:{type(_e).__name__}:{_e}"[:160],
-                                 key="result_handling_failed")
+                # 项目工作流推进 —— **这一段已删**（2026-09-19，外派评审 A4，逐行核过）。
+                #
+                # 它原来在"某项目的任务全到终态"时自己调 `run_test_fix_loop` →
+                # 直接推 GATE3，**跳过 `_run_integration_merge` 那道"工作区必须干净 +
+                # 集成测试"的门**，而人看到的是完整的 GATE3。正常路径它不触发
+                # （`orchestrator` 先把 phase 推成 integrating），但它接的是**降级路径**：
+                # `_auto_trigger_test_fix` 原来用**一个** `try` 套住整个 `for`（那一处
+                # 已改成 per-project 隔离），任一项目抛错 ⇒ 本轮它后面所有项目都不推进
+                # ⇒ 就轮到这一段接手 —— 于是"把别人拖挂的那个项目"恰好又是被静默
+                # 跳过一道门的那一个。两件事叠在一起，谁都没出声。
+                #
+                # 归属（`project.py` 顶部有同一张表，那是权威）：
+                #   EXECUTING/INTEGRATING/REVIEWING/DELIVERING  → **只归调度循环**
+                #     （`orchestrator._auto_trigger_test_fix`，`run_queue` 每 tick 调两次）
+                #   TEMPLATE/RESEARCHING/PLANNING/GATE*        → **只归 `run_phase`**
+                # 这一段两样都不是（它比调度循环多做的是"跳过 INTEGRATING"），所以删。
+                #
+                # 一并带走的：`auto_mode` 下面那个 `run_phase` 分支 —— 它是全仓**唯一**
+                # 的 auto_mode 消费点，而 auto_mode 没有任何界面/接口能置位
+                # （全仓只剩它自己那两行，`ProjectState` 里默认 False 且无人写），
+                # 也就是说那条路从来没生效过。删掉它不改变任何真实行为。
+                #
+                # 更早还删过一个 `elif proj.phase == Phase.FIXING:` 分支（FIXING 全仓
+                # 无人赋值，状态根本进不去）。
         except Exception as e:
             _push_event("error", f"loop error: {e}")
             # ⚠️ **必须进告警通道，不能只推 SSE。** 只推 SSE 的话这句话飘一次就没了 ——

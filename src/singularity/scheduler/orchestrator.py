@@ -39,7 +39,12 @@ except ImportError:
 # 集成合并含 pytest/docker subprocess (最长 ~150s), 不能在调度循环线程同步跑,
 # 否则单项目合并期间全局任务派发/SSE 停摆。用独立线程池异步执行, 完成后回写 phase。
 _merge_executor = None  # 惰性重建: 进程重启/shutdown 后 submit 会报 cannot schedule new futures
-_merge_inflight: set[str] = set()  # 正在跑集成合并的 project_id, 防重入
+_merge_inflight: set[str] = set()  # 正在跑集成合并/验收的 project_id, 防重入
+
+# 验收（run_test_fix_loop）连续失败几次就停手等人。同 `_INTEGRATE_MAX_RETRIES` 的思路：
+# 没有计数器的话，"验收一抛就回到 reviewing"会让**每个 tick 重跑一整段验收**
+# （2 次 LLM + 最多 10 条子进程检查），而且一直不停。
+_VERIFY_MAX_ATTEMPTS = 2
 
 
 def _get_merge_executor() -> ThreadPoolExecutor:
@@ -72,6 +77,71 @@ def _submit_integration_merge(proj, agents: dict) -> None:
         _merge_inflight.discard(proj.id)
         witness.warn("orch", f"merge_submit_failed:{type(e).__name__}:{e}"[:160],
                      key="merge_submit_failed")
+
+
+def _submit_verification(proj, agents: dict) -> None:
+    """把验收丢进后台池。**"占位"和"提交"要么一起成、要么一起不成**（同隔壁那条）。
+
+    守卫沿用 `_merge_inflight`（不是另起一个 set）：`add` 在提交时、`discard` 在
+    `finally`，作用域正好覆盖整个验收期间，而验收期间恰恰是最需要防重入的窗口。
+    """
+    _merge_inflight.add(proj.id)
+    try:
+        _get_merge_executor().submit(_run_verification_async, proj.id, agents)
+    except Exception as e:
+        _merge_inflight.discard(proj.id)
+        witness.warn("orch", f"verify_submit_failed:{type(e).__name__}:{e}"[:160],
+                     key="verify_submit_failed")
+
+
+def _run_verification_async(project_id: str, agents: dict) -> None:
+    """后台线程跑验收（`run_test_fix_loop` → 推 GATE3）。
+
+    ⚠️ **为什么必须异步**（2026-09-19 外派评审核出）：`run_test_fix_loop` 里是
+    最多 10 条机器检查（`DEFAULT_TIMEOUT=60.0` → 单条可到 60s）**加两次 LLM 调用**，
+    而它原来是在**调度循环线程里同步跑**的。这几分钟里 `_run_queue_v3` 不转 ⇒
+    其它项目的派发、reap、以及 **900s 超时收割**（收割本身就在那个循环里）全部停摆。
+    隔壁集成合并早就异步化了，理由一模一样（见文件顶 F1 注释），这条更长的却没做。
+
+    B1（同一次评审）：验收没走到 GATE3 就抛，phase 会一直停在 reviewing，
+    于是每个 tick 重跑一整段 —— 连带记账，触顶后停手等人（同 `integrate_failures` 的思路）。
+    """
+    from singularity.scheduler import project as proj_mod
+    try:
+        proj = proj_mod.load(project_id)
+        if proj is None:
+            return
+        attempts = getattr(proj, "verify_attempts", 0)
+        if attempts >= _VERIFY_MAX_ATTEMPTS:
+            if not any(i.get("kind") == "verify_attempts_exhausted" for i in proj.issues):
+                proj.issues.append({
+                    "kind": "verify_attempts_exhausted",
+                    "message": (f"验收连续 {attempts} 次没走到 GATE3（**不是任务失败**，"
+                                f"是验收自己没跑完）—— 已停手，等人看"),
+                    "ts": time.time(),
+                })
+                proj_mod.save(proj)
+                witness.warn("orch", f"verify_exhausted:{tracker.short_id(project_id)}"[:80])
+                _pending_sse_events.append({
+                    "kind": "system", "msg": f"项目 {proj.name}: 验收连续失败，已停手等人工",
+                    "ts": time.time(), "project_id": proj.id,
+                })
+            return
+        proj.verify_attempts = attempts + 1
+        proj_mod.save(proj)
+        from singularity.scheduler.workflow import run_test_fix_loop
+        msg = run_test_fix_loop(proj, agents)
+        _pending_sse_events.append({
+            "kind": "system", "msg": f"验收完成 → GATE3 {str(msg)[:120]}",
+            "ts": time.time(), "project_id": proj.id,
+        })
+    except Exception as e:
+        # 不必再包一层 try/except：`witness.warn` 自己不会抛（内部有兜底 + 第二条通道），
+        # 而多包一层就是凭空多一个静默 except —— 本仓有守卫在数这个
+        # （test_no_silent_except，棘轮只往一个方向转）。
+        witness.warn('orch', f'verify_async:{type(e).__name__}:{e}'[:200])
+    finally:
+        _merge_inflight.discard(project_id)
 
 
 def run_queue(agents: dict, max_concurrent: int = 1) -> list[tuple]:
@@ -899,121 +969,146 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
 
     F1: 集成合并异步化 — executing 任务全完成后只推进 phase→INTEGRATING,
     把 _run_integration_merge 扔进 _merge_executor 后台跑, 调度循环不阻塞。
+
+    ⚠️ **每个项目一个 try**（2026-09-19 外派评审 A4，逐行核过）。原来是**一个 try
+    套住整个 `for`**：任一项目抛错，本轮它**后面所有项目**都不推进，而这条路径
+    每小时要跑几百次。配合 `web/app.py` 里那段"降级接手"的重复推进（已删），
+    后果是"把别人拖挂的那个项目"恰好被静默跳过 INTEGRATING 那道门。
+    ⇒ 列项目失败只记一条并返回；单个项目失败只记一条，不影响同轮其它项目。
     """
     try:
         from singularity.scheduler import project as proj_mod
-        for proj in proj_mod.list_all():
-            if proj.phase.value == "executing":
-                # P2: 首次进入 → 拆解架构为任务
-                if not proj.task_ids:
-                    _decompose_and_create_tasks(proj, agents)
-                    if not proj.task_ids:
-                        # 拆不出任务 = 架构产物不可用。实测链路：融合失败（模型欠费）
-                        # → 掉到通用合成 → 产物不是合法架构 JSON → parse_error
-                        # → decompose 得 0 个任务。
-                        # **必须在这里拦住**：下面的推进判据要求 `proj.task_ids` 非空，
-                        # 空的话两条分支都不进 —— 项目**无声地永久卡在 executing**：
-                        # 没任务可跑、推不动、没有终态、也没有任何告警（2026-09-11
-                        # 真流水线实测：卡了 13 分钟，日志一行都没有）。
-                        if not any(i.get("kind") == "no_decomposable_tasks" for i in proj.issues):
-                            proj.issues.append({
-                                "kind": "no_decomposable_tasks",
-                                "message": "架构产物拆不出任务，无可执行内容（架构解析失败？）",
-                                "ts": time.time(),
-                            })
-                            proj_mod.save(proj)
-                            witness.warn("orch", f"project_no_tasks:{tracker.short_id(proj.id)}"[:80])
-                        continue
-                pending = [tid for tid in proj.task_ids
-                          if tracker.read_task(tid) and tracker.read_task(tid).status not in (
-                              tracker.TaskStatus.DONE, tracker.TaskStatus.ROLLED_BACK,
-                              tracker.TaskStatus.FAILED, tracker.TaskStatus.DECOMPOSED)]
-                if not pending and proj.task_ids:
-                    # FAILED 也在"终态"集合里，所以这里必须再分一次：**一个都没成功
-                    # 就没有可交付的东西**。以前不看这个 —— 7 个任务全失败的项目照样
-                    # 一路推到 DONE 并播报"交付完成!"，用户看到的和事实完全相反
-                    # （2026-09-11 探针实测：7 任务全 failed，项目 phase=done）。
-                    done_ids = [tid for tid in proj.task_ids
-                                if (t := tracker.read_task(tid))
-                                and t.status == tracker.TaskStatus.DONE]
-                    if not done_ids:
-                        # 记一条 issue 并**停在这里等人处理**，不再往交付推。
-                        # 已记过就不再重复（调度循环每 tick 都会走到这里，否则刷屏）。
-                        if not any(i.get("kind") == "all_tasks_failed" for i in proj.issues):
-                            proj.issues.append({
-                                "kind": "all_tasks_failed",
-                                "message": f"{len(proj.task_ids)} 个任务全部失败，无可交付内容",
-                                "ts": time.time(),
-                            })
-                            proj_mod.save(proj)
-                            witness.warn("orch", f"project_all_tasks_failed:"
-                                                 f"{tracker.short_id(proj.id)}:{len(proj.task_ids)}"[:80])
-                    else:
-                        # D2: 推进到集成合并阶段, 异步跑 (不阻塞调度循环)
-                        n_failed = len(proj.task_ids) - len(done_ids)
-                        proj.set_phase(proj_mod.Phase.INTEGRATING,
-                                        f"任务全部到终态(失败 {n_failed})→集成合并")
-                        proj_mod.save(proj)
-                        _pending_sse_events.append({
-                            "kind": "system",
-                            # 别再说"全部任务完成" —— 有失败时如实报数
-                            "msg": (f"项目 {proj.name}: {len(done_ids)} 个任务完成"
-                                    + (f"，{n_failed} 个失败" if n_failed else "")
-                                    + "，进入集成合并"),
-                            "ts": time.time(), "project_id": proj.id,
-                        })
-                        if proj.id not in _merge_inflight:
-                            _submit_integration_merge(proj, agents)
-            elif proj.phase.value == "delivering":
-                # S1: 自动交付打包 (轻量, 同步即可)
-                ok, detail = _run_delivery(proj)
-                if ok:
-                    # ⚠️ **别再套一层 `交付完成: `** —— `_run_delivery` 返回的串**自带**那个前缀
-                    # （账本和 SSE 那两处就是直接用它，读着正是要的样子）。这里再套一遍，
-                    # 真机上 lineage 就成了 `交付完成: 交付完成: tag=…`（2026-09-16 撞见）。
-                    proj.set_phase(proj_mod.Phase.DONE, detail[:60])
+        projects = proj_mod.list_all()
+    except Exception as e:
+        witness.warn('orch', f'auto_trigger_list:{type(e).__name__}:{e}'[:200])
+        return
+    for proj in projects:
+        try:
+            _advance_project(proj, agents)
+        except Exception as e:
+            witness.warn('orch', f'auto_trigger:{tracker.short_id(proj.id)}:'
+                                 f'{type(e).__name__}:{e}'[:200])
+
+
+def _advance_project(proj, agents: dict) -> None:
+    """单个项目的阶段推进 —— 抽成函数**只为让异常按项目隔离**（见上面那条注释）。
+
+    只认 EXECUTING / INTEGRATING / REVIEWING / DELIVERING 四档；其余
+    （TEMPLATE/RESEARCHING/PLANNING/GATE*）归 `run_phase`，见 `project.py` 顶部的归属表。
+    """
+    from singularity.scheduler import project as proj_mod
+    if proj.phase.value == "executing":
+        # P2: 首次进入 → 拆解架构为任务
+        if not proj.task_ids:
+            _decompose_and_create_tasks(proj, agents)
+            if not proj.task_ids:
+                # 拆不出任务 = 架构产物不可用。实测链路：融合失败（模型欠费）
+                # → 掉到通用合成 → 产物不是合法架构 JSON → parse_error
+                # → decompose 得 0 个任务。
+                # **必须在这里拦住**：下面的推进判据要求 `proj.task_ids` 非空，
+                # 空的话两条分支都不进 —— 项目**无声地永久卡在 executing**：
+                # 没任务可跑、推不动、没有终态、也没有任何告警（2026-09-11
+                # 真流水线实测：卡了 13 分钟，日志一行都没有）。
+                if not any(i.get("kind") == "no_decomposable_tasks" for i in proj.issues):
+                    proj.issues.append({
+                        "kind": "no_decomposable_tasks",
+                        "message": "架构产物拆不出任务，无可执行内容（架构解析失败？）",
+                        "ts": time.time(),
+                    })
                     proj_mod.save(proj)
-                    _record_ledger(proj, {"delivery": "ok", "detail": detail[:120]})
-                    _pending_sse_events.append({
-                        "kind": "system", "msg": f"项目 {proj.name}: 交付完成! {detail[:100]}",
-                        "ts": time.time(), "project_id": proj.id,
+                    witness.warn("orch", f"project_no_tasks:{tracker.short_id(proj.id)}"[:80])
+                # 抽成函数前这里是 `continue`（"这个项目本轮到此为止，看下一个"）。
+                # 现在函数体只服务一个项目，循环没了 ⇒ 同一个语义落在 `return`。
+                # ⚠️ refactor 时最容易漂的就是这种跳转语句，ruff 的 F702 会逮它。
+                return
+        pending = [tid for tid in proj.task_ids
+                  if tracker.read_task(tid) and tracker.read_task(tid).status not in (
+                      tracker.TaskStatus.DONE, tracker.TaskStatus.ROLLED_BACK,
+                      tracker.TaskStatus.FAILED, tracker.TaskStatus.DECOMPOSED)]
+        if not pending and proj.task_ids:
+            # FAILED 也在"终态"集合里，所以这里必须再分一次：**一个都没成功
+            # 就没有可交付的东西**。以前不看这个 —— 7 个任务全失败的项目照样
+            # 一路推到 DONE 并播报"交付完成!"，用户看到的和事实完全相反
+            # （2026-09-11 探针实测：7 任务全 failed，项目 phase=done）。
+            done_ids = [tid for tid in proj.task_ids
+                        if (t := tracker.read_task(tid))
+                        and t.status == tracker.TaskStatus.DONE]
+            if not done_ids:
+                # 记一条 issue 并**停在这里等人处理**，不再往交付推。
+                # 已记过就不再重复（调度循环每 tick 都会走到这里，否则刷屏）。
+                if not any(i.get("kind") == "all_tasks_failed" for i in proj.issues):
+                    proj.issues.append({
+                        "kind": "all_tasks_failed",
+                        "message": f"{len(proj.task_ids)} 个任务全部失败，无可交付内容",
+                        "ts": time.time(),
                     })
-                else:
-                    # 失败也记 —— **账本要的是结局，不是成功集**（只记成功的话，
-                    # digest 里永远一片大好，下一轮照着做还是撞同一堵墙）
-                    _record_ledger(proj, {"delivery": "failed", "detail": detail[:120]})
-                    _pending_sse_events.append({
-                        "kind": "system", "msg": f"项目 {proj.name}: 交付失败, 需人工处理 - {detail[:100]}",
-                        "ts": time.time(), "project_id": proj.id,
-                    })
-            elif proj.phase.value == "reviewing":
-                # P3: 验收阶段 — 直接推GATE3等人审（FIXING 已删，状态不可达）
-                #
-                # ⚠️ **必须防重入**（2026-09-18 外派评审抓出，逐行核过）。
-                # `_run_integration_merge_async` **自己就调** `run_test_fix_loop`：
-                # 它先 `set_phase(REVIEWING)` + `save`，**再**调 —— 而那里面是两次
-                # LLM 调用加最多 10 条子进程检查，**窗口是分钟级**。这里是
-                # **调度循环每一 tick** 扫一遍，扫到 `reviewing` 就再调一次 ⇒
-                # **同一个项目的验收同时跑两遍**：两份钱，各自 `issues = []` 再填，
-                # 最后 `save()` 整对象覆盖（`project.save` 的 RLock 只防"同时写"，
-                # **防不住丢更新**）。
-                #
-                # 守卫跟隔壁 `integrating` 分支**共用同一个** —— `_merge_inflight`
-                # 的作用域碰巧正好对：`add` 在提交时、`discard` 在 `finally`，
-                # 覆盖了整个验收期间。别另起一个 set。
-                if proj.id not in _merge_inflight:
-                    from singularity.scheduler.workflow import run_test_fix_loop
-                    run_test_fix_loop(proj, agents)
-            elif proj.phase.value == "integrating":
-                # 重启恢复: 若没在跑则提交 (已在跑的跳过防重入)
+                    proj_mod.save(proj)
+                    witness.warn("orch", f"project_all_tasks_failed:"
+                                         f"{tracker.short_id(proj.id)}:{len(proj.task_ids)}"[:80])
+            else:
+                # D2: 推进到集成合并阶段, 异步跑 (不阻塞调度循环)
+                n_failed = len(proj.task_ids) - len(done_ids)
+                proj.set_phase(proj_mod.Phase.INTEGRATING,
+                                f"任务全部到终态(失败 {n_failed})→集成合并")
+                proj_mod.save(proj)
+                _pending_sse_events.append({
+                    "kind": "system",
+                    # 别再说"全部任务完成" —— 有失败时如实报数
+                    "msg": (f"项目 {proj.name}: {len(done_ids)} 个任务完成"
+                            + (f"，{n_failed} 个失败" if n_failed else "")
+                            + "，进入集成合并"),
+                    "ts": time.time(), "project_id": proj.id,
+                })
                 if proj.id not in _merge_inflight:
                     _submit_integration_merge(proj, agents)
-    except Exception as e:
-        # S6: 不再静默吞错 — 记录并通知, 避免项目卡死无反馈
-        try:
-            witness.warn('orch', f'auto_trigger:{e}')
-        except Exception:
-            pass
+    elif proj.phase.value == "delivering":
+        # S1: 自动交付打包 (轻量, 同步即可)
+        ok, detail = _run_delivery(proj)
+        if ok:
+            # ⚠️ **别再套一层 `交付完成: `** —— `_run_delivery` 返回的串**自带**那个前缀
+            # （账本和 SSE 那两处就是直接用它，读着正是要的样子）。这里再套一遍，
+            # 真机上 lineage 就成了 `交付完成: 交付完成: tag=…`（2026-09-16 撞见）。
+            proj.set_phase(proj_mod.Phase.DONE, detail[:60])
+            proj_mod.save(proj)
+            _record_ledger(proj, {"delivery": "ok", "detail": detail[:120]})
+            _pending_sse_events.append({
+                "kind": "system", "msg": f"项目 {proj.name}: 交付完成! {detail[:100]}",
+                "ts": time.time(), "project_id": proj.id,
+            })
+        else:
+            # 失败也记 —— **账本要的是结局，不是成功集**（只记成功的话，
+            # digest 里永远一片大好，下一轮照着做还是撞同一堵墙）
+            _record_ledger(proj, {"delivery": "failed", "detail": detail[:120]})
+            _pending_sse_events.append({
+                "kind": "system", "msg": f"项目 {proj.name}: 交付失败, 需人工处理 - {detail[:100]}",
+                "ts": time.time(), "project_id": proj.id,
+            })
+    elif proj.phase.value == "reviewing":
+        # P3: 验收阶段 — 直接推GATE3等人审（FIXING 已删，状态不可达）
+        #
+        # ⚠️ **必须防重入**（2026-09-18 外派评审抓出，逐行核过）。
+        # `_run_integration_merge_async` **自己就调** `run_test_fix_loop`：
+        # 它先 `set_phase(REVIEWING)` + `save`，**再**调 —— 而那里面是两次
+        # LLM 调用加最多 10 条子进程检查，**窗口是分钟级**。这里是
+        # **调度循环每一 tick** 扫一遍，扫到 `reviewing` 就再调一次 ⇒
+        # **同一个项目的验收同时跑两遍**：两份钱，各自 `issues = []` 再填，
+        # 最后 `save()` 整对象覆盖（`project.save` 的 RLock 只防"同时写"，
+        # **防不住丢更新**）。
+        #
+        # 守卫跟隔壁 `integrating` 分支**共用同一个** —— `_merge_inflight`
+        # 的作用域碰巧正好对：`add` 在提交时、`discard` 在 `finally`，
+        # 覆盖了整个验收期间。别另起一个 set。
+        #
+        # ⚠️ 原来是**在本函数里同步调** `run_test_fix_loop`（2026-09-19 外派
+        # 评审核出）：这个函数跑在调度循环线程上，而验收是分钟级的 ⇒ 这段
+        # 时间里全局派发/reap/超时收割全部停摆，跟 F1 当初给集成合并异步化的
+        # 理由逐字一样。改成提交到同一个池子。
+        if proj.id not in _merge_inflight:
+            _submit_verification(proj, agents)
+    elif proj.phase.value == "integrating":
+        # 重启恢复: 若没在跑则提交 (已在跑的跳过防重入)
+        if proj.id not in _merge_inflight:
+            _submit_integration_merge(proj, agents)
 
 
 def _decompose_and_create_tasks(proj, agents: dict) -> None:
@@ -1168,6 +1263,9 @@ def _run_integration_merge_async(project_id: str, agents: dict) -> None:
                 # 用 `detail` 而不是写死一句话 —— 它区分得开"跑过测试"和
                 # "项目里没测试可跑"（`_note_integration`）。写死等于把刚拿到的
                 # 那个区别当场丢掉。
+                # 进 REVIEWING = 验收从头再来一次，验收尝试计数跟着清零
+                # （它是"连续失败几次"的计数，不是"这个项目总共验过几次"）
+                proj.verify_attempts = 0
                 proj.set_phase(proj_mod.Phase.REVIEWING, detail)
                 proj_mod.save(proj)
                 from singularity.scheduler.workflow import run_test_fix_loop
@@ -1359,15 +1457,30 @@ def _run_delivery(proj) -> tuple[bool, str]:
     }
 
     # 1) 代码归档: 打 tag
+    #
+    # ⚠️ **必须先看 HEAD 上有没有已存在的 release tag**（2026-09-19 外派评审 B2）。
+    # 这个函数在 phase 卡在 `delivering` 时会被**每 tick 重调一次**（下一段或
+    # `manifest` 写失败抛出去，phase 就留在原地），而 tag 名带**到分钟的时间戳**
+    # ⇒ 每重试一次就多一个 `release/<id>-<分钟>`，一串标签指着**同一个 commit**，
+    # 事后分不清哪个才是"那次交付"。⚠️ 真机上还没撞过（账上 8/8 都是真 tag）——
+    # 正因为没撞过，它才一直没被发现。
+    # 判据用 **commit** 而不是时间：同一个 HEAD 已经有 tag 就复用那个。
     try:
         tag_name = f"release/{proj.id}-{_dt.now().strftime('%Y%m%d%H%M')}"
-        r = subprocess.run(["git", "tag", tag_name], capture_output=True, text=True, timeout=15, cwd=root)
-        if r.returncode == 0:
-            deliverables["code_ref"] = tag_name
+        at_head = subprocess.run(["git", "tag", "--points-at", "HEAD"],
+                                 capture_output=True, text=True, timeout=15, cwd=root)
+        existing = [t for t in (at_head.stdout or "").split()
+                    if t.startswith(f"release/{proj.id}-")]
+        if existing:
+            deliverables["code_ref"] = existing[0]
         else:
-            # 无 git 或不成功 → 用 HEAD commit
-            r2 = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10, cwd=root)
-            deliverables["code_ref"] = r2.stdout.strip()[:12] if r2.returncode == 0 else "unknown"
+            r = subprocess.run(["git", "tag", tag_name], capture_output=True, text=True, timeout=15, cwd=root)
+            if r.returncode == 0:
+                deliverables["code_ref"] = tag_name
+            else:
+                # 无 git 或不成功 → 用 HEAD commit
+                r2 = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10, cwd=root)
+                deliverables["code_ref"] = r2.stdout.strip()[:12] if r2.returncode == 0 else "unknown"
     except Exception:
         deliverables["code_ref"] = "unknown"
 
@@ -1416,8 +1529,11 @@ def _run_delivery(proj) -> tuple[bool, str]:
         deliverables["artifacts"].append({"name": "npm-package", "type": "package"})
 
     # 写交付清单
+    # 原子写（同 A9）。原来是裸 `write_text` —— 而 B2 记的正是"打完 tag 之后抛出去"
+    # 那条路：撕裂的清单读不出来，下一次重试会**再打一个 tag**，而清单看不出来。
+    from singularity.scheduler._io import atomic_write_text
     manifest_path = docs_dir / "delivery_manifest.json"
-    manifest_path.write_text(_json.dumps(deliverables, ensure_ascii=False, indent=2))
+    atomic_write_text(manifest_path, _json.dumps(deliverables, ensure_ascii=False, indent=2))
 
     # ⚠️ 报告数一起报 —— 不然"报告一栏是空的"这件事在日志里看不出来，
     # 只有翻 manifest 才发现（原来就是这个问题）。

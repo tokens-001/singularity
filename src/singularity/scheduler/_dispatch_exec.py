@@ -32,6 +32,11 @@ from singularity.scheduler.log import timed
 # 没跑完的线程留在后台（不 join），不再拖住整条架构阶段。
 _WAVE_TIMEOUT = float(os.environ.get("QIDIAN_DEBATE_TIMEOUT", "300"))
 
+# 委员会最多几家。**必须和 `_dispatch_committee` 里的线程池大小一致** ——
+# 席位比 worker 多的话，多出来的那几家要么没开始、要么在 `done` 收集完之后才跑完：
+# token 照花、结果被丢，而且进不了 `member_usage` ⇒ 不进账（2026-09-19 外派评审 A6）。
+_COMMITTEE_MAX_SEATS = 4
+
 
 def _impl_role_veto(route_role: str) -> bool:
     """这个 route_role 是不是"执行阶段的角色"（= 这是实现活儿，不是架构设计）。
@@ -188,6 +193,7 @@ def dispatch(
         # 只有 A 臂留痕的话，"没看到 solo 事件"就同时是"跑了 B 臂"和"根本没进这里"，
         # 两种完全不同的情况长得一样（本仓 §59 那个老形状）。
         _log_arm_event("committee_arm", task_id=task_id, level=level,
+                       seats=len(chain),
                        models=[c.get("model", "") for c in chain[:3]])
         return _dispatch_committee(task, level, task_id, agents, chain, feedback,
                                    baseline_ref, cwd, project_id=project_id)
@@ -418,6 +424,18 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
     """多模型委员会: 所有可用D模型并行产出→合成。"""
     import concurrent.futures
 
+    # ── 席位与并发**钉在一起**（2026-09-19 外派评审 A6）──
+    # 线程池最多 4 个 worker，而 chain 可以有任意长。链上的第 5 家及以后：要么压根
+    # 没开始，要么在 `done` 收集完之后才跑完 —— token 照花、结果被丢掉（`done` 是
+    # 一个快照，之后完成的 future 没人取）。更糟的是它进不了 `member_usage`
+    # ⇒ **这笔钱不进账**，而委员会是全场最贵的一段。
+    # 所以席位在这一行就切齐：**席位表 == 实际会跑的表**，`_WAVE_TIMEOUT` 随之退回
+    # 它本来的角色（纯等待上界），不再是"结果截断"。
+    if len(chain) > _COMMITTEE_MAX_SEATS:
+        _log_arm_event("committee_seats_capped", task_id=task_id,
+                       seats=len(chain), kept=_COMMITTEE_MAX_SEATS)
+        chain = chain[:_COMMITTEE_MAX_SEATS]
+
     # 席位视角: 默认关闭 —— A/B 盲评证伪（有视角 31 vs 无视角 32，略输）：
     # 一句"你关注风险/创新"的提示词 = 伪碰撞，不产生真实差异。
     # 真正有效的是辩论轮（盲评 +3~5 分），别把两者搞混。
@@ -444,7 +462,9 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
     # 不能用 `with ThreadPoolExecutor(...)`: 退出时 shutdown(wait=True) 会去 join，
     # `_WAVE_TIMEOUT` 就只是个"延迟判定"而不是时限 —— 某个模型调用挂死就把整条
     # 架构阶段拖住（实测 A/B 探针三次这样卡住）。显式 shutdown(wait=False)。
-    _ex = concurrent.futures.ThreadPoolExecutor(max_workers=min(len(chain), 4))
+    # 用同一个常量：席位表和线程池**必须**同源，两个写字面量迟早会漂开
+    _ex = concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(len(chain), _COMMITTEE_MAX_SEATS))
     try:
         futures = {}
         for i, a in enumerate(chain):

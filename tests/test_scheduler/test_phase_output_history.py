@@ -7,6 +7,9 @@
 
 这些测试**钉接线**：删掉对应的那一行判据，测试必须红（每条 docstring 里写了删哪行）。
 """
+import pytest
+
+
 def _hist(project_id, filename):
     from singularity.scheduler.workflow import _phase_history_dir
     d = _phase_history_dir(project_id)
@@ -66,6 +69,33 @@ def test_归档塌了正文照样落盘(monkeypatch):
 
     # 去掉那圈 try/except ⇒ 这里直接抛 OSError，红。
     assert _phase_output_path(pid, "architecture.md").read_text(encoding="utf-8") == "v2"
+
+
+def test_阶段产出是原子写(monkeypatch):
+    """落盘中途出事 ⇒ **上一版还在**，不会留下半截文件（2026-09-19 外派评审 A9）。
+
+    这一族原来是全仓**唯一**一类裸 `write_text` 的状态文件（`project.save()` 和
+    `atomic_write_json` 都是 tmp+replace）。后果不是"文件坏了"这么轻：
+    半截 JSON 读不出来，而 `handle_gate3_reject` 写的是 `except: has_qa = False`
+    ⇒ **"读坏了"和"从来没跑过"在决策侧长得一模一样**，GATE3 打回的路由静默落到 impl。
+
+    判据钉在 `os.replace` 上：**换过去的那一步失败**，原文件必须一个字没变。
+    改回裸 `write_text` ⇒ 这里直接抛 OSError 且旧内容已被截断 ⇒ 红。
+    """
+    from singularity.scheduler import _io
+    from singularity.scheduler.workflow import _save_phase_output, _phase_output_path
+    pid = "1789000000006"
+    _save_phase_output(pid, "qa_report.json", '{"v": 1}')
+
+    def boom(*a, **k):
+        raise OSError("磁盘满了")
+    monkeypatch.setattr(_io.os, "replace", boom)
+
+    with pytest.raises(OSError):
+        _save_phase_output(pid, "qa_report.json", '{"v": 2}')
+
+    assert _phase_output_path(pid, "qa_report.json").read_text(encoding="utf-8") == '{"v": 1}', \
+        "写失败了，上一版却被截断 —— 读它的那个消费端只会看到『没有报告』"
 
 
 def test_history不进项目列表():

@@ -227,6 +227,65 @@ class TestObserverChatEntry:
         assert seen == ["竞品太少"], f"聊天里的理由没被带上: {seen}"
 
 
+class TestObserverApproveEntry:
+    """聊天里说「通过」同样要走共享入口**并接返回值**（2026-09-19 外派评审 A5）。
+
+    改之前三处都是"自己 `confirm_gate` + `save_project` + 硬编码一句 ✅ 已通过"。
+    打回那侧 09-17 就收敛了（见上面那个类），批准这侧漏了，于是同一个坑又踩一遍，
+    而且更糟：
+
+      · `confirm_gate` 返回 `None` = **没放行**（GATE2 架构无效时），回话照样"✅ 已通过"；
+      · 批准后**点火下一阶段**那步只有 HTTP 做了（那边注释记着"实测空等 14 分钟"），
+        聊天没点，回话却说"已进入架构规划阶段"。
+
+    ⚠️ 断言钉在**有没有调共享入口 / 回话有没有照返回值写**上：只看 phase 的话，
+    把整个分支删掉也照样绿（本仓 09-17 刚栽过一次"假接线"）。
+    """
+
+    def _cfg(self, monkeypatch):
+        """把观察者配置成**非 direct** —— direct 分支会在走到 GATE 检测前就返回。"""
+        from singularity.scheduler import _observer_answer as oa
+        monkeypatch.setattr(oa, "_get_observer_cfg",
+                            lambda: {"api_key": "k", "base_url": "https://x.invalid",
+                                     "model": "m"})
+        return oa
+
+    def test_聊天批准走共享入口(self, monkeypatch, tmp_path):
+        oa = self._cfg(monkeypatch)
+        _mk(tmp_path, monkeypatch, Phase.GATE2)
+        seen = []
+
+        def fake_confirm(pid, gate, decision, *a, **k):
+            seen.append((pid, gate, decision))
+            return {"ok": True, "next_phase": "executing"}, 200
+
+        monkeypatch.setattr(ap, "project_gate_confirm", fake_confirm)
+        msg = oa._answer_question_inner("通过", "proj1")
+
+        assert seen == [("proj1", "gate2", "approved")], "聊天批准没走共享入口"
+        assert "executing" in msg, f"回话该照 `next_phase` 写: {msg}"
+
+    def test_没放行就照实说_不编一句已通过(self, monkeypatch, tmp_path):
+        oa = self._cfg(monkeypatch)
+        _mk(tmp_path, monkeypatch, Phase.GATE2)
+        monkeypatch.setattr(ap, "project_gate_confirm",
+                            lambda *a, **k: ({"ok": False, "error": "架构校验未通过"}, 409))
+
+        msg = oa._answer_question_inner("通过", "proj1")
+
+        assert "架构校验未通过" in msg, f"失败原因没透出来: {msg}"
+        assert "✅" not in msg, "没放行却回了一句漂亮的成功话术"
+
+    def test_点火了要照实说(self, monkeypatch, tmp_path):
+        """批准 GATE1 后会自动启动 planning —— 回话得让用户知道，别让他去点。"""
+        from singularity.scheduler import _observer_answer as oa
+        monkeypatch.setattr(oa, "_gate_approve_reply", oa._gate_approve_reply)
+        msg = oa._gate_approve_reply(
+            "proj1", "gate1",
+            {"ok": True, "next_phase": "planning", "started_phase": "planning"})
+        assert "planning" in msg and "自动启动" in msg, msg
+
+
 class TestRejectReasonFrom:
     """从人话里剥理由。**剥不掉就说没有** —— 别把「不通过」当成修改意见送给模型。"""
 

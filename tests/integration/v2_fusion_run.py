@@ -30,18 +30,19 @@ BRIEF_NO = int(sys.argv[1]) if len(sys.argv) > 1 else 3
 # 委员会很贵，跑过就存下来，重跑融合时不用再花钱
 PLANS_CACHE = HERE / ".v2_plans.json"
 
-# AB_WRITER：强制指定定稿人。默认 writer = _first_speaker(disagreements, members)，
-# 即「最先提出分歧的那个模型」—— 于是「谁先开口，谁的设计就被保留」。
+# AB_WRITER：强制指定定稿人。默认 writer = `_pick_writer` 的择优结果，
+# 没有纪律数据时取 `members[0]`（**2026-09-19 外派评审 A7 起**：不再按"谁提分歧多"选，
+# 那和"分歧默认判给发言方"同源，会构成自我强化闭环）。
 # 用来验证「定稿人自我偏好」假设：换定稿人，看被保留的是不是也跟着换。
 if os.environ.get("AB_WRITER"):
-    # 两个都要打：_pick_writer 会先查 model_discipline 纪律表，命中就不走 _first_speaker，
-    # 只补后者的话这个开关会被静默忽略（"设了但没生效"）。
+    # 打 `_pick_writer` 就够 —— 它现在不走纪律表之外的第二条路（`_first_speaker` 已删），
+    # 少一个需要同步的补丁点。
     # 名字别用 `_w` —— 本文件下面 `_w` 是 witness 模块的别名，闭包按引用捕获，
     # 撞名会让闭包在调用时取到模块对象（实测崩在 json 序列化：winner 是个 module）。
     _forced_writer = os.environ["AB_WRITER"]
-    ej._first_speaker = lambda d, m: _forced_writer
     ej._pick_writer = lambda d, m: _forced_writer
-    print(f"⚠️ 强制定稿人 = {_forced_writer}（默认取最先提分歧者）", flush=True)
+    print(f"⚠️ 强制定稿人 = {_forced_writer}（默认按纪律表择优，无数据取 members[0]）",
+          flush=True)
 
 _bl.MAX_CHARS = 0
 _bl.JUDGE_MODEL = os.environ.get("AB_JUDGE", "glm-5.2")   # kimi 已停用（余额不足）

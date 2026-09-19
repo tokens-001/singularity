@@ -471,7 +471,11 @@ def _save_phase_output(project_id: str, filename: str, content: str) -> Path:
             from singularity.scheduler import witness
             witness.warn("workflow", f"phase_archive_failed:{filename}:{type(e).__name__}:{e}"[:140],
                          key="phase_archive_failed")
-    p.write_text(content, encoding="utf-8")
+    # 原子写（2026-09-19 外派评审 A9）：这一族原本是全仓**唯一**一类裸 `write_text`
+    # 的状态文件。撕裂的半截 JSON 读不出来，而消费端把"读坏了"当成"没跑过"
+    # —— 见 `handle_gate3_reject` 的 `route_source` 三种取值。
+    from singularity.scheduler._io import atomic_write_text
+    atomic_write_text(p, content)
     return p
 
 
@@ -1016,10 +1020,21 @@ def _read_observer_rollup(project_id: str) -> str | None:
 def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "") -> str:
     """GATE3 被人工打回: 按 fix_route 分级路由 (D3)。
 
-    impl   → 回 EXECUTING, 只重做有问题的 task (依赖该 task 的下游一并重测)
+    impl   → 回 EXECUTING, **重置全部 DONE 任务**重跑
+      ⚠️ 原文这里写的是"只重做有问题的 task (依赖该 task 的下游一并重测)"，
+      **代码从来不是这么干的**（2026-09-19 外派评审 B5 抓出，逐行核过）。
+      真正做"只重做有问题的那几个"要按 QA issue ↔ 架构 `estimated_files` ↔ 任务标题
+      做**模糊匹配**，而任务并不记录自己改过哪些文件（`_exec` 只把改动送给范围纪律表，
+      不落盘到 task）。匹配偏了的失败模式是**转圈**：漏掉的那个任务没重做 → 又冲回
+      GATE3 → 再打回，每圈都是真金白银。**全量重做贵，但它是收敛的** ——
+      没有真机数据证明匹配可靠之前，不换。
     design → 回 PLANNING 重新规划
     note   → 仅记录, 不阻断交付
-    无 qa_report 或读失败 → 默认 design (保守回规划)
+    拿不到依据（无报告 / 报告读坏了 / 有报告但没标路由）→ 默认 **impl**
+      ⚠️ 原文这里写的是"默认 design (保守回规划)"，**和代码对不上**（代码 2026-09-19
+      已统一成 impl）。"保守"在那句话里指对代码保守，可 `design` 要清空架构 +
+      `set_phase(PLANNING)`，是这套系统里**代价最大**的动作 —— 两条都是"没依据"，
+      没理由挑相反的那个代价。
     """
     project.add_lineage({"action": "gate3_rejected", "feedback": feedback[:500]})
 
@@ -1033,6 +1048,12 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
     #    但**手工写的 / 旧版留下的 `qa_report.json` 会走到**，所以这是补一个等着的地雷。
     fix_route = ""
     has_qa = False
+    # 「报告不在了」和「报告在但读不出来」是**两件事**，决策侧原来并成一个
+    # （2026-09-19 外派评审 A9）：`except Exception: has_qa = False` 一读，撕裂写的
+    # 半截 JSON 就退化成 `route_source="default_no_qa"`，文案说的是"没有报告"，
+    # 而真相是"报告被写坏了"—— 两者的下一步动作完全不同。
+    # 展示侧早就在分（`app.py` 的 `qa_report_unreadable`），决策侧没跟上。
+    qa_unreadable = False
     qa_report_path = _projects_dir() / f"{project.id}.qa_report.json"
     if qa_report_path.exists():
         try:
@@ -1050,8 +1071,13 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
                         fix_route = "impl"
                     else:
                         fix_route = "note"
-        except Exception:
+        except Exception as e:
             has_qa = False
+            qa_unreadable = True
+            from singularity.scheduler import witness
+            witness.warn("workflow",
+                         f"qa_report_unreadable:{type(e).__name__}"[:140],
+                         key="qa_report_unreadable")
 
     # 没有报告 ≠ 问题在架构。报告缺失恰恰是「架构没产出 constraints → 验收被整个跳过」
     # (见 workflow.py _run_verification 的空清单早退) 的症状 —— 这时猜 design 会: 清空架构
@@ -1061,10 +1087,14 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
     #    判据是"有没有依据"，不是"有没有报告"。两种情况都走这一支。
     if not fix_route:
         fix_route = "impl"
-        no_qa_reason = ("无 QA 报告(验收可能被跳过), 无法判断退回哪层 → 默认回实现层, 不动架构"
-                        if not has_qa else
-                        "有 QA 报告但 issues 里一条 fix_route 都没有, 无法判断退回哪层"
-                        " → 默认回实现层, 不动架构")
+        if qa_unreadable:
+            no_qa_reason = ("QA 报告**存在但解析失败**（撕裂写/坏 JSON），拿不到依据"
+                            " → 默认回实现层, 不动架构")
+        elif not has_qa:
+            no_qa_reason = "无 QA 报告(验收可能被跳过), 无法判断退回哪层 → 默认回实现层, 不动架构"
+        else:
+            no_qa_reason = ("有 QA 报告但 issues 里一条 fix_route 都没有, 无法判断退回哪层"
+                            " → 默认回实现层, 不动架构")
     else:
         no_qa_reason = ""
 
@@ -1075,6 +1105,9 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
         fix_route = _rollup_route
         no_qa_reason = ""
         route_source = "observer_rollup"
+    elif qa_unreadable:
+        # 报告**在**，只是读不出来（2026-09-19 外派评审 A9 新增）——别和下面那条合并
+        route_source = "qa_report_unreadable"
     elif not no_qa_reason:
         route_source = "qa_report"
     elif has_qa:

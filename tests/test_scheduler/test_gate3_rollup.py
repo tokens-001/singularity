@@ -186,6 +186,31 @@ def test_有报告但一条路由都没标_也回实现层(tmp_qidian):
     assert route.get("no_qa") is True
 
 
+def test_报告读坏了_不等于_没有报告(tmp_qidian):
+    """QA 报告**在**但解析不了 ≠ "从来没跑过"（2026-09-19 外派评审 A9）。
+
+    原来是 `except Exception: has_qa = False` ⇒ 撕裂写的半截 JSON 直接退化成
+    `route_source="default_no_qa"`，文案说"无 QA 报告(验收可能被跳过)"。
+    而真相是"报告被写坏了"—— 一个去查验收、一个去查磁盘，动作完全不同。
+    展示侧早就在分（`app.py` 的 `qa_report_unreadable`），决策侧没跟上。
+
+    ⚠️ 路由**不变**（仍然 impl）：拿不到依据时回代价最小那层，这条没动过。
+    变的是**说的话**——`source` 和 `no_qa_reason` 都必须指向"读坏了"。
+    """
+    p = _gate3_project()
+    proj_mod.save(p)
+    (proj_mod._projects_dir() / "p1.qa_report.json").write_text(
+        '{"passed": [], "issues": [{"id": "Q00', encoding="utf-8")   # 撕成两半
+
+    workflow.handle_gate3_reject(p, {}, feedback="人打回")
+
+    assert p.phase == Phase.EXECUTING
+    route = [e for e in p.lineage if e.get("action") == "gate3_route"][-1]
+    assert route["source"] == "qa_report_unreadable", \
+        f"读坏了被当成没报告了: {route}"
+    assert route["source"] != "default_no_qa", "两者在下游必须是可区分的"
+
+
 def test_汇总能盖过无报告时的默认(tmp_qidian):
     """观察者真给了裁决，就听它的 —— 即使没有 QA 报告。"""
     p = _gate3_project()

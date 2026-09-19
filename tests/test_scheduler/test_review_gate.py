@@ -17,7 +17,7 @@ from singularity.scheduler import _review as rv
 def _run(monkeypatch, tmp_path, *, project_id="", changed=("a.py", "b.py"),
          pool=(), scan=None, tests=None, multi=None, crossover=None,
          qa=None, conformance=None, audit=None, constraints=None,
-         trivial=False, tests_fn=None):
+         trivial=False, tests_fn=None, confidence=0.5):
     """跑一次门禁，返回 (validation, quality)。默认全绿，各测试只覆盖关心的那一段。
 
     pool=() → 走单模型 crossover fallback；给 2 个模型才走多人审查。
@@ -71,7 +71,7 @@ def _run(monkeypatch, tmp_path, *, project_id="", changed=("a.py", "b.py"),
         (tmp_path / f).write_text("x = 2\n")
 
     validation = SimpleNamespace(action="pass", unverified=[])
-    quality = {"warnings": [], "confidence": 0.5, "quality_signals": {}}
+    quality = {"warnings": [], "confidence": confidence, "quality_signals": {}}
     rv.run_post_exec_checks(
         validation=validation, quality=quality,
         exec_result=SimpleNamespace(raw_output=""),
@@ -165,6 +165,64 @@ def test_multi_review_warning_is_soft_quality(monkeypatch, tmp_path):
     assert q["failure_kind"] == "soft_quality"
     # 审查按文件循环（changed[:3]），每个文件的 warning 各记一次
     assert q["quality_signals"]["soft_warnings"] == 2
+
+
+def test_verdicts_retry_drops_confidence_below_cascade_accept(monkeypatch, tmp_path):
+    """≥2 个模型判 retry/abort（issues 为空）不能**只**设 action=retry。
+
+    下游 `_decide_cascade` 的第一判据是 `conf >= 0.75` → 直接 ok=True 接受并合并，
+    action 只是它的后置条件。而基线 0.5 + 长输出 0.1 + 含 "passed" 0.15 **正好 0.75**，
+    所以只设 action 的话，**审查层最明确的否定结论会被省钱分支吃掉**，
+    任务照样进 DONE 并合进项目仓（2026-09-19 外派评审核出、本机复核成立）。
+    同段的 critical 分支扣 0.25 才拦得住 —— 两支的差别说明这里只是漏了。
+    """
+    # 起始分必须给到 0.75 以上，否则"压到 0.7 以下"这件事在夹具里根本不可见 ——
+    # 0.85 = `post_execution_hook` 的基线 0.5 + 长输出 0.1 + 含 "passed" 0.15
+    # + 项目测试通过 0.1，就是真机那串加分的落点。
+    v, q = _run(monkeypatch, tmp_path, pool=[{"model": "r1"}, {"model": "r2"}],
+                confidence=0.85,
+                multi={"models_used": ["r1", "r2"], "issues": [],
+                       "verdicts": [{"model": "r1", "verdict": "retry"},
+                                    {"model": "r2", "verdict": "abort"}]})
+    assert v.action == "retry"
+    assert q["confidence"] <= 0.7, "分数没压下去 → 下游 conf>=0.75 会直接放行合并"
+    assert q["failure_kind"] == "review_needs_fix"
+    assert any("retry/abort" in w for w in q["warnings"])
+    assert any("retry/abort" in u for u in v.unverified), "交付报告看不到 = 没披露"
+
+
+def test_single_verdict_retry_does_not_hard_block(monkeypatch, tmp_path):
+    """**一个**模型判 retry 不算数（阈值是 ≥2）—— 别把上面的修法做成"一票否决"。"""
+    v, q = _run(monkeypatch, tmp_path, pool=[{"model": "r1"}, {"model": "r2"}],
+                multi={"models_used": ["r1", "r2"], "issues": [],
+                       "verdicts": [{"model": "r1", "verdict": "retry"},
+                                    {"model": "r2", "verdict": "pass"}]})
+    assert v.action == "pass"
+    assert q["confidence"] == 0.6, "0.5 + 测试通过 0.1：不该被这条分支扣分"
+
+
+def test_short_circuited_checks_are_disclosed(monkeypatch, tmp_path):
+    """被短路掉的检查必须如实进 unverified。
+
+    短路本身是有意的（省钱：这一版马上会被重试覆盖），有测试钉着它
+    （test_test_timeout_retries_and_returns）。缺的是**跳过了不说** ——
+    只看 warnings 的那份 quality 出不了这个函数，交付报告/人审只读 unverified，
+    不说就等于把"没跑"和"跑过了"混为一谈。
+    """
+    v, _ = _run(monkeypatch, tmp_path,
+                tests={"passed": False, "failures": 3, "runner": "pytest", "output": "boom"})
+    assert v.action == "retry"
+    note = [u for u in v.unverified if "前面已判" in u]
+    assert note, v.unverified
+    for name in ("多模型审查", "QA 约束验收", "安全审计"):
+        assert name in note[0], note[0]
+
+
+def test_all_green_does_not_report_skipped(monkeypatch, tmp_path):
+    """全绿时不许冒出"未跑"的噪声 —— 误报会让这条披露变得不可信。"""
+    v, _ = _run(monkeypatch, tmp_path, project_id="p1",
+                constraints=[{"text": "必须用 PostgreSQL"}])
+    assert v.action == "pass" and not v.unverified, v.unverified
 
 
 def test_crossover_abort_propagates(monkeypatch, tmp_path):

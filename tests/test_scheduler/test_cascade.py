@@ -55,6 +55,33 @@ class TestDecideCascade:
         # 低置信 + 有 fallback → 立即升级
         assert action == "break"
 
+    def test_retry_high_confidence_needs_failure_kind_ok(self):
+        """分数够高但 failure_kind 不是 ok → **不许** cascade_accept。
+
+        光看 `conf >= 0.75` 会被"形状"骗过去：`post_execution_hook` 的基线是 0.5，
+        长输出 +0.1、含 "passed" +0.15 = **正好 0.75**。审查层扣的那点分（软警告 -0.1）
+        能被这些无关的加分项抵回来，于是"这一版有问题"照样被接受合并，
+        而那轮承诺的软修（soft_quality）永远轮不到（2026-09-19 外派评审核出）。
+        """
+        task = self._make_task()
+        validation = val_mod.ValidationReport(
+            verdict="需改进", action="retry", confidence=0.85,
+            evidence={"issues": ["soft"]}, unverified=[]
+        )
+        # 对照：同一个分数，failure_kind=ok 时才接受
+        action, result = _decide_cascade(
+            task, "any", 1, validation, self._make_disp(), [], None,
+            ["E_model1"], set(), {"warnings": [], "failure_kind": "ok", "confidence": 0.85}
+        )
+        assert action == "return" and result.ok is True
+
+        action, _ = _decide_cascade(
+            task, "any", 1, validation, self._make_disp(), [], None,
+            ["E_model1"], set(),
+            {"warnings": ["软伤"], "failure_kind": "soft_quality", "confidence": 0.85}
+        )
+        assert action == "continue", "failure_kind 非 ok 却走了 cascade_accept —— 软修被跳过"
+
     def test_abort_terminal(self):
         task = self._make_task()
         validation = val_mod.ValidationReport(verdict="阻断", action="abort", unverified=["fatal"])

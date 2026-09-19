@@ -188,6 +188,43 @@ def fs_pick() -> tuple[dict, int]:
     return {"path": r.stdout.strip()}, 200
 
 
+# 归**调度循环**推的四档（权威表在 `project.py` 顶部）。其余档归 `run_phase`。
+_LOOP_OWNED_PHASES = ("executing", "integrating", "reviewing", "delivering")
+
+
+def _loop_status(next_phase) -> dict:
+    """批准之后，"接下来谁推这个项目"要说在明面上（2026-09-19 外派评审 B3）。
+
+    `next_phase` 只是**阶段名**，它不说"有没有人在推"。落到
+    EXECUTING/INTEGRATING/REVIEWING/DELIVERING 这几档时推手是**调度循环**，
+    而调度循环是 web 进程里的一个线程（`web/app.py` 的 `_loop_running`）——
+    它没开的话，项目就停在那儿等人，而界面上只显示"实现中"，看不出是没人点火。
+    这正是防御模式 §28 那个形状（返回里每个"像成功"的字段都要追得到一个副作用）。
+
+    ⚠️ **查不到返回 None（= 不知道），不返回 False** —— "不知道"和"没在跑"
+    在界面上必须分得开，否则这里就成了一个新的"看着像"。
+    """
+    nxt = getattr(next_phase, "value", "") or ""
+    if nxt not in _LOOP_OWNED_PHASES:
+        # 这几档归 `run_phase`（人在界面上点），没有"循环开没开"这回事
+        return {"driven_by": "run_phase"}
+    try:
+        from singularity.web import app as web_app
+        running = bool(getattr(web_app, "_loop_running", False))
+    except Exception as e:
+        # 这条理论上够不到（web 进程里 `app` 早已加载完，非 web 进程才可能炸），
+        # 但**不能静默** —— "我查不到循环在不在跑"本身就是要记一笔的事，
+        # 而静默 except 有棘轮在数（test_no_silent_except）。
+        witness.warn("project", f"loop_status_unknown:{type(e).__name__}"[:120],
+                     key="loop_status_unknown")
+        return {"driven_by": "scheduler_loop", "loop_running": None}
+    out = {"driven_by": "scheduler_loop", "loop_running": running}
+    if not running:
+        out["warning"] = ("调度循环没在跑 —— 这一档由它推，项目会停在原地等人。"
+                          "在界面上启动调度循环。")
+    return out
+
+
 def project_gate_confirm(project_id: str, gate: str = "", decision: str = "",
                           feedback: str = "") -> tuple[dict, int]:
     """POST /api/projects/<id>/gate-confirm"""
@@ -235,7 +272,7 @@ def project_gate_confirm(project_id: str, gate: str = "", decision: str = "",
             return {"ok": True, "gate": gate, "decision": "approved",
                     "next_phase": next_p.value, "started_phase": "planning"}, 200
         return {"ok": True, "gate": gate, "decision": "approved",
-                "next_phase": next_p.value}, 200
+                "next_phase": next_p.value, **_loop_status(next_p)}, 200
     elif decision == "rejected":
         # feedback 一路传到 `confirm_gate` —— 它负责写 lineage（两条入口共用一处，
         # 防御模式 #5）。**以前这里不传**：参数签了、`handle_gate3_reject` 也接了，

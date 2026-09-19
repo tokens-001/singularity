@@ -451,7 +451,13 @@ def _decide_cascade(task, level, turn, validation, disp_result, all_tool_events,
             ))
         conf = validation.confidence
         # 高置信 → 跳过升级，接受当前结果 (省钱)
-        if conf >= 0.75:
+        #
+        # ⚠️ **必须同时要求 failure_kind == "ok"**（2026-09-19 外派评审核出，本机复核成立）。
+        # 光看 conf 会被"形状"骗过去：`post_execution_hook` 的基线是 0.5，长输出 +0.1、
+        # 含 "passed" +0.15 = **正好 0.75** —— 于是任何一条 -0.1 的软警告扣完还剩 0.75，
+        # 照样在这里被接受，那轮承诺的软修（soft_quality，见 _review）永远轮不到。
+        # failure_kind 是"审查层判过什么"的直接记录，比分数稳：分数能被无关的加分项抬回来。
+        if conf >= 0.75 and quality.get("failure_kind", "ok") == "ok":
             return ("return", BatchOutput(
                 ok=True, task_id=task.id, dispatch_result=disp_result,
                 term_reason=f"cascade_accept (level={level}, conf={conf:.2f})",

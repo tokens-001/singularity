@@ -49,8 +49,13 @@ def _stub(monkeypatch, calls=None, **over):
                                       "unique_gains": [{"id": 1, "stance": "adopt", "reason": "好"}]}))
         if "逐条回应" in prompt:
             return _j(over.get("r2", R2_INSIST_ACCEPT))
+        # 默认对**两条**分歧都投确认票 —— 只投一条的话另一条会落进"未裁决"
+        # （2026-09-19 起：没有确认票 ≈ 没被裁决过），那会把下面几条用例的语义
+        # 从"裁决结果"偷偷换成"没裁决"。
         if "对你的论证给出了回应" in prompt:
-            return _j(over.get("r3", {"confirms": [{"id": 1, "verdict": "agree", "reason": "确实"}]}))
+            return _j(over.get("r3", {"confirms": [
+                {"id": 1, "verdict": "agree", "reason": "确实"},
+                {"id": 2, "verdict": "agree", "reason": "同意"}]}))
         if "架构定稿人" in prompt:
             return over.get("draft", "最终稿")
         if "检查三件事" in prompt:
@@ -74,12 +79,19 @@ def test_pick_writer_prefers_disciplined_model(tmp_path, monkeypatch):
     assert ej._pick_writer([], ["noisy", "clean"]) == "clean"
 
 
-def test_pick_writer_falls_back_without_data(tmp_path, monkeypatch):
-    """没有审计数据时回退到原规则（提分歧最多者），不改变既有行为。"""
+def test_pick_writer_fallback_is_independent_of_disagreement_count(tmp_path, monkeypatch):
+    """没有审计数据时回退到 `members[0]` —— **与"谁提的分歧多"无关**。
+
+    ⚠️ 原来回退到「提分歧最多者」，而下一条裁决规则是"分歧默认判给发言方"：
+    两条同源 ⇒ **自我强化闭环**（提分歧越多 → 越像定稿人 → 越容易赢下每个分歧）。
+    真机形态就是「2 席时融合稿 ≈ writer 原稿减去对方独有做法」（外派评审 A7）。
+    这条用例就是那个闭环的反面：**谁提得多都不影响结果**。
+    """
     from singularity.scheduler import config, execution_judge as ej
     monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
     d = [{"raised_by": "b"}, {"raised_by": "b"}]
-    assert ej._pick_writer(d, ["a", "b"]) == "b"
+    assert ej._pick_writer(d, ["a", "b"]) == "a", "还在按分歧计数定稿人"
+    assert ej._pick_writer([], ["a", "b"]) == "a"
 
 
 def test_finalize_prompt_carries_original_plans(monkeypatch):
@@ -99,27 +111,23 @@ def test_finalize_prompt_carries_original_plans(monkeypatch):
 
 # ── 裁决规则 ──────────────────────────────────────────────
 
-def test_first_speaker_picks_most_disagreements(monkeypatch):
-    """⚠️ **这两条原来都是假绿**（外派⑬ 变异实测：把计数循环退化成"恒取 members[0]"，
-    两条照样绿）—— 因为 `EXTRACT` 里两条分歧**都是 A 提的**，而 A 恰好就是 members[0]
-    ⇒ "取分歧最多者"和"取第一个"输出一样。改成**让 B 提得更多**才分辨得出。
+def test_first_speaker_gone():
+    """`_first_speaker` 已删除 —— 别再把它请回来当定稿人的选拔规则。
 
-    变异：`return max(members, key=...)` 换成 `return members[0]` → 红。
+    它本身不算错（"谁提的分歧多"是个事实），错的是**用途**：和"分歧默认判给
+    发言方"这条裁决规则同源就构成自我强化闭环（外派评审 A7）。
+    真要按发言顺序做别的事，重新设计并说明为什么不会再形成闭环。
     """
-    ds = [{"raised_by": "A"}, {"raised_by": "B"}, {"raised_by": "B"}]
-    assert ej._first_speaker(ds, ["A", "B"]) == "B", "不是 members[0] —— 得按计数走"
-    assert ej._first_speaker(ds, ["B", "A"]) == "B", "顺序不该改变结果（计数不是平手）"
+    assert not hasattr(ej, "_first_speaker"), \
+        "`_first_speaker` 又回来了 —— 先想清楚它会不会再和默认裁决规则同源"
 
 
-def test_first_speaker_tie_break_by_member_order():
-    """平手才轮到"顺序靠前"这条；**非平手必须按计数**，否则这条规则就退化成
-    "永远取第一个"（上一条钉的那件事）。"""
-    tie = [{"raised_by": "B"}, {"raised_by": "A"}]
-    assert ej._first_speaker(tie, ["A", "B"]) == "A"
-    assert ej._first_speaker(tie, ["B", "A"]) == "B"
-    more = [{"raised_by": "B"}, {"raised_by": "B"}, {"raised_by": "A"}]
-    assert ej._first_speaker(more, ["A", "B"]) == "B", "非平手时按计数，不按顺序"
-    assert ej._first_speaker([], ["A", "B"]) == "A"
+# ⚠️ 这里原来有两条 `_first_speaker` 的用例（"按分歧计数选轮 1 发言方"、
+# "平手取顺序靠前者"）。2026-09-19 外派评审 A7 之后**函数本身被删了** ——
+# 它和"分歧默认判给发言方"这条裁决规则同源，同源就构成自我强化闭环。
+# 那两条用例里记的"假绿/变异"教训属于**那个已删的实现**，不跟着搬。
+# 定稿人的回退规则改由 `test_pick_writer_fallback_is_independent_of_disagreement_count`
+# 钉住（判据恰好相反：谁提得多都不影响结果）。
 
 
 def test_insist_then_agree_gives_point_to_responder(monkeypatch):
@@ -134,12 +142,61 @@ def test_insist_then_agree_gives_point_to_responder(monkeypatch):
 
 
 def test_insist_then_question_keeps_writers_view(monkeypatch):
+    """发言方对某条回 question（不认输）→ 那条仍归发言方（辩论没让步，就按发言方走）。"""
     calls = []
-    _stub(monkeypatch, calls=calls, r3={"confirms": [{"id": 1, "verdict": "question"}]})
+    _stub(monkeypatch, calls=calls,
+          r3={"confirms": [{"id": 1, "verdict": "question"},
+                           {"id": 2, "verdict": "agree"}]})
     ej.fuse_architecture_v2("需求", PLANS)
     p = _finalize_prompt(calls)
-    # 分歧 1 归发言方 A；分歧 2 仍是 A → 两条都是 A
+    # 分歧 1 归发言方 A；分歧 2 是 accept → 也是 A
     assert p.count('"winner": "A"') == 2
+
+
+def test_disagreement_without_confirm_vote_is_not_awarded(monkeypatch):
+    """**没有确认票**的分歧 ≠ "发言方赢了"，是"根本没裁决过"（2026-09-19 外派评审 A7）。
+
+    原来走 `winner = writer` 只是多加一个 `basis="default_no_confirm_vote"` 标注 ——
+    标是标了，**结论还是发言方赢**，而定稿人（和事后看产物的人）只读 `winner` 字段：
+    "没人投过票"和"投票投出来的"在下游长得一模一样。
+    """
+    calls = []
+    rulings = {}
+    _stub(monkeypatch, calls=calls, r3={"confirms": [{"id": 1, "verdict": "agree"}]})
+    ej.fuse_architecture_v2("需求", PLANS, rulings=rulings)
+
+    p = _finalize_prompt(calls)
+    resolved = p.split("【分歧结论")[1].split("【未裁决的分歧")[0]
+    unresolved = p.split("【未裁决的分歧")[1].split("【采纳的独有做法")[0]
+
+    assert '"id": 1' in resolved, "有票的那条该照常裁决"
+    assert '"id": 2' not in resolved, "没裁决的分歧混进了「逐条已定」那一段"
+    assert '"id": 2' in unresolved and '"winner": null' in unresolved, \
+        f"没裁决的分歧没被单列（定稿人于是会替它选一边）: {unresolved}"
+    assert [u["basis"] for u in rulings["unresolved"]] == ["unresolved"], rulings
+
+
+def test_gain_needs_every_member_to_vote(monkeypatch):
+    """独有做法的门槛是「**全体** adopt」，不是「收到的票里全是 adopt」（A8）。
+
+    缺票不算反对的话：writer 轮 1 的 JSON 解析失败（一票都没有）或某个成员走了
+    `fusion_round2_json` 那条告警，**剩下几张 adopt 票就成了"全体"** ——
+    只有部分成员表过态的做法被采纳，而 `rulings.adopted` 事后看是全体一致。
+    规则本身是对的（保守），是**实现没执行它**。
+    """
+    calls = []
+    rulings = {}
+    # r1 不带 unique_gains ⇒ 发言方（第一个成员）一张票都没投
+    _stub(monkeypatch, calls=calls,
+          r1={"arguments": [{"id": 1, "reason": "整数不会丢精度"}]})
+    ej.fuse_architecture_v2("需求", PLANS, rulings=rulings)
+
+    p = _finalize_prompt(calls)
+    adopted = p.split("【采纳的独有做法】")[1].split("【已驳回")[0]
+    assert "幂等键" not in adopted, "只有一张 adopt 票就当成「全体」了"
+    assert rulings["adopted"] == [], rulings
+    assert len(rulings["missing_votes"]) == 1, \
+        f"缺票的条目该单列（它和「投了 reject」不是一回事）: {rulings}"
 
 
 def test_repeat_round_stops_ping_pong(monkeypatch):

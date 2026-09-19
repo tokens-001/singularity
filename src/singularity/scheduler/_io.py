@@ -51,6 +51,25 @@ def atomic_write_json(path: Path, data, *, indent: int = 2) -> None:
     _sweep_stale_tmps(path)
 
 
+def atomic_write_text(path: Path, text: str) -> None:
+    """原子写文本: 先写同目录 .tmp 再 os.replace。`atomic_write_json` 的兄弟。
+
+    🔴 为什么要有（2026-09-19 外派评审 A9）：阶段产出（`research.md` /
+    `architecture.md` / `machine-checks.json` / `qa_report.json`）原来**全是裸
+    `write_text`** —— 全仓唯一一类非原子写的状态文件（`project.save()` 和
+    `atomic_write_json` 都是 tmp+replace）。
+    后果不是"文件坏了"这么轻：消费端读到一半的 JSON 抛异常，而
+    `handle_gate3_reject` 的写法是 `except: has_qa = False` ⇒ **"读坏了"和
+    "从来没跑过"在决策侧长得一模一样**，GATE3 打回的 fix_route 于是静默落到 impl。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    with _WRITE_LOCK:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    _sweep_stale_tmps(path)
+
+
 _STALE_TMP_S = 300.0        # 5 分钟：远大于"写一行 JSON 到 replace"那几毫秒
 
 

@@ -20,6 +20,21 @@ from typing import NamedTuple
 from singularity.scheduler import config
 
 
+# ── 谁负责推进哪一档（**权威表**，2026-09-19 立）──
+#
+# 两条驱动线各推各的，**互不代劳**。这条边界曾经没写下来，于是 `web/app.py` 里
+# 长出了"第三套"推进逻辑，在降级路径上把项目从 EXECUTING 直接送进 GATE3，
+# **跳过了 INTEGRATING 那道"工作区必须干净 + 集成测试"的门**（外派评审 A4，已删）。
+#
+#   EXECUTING / INTEGRATING / REVIEWING / DELIVERING
+#       → **只归调度循环**：`orchestrator._advance_project`
+#         （由 `_auto_trigger_test_fix` 每 tick 调，`run_queue` 里两处调用点）
+#   TEMPLATE / RESEARCHING / PLANNING / GATE1 / GATE2 / GATE3
+#       → **只归 `run_phase`**：由人在界面上点（`_api_projects` 起后台线程）或 CLI 调
+#
+# ⚠️ "GATE 也归 run_phase" 指的是**推进**（跑到 GATE 就停下等人）；**人批了之后**
+# 往哪儿走由 `confirm_gate` 决定（见下面的 `_GATE_NEXT` / `_REJECT_FALLBACK`）。
+# 改任何一档的归属前，先问："换掉之后，还有人推它吗？"—— 没人推 = 项目无声停住。
 class Phase(str, Enum):
     TEMPLATE = "template"
     RESEARCHING = "researching"
@@ -100,6 +115,10 @@ class ProjectState:
     fix_round: int = 0                      # 内循环修复轮次 —— ⚠️ **无实现**：全仓只有 `= 0`，没有 `+= 1`，恒为 0
     review_failures: int = 0                # D1: 审查自动修失败计数 (上限 _REVIEW_MAX_AUTO_FIX)
     integrate_failures: int = 0             # D2: 集成合并失败计数 (上限 _INTEGRATE_MAX_RETRIES)
+    # 验收（run_test_fix_loop）**连续**没走到 GATE3 的次数（上限 orchestrator._VERIFY_MAX_ATTEMPTS）。
+    # 与上面两个不同：**进 REVIEWING 时清零**（那一支在 orchestrator 里）—— 它量的是
+    # "验收自己跑不跑得完"，不是"这个项目失败过几次"，棘轮语义在这里是错的。
+    verify_attempts: int = 0
 
     # Agent 编组: {"any": ["model_a","model_b"]} — 两档后统一全池, 不设则用全局配置
     agent_lineup: dict[str, list[str]] = field(default_factory=dict)
@@ -177,6 +196,7 @@ class ProjectState:
         d.setdefault("fix_round", 0)
         d.setdefault("review_failures", 0)
         d.setdefault("integrate_failures", 0)
+        d.setdefault("verify_attempts", 0)
         d.setdefault("agent_lineup", {})
         d.setdefault("created_at", 0.0)
         d.setdefault("updated_at", 0.0)

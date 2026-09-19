@@ -252,6 +252,14 @@ def run_post_exec_checks(*, validation, quality, exec_result,
     # 基准可用时它是真判据；基准不可用时 `_is_trivial_change` 返回 False（fail-closed），
     # 下面的检查照跑 —— 曾经这里没有基准也判 trivial，五道检查全被静默跳过。
     _trivial = bool(changed) and _is_trivial_change(changed, cwd, base_ref)
+
+    # 被"前面已经判出 retry/abort"短路掉的检查，末尾统一如实记账。
+    # 短路本身是**有意的**（省钱：这一轮的结果马上会被重试覆盖，再对同一版代码
+    # 花 LLM 钱不划算），而且有测试钉着（test_test_timeout_retries_and_returns 明确
+    # 断言"超时后不该继续跑后面的步骤"）。缺的不是"别短路"，是**跳过了不说** ——
+    # 那个缺口让交付报告把"没跑"和"跑过了"混为一谈，正是本模块的底线（见文件头）。
+    _skipped: list = []
+
     if validation.action == "pass" and changed and _trivial:
         validation.unverified.append(
             "审查已跳过: 改动被判为小改动(单文件, diff<50行) — 未跑项目测试/未多模型审查")
@@ -429,6 +437,26 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                         needs_fix = [v for v in review["verdicts"]
                                      if _norm(v.get("verdict")) in ("retry", "abort", "needs_fix")]
                         if len(needs_fix) >= 2:
+                            # ⚠️ 这里**只设 action=retry 是不够的**（2026-09-19 外派评审
+                            # 核出，本机复核成立）：`_decide_cascade` 的**第一判据**是
+                            # `conf >= 0.75` → 直接 ok=True 接受并合并，而 action 只是它的
+                            # 后置条件。基线 0.5 + 浅层加分（测试通过 +0.1）就能摸到 0.75，
+                            # 于是**审查层最明确的否定结论被省钱分支吃掉**，任务照样进
+                            # DONE 并合进项目仓。同一段的 critical 分支扣了 0.25 才拦得住 ——
+                            # 两支的差别恰好说明这里只是漏了，不是有意放行。
+                            _nf = "; ".join(
+                                f"{v.get('model', '')}:{v.get('verdict', '')}"
+                                for v in needs_fix[:3])
+                            quality["warnings"].append(
+                                f"multi-review {len(needs_fix)} 个模型判 retry/abort: {_nf}")
+                            # 必须同时进 unverified：quality 只活在内存里（见上面 critical 那段）
+                            validation.unverified.append(
+                                f"多模型审查 {len(needs_fix)} 个模型判 retry/abort (未修复): {_nf}")
+                            # 压到 0.75 以下 = 拿掉 cascade_accept 的资格，但不判死：
+                            # 比 critical 的 -0.25 轻，因为这是"该修"，不是"发现了严重问题"。
+                            quality["confidence"] = min(
+                                quality.get("confidence", 0.5), 0.7)
+                            quality["failure_kind"] = "review_needs_fix"
                             validation.action = "retry"
                             review_failed = True
                             break
@@ -482,9 +510,14 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             validation.action = "retry"
             validation.unverified.append(f"multi-review 异常: {e}")
             _record_review_failure("review_error")
+    elif changed and not _trivial:
+        _skipped.append("多模型审查")
 
     # 3) QA 约束验收: qa_engineer 角色对照约束清单验证 (补 multi_model_review 不查的约束维度)
-    if validation.action == "pass" and changed and not _is_trivial_change(changed, cwd, base_ref):
+    # 判据用开头算好的 `_trivial`，不再每步重跑一次 `_is_trivial_change`（它内部真跑
+    # `git diff`）：同一个判据在一个函数里求值四次，第 1 步跑过测试之后盘可能已经变了，
+    # 后面几步就可能拿到和前面对不上的答案。
+    if validation.action == "pass" and changed and not _trivial:
         try:
             proj = None
             if project_id:
@@ -545,9 +578,11 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             validation.action = "retry"
             validation.unverified.append(f"QA 约束验收异常: {e}")
             _record_review_failure("constraint_error")
+    elif changed and not _trivial:
+        _skipped.append("QA 约束验收")
 
     # 3.5) 需求符合性对账: 消费 traceability.json, 只写软信号 + warning (机械关键词, 先不设 hard gate)
-    if validation.action == "pass" and project_id and not _is_trivial_change(changed, cwd, base_ref):
+    if validation.action == "pass" and project_id and changed and not _trivial:
         try:
             from .supervisor import check_requirement_conformance
             conf = check_requirement_conformance(
@@ -563,9 +598,12 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                 quality["quality_signals"]["requirement_conformance"] = "passed"
         except Exception as e:
             quality["warnings"].append(f"需求符合性对账 error: {e}")
+    elif project_id and changed and not _trivial:
+        _skipped.append("需求符合性对账")
+        # 这一条原来是**软信号**（不硬拦），跳过它损失最小 —— 但"没跑"仍要说出口
 
     # 4) 安全审计: security_auditor 角色 LLM 五维审计 (补正则抓不到的复杂漏洞)
-    if validation.action == "pass" and changed and not _is_trivial_change(changed, cwd, base_ref):
+    if validation.action == "pass" and changed and not _trivial:
         try:
             diff_text = ""
             try:
@@ -624,6 +662,16 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             validation.action = "retry"
             validation.unverified.append(f"安全审计异常: {e}")
             _record_review_failure("security_error")
+    elif changed and not _trivial:
+        _skipped.append("安全审计")
+
+    # 被短路掉的检查统一记账 —— 走到这里 action 已经不是 pass（否则上面每步都会跑），
+    # 而**"跳过"和"跑过了"在产物里必须可区分**：GATE2 的人、交付报告、排障的
+    # 都只看 unverified，只看 warnings 的那一份（内存 quality）出不了这个函数。
+    if _skipped:
+        validation.unverified.append(
+            f"以下检查本次未跑（前面已判 {validation.action}，这一版代码马上会被重写）: "
+            + "、".join(_skipped))
 
 
 def check_review_fail_limit(project_id: str = "", current_retries: int = 0) -> dict:

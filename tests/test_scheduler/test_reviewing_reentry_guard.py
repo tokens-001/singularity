@@ -51,11 +51,37 @@ def test_合并线程正在跑验收时_调度循环不许再进(tmp_path, monke
 
 
 def test_不在_merge_inflight_里时_照常跑(tmp_path, monkeypatch):
-    """守卫只挡「合并线程自己已经在跑」那一种，不能把正常路径一起堵死。"""
+    """守卫只挡「已经在跑」那一种，不能把正常路径一起堵死。
+
+    ⚠️ 判据钉在**提交**上而不是「`run_test_fix_loop` 被调了」：验收已改成异步
+    （2026-09-19，A3），照旧钉后者的话这里要么恒假、要么得等后台线程 —— 两条都不是
+    在测这条守卫。**同步调用的消失本身也要被钉住**，见下面那条。
+    """
     p = _mk(tmp_path, monkeypatch)
-    calls = _spy(monkeypatch)
+    submitted = []
+    monkeypatch.setattr(orch, "_submit_verification",
+                        lambda proj, agents: submitted.append(proj.id))
     monkeypatch.setattr(orch, "_merge_inflight", set())
 
     orch._auto_trigger_test_fix({}, [])
 
-    assert calls == [p.id], "不在飞的就该照常验收，否则项目卡在 REVIEWING 没人推"
+    assert submitted == [p.id], "不在飞的就该照常验收，否则项目卡在 REVIEWING 没人推"
+
+
+def test_验收不在调度循环线程里同步跑(tmp_path, monkeypatch):
+    """验收必须丢给后台池 —— 同步跑的话这几分钟里全局派发/reap/超时收割全停摆。
+
+    判据用「`run_test_fix_loop` 在**本线程**里没被调到」+「池子收到了活」两条：
+    只看其中一条的话，把提交改成同步调用仍然绿（反过来也一样）。
+    """
+    p = _mk(tmp_path, monkeypatch)
+    calls = _spy(monkeypatch)                 # 直接调就会记到这里
+    submitted = []
+    monkeypatch.setattr(orch, "_submit_verification",
+                        lambda proj, agents: submitted.append(proj.id))
+    monkeypatch.setattr(orch, "_merge_inflight", set())
+
+    orch._auto_trigger_test_fix({}, [])
+
+    assert calls == [], "验收还在调度循环线程里同步跑 —— 全局会停摆"
+    assert submitted == [p.id]
