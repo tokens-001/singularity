@@ -369,8 +369,12 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                     # 但必须**同时**记进 unverified：本模块的原则是"可以放行，但不把通过和
                     # 已验证混为一谈"（见文件头）。只发告警的话，交付报告仍写 delivered，
                     # 而 1/4 的改动没有任何人看过 —— 告警是给排障的人看的，报告是给用户看的。
+                    # 带上 task_id（2026-09-19）：「46 个 trace 里一条『未审查』都没有」
+                    # 那个悬案卡在**这条告警没有主体** —— 只有条数，没法回 trace 对是哪个
+                    # 任务。⚠️ 聚合键不变（`witness` 取第一个 `:` 之前那段，仍是
+                    # `review_files_truncated`），只是这行自带主体。
                     witness.warn("review",
-                                 f"review_files_truncated:{len(changed)}->3"[:80])
+                                 f"review_files_truncated:{task.id}:{len(changed)}->3"[:120])
                     validation.unverified.append(
                         f"{len(changed) - 3} 个改动文件未审查（只审了前 3 个）: "
                         + ", ".join(str(f) for f in changed[3:]))

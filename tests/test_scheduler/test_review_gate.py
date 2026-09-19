@@ -14,6 +14,10 @@ import pytest
 from singularity.scheduler import _review as rv
 
 
+# `_run` 会把这一轮发出去的告警收进来（桩掉了落盘，只留内容给用例断言）。
+WARNS: list = []
+
+
 def _run(monkeypatch, tmp_path, *, project_id="", changed=("a.py", "b.py"),
          pool=(), scan=None, tests=None, multi=None, crossover=None,
          qa=None, conformance=None, audit=None, constraints=None,
@@ -25,7 +29,8 @@ def _run(monkeypatch, tmp_path, *, project_id="", changed=("a.py", "b.py"),
     """
     from singularity.scheduler import validator as val, dispatcher as disp, project as proj_mod
 
-    monkeypatch.setattr(rv.witness, "warn", lambda *a, **k: None)
+    WARNS.clear()
+    monkeypatch.setattr(rv.witness, "warn", lambda *a, **k: WARNS.append((a, k)))
     monkeypatch.setattr(rv, "_is_trivial_change", lambda *a, **k: trivial)
     monkeypatch.setattr(val, "security_review", lambda *a, **k: scan or {"issues": []})
     # tests_fn 优先于 tests：要在 _run 之外定制行为（比如让它卡住）时用
@@ -75,7 +80,9 @@ def _run(monkeypatch, tmp_path, *, project_id="", changed=("a.py", "b.py"),
     rv.run_post_exec_checks(
         validation=validation, quality=quality,
         exec_result=SimpleNamespace(raw_output=""),
-        task=SimpleNamespace(project_id=project_id, description="d"),
+        # `id` 是**生产里一定有**的字段（真 Task 必有）—— 桩里漏了它，`_review` 一旦
+        # 引用就会 AttributeError 被吞成 "multi-review 异常"，把真实行为淹掉。
+        task=SimpleNamespace(id="t1", project_id=project_id, description="d"),
         agent_cfg={"model": "writer"}, level="any", cwd=str(tmp_path),
         changed=list(changed),
         # 真实调用路径（_exec.py）一定带基准。不给的话会命中新增的
@@ -392,6 +399,10 @@ def test_more_than_three_files_records_unreviewed(monkeypatch, tmp_path):
     v, _ = _run(monkeypatch, tmp_path, pool=[{"model": "r1"}, {"model": "r2"}],
                 changed=("a.py", "b.py", "c.py", "d.py"))
     assert any("未审查" in u and "d.py" in u for u in v.unverified), v.unverified
+    # 告警要带**主体**（2026-09-19）：09-17 那个悬案（"46 个 trace 里一条『未审查』
+    # 都没有，查不出是哪个任务触发的"）卡的就是这条告警只有条数。
+    _msg = " ".join(str(a) for a, _ in WARNS)
+    assert "review_files_truncated" in _msg and "t1" in _msg, WARNS
 
 
 def test_three_files_not_flagged_as_unreviewed(monkeypatch, tmp_path):
