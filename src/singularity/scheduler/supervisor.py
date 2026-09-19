@@ -46,6 +46,7 @@ def supervise(
     implementer_model: str = "",
     repo_root: str = "",
     tests_result: dict = None,
+    our_side_stop: str = "",
 ) -> SupervisionVerdict:
     """对单任务输出做四维校验。
 
@@ -78,6 +79,7 @@ def supervise(
     # ── 1. 完整性 ──
     verdict.checks["completeness"] = _check_completeness(
         checklist, agent_output, changed_files, task_description, root,
+        our_side_stop=our_side_stop,
     )
 
     # ── 2. 约束合规 ──
@@ -202,9 +204,28 @@ def _all_empty(changed_files: list[str], root) -> list[str]:
     return empties if len(empties) == len(changed_files) else []
 
 
+def our_side_stop_of(executor_result) -> str:
+    """这次产出**是不是被我们自己停掉的** —— 是的话返回哪一种，否则空串。
+
+    判据只有两档算"我方"（2026-09-19 复核审计 A4 时定的）：
+      · `error_kind == "deadline"` —— 撞预算 / 单次 240s 硬顶，被我们掐断；
+      · `truncated_by` 非空 —— 工具轮次用尽（有新产出但没终答）。
+    ⚠️ `error_kind == "exec"` **不算** —— 那是模型/调用真的失败了，赖不到我们头上。
+      （把它算进来就会变成"什么都赖系统"，那就从一个归因错换到另一个。）
+    """
+    er = executor_result
+    if er is None:
+        return ""
+    if getattr(er, "truncated_by", ""):
+        return str(er.truncated_by)
+    if getattr(er, "error_kind", "") == "deadline":
+        return "deadline"
+    return ""
+
+
 def _check_completeness(
     checklist: list[str], agent_output: str, changed_files: list[str],
-    task_description: str = "", root=None,
+    task_description: str = "", root=None, our_side_stop: str = "",
 ) -> CheckResult:
     """完整性: checklist 逐项检查 (仅记录, 不判失败)。
 
@@ -229,6 +250,20 @@ def _check_completeness(
                 passed=True,
                 reason="只读任务（描述带 [只读] 声明），零改动是预期结果",
                 evidence={"readonly": True, "hard": False},
+            )
+        # 🔴 **判 fail 不变，但归因要说对**（2026-09-19 复核审计 A4，用户拍板走"只标归因"）。
+        #    零产出就是零产出 —— 判通过是假的。但"为什么零产出"分两种，而判据原来
+        #    只会写一句 `无文件改动`，读的人（和人审页）只能往"它偷懒"上想：
+        #      · 该有产出却空手回来；
+        #      · **这次是被我们自己掐断的**（撞 240s 硬顶 / 预算）—— `our_side_stop` 非空。
+        #    ⚠️ `passed` 一分没动：**没放行**。这条链的最后一跳（`_stream_call` → 判据）
+        #    今天才接上，动的只是那一跳携带的**说法**。
+        if our_side_stop:
+            return CheckResult(
+                passed=False,
+                reason=(f"无文件改动 —— **这次是被我方掐断的**（{our_side_stop}），"
+                        f"不是空手回来的偷懒"),
+                evidence={"hard": True, "our_side_stop": our_side_stop},
             )
         return CheckResult(
             passed=False, reason="无文件改动",

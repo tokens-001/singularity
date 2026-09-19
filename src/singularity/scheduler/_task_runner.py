@@ -311,12 +311,15 @@ class TaskRunner:
         if not qa_verdict and not cancelled:
             try:
                 from .project import repo_root_for
-                from .supervisor import qa_context, supervise
+                from .supervisor import our_side_stop_of, qa_context, supervise
                 changed = disp_result.executor_result.changed_files if disp_result else []
                 constraints, checklist = qa_context(task)
                 sv = supervise(task.description, changed, constraints, checklist,
                               getattr(disp_result.executor_result, 'raw_output', '') if disp_result else '',
-                              task.id, repo_root=str(repo_root_for(task)))
+                              task.id, repo_root=str(repo_root_for(task)),
+                              # 同 `_exec` 那处：把"是我方掐断的"带进判据（审计 A4）
+                              our_side_stop=our_side_stop_of(
+                                  disp_result.executor_result if disp_result else None))
                 qa_verdict = sv.verdict
                 qa_issues = list(sv.issues)
             except Exception as e:

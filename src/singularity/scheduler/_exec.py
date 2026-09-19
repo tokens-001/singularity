@@ -779,7 +779,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 # 只拦 verdict=fail (硬证据); escalate/retry 是软信号, 不拦, 仅 SSE 通知 Owner。
                 if pending_merge_req is not None:
                     try:
-                        from .supervisor import qa_context, supervise
+                        from .supervisor import our_side_stop_of, qa_context, supervise
                         _cons, _check = qa_context(task)
                         # 改动文件在 worktree (cwd) 里, 不在项目 repo 根 —— 传错根
                         # 会让 _check_artifact 的 py_compile/ruff 因 (root/f).exists()
@@ -787,7 +787,9 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                         sv = supervise(task.description, changed, _cons, _check,
                                        getattr(exec_result, 'raw_output', '') or '',
                                        task.id, repo_root=cwd,
-                                       tests_result=(quality or {}).get("test_result"))
+                                       tests_result=(quality or {}).get("test_result"),
+                                       # 让判据知道"这次是不是被我们掐断的"（审计 A4）
+                                       our_side_stop=our_side_stop_of(exec_result))
                         qa_verdict = sv.verdict
                         qa_issues = list(sv.issues)
                         # "block" 必须和 "fail" 同等对待：supervise 在**模型隔离违规**
