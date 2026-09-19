@@ -190,6 +190,7 @@ class AnthropicApiExecutor(BaseExecutor):
         return ExecutorResult(
             success=True,
             raw_output=assistant_text if 'assistant_text' in dir() else "(max turns)",
+            truncated_by="max_turns",   # ← 同 openai_agent：这是"成功但被截断"那一档
             changed_files=changed,
             elapsed=time.time() - start,
             token_count=total_tokens,

@@ -122,6 +122,10 @@ class DeliveryReport:
             elapsed=d.get("elapsed", 0.0),
             error=d.get("error", ""),
             error_kind=d.get("error_kind", ""),
+            # ⚠️ **重建路也得带上它**（2026-09-19）：`to_dict` 写出去的
+            # `agent_output_truncated_by` 不在这里捡回来，报告**重建一次就丢了标记** ——
+            # 而那正是"同一件事两个入口、一条忘了做全套"的形状（§60）。
+            truncated_by=d.get("agent_output_truncated_by", ""),
         )
         return cls(
             task=d.get("task", ""),
@@ -176,6 +180,13 @@ class DeliveryReport:
             "snapshot_method": self.snapshot.method,
             "snapshot_ref": self.snapshot.ref,
             "agent_output": self.executor_result.raw_output if self.executor_result else "",
+            # 🔴 **上面那段可能不是终答**（2026-09-19）：非空 = 这次的产出是**达到我方
+            # 上限才停的**，值说明哪一种（目前只有 `"max_turns"`），而 `agent_output`
+            # 里躺着的是一句占位串。**在这条之前，这件事只活在正文里** ——
+            # 报告别处（状态、用量）读起来都是"正常做完"，读得到那句话的是人、不是判据。
+            # 同下面 `token_count` 的规矩：**"不可知/被截断"和"正常"必须分得开。**
+            "agent_output_truncated_by": (getattr(self.executor_result, "truncated_by", "")
+                                          if self.executor_result else None),
             # **"不可知"和"0"必须分得开**（§44 承诺类字段三态可分）。
             # 超时被杀的任务拿不到 executor 的用量 —— 以前一律写 0，
             # 于是 trace 里看着像"这个任务一分钱没花、一个文件没改"，

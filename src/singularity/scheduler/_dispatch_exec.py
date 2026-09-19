@@ -252,6 +252,14 @@ def dispatch(
                     level=level, agent_cfg=agent_cfg,
                     executor_result=result, attempts=attempt + 1,
                 )
+            # ⚠️ **判据是 `raw_output` 非空，不是 `result.success` —— 别"收紧"它**
+            #    （2026-09-19 核过，审计 A8 原来的建议是错的）：
+            #    `claude_cli` 那条 `success=True, raw_output=proc.stdout`，**stdout 可能是空的**。
+            #      · 现在：空 ⇒ 落到下面"空输出"⇒ 换模型重试（这是**严**的一侧）；
+            #      · 换成 `result.success`：判成功 ⇒ 直接 return，
+            #        **交回一份"成功但零产出"** —— 那是把门放松，不是收紧。
+            #    "占位串被当真值"那件事的账在**产出侧**（`ExecutorResult.truncated_by`），
+            #    不在这个判据上。
             if result and result.raw_output:
                 _model_breaker.record_success(agent_cfg.get("model", ""))
                 return DispatchResult(

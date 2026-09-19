@@ -73,6 +73,13 @@ class ExecutorResult:
     # `timeout` 同族（CLI 超时）。两者的读者见 `_dispatch_exec` —— 它按 kind 决定
     # 「是不是这个模型的锅」（据 2026-09-13 真机：把收尾记成"空输出"会换模型把时间再烧一遍）。
     error_kind: str = ""                # timeout | ratelimit | format | exec | deadline | ""
+    # ⚠️ **与 `error_kind` 分开，别合并**：那档说的是"**为什么失败**"，而这一档
+    #    **成功时也会出现** —— 非空 = 这次的产出是**达到我方上限才停的**（值说明哪一种），
+    #    但产出仍然算数。目前只有 `"max_turns"`（工具轮次用尽、文件已落盘）。
+    # 🔴 存在的理由（2026-09-19）：这种"成功但其实被截断"的状态原来**只活在正文里** ——
+    #    `raw_output` 是那句自述的占位串，而 `success=True` / `error=""` / `error_kind=""`
+    #    三个结构化字段读起来都是"正常做完"。**读得到它的是人，不是判据。**
+    truncated_by: str = ""
     tool_events: list = field(default_factory=list)   # 工具调用事件 [{tool,status,time,...}]
 
 

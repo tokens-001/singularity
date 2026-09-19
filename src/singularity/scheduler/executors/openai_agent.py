@@ -772,6 +772,7 @@ class OpenAIAgentExecutor(BaseExecutor):
         if self._changed_files:
             return ExecutorResult(
                 success=True, raw_output="(达到最大工具轮次, 已产出文件)",
+                truncated_by="max_turns",   # ← 「成功但其实被截断」的结构化出口
                 changed_files=list(self._changed_files),
                 elapsed=time.time() - start, token_count=total_tokens,
                 tool_events=list(self._tool_events))
