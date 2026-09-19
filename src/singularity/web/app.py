@@ -2363,6 +2363,29 @@ def _setup_startup_logger():
 if __name__ == "__main__":
     import signal as _signal
 
+    # ── 🔴 `python -m` 会把这个文件**执行两遍**：同一个模块，两个对象 ──
+    #
+    # `-m pkg.mod` 把代码跑在 `__main__` 名下，`sys.modules` 里**不会**留下
+    # `pkg.mod` 这条记录（实测：玩具包跑完 `-m`，`"pkg.mod" in sys.modules` 为 False）。
+    # 于是**任何**晚一点发生的 `from singularity.web import app` 都会**重新执行一遍
+    # 这个文件**，拿到**第二个模块副本** —— 它有自己的一套模块级全局。
+    #
+    # 真机症状（2026-09-19 夜，`_api_projects._loop_status`）：副本的 `_loop_running`
+    # 停在初始值 `False`（起循环那段在 `__main__` 守卫里，副本走不到），而
+    # `/api/loop/status` 读真身回 `true` —— **同进程同一个变量，两条路两个答案**，
+    # 于是过 GATE2/3 时恒弹「调度循环没在跑，去界面上启动它」。**狼来了**：
+    # 真坏掉时和正常时长得一模一样。
+    #
+    # ⇒ 在这里把 `__main__` 登记到它**包名**的位置。晚来的 import 直接命中这份，
+    # 不再重新执行、也不再诞生第二个副本。只影响 `-m` 这一种起法 ——
+    # 别的起法（`import` 进来的）本来就是对的，`__main__` 守卫也不会走到这儿。
+    #
+    # ⚠️ **赋值而不是 `setdefault`**：万一在跑到这行之前已经有人 import 过了
+    # （副本先生），**真身要盖回去** —— 真身才是拿着活循环的那个。
+    # `__spec__` 为 None = 不是 `-m` 起的（`python app.py` 那种），没这回事、不用管。
+    if __spec__ is not None and __spec__.name != __name__:
+        sys.modules[__spec__.name] = sys.modules["__main__"]
+
     _startup_log = _setup_startup_logger()
 
     # 审计日志/目录改成懒初始化了（原来在 import 期，测试一 import 就污染真 .qidian/）。
