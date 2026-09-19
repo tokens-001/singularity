@@ -781,7 +781,16 @@ def _drain_pending(pending_batches: dict, mq, results: list) -> int:
                     results.append((t.id, f"conflict: {mr.conflict_files}", batch.validation))
                     failure_mode = f"merge_conflict: {err}"
                 else:
-                    tracker.transition(t.id, TaskStatus.FAILED, error=f"merge {mr.status}")
+                    # ⚠️ **把 `mr.reason` 带上**（2026-09-19 复核判据错位审计 B5）：原来只写
+                    #    `f"merge {mr.status}"` ⇒ 终态上一句光秃秃的 `merge failed`，而真因
+                    #    （`merge probe 命令错误 (ref 可能已过期: …)`）**就被丢在这儿了**。
+                    #    那一条**不是任务没干好** —— 是我们的锚/ref 没了（超时、GC、
+                    #    或提前释放）。排障的人看到 "merge failed" 会去查任务的合并，
+                    #    而该查的是 ref 那条链。
+                    # ⚠️ **判定强度一个字没动**：照样 `FAILED`。这个终态本身是对的 ——
+                    #    ref 没了 = 产物已经找不回来，parking 等人也解不了。
+                    tracker.transition(t.id, TaskStatus.FAILED,
+                                       error=f"merge {mr.status}: {(mr.reason or '无原因')[:200]}")
                     results.append((t.id, "merge_failed", batch.validation))
                     failure_mode = f"merge_{mr.status}"
             except Exception as _e:
