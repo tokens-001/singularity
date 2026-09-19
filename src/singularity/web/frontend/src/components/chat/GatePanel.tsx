@@ -1,5 +1,6 @@
 import { memo, useState, useEffect } from 'react'
 import { TaskCard } from './TaskCard'
+import { ArchGraph } from './ArchGraph'
 
 const GATE_LABELS: Record<string, string> = { '1': '定义完成·请审核PRD', '2': '架构完成·请审核方案', '3': '验收完成·请审核交付物' }
 
@@ -267,16 +268,18 @@ export const ArchitectureDetails = memo(function ArchitectureDetails(
       {modules.length > 0 && (
         <div style={{ marginBottom: 10 }}>
           <div style={{ ...sectionTitle, marginBottom: 6 }}>模块（{modules.length}）</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {modules.map((m: any, i: number) => (
-              <span key={i} style={{ fontSize: 11, color: '#141413', background: '#faf9f5', border: '1px solid #e5e2d8', borderRadius: 6, padding: '3px 9px' }}>{m.name}</span>
-            ))}
-          </div>
+          {/* 原来是一排药丸标签，只列名字、**依赖关系看不见** —— 而那正是人在 GATE2 要批的东西。
+              换成图之后名字照样都在盒子里，不多占地方。 */}
+          <ArchGraph nodes={modules.map((m: any) => ({ id: m.name, deps: m.depends_on }))} />
         </div>
       )}
       {tasks.length > 0 && (
         <div>
-          <div style={sectionTitle}>任务（{tasks.length}）</div>
+          <div style={{ ...sectionTitle, marginBottom: 6 }}>任务（{tasks.length}）</div>
+          {/* 图看形状（谁压着谁、哪几条能并行），下面那张表看细节（验收标准、复杂度）—— 两样都要 */}
+          <div style={{ marginBottom: 8 }}>
+            <ArchGraph nodes={tasks.map((t: any) => ({ id: t.id, label: t.title, deps: t.depends_on }))} />
+          </div>
           {tasks.map((t: any, i: number) => (
             <div key={i} style={{ fontSize: 11, color: '#141413', padding: '4px 0', borderBottom: '1px solid #f3f2ec' }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
