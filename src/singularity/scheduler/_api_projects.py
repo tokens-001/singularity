@@ -75,29 +75,39 @@ def _git_ro(root, *args: str, timeout: int = 5) -> str:
     return r.stdout or ""
 
 
-def _parse_log_numstat(text: str) -> list[tuple[str, str, int]]:
-    """把 `git log --numstat --format=@@%H%x09%s` 拆成 `[(sha, subject, 新增行数)]`。
+def _parse_log_numstat(text: str) -> list[tuple[str, str, int, list[str]]]:
+    """把 `git log --numstat --format=@@%H%x09%s` 拆成 `[(sha, subject, 新增行数, 改动文件名)]`。
 
     ⚠️ 二进制文件的 `--numstat` 那一列是 `-` 不是数字 ⇒ **必须 `isdigit()` 挡一下**，
     否则一个 `.png` 就让整个解析炸掉。`(sha, subject, ...)` 之间用 `%x09`(tab) 分隔 ——
     用空格分会被中文标题里的空格切碎。
+
+    🔴 **文件名照收，哪怕行数是 `-`**（2026-09-20 补）。来历：`round-20260920b` 结束后
+    有人读 `merged.insertions = 478` 差点当成"产物进仓了 478 行" —— **去查才发现
+    那 478 行全是 `pyproject.toml`(+36) 和 `README.md`(+356/+86) 的样板**，
+    5654 行 `jsonlstat/*.py` 一行都没进树。**光看数字会把样板读成产物。**
+    收名字是为了让那个数字**带上组成**（同「数总数要连组成一起数」）。
     """
-    commits: list[tuple[str, str, int]] = []
+    commits: list[tuple[str, str, int, list[str]]] = []
     sha = subj = ""
     added = 0
+    files: list[str] = []
     for line in text.splitlines():
         if line.startswith("@@"):
             if sha:
-                commits.append((sha, subj, added))
+                commits.append((sha, subj, added, files))
             head = line[2:]
             sha, _, subj = head.partition("\t")
             added = 0
+            files = []
         elif commits or sha:
             parts = line.split("\t")
-            if len(parts) >= 3 and parts[0].isdigit():
-                added += int(parts[0])
+            if len(parts) >= 3:
+                if parts[0].isdigit():      # `-` = 二进制：只跳过行数，**名字照收**
+                    added += int(parts[0])
+                files.append(parts[2])
     if sha:
-        commits.append((sha, subj, added))
+        commits.append((sha, subj, added, files))
     return commits
 
 
@@ -120,7 +130,9 @@ def project_integration(proj) -> dict:
     **不能读成"这么多行可用程序"**。要的是**量级**，不是精确值。
     """
     out = {
-        "merged": {"tasks": [], "commits": 0, "insertions": 0},
+        # `files` 是**给数字配的组成**：`insertions` 一个数会把 README/pyproject 的样板
+        # 和真产物算在一起，光看数会读成"产物进仓了"（2026-09-20 差点这么读）。
+        "merged": {"tasks": [], "commits": 0, "insertions": 0, "files": []},
         "not_merged": {"tasks": [], "insertions": 0, "refs": []},
         "tests_ran": None,          # None = 没记录（不是"没跑"）
         "machine_checks": None,
@@ -144,7 +156,7 @@ def project_integration(proj) -> dict:
     want = {str(t) for t in (proj.task_ids or [])}
 
     # ── 进仓 ──（一次 `git log` 拿全：逐条查 `git show` 会在任务多的项目上拖死）
-    for _sha, subj, ins in _parse_log_numstat(
+    for _sha, subj, ins, files in _parse_log_numstat(
             _git_ro(root, "log", "--numstat", "--format=@@%H%x09%s", "HEAD")):
         m = _AGENT_COMMIT.search(subj or "")
         if not m or m.group(1) not in want:
@@ -152,7 +164,9 @@ def project_integration(proj) -> dict:
         out["merged"]["tasks"].append(m.group(1))
         out["merged"]["commits"] += 1
         out["merged"]["insertions"] += ins
+        out["merged"]["files"].extend(files)
     out["merged"]["tasks"] = sorted(set(out["merged"]["tasks"]))
+    out["merged"]["files"] = sorted(set(out["merged"]["files"]))
 
     # ── 没进仓 ──
     for line in _git_ro(root, "for-each-ref",

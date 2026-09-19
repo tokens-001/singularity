@@ -167,6 +167,29 @@ def facts(pid: str) -> None:
         print(f"   {len(rows)} 行 · {tot:,} tokens · 模型 {', '.join(models)}")
     else:
         print("   （没有这个项目的账 —— 不代表没花钱，见 §59：记账是下界）")
+    # ⑥ 集成 —— **进仓 / 没进仓**（项目详情里「集成实况」那块，从命令行也能读）
+    #
+    # 2026-09-20 加。为什么值得单列：这一栏原来只在界面上，而**判下一轮改动有没有变好**
+    # 要的正是这个数 —— 命令行能读才谈得上"可机检"。
+    # 🔴 **两个方向一起看才算数**：
+    #   · `not_merged` 落下来 —— ref 只在**真有改动**时才打（`_anchor_ref` 的前提是
+    #     `branch_ref != snapshot_ref`）⇒ 它量的是**真产物**；
+    #   · `merged.files` 里得出现产物文件名 —— `merged.insertions` **不能单独看**：
+    #     真机实测过「进仓 478 行」**全是 README / pyproject 样板**、产物一行没进树，
+    #     而那个数字看着像好消息。**数字必须连着组成一起读**。
+    print("⑥ 集成（进仓 / 没进仓）")
+    try:
+        from singularity.scheduler._api_projects import project_integration
+        ig = project_integration(proj)
+        mg, nm = ig["merged"], ig["not_merged"]
+        print(f"   进仓   {len(mg['tasks'])} 个任务 · {mg['commits']} 个提交 · "
+              f"+{mg['insertions']} 行 · 文件 {mg['files'] or '（无）'}")
+        print(f"   没进仓 {len(nm['tasks'])} 个任务 · +{nm['insertions']} 行 "
+              f"（各任务合计、有重复）—— 锚还在 refs/qidian/pending/")
+        print(f"   集成测试：{ig['tests_ran']}（None = 没记录，不是没跑）"
+              f" · 机械检查 {ig['machine_checks']}")
+    except Exception as e:
+        print(f"   ⚠️ 读不出来：{type(e).__name__}: {e}")
     print("\n（以上都是事实，判不判「成了」由你定。→ 来源路径都印在上面的括号里）")
 
 

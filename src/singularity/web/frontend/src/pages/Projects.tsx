@@ -206,6 +206,17 @@ export default function Projects() {
                           进仓：<b>{detail.integration.merged?.tasks?.length ?? 0}</b> 个任务
                           {' · '}{detail.integration.merged?.commits ?? 0} 个提交
                           {' · +'}{detail.integration.merged?.insertions ?? 0} 行
+                          {/* 🔴 **行数必须带组成**（2026-09-20）。上面那个 +N 行把 README /
+                              pyproject 的样板行和真产物算在一起 —— 本轮真机就是「478 行」
+                              **全是样板**、5654 行产物一行没进树，而这个数字看着像好消息。
+                              ⇒ 把进仓的文件名列出来，一眼看得出进的是什么。 */}
+                          {(detail.integration.merged?.files?.length ?? 0) > 0 && (
+                            <span className="fs-10 text-muted">
+                              {' （'}{detail.integration.merged.files.slice(0, 4).join(' · ')}
+                              {detail.integration.merged.files.length > 4
+                                ? ` 等 ${detail.integration.merged.files.length} 个文件` : ''}{'）'}
+                            </span>
+                          )}
                         </div>
                         {(detail.integration.not_merged?.tasks?.length ?? 0) > 0 && (
                           <div className="fs-11" style={{ color: '#b45309' }}>

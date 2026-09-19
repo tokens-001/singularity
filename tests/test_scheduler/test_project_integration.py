@@ -104,6 +104,12 @@ def test_进仓与没进仓分得清(tmp_path, monkeypatch):
     assert out["merged"]["tasks"] == ["111"], "进仓的任务认错了"
     assert out["merged"]["commits"] == 1
     assert out["merged"]["insertions"] == 10, "二进制的 `-` 那行被算进去了？应只数 a.py 的 10 行"
+    # 🔴 **数字必须带组成**（2026-09-20 加）：`round-20260920b` 那次读数
+    # `insertions=478` 差点被当成"产物进仓了 478 行"，一查全是 README/pyproject 样板。
+    # ⇒ 文件名照收（**含行数为 `-` 的二进制** —— 它一样是"改了这个文件"）。
+    # 变异：把 `files.append(parts[2])` 挪进 `if parts[0].isdigit()` 里 ⇒ 二进制那条没了、红。
+    assert out["merged"]["files"] == ["a.py", "logo.png"], \
+        f"进仓的文件名没报全（二进制也该算『改了这个文件』）：{out['merged']['files']}"
     assert out["not_merged"]["tasks"] == ["222"], "没进仓的任务认错了（泄漏了别的项目号？）"
     assert out["not_merged"]["insertions"] == 7
     assert out["not_merged"]["refs"][0]["sha"] == sha2[:7]
