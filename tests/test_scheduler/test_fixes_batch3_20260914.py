@@ -137,16 +137,35 @@ def test_QA报告没落盘就不许撒验证标记(tmp_path, monkeypatch):
 
 
 def test_QA报告落了盘才撒验证标记(tmp_path, monkeypatch):
-    """对照：正常路径必须照撒（不然 `_gate3_admission` 会对每次正常验收都误报）。"""
+    """对照：正常路径必须照撒（不然 `_gate3_admission` 会对每次正常验收都误报）。
+
+    ⚠️ **2026-09-19 返工 —— 这条以前根本没走到"正常路径"。**
+    它拿 `agents={}` 直接调 `_run_verification`，**QA 那一步压根没派发出去**、
+    raw 是空的 ⇒ `_qa_verdict_from_raw` 判的其实是**「未产出」**那条路；
+    它绿只是因为旧判据只看 `qa_saved`（空报告也不抛）。
+    ⇒ **docstring 说的（正常路径）和断言钉的（未产出路径）不是一回事**
+      （本仓反复栽的那个形状）。现在把 QA 的产出喂成真的，它才真在钉对照。
+    同批改动把判据收紧成"必须有 verdict"之后它当场红了 —— 那正是它一直在
+    钉错东西的**证据**，不是回归。
+    """
+    import json
+    from types import SimpleNamespace as NS
     from singularity.scheduler import workflow
     p = _mk_project(tmp_path, monkeypatch)
     _quiet_flags(monkeypatch)
+    # QA 真的产出了结论（不是空 `{}`）
+    qa_json = json.dumps({"verdict": "go", "passed": [{"rule": "r0"}], "issues": [],
+                          "reason": "全部通过"}, ensure_ascii=False)
+    monkeypatch.setattr(workflow, "_safe_dispatch",
+                        lambda *a, **k: (NS(executor_result=NS(raw_output=qa_json)), ""))
+    # 落盘本身不是这条要验的（上一条测的就是它炸了会怎样）
+    monkeypatch.setattr(workflow, "_save_phase_output", lambda *a, **k: None)
     try:
         workflow._run_verification(p, agents={})
     except Exception:
         pass
     assert [i for i in p.issues if i.get("type") == "verification_ran"], \
-        f"正常跑完却没撒标记，GATE3 会误报缺证据：{p.issues}"
+        f"正常跑完（QA 有结论、报告也落了盘）却没撒标记，GATE3 会误报缺证据：{p.issues}"
     assert p.has_verification_evidence() is True
 
 

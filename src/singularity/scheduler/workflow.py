@@ -635,6 +635,29 @@ def _flag_missing_qa_verdict(project: ProjectState) -> None:
     })
 
 
+def _record_verification_marker(project: ProjectState, qa_saved: bool, qa_verdict: str) -> None:
+    """验收门槛标记 —— **只有"QA 真的产出了结论"才撒 `verification_ran`**。
+
+    🔴 **2026-09-19 修（外派评审 ③ 指出的那道"坏刹车"）**：判据原来是 `qa_saved`，
+    而它只表示"`build_qa_report` 没抛"。`build_qa_report([], [], verdict, reason)`
+    **空输入照样不抛** ⇒ **QA 那一维什么都没产出时报告照样落盘、`verification_ran`
+    照样撒**，detail 还写着"QA + 安全审计已执行"。⇒ 越是"QA 报错/没产出"那轮
+    （也正是最该被拦住的那轮），门槛标记越会开火。
+
+    现在要求 `verdict != 未产出`：QA 没出结论就不算"验收跑过"，让
+    `_gate3_admission` 去报"缺证据"（它的规矩本来就是"把缺证据摆到台面上，
+    比卡死项目有用"）。`qa_verdict_missing` 那条 issue 由 `_flag_missing_qa_verdict`
+    照旧单独记，两个信号各管一段。
+
+    抽成函数是为了能单测 —— 同 `_flag_missing_qa_verdict`。
+    """
+    if qa_saved and qa_verdict != _QA_VERDICT_MISSING:
+        project.issues.append({"type": "verification_ran", "detail": "QA + 安全审计已执行"})
+        return
+    from singularity.scheduler import witness
+    witness.warn("workflow", f"verification_ran_withheld:{project.id}"[:120])
+
+
 def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     """Step 5: QA工程师 + 安全审计师并行出验收报告。
 
@@ -784,6 +807,10 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     # D3: 构建结构化 QA 报告 (fix_route 分级)
     # ⚠️ 只有报告**真落盘**了才算数，见下面那段标记的说明。
     qa_saved = False
+    # ⚠️ **在 try 外面先给初值**：下面那句标记要用它，而异常可能发生在它被赋值之前
+    # （那样引用它会变 NameError、把原异常盖掉）。初值取"MISSING"是安全的一侧 ——
+    # 拿不准就别声称验收跑过。
+    qa_verdict = _QA_VERDICT_MISSING
     try:
         from singularity.scheduler.validator import build_qa_report
         qa_raw = disp_result.executor_result.raw_output if disp_result and disp_result.executor_result else "{}"
@@ -794,6 +821,7 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
         # 也不是"跑了两趟"（只打了一行）**。那个谜没在这一轮复现（它的定性本来就是"间歇性"）。
         # 也就是说：**病灶不在这层**。要再查得从别处下手。
         qa_data, verdict, reason = _qa_verdict_from_raw(qa_raw)
+        qa_verdict = verdict          # 门槛标记要用它 —— 见 `_record_verification_marker`
         issues = qa_data.get("issues", [])
         passed = qa_data.get("passed", [])
         if verdict == _QA_VERDICT_MISSING:
@@ -820,11 +848,10 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     # 原先是无条件 append —— 上面那条 `except` 一吞，QA 报告根本没落盘，
     # 标记却照样撒 ⇒ `_gate3_admission` 看到的是"验收跑过"，进 GATE3 零告警。
     # 标记的语义是"验收有产出"，不是"代码走到这一行"。没产出就让 admission 去报缺证据。
-    if qa_saved:
-        project.issues.append({"type": "verification_ran", "detail": "QA + 安全审计已执行"})
-    else:
-        from singularity.scheduler import witness
-        witness.warn("workflow", f"verification_ran_withheld:{project.id}"[:120])
+    # ⚠️ **2026-09-19 再收紧一层**：原来判据是 `qa_saved`（= "报告落盘没抛"），
+    # 而空 QA 结果照样不抛 ⇒ QA 什么都没产出时标记也撒。判据收进
+    # `_record_verification_marker`，见它的 docstring（外派评审 ③ 指出的坏刹车）。
+    _record_verification_marker(project, qa_saved, qa_verdict)
     return msgs
 
 
