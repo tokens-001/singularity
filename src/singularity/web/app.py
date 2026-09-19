@@ -1334,13 +1334,14 @@ def api_project_run_phase(project_id):
 
 @app.route("/api/projects/<project_id>", methods=["DELETE"])
 def api_project_delete(project_id):
-    from singularity.scheduler import project as proj_mod
     audit_log("delete_project", project_id, ip=request.remote_addr)
-    ok = proj_mod.delete(project_id)
-    if ok:
+    # ⚠️ 别退回 `proj_mod.delete(project_id)` —— 那只清项目文件，任务一个不停（重启会把
+    # 它们回收成 PENDING 又派下去接着烧钱）。见 `_api_projects.project_delete` 的 docstring。
+    data, code = _api_handler.project_delete(project_id)
+    if data.get("ok"):
         # 与 create 对称：不广播的话，SSE 活着时前端不会退回轮询，侧边栏会留一个幽灵项目
         _push_event("project", json.dumps({"project_id": project_id, "deleted": True}))
-    return jsonify({"ok": ok}), 200 if ok else 404
+    return jsonify(data), code
 
 @app.route("/api/projects/<project_id>/start", methods=["POST"])
 def api_project_start(project_id):

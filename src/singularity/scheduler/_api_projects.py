@@ -70,6 +70,44 @@ def project_detail(project_id: str) -> tuple[dict, int]:
     return d, 200
 
 
+def project_delete(project_id: str) -> tuple[dict, int]:
+    """DELETE /api/projects/<id> —— 删项目**之前先把它的任务停掉**。
+
+    🔴 **2026-09-19 真机踩过**：`proj_mod.delete` 只清项目那几份文件，任务一个不动
+    ⇒ 那些任务**还是活的**：杀掉项目 + 重启后端，它们会被回收成 PENDING **又派下去
+    接着烧钱**（实测烧了 9 分钟，还和别的轮抢模型）。
+    ⇒ 所以删项目必须连同"停掉它在跑的任务"，而那一步以前只在人脑子里。
+
+    ⚠️ **任务 JSON 一个都不删**（09-19 拍板）。锚 `refs/qidian/pending/<task_id>` 打在
+    **项目仓**上，而任务文件是"这个锚是什么"的**唯一**线索（描述/状态/父项目）——
+    删掉它就等于把可打捞的产物变成查无来处的孤儿 ref。
+    所以这里只做两件：**取消还在跑的** + **把留下的报出来**（别让它悄悄攒）。
+
+    返回多带两个计数（`cancelled` / `left_tasks`），前端只读 `ok` 也不受影响。
+    """
+    from . import _api_tasks
+    from . import project as proj_mod
+    proj = proj_mod.load(project_id)
+    task_ids = list(proj.task_ids) if proj is not None else []
+
+    cancelled = 0
+    for tid in task_ids:
+        if tracker.read_task(tid) is None:
+            continue
+        _, code = _api_tasks.task_cancel(tid)
+        if code == 200:
+            cancelled += 1
+
+    ok = proj_mod.delete(project_id)
+    left = sum(1 for tid in task_ids if tracker.read_task(tid) is not None)
+    if ok and left:
+        # 用 `key=` 显式聚合：这条是"要注意的事"，不是每个 tick 都刷的事件，
+        # 但也不该让每次删项目各占一条（别的删项目现场会看到同一个 key 在涨）。
+        witness.warn("project", f"project_deleted_left_tasks:{left}"[:80],
+                     key="project_deleted_left_tasks")
+    return {"ok": ok, "cancelled": cancelled, "left_tasks": left}, (200 if ok else 404)
+
+
 def project_set_flow_weight(project_id: str, flow_weight: str = "") -> tuple[dict, int]:
     """PUT /api/projects/<id>/flow-weight —— 定点 setter（仿 lineup 那个）。
 
