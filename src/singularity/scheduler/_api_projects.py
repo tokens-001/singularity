@@ -448,6 +448,65 @@ def project_lineage(project_id: str) -> tuple[dict, int]:
     return {"project_id": project_id, "lineage": list(proj.lineage or [])}, 200
 
 
+def project_phase_history(project_id: str, filename: str) -> tuple[str | None, int]:
+    """GET /api/projects/<id>/history/<filename> —— 阶段产出的**历史版本**（纯文本）。
+
+    🔴 2026-09-19 补：`_save_phase_output` 从 09-17 起就在覆盖前把上一版归档进
+    `<项目目录>/history/<文件名>.<n>`，**数据早就在盘上，界面上一点入口都没有**
+    （用户当场想看"打回前后的对比"）。同族的 `research-raw` 只解决"这一版看得到全文"，
+    **不解决跨版本**。
+
+    ⚠️ **回纯文本、一次性把各版拼起来**，不做列表接口 —— 同 `research-raw` 的理由：
+    前端只要给个链接就能看，不用加异步取数的状态，"对比改进"就是上下滚动的事。
+    各版之间插分隔头（版本号 + 落盘时间 + 字节数），**新→旧**排（想对比时先看到新的）。
+
+    返回 `(text, code)`；调用方直接当 text/plain 吐出去。
+    """
+    import time as _time
+    from pathlib import Path
+
+    from . import project as proj_mod
+    # 边界先挡：历史文件名来自 URL。**合法的只有"纯文件名"** —— 带路径分隔符或
+    # `..` 一律拒（这个仓在 `task_override_route` 上已经栽过一次路径穿越的形状）。
+    if not filename or "/" in filename or "\\" in filename or ".." in filename:
+        return None, 400
+
+    # ⚠️ 用 `_projects_dir()` 直接拼、**不调 `get_project_dir()`** —— 后者会 mkdir，
+    # 查一个不存在的项目会顺手把它的目录建出来（`7bdeb34` 刚修过同族那个坑）。
+    # 与 `workflow._phase_history_dir()` 拼的是同一条路径。
+    hist = Path(proj_mod._projects_dir()) / project_id / "history"
+    if not hist.is_dir():
+        return None, 404
+    versions: list[tuple[int, Path]] = []
+    for f in hist.glob(f"{filename}.*"):
+        tail = f.name.rsplit(".", 1)[-1]
+        if tail.isdigit() and f.is_file():
+            versions.append((int(tail), f))
+    if not versions:
+        return None, 404
+    versions.sort(key=lambda t: t[0], reverse=True)      # 新 → 旧
+
+    blocks: list[str] = []
+    for n, f in versions:
+        try:
+            body = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            # 读不出来 ≠ 这一版不存在（"损坏和没有长得一样" —— 本仓反复咬人的那个病）。
+            # 两处都要出声：给用户的那句在返回文本里，**给运维的那句走 witness**
+            # （只把错误拼进返回文本不算"出声" —— 静默 except 棘轮按 AST 形状看，
+            #  它判得对：用户不一定点开这个链接，而盘上坏了就是坏了）。
+            witness.warn("project",
+                         f"phase_history_unreadable:{project_id}:{f.name}:{type(e).__name__}"[:160],
+                         key="phase_history_unreadable")
+            body = f"（这一版读不出来：{type(e).__name__}——它还在盘上：{f.name}）"
+        blocks.append(
+            f"===== 版本 {n} · {_time.strftime('%Y-%m-%d %H:%M:%S', _time.localtime(f.stat().st_mtime))}"
+            f" · {f.stat().st_size} 字节 =====\n{body}")
+    head = (f"# {filename} 的历史版本（共 {len(versions)} 版，新 → 旧）\n"
+            f"# 当前生效的那一版不在这里 —— 它在 .qidian/projects/<id>.{filename}\n\n")
+    return head + "\n\n".join(blocks), 200
+
+
 def project_snapshot(project_id: str) -> tuple[dict, int]:
     """POST /api/projects/<id>/snapshot — 快照项目 repo (修复 #1 遗漏: 原先快照的是奇点仓库)。"""
     from . import project as proj_mod

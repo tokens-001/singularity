@@ -514,3 +514,28 @@ describe('打回时能写理由', () => {
     el.remove()
   })
 })
+
+// ═══════════════════════════════════════════════════════════════
+// 架构的「历史版本」入口（2026-09-19）
+// ═══════════════════════════════════════════════════════════════
+// 归档早就落盘了（`_save_phase_output` 从 09-17 起覆盖前会存上一版），而界面上
+// **一点入口都没有** —— 用户当场想看"打回前后的对比"。
+// ⚠️ 这条钉的是**接线**：光有 `ArchitectureDetails` 里的链接不算，得证明
+//   两个调用点真的把 `projectId` 传下去了（不传就是渲染个 href 里带 `undefined` 的死链）。
+describe('架构历史版本入口', () => {
+  const hrefs = (el: HTMLElement) =>
+    Array.from(el.querySelectorAll('a')).map(a => a.getAttribute('href') || '')
+
+  it('项目档案里给出了通往历史版本的链接', () => {
+    const el = dom(<ProjectArchive info={{ id: 'p123', architecture: ARCH }} />)
+    expect(hrefs(el), '历史版本的链接没渲染 —— 归档在盘上、界面上还是没入口')
+      .toContain('/api/projects/p123/history/architecture.md')
+    el.remove()
+  })
+
+  it('没有 projectId 时不给死链（href 里不许出现 undefined）', () => {
+    const el = dom(<ProjectArchive info={{ architecture: ARCH }} />)
+    expect(hrefs(el).some(h => h.includes('undefined')), '渲染出了带 undefined 的死链').toBe(false)
+    el.remove()
+  })
+})

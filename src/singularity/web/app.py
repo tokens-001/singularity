@@ -1725,6 +1725,23 @@ def api_project_research_raw(project_id):
     from flask import Response
     return Response(text, mimetype="text/plain; charset=utf-8")
 
+@app.route("/api/projects/<project_id>/history/<filename>")
+def api_project_phase_history(project_id, filename):
+    """阶段产出的**历史版本**（纯文本，新→旧全拼在一起）。
+
+    同 `research-raw` 的形状与理由 —— 只读、纯文本、一个链接就能看，
+    前端不用加异步取数的状态。
+
+    判据：`_save_phase_output` 覆盖前会把上一版归档进
+    `.qidian/projects/<id>/history/<文件名>.<n>`（09-17 起）。
+    惯例的入口名：`architecture.md` / `research.md` / `test-plan.md`。
+    """
+    data, code = _api_handler.project_phase_history(project_id, filename)
+    if data is None:
+        return jsonify({"error": {400: "文件名不合法", 404: "这个项目没有该文件的历史版本"}[code]}), code
+    from flask import Response
+    return Response(data, mimetype="text/plain; charset=utf-8")
+
 @app.route("/api/observer/status")
 def api_observer_status():
     """观察者的**活性痕迹** —— 它自己的失效方式是"什么都不发生"，与"一切正常"长得一样。

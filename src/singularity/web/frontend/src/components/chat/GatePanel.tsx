@@ -233,7 +233,8 @@ export const ResearchReport = memo(function ResearchReport(
  * 要点两下才看得见内容（用户贴的截图就是「🏗 架构 → 🏗 架构方案 → 点击展开」）。
  * 壳归分组提供，正文归组件提供 —— 各出一半，别都出。
  */
-export const ArchitectureDetails = memo(function ArchitectureDetails({ arch, bare }: { arch: any; bare?: boolean }) {
+export const ArchitectureDetails = memo(function ArchitectureDetails(
+  { arch, bare, projectId }: { arch: any; bare?: boolean; projectId?: string }) {
   const modules = arch.modules || []
   const tasks = arch.tasks || []
   const entities = arch.data_model?.entities || []
@@ -245,6 +246,19 @@ export const ArchitectureDetails = memo(function ArchitectureDetails({ arch, bar
   const row = { fontSize: 11, color: '#141413', padding: '3px 0', borderBottom: '1px solid #f3f2ec' } as const
   const body = (
     <>
+      {projectId && (
+        // 归档早就在盘上：`_save_phase_output` 从 2026-09-17 起，**覆盖前会把上一版**
+        // 存进 `.qidian/projects/<id>/history/<文件名>.<n>`，而界面上一直没有入口
+        // （用户当场想看"打回前后的对比"）。
+        // ⚠️ **无条件显示**（同 `ResearchReport` 那条「打开完整原文」）：有没有历史版本
+        // 由服务端说（没有就 404 一页说明），前端不为了一个链接去加异步取数的状态。
+        <div style={{ marginBottom: 8 }}>
+          <a href={`/api/projects/${projectId}/history/architecture.md`}
+             target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#2563eb' }}>
+            🗂 历史版本（打回前后对比）
+          </a>
+        </div>
+      )}
       {arch.architecture && (
         <div style={{ fontSize: 12, color: '#141413', lineHeight: 1.6, marginBottom: 10, padding: '8px 10px', background: '#faf9f5', borderRadius: 6 }}>
           {arch.architecture}
@@ -526,7 +540,7 @@ export const ProjectArchive = memo(function ProjectArchive({ info }: { info: any
   if (!info?.architecture && !info?.research_report) return null
   return (
     <div style={{ maxWidth: 760, margin: '12px auto 0', textAlign: 'left' }}>
-      {info.architecture && <ArchitectureDetails arch={info.architecture} />}
+      {info.architecture && <ArchitectureDetails arch={info.architecture} projectId={info.id} />}
       {info.research_report && <ResearchReport report={info.research_report} projectId={info.id} />}
     </div>
   )
@@ -689,7 +703,7 @@ export const ProjectMaterials = memo(function ProjectMaterials(
       </MatGroup>
 
       <MatGroup label="🏗 架构" summary={架构摘要} open={isOpen('arch')}>
-        {arch ? <ArchitectureDetails arch={arch} bare />
+        {arch ? <ArchitectureDetails arch={arch} bare projectId={info?.id} />
               : <div style={MUTED}>还没出架构方案。</div>}
       </MatGroup>
 
