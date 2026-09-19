@@ -132,25 +132,40 @@ def _tool_create_task(description: str, level: str = "any") -> dict:
             mode = _pending_exec_mode
         # LLM 分类任务类型
         route_type = "default"
+        gate_unknown = False
         try:
             from singularity.scheduler.router import route as classify_route
             r = classify_route(description)
             route_type = r.task_type
             gate = r.gate_required
+            # ⚠️ `route()` 自己已经吞掉异常了（它回一个 `classified=False` 的结果），
+            # 所以**这里不能只看有没有抛** —— 「它没抛」不等于「它判出来了」。
+            gate_unknown = not getattr(r, "classified", True)
         except Exception:
+            # **第三态**（2026-09-20）：分类挂了 ⇒ `gate=False` 是没办法（折 True 会造出
+            # 假失败，见 `RouteResult` 的 docstring），但**"没判出来"不许静默**。
             gate = False
+            gate_unknown = True
+            import logging
+            logging.getLogger(__name__).warning(
+                "observer: 任务分类没判出来（路由未判定）—— 门改由文件级兜底判")
         # execution_mode 一并走 transition 的 kwargs —— 以前是"读出来改完再 _write"，
         # 那两步都在 tracker._LOCK **外面**，中间调度线程若 CAS 走了（PENDING→ROUTED），
         # 这里的陈旧对象会把状态写回去（实测复现 lost update）→ 任务退回可调度态、
         # 可能被重复派发。transition 支持任意已存在属性，并进去就原子了。
         tracker.transition(task.id, tracker.TaskStatus.PENDING, route_level=level,
                           route_locked=True, route_type=route_type, route_gate=gate,
+                          route_gate_unknown=gate_unknown,
                           execution_mode=mode)
         # 确保调度循环在跑（走 _hooks，不 import web —— 见 _hooks 模块说明）
         from singularity.scheduler import _hooks
         if not _hooks.loop_status().get("running"):
             _hooks.start_loop(concurrent=2)
-        return {"ok": True, "task_id": task.id, "type": route_type, "description": description}
+        return {"ok": True, "task_id": task.id, "type": route_type,
+                # 把"没判出来"摆到返回值里 —— 建任务的那一方（观察者）当场看得见，
+                # 不用等以后翻盘才发现当时就没判。
+                **({"route_gate_unknown": True} if gate_unknown else {}),
+                "description": description}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

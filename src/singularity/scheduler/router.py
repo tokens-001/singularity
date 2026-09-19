@@ -14,9 +14,31 @@ from singularity.scheduler.log import timed
 
 @dataclass
 class RouteResult:
-    """路由结果: task_type + gate_required。"""
+    """路由结果: task_type + gate_required + **判没判出来**。
+
+    ⚠️ **`gate_required` 是 bool，但它其实有第三态**（2026-09-20）：
+      · `True`  —— 分类器说"要跑回归门"
+      · `False` —— 分类器说"不用"
+      · **判不出来** —— 分类调用挂了 / 回复解析不出来 ⇒ **我们根本不知道**
+
+    第三态原来**没有名字**：一律折成 `False`（"不用跑门"），于是
+    「分类挂了」和「分类说不跑」在盘上**长得一模一样** —— 本仓最忌讳的形状，
+    而它落在**安全**那一档（判据错位审计的 C 组）。
+
+    🔴 **为什么不干脆兜底成 `True`**（外派评审 09-19 的建议，逐行核过之后**否掉**）：
+    `_run_gate()` 跑的是项目自己的 `eval.py`，**没有 `eval.py` 的项目**会直接
+    `gate失败` ⇒ `retry/rollback`。那是**假失败**，比放行更坏 ——
+    拿一个我们不知道的东西去换一个**确定会错**的动作，不划算。
+
+    ⇒ 第三态的做法：**把"没判出来"显式带上（`classified=False`），
+    门的行为一个字不改**（`validator` 那边仍然靠**文件级兜底**
+    `_gate_check_by_files` 兜住"改的明明是核心引擎文件"那一类），
+    区别只在于**这件事从此可数、可查** —— 而"没判"和"判了说不用"从此刻分得开。
+    """
     task_type: str = "default"
     gate_required: bool = False
+    #: `False` = 分类**没判出来**（异常 / 回复解析失败）。默认 `True` = 判过了。
+    classified: bool = True
     matched_signals: list = field(default_factory=list)
     cached_at: float = 0.0
 
@@ -121,6 +143,10 @@ def _llm_classify(task: str) -> RouteResult:
                 break
 
         if not agent_cfg:
+            # ⚠️ **这一条有意不标 `classified=False`**（2026-09-20）：没配分类器是
+            # **稳定的配置事实**（装了就这样），标上去 = **每个任务**都挂一句"未判定"
+            # ⇒ 变成"常亮的假红"，真出事那次反而没人看（本仓那条规矩）。
+            # 它该在**系统层报一次**（`missing_deps` / 启动自检那一类），不是逐任务标。
             return RouteResult()
 
         model = agent_cfg.get("request_template", {}).get("model", agent_cfg.get("model", "deepseek-chat"))
@@ -129,6 +155,7 @@ def _llm_classify(task: str) -> RouteResult:
         api_key = os.environ.get(api_key_env, "")
 
         if not api_key:
+            # 同上：**没配 key 是配置事实，不是"这次没判出来"**，有意不标未判定。
             return RouteResult()
 
         body = {
@@ -161,8 +188,16 @@ def _llm_classify(task: str) -> RouteResult:
             pass          # 记账失败不能影响分类
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
         result = _parse_classify_reply(content)
-    except Exception:
-        result = RouteResult()
+    except Exception as e:
+        # 🔴 **第三态**（2026-09-20）：分类挂了 ⇒ `gate_required` 折成 False 是**没办法**
+        # （折成 True 会造出假失败，见 `RouteResult` 的 docstring），
+        # 但**"我们不知道"这件事不许静默** —— 出声 + `classified=False`，
+        # 否则「分类挂了」和「分类说不跑」在盘上长得一模一样。
+        from singularity.scheduler import witness
+        witness.warn("router",
+                     f"classify_failed:{type(e).__name__}:{str(e)[:80]}（路由未判定，"
+                     f"门改由文件级兜底判）"[:200], key="classify_failed")
+        result = RouteResult(classified=False)
 
     # 写缓存 (限制大小)
     if len(_CLASSIFY_CACHE) >= _CACHE_MAX:

@@ -77,6 +77,12 @@ class Task:
     depends_on: list[str] = field(default_factory=list)
     route_level: str = "any"  # 两档后统一 "any" (E/E+/D 已废弃)
     route_gate: bool = False
+    # 「路由未判定」—— 分类**没判出来**（调用挂了 / 回复解析不出），
+    # 于是 `route_gate=False` 是**折出来的**，不是分类器的意见（2026-09-20）。
+    # ⚠️ **必须是个显式字段**：没有它的话，「没判」和「判了说不用」在盘上
+    # 长得一模一样 —— 而这一档是**安全**类的（判据错位审计 C 组）。
+    # 见 `router.RouteResult` 的 docstring（那儿还写着"为什么不兜底成 True"）。
+    route_gate_unknown: bool = False
     route_type: str = "default"
     # _workflow_phases 建项目子任务时写、_exec 首轮读（Step 4 角色提示词注入）。
     # 这个字段曾经**不存在** —— 写入侧走 transition(**kwargs) 被 hasattr 静默丢弃，

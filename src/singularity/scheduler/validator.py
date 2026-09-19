@@ -42,7 +42,8 @@ class ValidationReport:
     # D3: GATE3 分级路由 (QA 建议, Observer 裁定)
     fix_route: str = ""  # impl|design|note
 
-def validate(candidate, gate_required, task_type, changed_files, snap, turn, max_turns, cwd=None):
+def validate(candidate, gate_required, task_type, changed_files, snap, turn, max_turns, cwd=None,
+             gate_unknown: bool = False):
     report = ValidationReport(turns_used=turn)
     for pat in _DANGEROUS_PATTERNS:
         if pat.search(candidate):
@@ -56,7 +57,16 @@ def validate(candidate, gate_required, task_type, changed_files, snap, turn, max
         report.action = "retry" if turn < max_turns else "abort"
         report.unverified.append("执行器未产出任何文件 (changed_files 空)")
         return report
-    if gate_required or _gate_check_by_files(changed_files):
+    # 🔴 **第三态**（2026-09-20）：`gate_required` 有第三种来源 —— **分类没判出来**。
+    # 那时 `gate_required=False` 是**折出来的**，不是"分类器说不用跑门"。
+    # 门的行为**一个字不改**（仍然靠下面 `_gate_check_by_files` 兜住核心引擎文件那一类；
+    # 兜底成 True 会造出假失败，见 `router.RouteResult` 的 docstring），
+    # 但**"这个决定是在不知道的情况下做的"必须留痕** —— 否则它和真判过的一模一样。
+    _gate_ran = bool(gate_required or _gate_check_by_files(changed_files))
+    if gate_unknown and not _gate_ran:
+        report.unverified.append(
+            "路由未判定：分类没判出来，门只按文件级兜底判过（没命中 ⇒ 这次没跑门）")
+    if _gate_ran:
         g = _run_gate()
         report.gate_passed = g.get("passed")
         report.gate_message = g.get("message","")

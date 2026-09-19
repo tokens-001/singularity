@@ -531,6 +531,10 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
 
     level = task.route_level
     route_gate = task.route_gate
+    # 「路由未判定」—— 分类没判出来时 `route_gate` 是**折出来的 False**，
+    # 不是"分类器说不用跑门"。带着它往下走，让 `validate` 能把这件事记进 unverified
+    # （2026-09-20，见 `router.RouteResult` 的 docstring）。
+    route_gate_unknown = bool(getattr(task, "route_gate_unknown", False))
     route_type = task.route_type
     # Step 4: 读取 layer→角色路由
     route_role = getattr(task, 'route_role', None) or ""
@@ -741,7 +745,7 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     task_type=route_type,
                     changed_files=getattr(exec_result, 'changed_files', []),
                     snap=snap, turn=turn, max_turns=level_max,
-                    cwd=cwd,
+                    cwd=cwd, gate_unknown=route_gate_unknown,
                 )
                 # 补充质量信号
                 try:
