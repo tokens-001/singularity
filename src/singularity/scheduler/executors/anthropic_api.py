@@ -186,12 +186,43 @@ class AnthropicApiExecutor(BaseExecutor):
             messages.append({"role": "user", "content": tool_results})
 
         # ── Max turns exhausted ──
+        #
+        # 🔴 **"轮次用尽"和"干出东西了"是两件事**（2026-09-20 对齐 openai_agent）。
+        #
+        # 原来这里**无条件 `success=True`**，`raw_output` 可能是 `"(max turns)"` ——
+        # 也就是**零产出也报成功**，而且**不会触发换模型重试**（`_exec` 只在 `not success`
+        # 时才换）。openai 那条有守卫（`if self._changed_files:` 才判成功），两条路对同一件事
+        # 给了相反的答案 —— 同一个系统里**换个执行器就换个答案**，这是本仓最忌讳的形状。
+        #
+        # ⚠️ **"会不会有任务本来就不该产文件"** —— 动手前查过（2026-09-20），答案是**没有**：
+        #   · 走 `run()` 的是**执行层任务**，契约就是"产出可运行的东西"；
+        #   · 唯一例外的 **planner**（只出拆解、不写文件）**当前压根不可达**
+        #     （没有任何 agent 配 `mode: planner`），而且它的成败由 `decompose()` 决定、
+        #     够不到这里；真拆不出子任务时**本来就该判失败**；
+        #   · 真机 124 份 trace 里 `truncated_by=max_turns` 只有 **2 条**，
+        #     两条的 `changed_files` 分别是 **1 个和 3 个** —— 从没出现过"轮次用尽且零产出"。
+        # ⇒ 对齐是安全的。**哪天有人把 planner 类任务接上去，这条守卫要重新看一遍。**
+        #
+        # ⚠️ `truncated_by` **两档都照旧带上**：它管的是**归因**
+        # （`supervisor.our_side_stop_of` 靠它说"这次是被我们掐断的"），不是成败。
+        # 零产出那一档同时给 `error_kind="exec"` —— 和 openai 那条同一个信号。
         changed = self._get_changed_files()
+        if changed:
+            return ExecutorResult(
+                success=True,
+                raw_output=assistant_text if 'assistant_text' in dir() else "(max turns)",
+                truncated_by="max_turns",   # ← 「成功但其实被截断」那一档
+                changed_files=changed,
+                elapsed=time.time() - start,
+                token_count=total_tokens,
+                tool_events=tool_events,
+            )
         return ExecutorResult(
-            success=True,
-            raw_output=assistant_text if 'assistant_text' in dir() else "(max turns)",
-            truncated_by="max_turns",   # ← 同 openai_agent：这是"成功但被截断"那一档
-            changed_files=changed,
+            success=False,
+            error=f"达到最大轮次 {max_turns}，任务未完成（0 个文件改动）",
+            error_kind="exec",
+            truncated_by="max_turns",
+            changed_files=[],
             elapsed=time.time() - start,
             token_count=total_tokens,
             tool_events=tool_events,

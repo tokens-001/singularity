@@ -2321,3 +2321,88 @@ class TestFailureKeepsChangedFiles:
             "失败就把改过的文件丢了 ⇒ QA 会拿「改动 0 个」判它偷懒"
             f"（干过活的和没干活的在账上长得一样）。实到 {r.changed_files!r}")
         assert r.error_kind == "exec", "失败种类不许改 —— 改了就不会换模型重试了"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 「轮次用尽」≠「干出东西了」—— 两条执行器必须给同一个答案
+#
+# 2026-09-20 对齐：`anthropic_api` 原来在 `# ── Max turns exhausted ──` 上
+# **无条件 `success=True`**（`raw_output` 可能是 `"(max turns)"`）⇒ **零产出也报成功**，
+# 而且不会触发换模型重试（`_exec` 只在 `not success` 时才换）。
+# openai 那条有守卫 —— 同一个系统里换个执行器就换个答案，本仓最忌讳的形状。
+# ═══════════════════════════════════════════════════════════════
+
+class TestMaxTurnsHonesty:
+
+    def _run(self, monkeypatch, tmp_path, writes: bool):
+        """跑到 `max_turns` 用尽那一步。`writes` 控制模型这轮到底写没写文件。
+
+        ⚠️ **cwd 必须指到临时 git 仓** —— `_get_changed_files` 是拿
+        `git diff --name-only <baseline>` 在 **cwd** 里算的；不指的话它会去读
+        **真仓库**，于是"一个改动都没有"这个前提根本不成立（本仓"读也不安全"那条）。
+        """
+        import subprocess as sp
+        import httpx
+        from singularity.scheduler.executors import anthropic_api as aa
+
+        repo = tmp_path / "wt"
+        repo.mkdir()
+        for cmd in (["git", "init", "-q"], ["git", "config", "user.email", "t@t"],
+                    ["git", "config", "user.name", "t"]):
+            sp.run(cmd, cwd=repo, check=True, capture_output=True)
+        (repo / "seed.txt").write_text("x", encoding="utf-8")
+        sp.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+        sp.run(["git", "commit", "-qm", "seed"], cwd=repo, check=True, capture_output=True)
+        base = sp.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                      capture_output=True, text=True).stdout.strip()
+
+        class _Resp:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"content": [{"type": "tool_use", "id": "t1", "name": "write_file",
+                                     "input": {"path": "out.txt", "content": "hi"}}],
+                        "usage": {"input_tokens": 10, "output_tokens": 5}}
+
+        monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+        ex = aa.AnthropicApiExecutor(
+            {"model": "claude-sonnet-4-6", "max_turns": 1},
+            "任务", "tid", baseline_ref=base, cwd=str(repo),
+            skill_tools=[{"type": "function",
+                          "function": {"name": "write_file",
+                                       "parameters": {"type": "object", "properties": {}}}}],
+            skill_prompt="", mcp_tools=[],
+        )
+        # 真实写盘太绕（要过权限闸门），直接替换工具执行：`writes` 决定改不改文件
+        def fake_tool(name, args):
+            if writes:
+                (repo / "out.txt").write_text("hi", encoding="utf-8")
+            return "ok"
+        monkeypatch.setattr(ex, "_execute_tool", fake_tool)
+        return ex.run()
+
+    def test_轮次用尽但零产出_不算成功(self, monkeypatch, tmp_path):
+        """**正题**。变异：把 `if changed:` 那半删掉、退回无条件 `success=True` ⇒ 本条红。"""
+        r = self._run(monkeypatch, tmp_path, writes=False)
+        assert r.changed_files == [], "前提没成立：这轮不该有文件改动"
+        assert r.success is False, (
+            "零产出还报成功 —— 而且 `_exec` 只在 not success 时才换模型，"
+            "于是它连重试的机会都没有")
+        assert r.error_kind == "exec", f"没给换模型的信号：{r.error_kind}"
+
+    def test_轮次用尽但写出了文件_照旧算成功(self, monkeypatch, tmp_path):
+        """**命门**：别把守卫写成"轮次用尽一律失败" —— 写出了东西的就该算数。
+
+        （这正是原来那条无条件 `success=True` 想表达的意思，它只是**没加守卫**。）
+        """
+        r = self._run(monkeypatch, tmp_path, writes=True)
+        assert r.changed_files == ["out.txt"], f"改动没数出来：{r.changed_files}"
+        assert r.success is True, f"写出文件却不认：{r.error}"
+
+    def test_两档都带_truncated_by_归因不能丢(self, monkeypatch, tmp_path):
+        """`truncated_by` 管的是**归因**（`supervisor.our_side_stop_of` 靠它说
+        "这次是被我们掐断的"），不是成败 —— 两档都得带上。"""
+        assert self._run(monkeypatch, tmp_path, writes=False).truncated_by == "max_turns"
