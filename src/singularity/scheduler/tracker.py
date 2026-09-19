@@ -500,10 +500,22 @@ def ready_tasks(exclude: set[str] = None) -> list[Task]:
             dead_dep = _any_dead_dep(task)
             if dead_dep:
                 # 不级联失败 → 标记降级，任务继续跑。返工循环会修复。
-                task.error = f"上游依赖 {dead_dep} 已失败 (降级运行)"
-                task.updated_at = time.time()
-                if task.status == TaskStatus.BLOCKED:
-                    task.status = TaskStatus.ROUTED
+                # ⚠️ 这句 error **必须落盘**，只改内存等于没写：唯一的读侧
+                # `workflow._flag_degraded_tasks` 走的是 `read_task()`（从盘上读），
+                # 而本函数只是**建议**可调度 —— 真正派发它的 `_dispatch_ready` 用
+                # `cas()`/`transition()`，那两步都是"重读盘上那份再覆盖写"
+                # ⇒ 内存里设的 error 当场丢掉。原来只有 `BLOCKED→ROUTED` 那一支写盘，
+                # 于是「上游已失败、这是降级起跑的」只对**先 BLOCKED 过**的任务成立；
+                # PENDING/ROUTED 起步（上游早就失败 / 返工循环重排回来）的任务，
+                # 人审页上永远看不出这个前提（2026-09-19 实测：走完 `ready_tasks()`
+                # 再 `read_task()`，error 仍是空串）。
+                _mark = f"上游依赖 {dead_dep} 已失败 (降级运行)"
+                _was_blocked = task.status == TaskStatus.BLOCKED
+                if _was_blocked or str(getattr(task, "error", "") or "") != _mark:
+                    task.error = _mark
+                    task.updated_at = time.time()
+                    if _was_blocked:
+                        task.status = TaskStatus.ROUTED
                     _write(task)
                 task.compute_starvation()
                 ready.append(task)
