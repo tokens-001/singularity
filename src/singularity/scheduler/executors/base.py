@@ -67,7 +67,12 @@ class ExecutorResult:
     elapsed: float = 0.0
     token_count: int = 0                # token 消耗 (0=未获取)
     error: str = ""                     # 失败原因 (超时/限流/格式异常)
-    error_kind: str = ""                # timeout | ratelimit | format | exec | ""
+    # ⚠️ **这个列表要跟着实际写入的取值走**（2026-09-19 复核抓到：`deadline` 已经写了
+    #    8 处、是第二常用的值，而注释里压根没有它 —— 读注释的人会以为"没有这一类"）。
+    # `deadline` = **我方主动收尾/掐断**（预算到、单次撞 240s 上限），不是模型坏或限流；
+    # `timeout` 同族（CLI 超时）。两者的读者见 `_dispatch_exec` —— 它按 kind 决定
+    # 「是不是这个模型的锅」（据 2026-09-13 真机：把收尾记成"空输出"会换模型把时间再烧一遍）。
+    error_kind: str = ""                # timeout | ratelimit | format | exec | deadline | ""
     tool_events: list = field(default_factory=list)   # 工具调用事件 [{tool,status,time,...}]
 
 

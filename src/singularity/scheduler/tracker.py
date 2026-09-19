@@ -573,7 +573,13 @@ def recover() -> int:
                 task.retry_count += 1
                 if task.retry_count >= task.max_retries:
                     task.status = TaskStatus.FAILED
-                    task.error = f"recover: 重试 {task.retry_count} 次仍崩, 转 FAILED"
+                    # ⚠️ **别写"重试 N 次仍崩"** —— 这里数的 `retry_count` 是**进程重启
+                    #     回收在飞任务的次数**，模型可能一次都没失败过（它只是被杀掉了）。
+                    #     写成"仍崩"会把"我们重启了 N 次"记成"模型崩了 N 次"，
+                    #     于是排障的人去查模型，而真因是调度侧（2026-09-19 复核 A9）。
+                    #     行为一个字没改：够 `max_retries` 照样转 FAILED。
+                    task.error = (f"recover: 进程重启回收 {task.retry_count} 次后仍未完成"
+                                  f"（非模型失败）, 转 FAILED")
                 else:
                     task.status = TaskStatus.PENDING
                 task.updated_at = time.time()

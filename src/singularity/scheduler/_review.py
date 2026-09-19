@@ -213,6 +213,14 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             if proj is None:
                 return
             proj.review_failures = getattr(proj, 'review_failures', 0) + 1
+            # 🔵 记下**这一分是怎么来的**（2026-09-19 复核 B2）：这个计数器里混着两样东西 ——
+            #    模型侧的（`review_critical`）和**我们自己这边**的（`test_timeout` /
+            #    `multi_review_timeout` / `test_error` / `review_error`）。触顶那句原文案
+            #    只说"审查自动修已达上限"，读的人会以为全是模型没改好。
+            # ⚠️ **计数和触顶判定一分没动** —— 它是安全阀（审查这条路走不通就该叫人），
+            #    这里只是让"攒够 2 分的是哪两分"事后查得到（用现成的 `lineage`，不新增字段）。
+            proj.add_lineage({"action": "review_failure", "reason": reason,
+                              "count": proj.review_failures})
             proj_mod.save(proj)
             fail_check = check_review_fail_limit(project_id, proj.review_failures)
             if fail_check["blocked"]:
@@ -399,18 +407,32 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                         crit = [i for i in issues if _sev(i) == "critical"]
                         warns = [i for i in issues if _sev(i) == "warning"]
                         if crit:
+                            # 🔵 **两堆分开说**（2026-09-19 复核 B1）：`crit` 里混着两种东西 ——
+                            #    · 审查员**真发现了** critical；
+                            #    · 审查员**自己没答上来**（吐不出 JSON / 调用失败 / 没审查员），
+                            #      而 `validator` 那边为了避免静默，合成了一条 critical。
+                            #    后者被写成"发现 N 处 critical"是**归因错**：查的人会去翻被审的
+                            #    代码，而真正该看的是审查那条链路。
+                            # ⚠️ **拦的强度一个字没动** —— 下面 `if crit:` 用的还是**合起来**的
+                            #    那一份（两堆都照样 unverified + retry），只改了**说法**。
+                            _harness = [i for i in crit if i.get("source") == "review_harness"]
+                            _real = [i for i in crit if i.get("source") != "review_harness"]
                             details = "; ".join(
                                 f"{i.get('model','')}:{i.get('detail','')[:60]}"
-                                for i in crit[:3])
+                                for i in _real[:3])
+                            _hr = (f"；另有 {len(_harness)} 个是**审查器自己没答上来**"
+                                   f"（非被审代码的问题）") if _harness else ""
                             quality["warnings"].append(
-                                f"multi-review {f}: {len(crit)} critical: {details}")
+                                f"multi-review {f}: {len(_real)} critical: {details}{_hr}")
                             # 必须同时进 unverified：`quality` 只在本次运行内存活
                             # （_save_trace/build_report 的签名里根本没有 quality 参数），
                             # 只进 warnings 的话**交付报告看不到这条**，用户拿到的仍是
                             # "delivered"。修档 #10 为 review_files_truncated 立过这条规矩，
                             # 这里（多模型审查发现 critical）是同族却漏了。
                             validation.unverified.append(
-                                f"多模型审查发现 {len(crit)} 处 critical (未修复): {details[:200]}")
+                                f"多模型审查发现 {len(_real)} 处 critical (未修复): {details[:200]}"
+                                + (f"（另有 {len(_harness)} 个文件审查器没答上来，同属未审查）"
+                                   if _harness else ""))
                             quality["failure_kind"] = "review_critical"
                             quality["confidence"] = max(
                                 0.0, quality.get("confidence", 0.5) - 0.25)
@@ -478,9 +500,13 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                     warns = [i for i in review["issues"]
                              if _sev(i) == "warning"]
                     if crit:
+                        # 同上面多模型那条：审查器自己没答上来的，别算成"发现了 critical"。
+                        _h = [i for i in crit if i.get("source") == "review_harness"]
+                        _r = [i for i in crit if i.get("source") != "review_harness"]
                         quality["warnings"].append(
-                            f"review found {len(crit)} critical issues: " +
-                            "; ".join(i.get("detail", "")[:60] for i in crit))
+                            f"review found {len(_r)} critical issues: " +
+                            "; ".join(i.get("detail", "")[:60] for i in _r)
+                            + (f"；另有 {len(_h)} 个是审查器自己没答上来" if _h else ""))
                         quality["failure_kind"] = "review_critical"
                         quality["confidence"] = max(
                             0.0, quality.get("confidence", 0.5) - 0.25)
@@ -681,6 +707,12 @@ def check_review_fail_limit(project_id: str = "", current_retries: int = 0) -> d
     """
     remaining = _REVIEW_MAX_AUTO_FIX - current_retries
     if remaining <= 0:
+        # ⚠️ 文案要说清这个数**不全是模型的锅**（2026-09-19 复核 B2）：审查侧自己的超时 /
+        #    测试执行异常也在给它充值（见 `_record_review_failure` 的调用点）。
+        #    光写"审查自动修已达上限"，人会去查模型改没改好，而真因可能是审查那条链路
+        #    —— 构成看 `project.lineage` 里 `action:"review_failure"` 那几条的 `reason`。
         return {"blocked": True, "action": "escalate_to_gate2", "remaining": 0,
-                "reason": f"审查自动修已达上限({_REVIEW_MAX_AUTO_FIX}轮), 升GATE2人工兜底"}
+                "reason": (f"审查自动修已达上限({_REVIEW_MAX_AUTO_FIX}轮), 升GATE2人工兜底"
+                           f"（这个数**含审查侧自身的超时/异常**，不全是模型没改好；"
+                           f"构成见 lineage 的 review_failure 条）")}
     return {"blocked": False, "action": "continue", "remaining": remaining}

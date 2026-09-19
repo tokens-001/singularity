@@ -721,13 +721,27 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
                 r = mchk.run_check(c.get("check"), root)
                 results.append({"rule": c.get("rule", c.get("text", "")), **r})
             passed = sum(1 for r in results if r.get("passed"))
+            # 🔵 **"我们没跑完"和"跑了没过"是两件事**（2026-09-19 复核 B4）：`run_check`
+            #    超时返回 `ran=True, passed=False, reason="超时 Ns"`，跑不动返回 `ran=False`。
+            #    原来那句"x/y 通过"把这两种都算进分母 ⇒ GATE3 上读到的是"它没过"，
+            #    真相是**我们给的 60 秒不够**（或命令压根起不来）。
+            # ⚠️ `passed` 一分没动 —— 超时**绝不能**算通过（fail-closed）；这里只是**分开说**。
+            _unran = [r for r in results if not r.get("ran")]
+            _timed_out = [r for r in results
+                          if r.get("ran") and not r.get("passed")
+                          and "超时" in str(r.get("reason", ""))]
+            _ours = len(_unran) + len(_timed_out)
             note = f"机械检查 {passed}/{len(results)} 条通过"
+            if _ours:
+                note += (f"；另有 {_ours} 条**是我们没跑完**（超时/命令起不来），"
+                         f"不计入通过、也不算它失败")
             if dropped:
                 note += f"（另有 {len(dropped)} 条超出上限 {_max_machine_checks}，本轮未跑）"
             project.issues = [i for i in project.issues if i.get("type") != "machine_checks"]
             project.issues.append({"type": "machine_checks", "detail": note})
             project.add_lineage({"action": "machine_checks", "ran": len(results),
-                                 "passed": passed, "skipped": len(dropped)})
+                                 "passed": passed, "skipped": len(dropped),
+                                 "our_side": _ours})
             _save_phase_output(project.id, "machine-checks.json",
                                json.dumps(results, ensure_ascii=False, indent=2))
             msgs.append(note)

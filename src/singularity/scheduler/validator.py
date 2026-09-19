@@ -504,6 +504,7 @@ JSON:"""
             exclude={writer_model} if writer_model else None)
         if not chain:
             return {"issues":[{"severity":"critical","line":0,
+                     "source":"review_harness",
                      "detail":f"no reviewer at {review_level}"}],
                     "verdict":"retry","summary":f"no reviewer at {review_level}"}
         result = _disp.dispatch(prompt, review_level, f"review_{writer_model or '?'}",
@@ -511,6 +512,7 @@ JSON:"""
         raw = result.executor_result.raw_output if result and result.executor_result else ""
     except Exception as e:
         return {"issues":[{"severity":"critical","line":0,
+                 "source":"review_harness",
                  "detail":f"review call failed: {e}"}],
                 "verdict":"retry","summary":f"review call failed: {e}"}
 
@@ -519,6 +521,7 @@ JSON:"""
         return {"issues":d.get("issues",[]),"verdict":d.get("verdict","pass"),
                 "summary":d.get("summary",raw[:200])}
     return {"issues":[{"severity":"critical","line":0,
+             "source":"review_harness",
              "detail":f"review output not JSON: {raw[:100]}"}],
             "verdict":"retry","summary":raw[:200] if raw else "no result"}
 
@@ -644,11 +647,13 @@ JSON:"""
                        "summary": d.get("summary", raw[:200])}
             return {"model": model_name,
                    "issues": [{"severity": "critical", "line": 0,
+                               "source": "review_harness",
                                "detail": f"chunk review output not JSON: {raw[:100]}"}],
                    "verdict": "retry", "summary": raw[:200]}
         except Exception as e:
             return {"model": cfg.get("model", "unknown"),
                    "issues": [{"severity": "critical", "line": 0,
+                               "source": "review_harness",
                                "detail": f"chunk review failed: {e}"}],
                    "verdict": "retry", "summary": f"chunk review failed: {e}"}
 

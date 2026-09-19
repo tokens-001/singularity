@@ -259,8 +259,19 @@ def dispatch(
                     executor_result=result, attempts=attempt + 1,
                 )
             exec_error = getattr(result, 'error', '') if result else 'no result'
-            last_error = f"{agent_cfg.get('model', '?')}: 空输出" + (f" [{exec_error}]" if exec_error else "")
-            _model_breaker.record_failure(agent_cfg.get("model", ""))
+            # ⚠️ **文案别一律写「空输出」**（2026-09-19 复核 A7）：`error_kind` 非空时那是
+            #    一类**已知的原因**，写成"空输出"会让读 `last_error` 的人以为模型什么都没吐。
+            #    🔵 只改**说法**：走哪条分支（照样换模型重试）一个字没动。
+            _kind = getattr(result, "error_kind", "") if result else ""
+            _why = f"{_kind} 未产出" if _kind else "空输出"
+            last_error = f"{agent_cfg.get('model', '?')}: {_why}" + (f" [{exec_error}]" if exec_error else "")
+            # 🔴 `timeout` 与上面 `deadline` 同族：**是我们给的时限到了**，不是模型坏了、也没限流
+            #    —— 记 breaker 会误伤好模型（同那段 `deadline` 的理由，2026-09-13 真机坐实过：
+            #    "这不是模型的锅（它没坏、也没限流），记了会误伤好模型"）。
+            #    ⚠️ **只跳过 breaker**：仍然换模型重试（超时也可能是这家慢），
+            #       判定强度一个字没改 —— 别把这条读成"timeout 不用管"。
+            if _kind != "timeout":
+                _model_breaker.record_failure(agent_cfg.get("model", ""))
         except Exception as e:
             last_error = f"{agent_cfg.get('model', '?')}: {type(e).__name__}: {e}"[:200]
             _model_breaker.record_failure(agent_cfg.get("model", ""))

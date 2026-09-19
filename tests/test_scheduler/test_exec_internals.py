@@ -1662,6 +1662,82 @@ def test_empty_output_still_falls_through(monkeypatch):
 
 
 # ═══════════════════════════════════════════════════════════════
+# 归因：别把"我方掐断"记成"这个模型空输出"（2026-09-19 复核判据错位审计 A7）
+# ═══════════════════════════════════════════════════════════════
+# `deadline` 那一档 09-13 已经认了"我方造成、别赖模型"，但**它的兄弟没跟上**：
+# 其余失败一律写 `"{model}: 空输出"` 并 `record_failure` —— 于是
+#   · 排障的人读到"空输出"，以为模型什么都没吐（真相是流停滞/超时）；
+#   · 连着 3 次就把**没坏也没限流**的好模型熔断 300 秒。
+# 🔵 这次**只动 timeout 那一格的 breaker**；换模型重试的判定一个字没改。
+
+def _stub_dispatch(monkeypatch, result, breaker_calls):
+    from singularity.scheduler import _dispatch_exec as pd
+
+    monkeypatch.setattr(pd, "pick_agent_fallback_chain",
+                        lambda *a, **k: [{"model": "m", "type": "openai-agent"}])
+    monkeypatch.setattr(pd, "_prefer_by_strengths", lambda task, chain: chain)
+    monkeypatch.setattr(pd, "_committee_allowed", lambda *a, **k: False)
+    monkeypatch.setattr(pd, "_ensure_agent_type", lambda c: c)
+    monkeypatch.setattr(pd, "_model_breaker",
+                        type("B", (), {"record_failure": lambda _s, m: breaker_calls.append(m),
+                                       "record_success": lambda *a: None})())
+    monkeypatch.setattr(pd, "_run_executor", lambda *a, **k: result)
+    return pd
+
+
+def test_失败文案要说清是哪一类_不再一律叫空输出(monkeypatch):
+    """`error_kind` 非空 = 一类**已知原因**；写"空输出"会让读日志的人查错方向。"""
+    from singularity.scheduler.executors.base import ExecutorResult
+    pd = _stub_dispatch(monkeypatch, ExecutorResult(
+        success=False, raw_output="", error="流停滞 90s 无新 token",
+        error_kind="timeout"), [])
+
+    with pytest.raises(RuntimeError) as ei:
+        pd.dispatch("任务", "any", "tid", {})
+
+    assert "timeout 未产出" in str(ei.value), str(ei.value)
+    assert "空输出" not in str(ei.value), "已知的类不该被说成'空输出'"
+
+
+def test_空error_kind照旧说空输出(monkeypatch):
+    """**对照**：真·空输出（`error_kind` 为空）那句话一个字不能变。"""
+    from singularity.scheduler.executors.base import ExecutorResult
+    pd = _stub_dispatch(monkeypatch, ExecutorResult(
+        success=False, raw_output="", error="模型吐了个空", error_kind=""), [])
+
+    with pytest.raises(RuntimeError) as ei:
+        pd.dispatch("任务", "any", "tid", {})
+
+    assert "空输出" in str(ei.value), str(ei.value)
+
+
+def test_timeout不熔断模型_跟deadline同族(monkeypatch):
+    """`timeout` 是**我们给的时限**到了 —— 记 breaker 会误伤没坏的好模型。"""
+    from singularity.scheduler.executors.base import ExecutorResult
+    calls = []
+    pd = _stub_dispatch(monkeypatch, ExecutorResult(
+        success=False, raw_output="", error="超时 120s", error_kind="timeout"), calls)
+
+    with pytest.raises(RuntimeError):
+        pd.dispatch("任务", "any", "tid", {})
+
+    assert calls == [], f"timeout 记了 breaker（{calls}）—— 那是误伤"
+
+
+def test_exec失败照旧熔断(monkeypatch):
+    """**对照**：模型的锅（`exec`）仍然记 breaker —— 别把它一起放过了。"""
+    from singularity.scheduler.executors.base import ExecutorResult
+    calls = []
+    pd = _stub_dispatch(monkeypatch, ExecutorResult(
+        success=False, raw_output="", error="模型吐了个空", error_kind="exec"), calls)
+
+    with pytest.raises(RuntimeError):
+        pd.dispatch("任务", "any", "tid", {})
+
+    assert calls == ["m"], f"exec 失败没记 breaker，改宽了：{calls}"
+
+
+# ═══════════════════════════════════════════════════════════════
 # 流式调用必须有**总时长**上限（2026-09-15 真机坐实）
 # ═══════════════════════════════════════════════════════════════
 # 真机现场：一次 dispatch `elapsed = 1615.7` 秒（**27 分钟**）、`tokens = 0`
