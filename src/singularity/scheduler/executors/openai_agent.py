@@ -542,6 +542,8 @@ class OpenAIAgentExecutor(BaseExecutor):
                     except (_NetworkError, _FormatError) as e2:
                         return self._fail_result(str(e2), start, exc=e2)
                 else:
+                    # 认不出来的 400 —— **先把现场留下再失败**，否则又是无头案（见该方法 docstring）
+                    self._dump_unknown_400(body, str(e))
                     return self._fail_result(str(e), start, exc=e)
             except _NetworkError as e:
                 # 预算已到 → 这多半是上面封顶超时导致的断流，**不是**该换模型重来的
@@ -1006,6 +1008,49 @@ class OpenAIAgentExecutor(BaseExecutor):
             error_kind=("stalled" if isinstance(exc, _StalledError) else "exec"),
             changed_files=list(self._changed_files),
             elapsed=time.time() - started, tool_events=list(self._tool_events))
+
+    def _dump_unknown_400(self, body: dict, err: str) -> None:
+        """**认不出来的** 400：把当次请求体原样落一份，供事后复现。
+
+        来历（2026-09-19 夜，一整轮真机死在这上面）：任务报
+        `400 The reasoning_content in the thinking mode must be passed back`，
+        等回头看时**现场什么都没有** ——
+          · trace 只留了"超时那次"（`_save_trace` 幂等，先写者胜）；
+          · `alerts.jsonl` 只有告警键，没有请求体。
+        只能事后拿探针去重撞，四个形状**全是 200**，触发条件至今没找到。
+        ⇒ 认不出来的 400 一次落一条，别让下一次再变成无头案。
+
+        **只落认不出来的**：`tool_choice` / 思考参数那两类代码自己会处理，
+        每轮都记只会把真信号淹掉（同 `_SLOW_CALL_LOG_S` 只记 ≥20s 的理由）。
+
+        ⚠️ **不写摘要、原样落 `messages`** —— 触发条件很可能就藏在"某条消息有没有
+        某个字段"上，摘要过一道正好把要找的东西摘掉（本仓栽过：拿摘要当证据）。
+
+        ⚠️ 落盘失败**不许静默**：这条通道是"现场"的唯一来源，它哑了和
+        "没发生过 400"长得一模一样（同 `witness` 那第二条通道的理由）。
+        """
+        try:
+            rec = {
+                "ts": time.time(),
+                "model": self._model,
+                "url": self._url,
+                "error": str(err)[:500],
+                "task_id": self.task_id,
+                "tool_choice": body.get("tool_choice"),
+                "tool_names": [(t.get("function") or {}).get("name", "")
+                               for t in (body.get("tools") or [])],
+                # messages / tools 之外的那些参数（temperature、max_tokens、思考参数……）
+                "params": {k: v for k, v in body.items()
+                           if k not in ("messages", "tools")},
+                "messages": body.get("messages"),
+            }
+            with (config.QIDIAN_DIR / "llm_400_unknown.jsonl").open(
+                    "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except Exception as e:                    # noqa: BLE001
+            witness.warn("oa_exec",
+                         f"unknown_400_dump_failed:{type(e).__name__}:{e}"[:150],
+                         key="unknown_400_dump_failed")
 
     # ── API 调用 ──
 
