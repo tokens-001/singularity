@@ -105,10 +105,33 @@ def _assistant_msg_for_history(msg: dict, tools: list) -> dict:
 
     ⚠️ 不带 tools 的那条路（架构/规划的 `no_tools` 委员会）**保持剥掉** ——
     对 Kimi/GLM 维持原行为，**零回归**。
+
+    🔴 **但"这一轮带不带 tools"不是完整的判据**（2026-09-19 深夜，真机请求体解出来的）：
+
+    本函数上面那条规则**漏了一个组合**，而它**必然会发生**：
+      · 两处 `tools = []`（`测试通过即停` / `已达最大工具调用轮次`）会**中途撤掉工具**，
+        而**历史里已经躺着带 `tool_calls` 的 assistant 消息**；
+      · 模型这一轮没工具可用、**还是吐了 XML 形式的工具调用** ⇒ 被 `_parse_xml_tool_calls`
+        捞成合成 tool_call（id `xml_0`）；
+      · 于是这里 `if tools:` 为假 ⇒ **把这个消息的 `reasoning_content` 整个 pop 掉**。
+    ⇒ 下一条请求的历史里就是「**带 tool_calls 却没有 `reasoning_content`**」的消息 → **400**。
+
+    现场（`.qidian/llm_400_unknown.jsonl`，task `1789829637698`）：11 条消息里第 [9] 条正是这个形状；
+    **同一份请求体回放真端点**：原样 400，**只给它补 `reasoning_content: ""` 就 200**。
+
+    所以判据是**按消息**（这条带不带 `tool_calls`），不是**按这一轮**（带不带 `tools`）：
+    带 `tool_calls` 的消息**永远保留** reasoning —— 模型没给就补 `""`
+    （**空串 ≠ 没有**；DeepSeek 只在字段**整个缺失**时报 400，回 `""` 就没事）。
     """
+    out = dict(msg)
+    if out.get("tool_calls"):
+        # 带 tool_calls 的消息：reasoning_content 必须在 —— 缺了就补空串（不是删）
+        out.setdefault("reasoning_content", "")
+        return out
     if tools:
-        return dict(msg)
-    return {k: v for k, v in msg.items() if k != "reasoning_content"}
+        return out
+    out.pop("reasoning_content", None)
+    return out
 
 
 def _parse_xml_tool_calls(content: str) -> list[dict] | None:

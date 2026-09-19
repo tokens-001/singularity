@@ -105,7 +105,16 @@ def test_merge_tmpl_noop_without_tmpl_update():
 #   · **带 `tools` 参数** → 必须**原样回传**（含没有工具调用的轮次）——「must be fully
 #     passed back to the API in all subsequent requests」；不回传 = 400；
 #   · **不带 `tools`** → 不必回传，传了也会被忽略。
-# ⇒ 判据卡在"这次请求有没有带 tools"，**不是**维护模型能力表（同本文件顶上那条取舍）。
+#
+# 🔴 **但"这次请求带不带 tools"不是完整判据**（2026-09-19 深夜，真机请求体解出来的）：
+# 两处 `tools = []`（`测试通过即停` / `已达最大工具调用轮次`）会**中途撤掉工具**，
+# 而历史里**已经躺着带 `tool_calls` 的 assistant 消息**；模型这一轮没工具可用、
+# 还是吐了 XML 形式的工具调用 ⇒ 被捞成合成 tool_call ⇒ 按旧判据**把 reasoning 剥掉**了。
+# 下一条请求就是「带 `tool_calls` 却没有 `reasoning_content`」→ **400**。
+# 现场 + 回放：`.qidian/llm_400_unknown.jsonl`（task `1789829637698`）；
+# **同一份请求体原样发真端点是 400，只给那条补 `reasoning_content: ""` 就 200**。
+# ⇒ **完整判据是"这条消息带不带 `tool_calls`"**，不是"这一轮带不带 tools"。
+# （同一条规则流式那侧早就写着 —— 见 `openai_agent.py` 里 `msg.setdefault("reasoning_content", "")`。）
 
 from singularity.scheduler.executors.openai_agent import _assistant_msg_for_history
 
@@ -121,9 +130,29 @@ def test_带工具时必须回传_reasoning_content():
     assert out["reasoning_content"] == "我先看看文件…"
 
 
-def test_不带工具时照旧剥掉_对别家零回归():
-    """不带 tools 时官方说"不必回传、传了也忽略" ⇒ **保持原行为**（Kimi/GLM 那边零回归）。"""
+def test_不带工具但带tool_calls_也必须留着():
+    """🔴 **这条原来钉的是反的**（2026-09-20 反向重写）。
+
+    原来叫 `test_不带工具时照旧剥掉_对别家零回归`，断言 `"reasoning_content" not in out`
+    —— 而 `_ASSISTANT` **带 tool_calls**。真机上正是这个形状撞出 400：
+    「撤掉工具那一轮」+「模型还是吐了 XML 工具调用被捞回来」⇒ 历史里留下
+    **带 tool_calls 却没有 reasoning_content** 的消息 ⇒ **整条任务挂掉**。
+    （现场与回放见本文件顶上那段。）
+
+    ⚠️ 别把它改回去 —— 要改成 `tools=[]` 的**无 tool_calls** 消息再断言剥掉，
+    那才是"对别家零回归"真正指的那条路（见下一条）。
+    """
     out = _assistant_msg_for_history(dict(_ASSISTANT), tools=[])
+    assert "reasoning_content" in out, "撤掉工具那一轮把 reasoning 剥了 ⇒ 下一条请求必然 400"
+
+
+def test_不带工具且无tool_calls_照旧剥掉_对别家零回归():
+    """真正的那条"零回归"路：`no_tools` 委员会（架构/规划）出的是**纯文本**消息。
+
+    只有这类消息保持剥掉 —— 对 Kimi/GLM 的旧行为一字未动。
+    """
+    text_only = {k: v for k, v in _ASSISTANT.items() if k != "tool_calls"}
+    out = _assistant_msg_for_history(text_only, tools=[])
     assert "reasoning_content" not in out
 
 
