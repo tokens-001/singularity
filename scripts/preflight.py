@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
 """preflight —— 两种病灶形状的静态预检 + 真机现场自查（只读）。
 
+⚠️ 「只读」有一个例外：`shapes --write-baseline <path>` 会写那个基线文件，
+   它是人看完命中之后**主动**更新棘轮的动作，不在 CI 里跑。
+
 用法:
     python3 scripts/preflight.py shapes [--rev <git-rev>] [--root DIR] [--json] [--debug SUBSTR]
+    python3 scripts/preflight.py shapes --baseline scripts/preflight-baseline.json
     python3 scripts/preflight.py live   [--root DIR] [--json] [--since-hours H]
 
     shapes  静态扫源码（不跑代码）。--rev 时用 `git archive <rev>` 把那棵树取到
             临时目录再扫 —— 不 checkout、不碰工作区。不给 --rev 就扫当前工作区
             （默认仓库根）。
+            --baseline 是**给门用的形态**：只有**新出现**的形状才红（棘轮），
+            不是「有命中就红」—— 后者是恒红，恒红的门会被 `|| true` 掉。
     live    真机跑完一轮之后的现场自查。只读：扫 .qidian/ 下的 *.corrupt 隔离备份、
             alerts.jsonl 里的静默降级类告警，并给出人工恢复的下一步。绝不写任何文件。
 
-退出码: 0 = 干净（无命中）；1 = 有命中；2 = 环境/用法错误。
+退出码: 0 = 干净（无命中 / 相对基线无新增）；1 = 有命中（或有新增）；2 = 环境/用法错误。
 （命中不代表一定是 bug —— 每条都要人判，这是工具的边界，不是缺陷的借口。）
 
 形状判据（详细论证见 ~/Desktop/ZCode审阅/预检工具-01.md §1）:
@@ -1533,6 +1539,54 @@ def _print_live(report, as_json: bool):
 # shapes 主流程
 # ═══════════════════════════════════════════════════════════════
 
+def _finding_key(f) -> str:
+    return f"{f.shape} | {f.file} | {f.symbol}"
+
+
+def _apply_baseline(findings, path: Path) -> int:
+    """对着基线比：**只有新出现的命中才红**。
+
+    为什么要基线：`shapes` 设计上「命中不代表是 bug，每条都要人判」⇒ 直接当门就是**恒红**
+    （当前工作区 4 条），而恒红的门马上会被 `|| true` 掉（§78 假门比没门坏）。
+    基线把它变成**棘轮**：已知那几条不红，**再多一条就红**。
+
+    · 新键 → 红（打印出来，附基线里没有的原因）
+    · 已知键但 message 变了 → 红（内容漂了就要人看一眼再更新，别让它悄悄过期）
+    · 基线里有、现在没了 → 不红，提示可以收窄（修好了）
+    """
+    old = json.loads(path.read_text(encoding="utf-8"))
+    old_map = {e["key"]: e["message"] for e in old["findings"]}
+    cur_map = {_finding_key(f): f.message for f in findings}
+
+    new = sorted(set(cur_map) - set(old_map))
+    changed = sorted(k for k in (set(cur_map) & set(old_map)) if cur_map[k] != old_map[k])
+    gone = sorted(set(old_map) - set(cur_map))
+
+    for k in new:
+        print(f"🔴 新增命中: {k}\n    {cur_map[k]}")
+    for k in changed:
+        print(f"🔴 已知命中但内容变了: {k}\n    基线: {old_map[k]}\n    现在: {cur_map[k]}")
+    if gone:
+        print(f"🔵 基线里有 {len(gone)} 条现在没了（修好了就收窄基线）:")
+        for k in gone:
+            print(f"    {k}")
+
+    if new or changed:
+        print(f"\n合计 {len(new)} 新增 / {len(changed)} 内容变了 / 基线 {len(old_map)} 条。"
+              f"\n确认无误后更新基线: {Path(__file__).name} shapes --write-baseline {path}")
+        return 1
+    print(f"✅ 相对基线无新增（基线 {len(old_map)} 条，命中 {len(findings)} 条）")
+    return 0
+
+
+def _write_baseline(findings, path: Path) -> int:
+    payload = {"note": "已知命中基线 —— 只有新增/内容变了的才让门变红。人看过后手动更新。",
+               "findings": [{"key": _finding_key(f), "message": f.message} for f in findings]}
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"已写入基线 {len(findings)} 条 -> {path}")
+    return 0
+
+
 def cmd_shapes(args) -> int:
     repo = find_repo_root(Path.cwd())
     if args.rev:
@@ -1559,6 +1613,8 @@ def cmd_shapes(args) -> int:
                 "findings": len(findings)}
         if args.debug:
             _debug_dump(idx, summ, args.debug)
+        if args.write_baseline:
+            return _write_baseline(findings, Path(args.write_baseline))
         if args.json:
             print(json.dumps({"meta": meta,
                               "findings": [f.as_dict() for f in findings]},
@@ -1576,6 +1632,8 @@ def cmd_shapes(args) -> int:
                     print(f"    {f.message}")
                     for e in f.evidence:
                         print(f"      · {e}")
+        if args.baseline:
+            return _apply_baseline(findings, Path(args.baseline))
         return 1 if findings else 0
     finally:
         if args.rev and not args.keep:
@@ -1609,6 +1667,8 @@ def main(argv=None) -> int:
     ps.add_argument("--b3-threshold", type=float, default=0.45,
                     help="B3 近似重复的相似度阈值（默认 0.45）")
     ps.add_argument("--debug", help="打印符号含该子串的函数摘要到 stderr")
+    ps.add_argument("--baseline", help="对着基线比：只有**新增/内容变了**的命中才红（棘轮，给门用）")
+    ps.add_argument("--write-baseline", help="把当前命中写成基线（唯一会写盘的分支）")
 
     pl = sub.add_parser("live", help="真机现场自查（只读）")
     pl.add_argument("--root", help=".qidian 所在的仓库根（默认：当前 git 仓库根）")

@@ -21,6 +21,22 @@ import dispatch as D  # noqa: E402
 FENCE = "```"
 DISPATCH = SCRIPTS / "dispatch.py"
 
+# 🔴 `render_blocklist` 的断行位置**取决于 HOME 有多长**（宽度按 90 校准，而每条前缀都是
+#    `$HOME/...`）。而 `test_matches_instance_13_byte_for_byte` 那句「和实例 ⑬ 逐字节一致」
+#    —— 实例 ⑬ 就是在**这台机器这个 HOME** 下渲染的 ⇒ 换台机器（CI 的 `/home/runner`
+#    12 字符 vs 本地 `/Users/jingzhe` 13 字符）断行位置就漂，测试红，而**被测的代码一个字没改**。
+#    这是「本机绿只在被测的东西不读这台机器时才等于绿」那一条的又一个面。
+#    ⇒ 把 HOME 钉成校准时的那个值。测试考的是**折行逻辑**，不是"我这台机器叫什么"。
+CALIBRATION_HOME = Path("/Users/jingzhe")
+
+
+def setUpModule():
+    # `DEFAULT_REVIEW_DIR` 是**导入期**从真 HOME 算出来的，上面改 `D.HOME` 追不上它
+    # （`test_default_review_dir_uses_real_zcode_path` 就是拿它对比的那个值）
+    # ⇒ 两个一起钉，测试才考的是「DEFAULT_REVIEW_DIR 有没有进条目」而不是「这台机器叫什么」。
+    D.HOME = CALIBRATION_HOME
+    D.DEFAULT_REVIEW_DIR = CALIBRATION_HOME / "Desktop" / "ZCode审阅"
+
 PENDING = """# 要发的指令（**只装「还没发」的**）
 
 > 🆕 **待发 2 个**：**⑬ 审甲**（只读）· **⑫ 写乙**（写脚本）。

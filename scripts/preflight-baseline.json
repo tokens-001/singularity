@@ -1,0 +1,21 @@
+{
+  "note": "已知命中基线 —— 只有新增/内容变了的才让门变红。人看过后手动更新。",
+  "findings": [
+    {
+      "key": "B1-denylist-family-divergence | src/singularity/scheduler/_sensitive.py | BLOCKED_COMMANDS, BLOCKED_PATH_PATTERNS",
+      "message": "与 src/singularity/web/app.py（_SENSITIVE_FILES, _SENSITIVE_SUFFIXES）是同一族名单（两侧都是文件模式的共享条目: [('*.key', '.key'), ('*.p12', '.p12'), ('*.pem', '.pem'), ('*.pfx', '.pfx')]），但条目已经不一致。"
+    },
+    {
+      "key": "B2a-dead-word | src/singularity/scheduler/_task_runner.py | finalize.TaskRunner",
+      "message": "字面量 'escalation_exhausted' 按匹配语义（in）对全仓任何产出值都永不命中 —— 消费侧在等一个不会再来的词（同通道的现役词是 'no_escalation_path (level='）。"
+    },
+    {
+      "key": "B2a-dead-word | src/singularity/scheduler/executors/openai_agent.py | _tests_green.OpenAIAgentExecutor",
+      "message": "字面量 'exit=0' 按匹配语义（in）对全仓任何产出值都永不命中 —— 消费侧在等一个不会再来的词（同通道的现役词是 'exit_code'）。"
+    },
+    {
+      "key": "B3-duplicated-wrapper | src/singularity/scheduler/snapshot.py | _current_head / _is_git_repo",
+      "message": "同一件事的两份实现（归一化相似度 0.53）——subprocess 实参差：（kwarg 无差，见证据里的常量/调用差）"
+    }
+  ]
+}

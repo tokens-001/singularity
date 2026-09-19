@@ -206,6 +206,56 @@ def case_subscript_producer():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def case_baseline():
+    """`shapes --baseline` 的棘轮 —— 三条分支各钉一次（门就靠它不恒红/不恒绿）。
+
+    这是**接线**测试：走真 CLI 参数、真工作区，不是直接调 `_apply_baseline`
+    （那种测法删掉 argparse 里 `--baseline` 那行照样绿）。
+    """
+    print("--baseline 棘轮（临时基线文件，不碰 scripts/preflight-baseline.json）")
+    p = subprocess.run([sys.executable, str(TOOL), "shapes", "--json"],
+                       cwd=REPO, capture_output=True, text=True)
+    if p.returncode not in (0, 1):
+        check("worktree 扫得动", False, f"退出码 {p.returncode}: {p.stderr[-300:]}")
+        return
+    cur = json.loads(p.stdout)["findings"]
+    if not cur:
+        check("worktree 至少有一条命中（否则棘轮没法测）", False, "0 条 —— 得换个合成树")
+        return
+    entries = [{"key": f"{f['shape']} | {f['file']} | {f['symbol']}", "message": f["message"]}
+               for f in cur]
+
+    tmp = Path(tempfile.mkdtemp(prefix="pf-baseline-test-"))
+    try:
+        def run(entries_):
+            path = tmp / "b.json"
+            path.write_text(json.dumps({"findings": entries_}, ensure_ascii=False),
+                            encoding="utf-8")
+            r = subprocess.run([sys.executable, str(TOOL), "shapes", "--baseline", str(path)],
+                               cwd=REPO, capture_output=True, text=True)
+            return r.returncode, r.stdout
+
+        rc, out = run(entries)
+        check("基线 = 当前全部命中 ⇒ 绿", rc == 0, f"rc={rc}")
+        check("绿的时候明说「无新增」", "无新增" in out, out[-200:])
+
+        rc, out = run(entries[1:])                      # 砍掉一条 ⇒ 它变"新增"
+        check("砍掉一条 ⇒ 红", rc == 1, f"rc={rc}")
+        check("把那条点名报成「新增命中」", "新增命中" in out and entries[0]["key"] in out,
+              out[-300:])
+
+        flipped = [{"key": entries[0]["key"], "message": "手工改过的旧文案"}] + entries[1:]
+        rc, out = run(flipped)                          # 内容漂了 ⇒ 红
+        check("已知命中但文案变了 ⇒ 红", rc == 1, f"rc={rc}")
+        check("把两边文案都摆出来", "内容变了" in out and "手工改过的旧文案" in out, out[-300:])
+
+        rc, out = run(entries + [{"key": "X-yyy | nowhere.py | gone", "message": "早修好了"}])
+        check("基线里多一条、实际没有 ⇒ 仍绿（修好了不罚）", rc == 0, f"rc={rc}")
+        check("但提示可以收窄", "现在没了" in out, out[-200:])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     print(f"preflight 复现脚本（仓库: {REPO}，HEAD 基线: {HEAD}）\n")
     case_score1()
@@ -216,6 +266,7 @@ def main():
     case_head()
     case_subscript_producer()
     case_live()
+    case_baseline()
     print()
     if FAILURES:
         print(f"结果: {len(FAILURES)} 项未过")

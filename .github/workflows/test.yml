@@ -48,3 +48,25 @@ jobs:
       # 它整块屏蔽 `executors/` / `neijinglu.py` / `supervisor.py`。
       # ⚠️ 这两件事是**耦合**的：mypy 恒不卡时那个 exclude 一点后果都没有；
       #    **只有 `|| true` 去掉之后，它才变成承重墙上的盲区**。分开修等于没修。
+
+  # 审计脚本接电（2026-09-20）。**必须单独一个 job**，理由同上面拆 job 那次：
+  # 串进去的话 lint 一红就把审计 skip 掉，而审计恰恰是「其它判断的地基」那一步。
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 🔴 **必须 0**：`scripts/test_preflight.py` 的成绩单是拿 `git archive <sha>`
+          # 取历史那些树来扫的（312584b / 905a5dd …）。默认 fetch-depth: 1 只有 HEAD，
+          # 那些 rev 一个都取不到 ⇒ 脚本直接 RuntimeError 红掉，而且红得**莫名其妙**
+          # （看起来像"工具坏了"，其实是没喂历史）。
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      # 和 Makefile 的 `audit` **同两条命令**，别在这儿另写一套判据。
+      - run: python scripts/test_preflight.py
+      - run: python scripts/test_delivery_facts.py
+      - run: python scripts/test_dispatch.py
+      - run: python scripts/preflight.py shapes --baseline scripts/preflight-baseline.json
