@@ -22,12 +22,13 @@ def _er(files=(), tokens=0):
     return NS(changed_files=list(files), token_count=tokens, tool_events=[])
 
 
-def _batch(files=(), tokens=0, merge_request=None, dispatch_result="有", turn_count=0):
+def _batch(files=(), tokens=0, merge_request=None, dispatch_result="有", turn_count=0,
+           deadline_wrapup=False):
     """`dispatch_result="有"` 是哨兵：真传 None 表示"压根没发起过调用"那种空壳。"""
     dr = NS(executor_result=_er(files, tokens)) if dispatch_result == "有" else None
     return NS(ok=False, task_id="T1", term_reason="", dispatch_result=dr,
               merge_request=merge_request, tool_events=[], turn_count=turn_count,
-              deadline_wrapup=False, planner_decomposed=False)
+              deadline_wrapup=deadline_wrapup, planner_decomposed=False)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -136,3 +137,62 @@ def test_后一轮更满就换成后一轮的(monkeypatch):
     second = _batch(files=["a.py", "b.py"])
     got = _drive(monkeypatch, [first, second], exhausted=[False, True])
     assert got is second
+
+
+# ═══════════════════════════════════════════════════════════════
+# ③ 分档：弱的不许顶掉强的（2026-09-20 真机 round-20260920b 的 T3/T4/T6）
+#
+# 上面 ①② 修的是"0 产物**且**0 token"的空壳。真机补的那一刀是**另一种空壳**：
+# 它**烧了 4773~4920 token**、0 个文件 —— 旧判据是个 bool，照样返回 True ⇒
+# 它把上一轮带 `merge_request`（pending ref 上 +1008 行）的那份顶掉了。
+# ⇒ 判词「无文件改动」⇒ `orchestrator` 只看 `batch.merge_request`，None ⇒ 产物进不了合并队列。
+# ═══════════════════════════════════════════════════════════════
+
+def test_分档_合请最硬_文件次之_只烧钱最软():
+    assert X._batch_evidence(_batch(merge_request=NS())) == 3
+    assert X._batch_evidence(_batch(files=["a.py"])) == 2
+    assert X._batch_evidence(_batch(tokens=4920)) == 1
+    assert X._batch_evidence(_batch()) == 0
+    assert X._batch_evidence(_batch(dispatch_result=None)) == 0
+
+
+def test_只烧钱的那一轮_顶不掉带合并请求的那一轮(monkeypatch):
+    """**正题（真机的形状）** —— `round-20260920b` T3：
+
+    第 1 轮：真干完，`merge_request` 建好、ref 锚上（`changed_files` 是空的也不影响）
+    第 2 轮：表到点又起了一轮，烧了 4920 token、0 个文件
+    第 3 轮：guard 交回 `prev_batch`
+
+    ⇒ 交回的必须是**第 1 轮**那份。把 `_batch_evidence(batch) >= _batch_evidence(prev_batch)`
+    改回 `_batch_has_facts(batch)`（bool）⇒ 第 2 轮的空壳顶掉第 1 轮 ⇒ 红。
+    """
+    real = _batch(merge_request=NS(), tokens=100)
+    burn = _batch(tokens=4920)
+    got = _drive(monkeypatch, [real, burn], exhausted=[False, True])
+    assert got is real, (
+        "只烧钱的那一轮把带合并请求的顶掉了 —— 产物还在 pending ref 上，而这条路交出去的是空壳")
+    assert got.merge_request is not None
+
+
+def test_撞预算收尾时交回的是手里更硬的那份(monkeypatch):
+    """**第二半**：`deadline_wrapup` 那条 return 原来是**无条件**交 `batch` 的。
+
+    即使上面那行已经把 `prev_batch` 保住了，这一句照样把空壳交出去 ——
+    于是产物**永远到不了** `orchestrator` 的 `if batch.merge_request: mq.submit(...)`。
+
+    把 `if prev_batch is not None and _batch_evidence(prev_batch) > ...` 那两句删掉
+    （退回无条件 `return batch`）⇒ 红。
+    """
+    real = _batch(merge_request=NS(), tokens=100)
+    wrapup_shell = _batch(tokens=4812, deadline_wrapup=True)   # T6 那个数
+    got = _drive(monkeypatch, [real, wrapup_shell], exhausted=[False])
+    assert got is real, "撞预算收尾交回的是那个空壳 —— 真产物到不了合并队列"
+    assert got.merge_request is not None
+
+
+def test_撞预算时手里没有更硬的_照旧交收尾那一份(monkeypatch):
+    """**边界**：手里那份不比收尾这份硬时，别自作主张换 —— 收尾那份才是最新的账。"""
+    first = _batch(tokens=100)
+    wrapup = _batch(tokens=4920, deadline_wrapup=True)
+    got = _drive(monkeypatch, [first, wrapup], exhausted=[False])
+    assert got is wrapup

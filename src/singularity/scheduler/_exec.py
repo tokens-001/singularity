@@ -877,29 +877,58 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
         deadline_wrapup=deadline_wrapup,
     )
 
-def _batch_has_facts(b) -> bool:
-    """这一批交回来的东西里，有没有**磁盘上真发生过的事实**。
+def _batch_evidence(b) -> int:
+    """这一批交回来的东西**有多硬** —— 数字越大越硬，`0` = 空壳。
 
-    判据是"**有没有产物 / 花没花过钱**"，不是"成没成功"，**也不是"轮次 > 0"**：
+    **三种事实不是一个档次的，分成三档**（2026-09-20 真机坐实，见下）：
 
-    ⚠️ **`turn_count` 不能当判据** —— 预算 6 秒那次**确实发起了**一轮，
-    `turn_count` 会是 1，而它交回 0 文件 0 token。拿轮次当判据就等于把那个
-    空壳原样放回去，**而"空壳顶掉真结果"正是要修的东西**。
+    | 档 | 判据 | 含义 |
+    |---|---|---|
+    | 3 | `merge_request is not None` | worktree 里已 commit 并锚到 `refs/qidian/pending/` —— **磁盘上最硬的事实** |
+    | 2 | `changed_files` 非空 | 交了文件，但还没构成合并请求 |
+    | 1 | `token_count > 0` | **只花过钱**，一样产物都没有 |
+    | 0 | 以上都不是 | 连调用都没发起过的空壳 |
+
+    🔴 **为什么要分档（原来是个 bool，真机吃了大亏）**：`round-20260920b` 的
+    T3/T4/T6 三个任务，**产物全都在**（pending ref 上分别是 +1008 / +251 / +1178 行），
+    最后却判「无文件改动」、5654 行**进仓 0 行**。形状是：
+
+      ① 某一轮真干完，`_anchor_ref` + `_build_merge_request` 都做了（ref 就是那时候打的）；
+      ② 表到点，`run()` 又起了一轮 —— 这一轮**烧了 4773~4920 token、0 个文件**，
+         属于第 1 档；而上一轮是第 3 档；
+      ③ 旧判据 `has_facts` 是个 bool ⇒ 档 1 也返回 True ⇒ **档 1 顶掉了档 3**；
+      ④ `_run_with_retry` 交回空壳 ⇒ `finalize` 读到 `changed_files=[]` ⇒ 判词「无文件改动」
+         ⇒ `orchestrator` 只看 `batch.merge_request`，None ⇒ **产物永远进不了合并队列**。
+
+    ⇒ 判据从「**有没有**事实」改成「**哪个更硬**」：**弱的不许顶掉强的**。
 
     ⚠️ `token_count` 的 `None` 是"**不知道**"（§59）不是"没花钱"，所以按 `or 0` 折成 0 ——
-    宁可把"不知道花没花钱"的那一批当空壳留着上一份（更保守的一侧）。
+    宁可把"不知道花没花钱"的那一批当成档 0（更保守的一侧）。
 
-    ⚠️ **只收"产物/钱"这三样，不收 `tool_events`**：只读文件、改了又回滚的那些轮
-    确实"发生了点什么"，但拿它去换掉一份**真交了文件**的账，是净亏。
+    ⚠️ **`turn_count` 仍然不能当判据**（原注释保留）：预算 6 秒那次**确实发起了**一轮，
+    `turn_count` 会是 1，而它交回 0 文件 0 token。
+
+    ⚠️ **`tool_events` 仍然不进判据**：只读文件、改了又回滚的那些轮确实"发生了点什么"，
+    但拿它去换掉一份**真交了文件**的账，是净亏。
     """
     if getattr(b, "merge_request", None) is not None:
-        return True                       # worktree 里已 commit —— 最硬的事实
+        return 3                          # worktree 里已 commit + 已锚 —— 最硬的事实
     er = getattr(getattr(b, "dispatch_result", None), "executor_result", None)
     if er is None:
-        return False
+        return 0
     if getattr(er, "changed_files", None):
-        return True
-    return int(getattr(er, "token_count", 0) or 0) > 0
+        return 2
+    return 1 if int(getattr(er, "token_count", 0) or 0) > 0 else 0
+
+
+def _batch_has_facts(b) -> bool:
+    """这一批里有没有**磁盘上真发生过的事实**（= 档位 > 0）。
+
+    ⚠️ **"要不要用这一批"不该再调它** —— 它是个 bool，答不了「两份都有事实时留哪份」，
+    而 2026-09-20 真机栽的正是那个问题（档 1 顶掉了档 3）。要比较就用 `_batch_evidence`。
+    留着它是给"只想问有没有"的地方（以及既有测试）用的。
+    """
+    return _batch_evidence(b) > 0
 
 
 def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
@@ -934,7 +963,12 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
         # 交回 0 文件 0 token。第 1 轮那份真干出来的账就是这么丢的。
         # ⇒ 这就是"太小也是没有"那个区间的**伤害面**：不去猜"多小算小"（没数据，见 OPEN.md），
         #    而是让"小到白跑"这件事**不再有后果** —— 浪费几秒可以接受，丢掉真账不行。
-        if prev_batch is None or _batch_has_facts(batch):
+        #
+        # 🔴 **2026-09-20 真机：bool 判据不够，要分档**（见 `_batch_evidence`）。
+        # 档 1（只花过钱、0 产物）原来也返回 True ⇒ 它把档 3（带 `merge_request`、
+        # pending ref 上躺着 1008 行）顶掉了 ⇒ 判「无文件改动」⇒ 产物进不了合并队列。
+        # ⇒ 只在"这一批**不比手里那份软**"时才替换。
+        if prev_batch is None or _batch_evidence(batch) >= _batch_evidence(prev_batch):
             prev_batch = batch
 
         # ── 执行后钩子 ──
@@ -966,6 +1000,16 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
         if getattr(batch, "deadline_wrapup", False):
             # 撞总预算收尾。重试 = 把剩下的时间再烧一遍，而且下次多半是被 orchestrator
             # 900s 无声收割 —— 这一份已经拿到手的账（token/文件）也跟着丢。收下就走。
+            #
+            # 🔴 **"收下就走"≠"收下这一份"**（2026-09-20 真机补的第二半）。
+            # 上面那行 `prev_batch = ...` 修的是"**留**哪一份"，这句是"**交**哪一份" ——
+            # 原来无条件交 `batch`，于是即使 `prev_batch` 攥着带 `merge_request` 的真产物，
+            # 也**永远到不了 `orchestrator` 那句 `if batch.merge_request: mq.submit(...)`**。
+            # 真机形状：T3/T4/T6 三条**全都**是从这儿原样交回空壳的（trace 里
+            # `changed_files=[]` + `token_count>0` + `unverified` 是 deadline 那句，三样同时在场）。
+            # ⇒ 手里那份更硬就交手里那份；它一样会让 `_run_with_retry` 立刻返回（不重试）。
+            if prev_batch is not None and _batch_evidence(prev_batch) > _batch_evidence(batch):
+                return prev_batch
             return batch
 
         retry += 1
