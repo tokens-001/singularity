@@ -155,6 +155,37 @@ def test_没有汇总时行为跟改动前一致_无报告回实现层(tmp_qidia
     assert route.get("no_qa") is True
 
 
+def test_有报告但一条路由都没标_也回实现层(tmp_qidian):
+    """🔴 **2026-09-19 统一两条"没依据"的代价**。
+
+    `handle_gate3_reject` 原来有两个"没依据"的分支，却挑了**相反的代价**：
+      · **没有 QA 报告** → `impl`，注释：「**无依据时回实现层: 代价最小, 且不动架构**」；
+      · **有报告、但 issues 里一条 `fix_route` 都没有** → `design`，注释：「有报告但没标路由
+        → 保守回架构」⇒ **清空架构 + 回 PLANNING**。
+    ⚠️ **"保守"在这里指的是对代码保守**，而清空架构是这个系统里**代价最大**的动作。
+    判据应该是"有没有依据"，不是"有没有报告"。
+
+    🔵 现状**够不到**（`build_qa_report` 给每条 issue 都补 `fix_route`）——
+    但手工写的 / 旧版留下的 `qa_report.json` 会走到，这是等在那儿的地雷。
+    """
+    p = _gate3_project()
+    proj_mod.save(p)
+    p.architecture = {"tasks": [{"id": "T1"}]}
+    proj_mod.save(p)
+    # 有报告，但 issues 里没有一条带 fix_route
+    (proj_mod._projects_dir() / "p1.qa_report.json").write_text(
+        json.dumps({"passed": [], "issues": [{"id": "Q001", "description": "x"}],
+                    "summary": {"verdict": "no_go"}}), encoding="utf-8")
+
+    workflow.handle_gate3_reject(p, {}, feedback="人打回")
+
+    assert p.phase == Phase.EXECUTING, "又走回『清空架构』那条最贵的路了"
+    assert p.architecture is not None, "没依据却把架构清空了 —— 代价最大的动作"
+    route = [e for e in p.lineage if e.get("action") == "gate3_route"][-1]
+    assert route["route"] == "impl" and route["source"] == "default_no_route"
+    assert route.get("no_qa") is True
+
+
 def test_汇总能盖过无报告时的默认(tmp_qidian):
     """观察者真给了裁决，就听它的 —— 即使没有 QA 报告。"""
     p = _gate3_project()

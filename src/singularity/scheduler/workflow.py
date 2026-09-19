@@ -1024,7 +1024,14 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
     project.add_lineage({"action": "gate3_rejected", "feedback": feedback[:500]})
 
     # 读 QA 报告的 fix_route 决定路由
-    fix_route = "design"  # 有报告但没标路由 → 保守回架构
+    # ⚠️ **空串 = "还没有依据"，不预置 design**（2026-09-19）。原来初值是 `"design"`、
+    #    注释写着「有报告但没标路由 → 保守回架构」—— 可 **"保守"在这里指的是对代码保守，
+    #    而清空架构 + set_phase(PLANNING) 是这个系统里代价最大的动作**，
+    #    和同函数另一条「无依据时回实现层: 代价最小, 且不动架构」正好相反。
+    #    两条路都是"没依据"，凭什么挑相反的代价？现在统一：**没依据一律回实现层**。
+    # 🔵 现状够不到（`build_qa_report` 给每条 issue 都补 `fix_route`）——
+    #    但**手工写的 / 旧版留下的 `qa_report.json` 会走到**，所以这是补一个等着的地雷。
+    fix_route = ""
     has_qa = False
     qa_report_path = _projects_dir() / f"{project.id}.qa_report.json"
     if qa_report_path.exists():
@@ -1050,9 +1057,14 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
     # (见 workflow.py _run_verification 的空清单早退) 的症状 —— 这时猜 design 会: 清空架构
     # → 重做架构 → GATE2 又请你审架构 → 打回 → 转圈, 而架构其实什么都没改。
     # 无依据时回实现层: 代价最小, 且不动架构。
-    if not has_qa:
+    # ⚠️ **"有报告但一条 fix_route 都没有"是同一件事**（2026-09-19 统一）——
+    #    判据是"有没有依据"，不是"有没有报告"。两种情况都走这一支。
+    if not fix_route:
         fix_route = "impl"
-        no_qa_reason = "无 QA 报告(验收可能被跳过), 无法判断退回哪层 → 默认回实现层, 不动架构"
+        no_qa_reason = ("无 QA 报告(验收可能被跳过), 无法判断退回哪层 → 默认回实现层, 不动架构"
+                        if not has_qa else
+                        "有 QA 报告但 issues 里一条 fix_route 都没有, 无法判断退回哪层"
+                        " → 默认回实现层, 不动架构")
     else:
         no_qa_reason = ""
 
@@ -1063,8 +1075,14 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
         fix_route = _rollup_route
         no_qa_reason = ""
         route_source = "observer_rollup"
+    elif not no_qa_reason:
+        route_source = "qa_report"
+    elif has_qa:
+        route_source = "default_no_route"    # 有报告但一条 fix_route 都没有（2026-09-19 新增）
     else:
-        route_source = "qa_report" if has_qa else "default_no_qa"
+        # ⚠️ **这个字符串别动** —— 没有报告那条路的行为"一个字都不该变"，
+        # `test_gate3_rollup` 里那条回归就是钉它的。
+        route_source = "default_no_qa"
 
     if fix_route == "impl":
         # 回实现层: 重置 DONE task 为 PENDING, 让实现层重新执行
