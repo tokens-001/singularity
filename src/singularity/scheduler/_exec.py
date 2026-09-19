@@ -306,18 +306,12 @@ def _check_cancelled(task, all_tool_events: list) -> BatchOutput | None:
     读不出 `by`（旧格式 / 空 body / 文件坏了）→ **按用户取消处理**，即旧行为。
     那是最保险的一侧：宁可把一次超时记成用户取消，也不要把用户取消咽掉。
     """
-    cancel_path = config.CANCEL_DIR / f"{task.id}.json"
-    if not cancel_path.exists():
+    # 🔵 读法**只此一份**（`tracker.take_cancel_marker`）—— 因为同一个标记的另一个
+    # 消费者是 `tracker.recover()`（进程重启那一下必须也兑现它，见那里）。两份读法
+    # 迟早有一条忘了改。
+    by = tracker.take_cancel_marker(task.id)
+    if by is None:
         return None
-    try:
-        body = json.loads(cancel_path.read_text(encoding="utf-8"))
-        by = body.get("by", "") if isinstance(body, dict) else ""
-    except (json.JSONDecodeError, OSError) as e:
-        # 不静默：读不出来只能退到旧行为，而"退到旧行为"正是这个洞的成因。
-        witness.warn("exec", f"cancel_marker_unreadable:{task.id}:{type(e).__name__}"[:180],
-                     key="cancel_marker_unreadable")
-        by = ""
-    cancel_path.unlink()
 
     if by == "timeout":
         return BatchOutput(

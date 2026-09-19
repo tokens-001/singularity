@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from dataclasses import asdict, dataclass, field, fields
@@ -183,6 +184,41 @@ def _warn_task_once(token: str, msg: str, key: str) -> None:
     _TASK_WARNED.add(token)
     from singularity.scheduler import witness  # 函数体内 import：witness → tracker 是现成的环
     witness.warn("tracker", msg[:200], key=key)
+
+
+def take_cancel_marker(task_id: str) -> str | None:
+    """取走这个任务的"停"标记，返回是谁写的：`""`=用户 / `"timeout"`=调度器超时。
+
+    **没有标记 → `None`**（和 `""` 分得开：`None` 是"没事发生"，`""` 是"有一次停，
+    只是没写清是谁写的"）。
+
+    ⚠️ **读不出来 → 按用户取消处理**（返回 `""`）。那是最保险的一侧：宁可把一次
+    超时记成用户取消，也不要把用户取消咽掉 —— 但**必须出声**，因为"退到旧行为"
+    正是这个洞的成因（同 `_exec._check_cancelled` 的取舍）。
+
+    🔵 读法只此一份：原来只有 `_exec._check_cancelled` 会读它，而**标记可能在
+    没有活着的 worker 时被写出来**（见 `recover()` 里那段）。同一件事两份读法，
+    迟早有一条忘了改。
+    """
+    p = config.CANCEL_DIR / f"{task_id}.json"
+    if not p.exists():
+        return None
+    try:
+        body = json.loads(p.read_text(encoding="utf-8"))
+        by = body.get("by", "") if isinstance(body, dict) else ""
+    except (json.JSONDecodeError, OSError) as e:
+        from singularity.scheduler import witness
+        witness.warn("tracker", f"cancel_marker_unreadable:{task_id}:{type(e).__name__}"[:180],
+                     key="cancel_marker_unreadable")
+        by = ""
+    try:
+        p.unlink()
+    except OSError as e:
+        # 删不掉 = 这个标记**下一轮还会被读到**（任务会被反复判停）。出声，别静默。
+        from singularity.scheduler import witness
+        witness.warn("tracker", f"cancel_marker_unlink_failed:{task_id}:{type(e).__name__}"[:180],
+                     key="cancel_marker_unlink_failed")
+    return by
 
 
 def _read_task_file(p: Path) -> Task | None:
@@ -582,6 +618,25 @@ def recover() -> int:
             if task is None:
                 continue
             if task.status in _INFLIGHT:
+                # ── 🔴 **取消标记优先于"回收重派"**（2026-09-19 夜实测的洞）──
+                # 标记本来只由 `_exec._check_cancelled` 在**轮与轮之间**消费，那要求
+                # **有一个活着的 worker**。而后端停着的时候照样会写出标记：
+                # `task_cancel` 对 RUNNING 的**只写标记**，`project_delete` 正是走它。
+                # ⇒ 没人消费，任务顶着 `running` 复活，**重派之后要先花掉第一轮模型
+                # 调用才停得住**（当夜现场：删除报 `cancelled: 11`，而盘上 6 个仍是
+                # running，最后靠手工补终态）。
+                # ⇒ 启动回收是**唯一**保证"进程不在时写下的标记会被兑现"的地方。
+                _by = take_cancel_marker(task.id)
+                if _by is not None:
+                    task.status = TaskStatus.FAILED
+                    # 两种来源分开报（同 `_exec._check_cancelled`）：把超时记成
+                    # "用户取消"就是**账记在用户头上而他什么都没做**。
+                    task.error = ("调度器超时中断（进程重启回收时兑现）" if _by == "timeout"
+                                  else "用户手动取消（进程重启回收时兑现）")
+                    task.updated_at = time.time()
+                    _write(task)
+                    count += 1
+                    continue
                 task.retry_count += 1
                 if task.retry_count >= task.max_retries:
                     task.status = TaskStatus.FAILED

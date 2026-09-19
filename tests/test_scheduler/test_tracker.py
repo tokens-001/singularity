@@ -169,3 +169,71 @@ class TestBrokenTaskFileLeavesATrace:
         tracker.ready_tasks()
         tracker._load_all_tasks()
         assert warns == [], f"干净任务被误报: {warns}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# `recover()` 必须先兑现"停"标记，再谈"回收重派"
+# ═══════════════════════════════════════════════════════════════
+#
+# 2026-09-19 夜实测的洞：标记本来只有 `_exec._check_cancelled` 在**轮与轮之间**
+# 消费 —— 那要求**有一个活着的 worker**。而后端停着的时候照样会被写出来
+# （`task_cancel` 对 RUNNING 的**只写标记**，`project_delete` 正是走它）：
+# 删除项目报 `cancelled: 11`，而盘上 **6 个任务仍是 running**，最后靠手工补终态。
+#
+# 后果不是"状态难看"，是**钱**：下次开后端它们被回收成 PENDING 重派，而那个标记
+# 要到**第一轮模型调用之后**才判得到（`_check_cancelled` 在轮与轮之间）。
+
+class TestRecoverHonoursCancelMarker:
+
+    def _seed_running(self, qdir, tid: str, **kw):
+        t = Task(id=tid, description="x", status=TaskStatus.RUNNING)
+        d = qdir / "tasks"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{tid}.json").write_text(
+            json.dumps(t.to_dict(), ensure_ascii=False), encoding="utf-8")
+
+    def _marker(self, qdir, tid: str, by: str = ""):
+        d = qdir / "cancels"
+        d.mkdir(parents=True, exist_ok=True)
+        body = {"task_id": tid, "cancelled_at": 0}
+        if by:
+            body["by"] = by                      # `task_cancel` 写的不带 by
+        (d / f"{tid}.json").write_text(json.dumps(body), encoding="utf-8")
+
+    def test_有标记就不重派_直接终态(self, qdir):
+        """判据：**终态 FAILED，不是 PENDING** —— PENDING 就等于"接着烧"。"""
+        self._seed_running(qdir, "t1")
+        self._marker(qdir, "t1")
+
+        assert tracker.recover() == 1
+        got = tracker.read_task("t1")
+        assert got.status is TaskStatus.FAILED, \
+            f"取消过的任务被回收成 {got.status.value} ⇒ 下次一开就跑，白烧第一轮"
+        assert "取消" in got.error, f"理由没说清: {got.error!r}"
+
+    def test_标记被取走_不会二次生效(self, qdir):
+        self._seed_running(qdir, "t1")
+        self._marker(qdir, "t1")
+        tracker.recover()
+        assert not (qdir / "cancels" / "t1.json").exists(), \
+            "标记没删 ⇒ 下一轮还会读到它（消费者本来就会删）"
+
+    def test_超时那条不许记成用户取消(self, qdir):
+        """两种来源分开报 —— 把超时记成"用户取消"就是**账记在用户头上而他什么都没做**。"""
+        self._seed_running(qdir, "t1")
+        self._marker(qdir, "t1", by="timeout")
+
+        tracker.recover()
+        got = tracker.read_task("t1")
+        assert got.status is TaskStatus.FAILED
+        assert "超时" in got.error, f"超时被记成用户取消: {got.error!r}"
+
+    def test_没标记照旧回收成_PENDING_不许误伤(self, qdir):
+        """**命门**：这条修补的是一条**已经对**的路径，别把正常回收一起打死。"""
+        self._seed_running(qdir, "t1")
+
+        assert tracker.recover() == 1
+        got = tracker.read_task("t1")
+        assert got.status is TaskStatus.PENDING, \
+            f"没有标记的正常任务被误杀成 {got.status.value} —— 这是在制造假失败"
+        assert got.retry_count == 1, "retry_count 该照旧 +1（那是回收次数，不是模型失败次数）"
