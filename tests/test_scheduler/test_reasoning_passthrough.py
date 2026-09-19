@@ -78,6 +78,39 @@ class TestPerMessageRule:
         assert oa._assistant_msg_for_history(msg, [])["reasoning_content"] == "想过"
 
 
+class TestFixFiresAlert:
+    """🔵 **修复自己出声** —— 没有这声，"没再冒 400"永远说不清是修好了还是没走到。
+
+    真机实测两种都见过：09-19 21:33 那次捞回后 1 秒就 400；09-20 00:00 那两次捞回后什么
+    都没发生 ⇒ **光看"没 400"分不出"修好了"和"这一轮没走到那个形状"**。
+    """
+
+    def _alerts(self, monkeypatch):
+        got = []
+        from singularity.scheduler import witness as w
+        monkeypatch.setattr(w, "warn", lambda scope, msg, **kw: got.append((scope, msg)))
+        return got
+
+    def test_不带tools但带tool_calls_要出声(self, monkeypatch):
+        got = self._alerts(monkeypatch)
+        oa._assistant_msg_for_history({"role": "assistant", "tool_calls": [_A_CALL]}, tools=[])
+        assert [m for _, m in got if m.startswith("reasoning_kept_for_tool_call_without_tools")], \
+            f"修复兜住那个形状时没出声 ⇒ 下次真机没法判「修好了」：{got}"
+
+    def test_带tools时不出声_那不是修复在起作用(self, monkeypatch):
+        """带 tools 时旧判据本来就留 reasoning —— 那不算修复生效，别刷屏。"""
+        got = self._alerts(monkeypatch)
+        oa._assistant_msg_for_history({"role": "assistant", "tool_calls": [_A_CALL]},
+                                      tools=[{"type": "function"}])
+        assert not got, f"不该出声：{got}"
+
+    def test_无tool_calls时不出声(self, monkeypatch):
+        got = self._alerts(monkeypatch)
+        oa._assistant_msg_for_history({"role": "assistant", "content": "答案",
+                                       "reasoning_content": "想过"}, tools=[])
+        assert not got, f"不该出声：{got}"
+
+
 class TestWiring:
     """🔴 **接线**：光规则对没用，得**真的落到发给 API 的那个 body 里**。
 

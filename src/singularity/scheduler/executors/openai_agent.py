@@ -127,6 +127,21 @@ def _assistant_msg_for_history(msg: dict, tools: list) -> dict:
     if out.get("tool_calls"):
         # 带 tool_calls 的消息：reasoning_content 必须在 —— 缺了就补空串（不是删）
         out.setdefault("reasoning_content", "")
+        if not tools:
+            # 🔵 **这一条就是"修复真的兜住了"的判据**（2026-09-20 加）。
+            # 这个组合（**不带 tools** ∧ **消息带 tool_calls**）正是旧判据会 pop 掉
+            # reasoning 的那个形状 —— 也就是那条 400 的**唯一**成因。
+            # 没有这条痕的话，"没再冒 400"永远说不清是**修好了**还是**这一轮压根没走到**：
+            # 真机实测两种都见过（09-19 21:33 那次捞回后 1 秒就 400；09-20 00:00 那两次
+            # 捞回后什么都没发生）—— 光看"没 400"分不出这两种。
+            # ⇒ 下次核判据：**这条告警出现过，且 `llm_400_unknown.jsonl` 没跟着长** = 修好了。
+            try:
+                from singularity.scheduler import witness
+                witness.warn("oa_exec",
+                             f"reasoning_kept_for_tool_call_without_tools:{len(out['tool_calls'])}"
+                             [:120], key="reasoning_kept_for_tool_call_without_tools")
+            except Exception:
+                pass
         return out
     if tools:
         return out
