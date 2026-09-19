@@ -135,13 +135,12 @@ def _assistant_msg_for_history(msg: dict, tools: list) -> dict:
             # 真机实测两种都见过（09-19 21:33 那次捞回后 1 秒就 400；09-20 00:00 那两次
             # 捞回后什么都没发生）—— 光看"没 400"分不出这两种。
             # ⇒ 下次核判据：**这条告警出现过，且 `llm_400_unknown.jsonl` 没跟着长** = 修好了。
-            try:
-                from singularity.scheduler import witness
-                witness.warn("oa_exec",
-                             f"reasoning_kept_for_tool_call_without_tools:{len(out['tool_calls'])}"
-                             [:120], key="reasoning_kept_for_tool_call_without_tools")
-            except Exception:
-                pass
+            # ⚠️ **不裹 try**：这条通道是"修复到底有没有生效"的唯一判据，它哑了
+            # 和"这轮没走到"长得一模一样（同 `_dump_unknown_400` 那条的理由）。
+            # 本模块顶部已有模块级 `witness`。
+            witness.warn("oa_exec",
+                         f"reasoning_kept_for_tool_call_without_tools:{len(out['tool_calls'])}"
+                         [:120], key="reasoning_kept_for_tool_call_without_tools")
         return out
     if tools:
         return out
