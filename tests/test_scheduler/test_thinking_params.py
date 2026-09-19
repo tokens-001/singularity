@@ -141,3 +141,80 @@ def test_没有_reasoning_content_时两种都无所谓():
     plain = {"role": "assistant", "content": "好的"}
     for tools in ([{"type": "function"}], []):
         assert _assistant_msg_for_history(dict(plain), tools=tools) == plain
+
+
+# ═══════════════════════════════════════════════════════════════
+# `tool_choice="required"` 也是"被拒一次就该记住"的同一件事
+# ═══════════════════════════════════════════════════════════════
+#
+# thinking 模式（DeepSeek 等）**不收** `tool_choice="required"`：
+#   `400 Thinking mode does not support this tool_choice`
+# 降级分支原来**只改当次的 body**，而 body 每轮重建 ⇒ 每个带工具的轮次都重撞一发。
+# 2026-09-19 夜用真端点复现的量：3 个工具轮 = 6 次 HTTP，**3 次是白打的**。
+#
+# 钉住的是**跨轮次的记忆**，不是单次的降级 —— 单次降级原来就是对的，坏的是一直没记住。
+
+class TestToolChoiceRequiredRemembered:
+    """判据：**第二轮起不再要 `required`**。删掉 `_no_required_tool_choice` 那两处，两条都红。"""
+
+    def _bodies(self, monkeypatch):
+        """跑一次真 `run()`，把每次 HTTP 的 body 按顺序记下来。"""
+        import pytest
+
+        from singularity.scheduler.executors import openai_agent as oa
+
+        monkeypatch.setenv("TEST_KEY", "k")
+        cfg = {"model": "m", "api_key_env": "TEST_KEY", "entry": "http://x",
+               "max_turns": 3}
+        ex = oa.OpenAIAgentExecutor(cfg, "任务", "tid", skill_tools=[], mcp_tools=[])
+
+        seen: list[dict] = []
+        ok_calls = {"n": 0}
+
+        def fake(body):
+            # ⚠️ **必须拷一份**：降级分支会 `body["tool_choice"] = "auto"` **就地改**，
+            # 存引用的话记下来的是"改完之后"的值 —— 第一版就栽在这儿：断言报
+            # "第一轮没要 required"，其实是它自己把证据改了。
+            seen.append(dict(body))
+            if body.get("tool_choice") == "required":
+                # 真机上那句原话
+                raise oa._FormatError(
+                    'HTTP 400: {"error":{"message":"Thinking mode does not support '
+                    'this tool_choice","type":"invalid_request_error"}}')
+            ok_calls["n"] += 1
+            if ok_calls["n"] == 1:
+                # 第一轮：回一个工具调用 ⇒ 循环进第二轮（不然测不到"跨轮"）
+                return {"choices": [{"message": {
+                    "content": "", "reasoning_content": "想一下",
+                    "tool_calls": [{"id": "c1", "type": "function",
+                                    "function": {"name": "read_file",
+                                                 "arguments": "{}"}}]}}]}
+            return {"choices": [{"message": {"content": "收尾"}}]}
+
+        monkeypatch.setattr(ex, "_api_call", fake)
+        monkeypatch.setattr(ex, "_execute_tool", lambda name, args: "ok")
+        ex.run()
+        return seen
+
+    def test_第一轮确实要了_required(self, monkeypatch):
+        """先钉住前提：这个判据只有在**真的撞过**那次 400 之后才有意义。"""
+        seen = self._bodies(monkeypatch)
+        assert seen[0]["tool_choice"] == "required", \
+            f"第一轮没要 required ⇒ 下面那条测的是空气：{seen[0].get('tool_choice')}"
+
+    def test_第二轮不再重撞_required(self, monkeypatch):
+        seen = self._bodies(monkeypatch)
+        assert len(seen) >= 3, f"没跑到第二轮的请求，测不到'记没记住'：{len(seen)} 次"
+        assert seen[2]["tool_choice"] == "auto", (
+            f"第二轮又把 required 拼回来了（第 3 次请求 tool_choice={seen[2]['tool_choice']}）"
+            " —— 这正是每个工具轮白撞一次 400 的成因")
+
+    def test_学到的那次只出声一次(self, monkeypatch, caplog):
+        """告警不能被自己的重试刷屏：一个 dispatch 只该报一条。"""
+        from singularity.scheduler import witness
+        hits: list[str] = []
+        monkeypatch.setattr(witness, "warn",
+                            lambda scope, msg, **kw: hits.append(msg))
+        self._bodies(monkeypatch)
+        learned = [h for h in hits if "tool_choice_required_rejected" in h]
+        assert len(learned) == 1, f"报了 {len(learned)} 条：{learned}"

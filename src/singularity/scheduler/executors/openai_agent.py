@@ -378,6 +378,12 @@ class OpenAIAgentExecutor(BaseExecutor):
         self._tool_events: list[dict] = []
         # body 每轮重建，被 API 拒过的思考参数要记住，否则下一轮又加回来、又撞一次 400
         self._rejected_think_keys: set[str] = set()
+        # 同一件事的**另一个面**：thinking 模式不接受 `tool_choice="required"`
+        # （DeepSeek 原文 `400 Thinking mode does not support this tool_choice`）。
+        # 下面的降级分支原来**只改当次的 body**，而 body 每轮重建 ⇒ **每个带工具的
+        # 轮次都重撞一次 400**。2026-09-19 夜真机复现的量：3 个工具轮 = 6 次 HTTP，
+        # 其中 3 次是白撞的（探针 `/tmp/probe_exec_400.py`）。记在实例上，一次就够。
+        self._no_required_tool_choice = False
         # `_agent_level` 删了（2026-09-14）：闸门收进基类后它一个读者都没有，
         # 而同一件事存两份正是本仓反复吃亏的形状（改一处漏一处）。现在只有
         # `self.agent_level` 一份，由上面的 super() 赋值。
@@ -478,7 +484,10 @@ class OpenAIAgentExecutor(BaseExecutor):
                     "messages": messages,
                     "tools": tools,
                     # tools 清空(测试通过即停/死循环强制输出)后别再 required, 否则 API 拒收空 tools + required
-                    "tool_choice": "required" if tools else "auto",
+                    # `_no_required_tool_choice` = 这个模型已经拒过一次，别再每轮重撞（见 __init__）
+                    "tool_choice": ("required"
+                                    if tools and not self._no_required_tool_choice
+                                    else "auto"),
                 }
                 # GPT-5.5+ 用 max_completion_tokens, 旧模型用 max_tokens
                 if "max_completion_tokens" in tmpl:
@@ -500,6 +509,13 @@ class OpenAIAgentExecutor(BaseExecutor):
                 # thinking 模型(DeepSeek V4 等)不接受 tool_choice=required → 降级 auto 重试一次
                 if body.get("tool_choice") == "required" and "tool_choice" in str(e):
                     body["tool_choice"] = "auto"
+                    # ⚠️ **这个降级原来只活在这一次调用里** —— 记住它，否则下一轮的 body
+                    # 又把 required 拼回来、又撞一次（2026-09-19 夜复现：每个工具轮都白打一发）。
+                    # 只在**第一次**学到时出声，不然告警会被自己的重试刷屏。
+                    if not self._no_required_tool_choice:
+                        self._no_required_tool_choice = True
+                        witness.warn("oa_exec",
+                                     f"tool_choice_required_rejected:{self._model}:{str(e)[:60]}"[:150])
                     # 光说不做防护: auto 模式 thinking 模型可能只回文字不调工具 → 注入强制工具指令
                     messages.append({
                         "role": "system",
