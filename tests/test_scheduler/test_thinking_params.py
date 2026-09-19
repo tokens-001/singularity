@@ -218,3 +218,33 @@ class TestToolChoiceRequiredRemembered:
         self._bodies(monkeypatch)
         learned = [h for h in hits if "tool_choice_required_rejected" in h]
         assert len(learned) == 1, f"报了 {len(learned)} 条：{learned}"
+
+
+def test_那条_reasoning_400_不许当成_模型不吃思考参数():
+    """地雷（2026-09-19 夜实测坐实）：那条 400 的原文里**含 `thinking` 这个词** ——
+
+        `The `reasoning_content` in the **thinking** mode must be passed back to the API.`
+
+    而 `_THINK_KEYS` 第一项就是 `"thinking"` ⇒ 光按子串匹配会把它**误读成
+    "模型不吃这个参数"**：把参数悄悄摘掉重试，而**真问题一个字都不留痕**，
+    连 `_dump_unknown_400` 也永远不会触发（它只接 `else:` 那一支）。
+
+    **今天是隐性的**，只因 `request_template` 没配 thinking（`k in body` 不成立）——
+    哪天有人配了，发作的样子是"模型突然变笨"，不是报错。
+
+    变异：删掉 `_drop_rejected_think_param` 开头那句 `if "reasoning_content" in low` → 红。
+    """
+    err = ('HTTP 400: {"error":{"message":"The `reasoning_content` in the thinking '
+           'mode must be passed back to the API.","type":"invalid_request_error"}}')
+    body = {"thinking": {"type": "enabled"}, "tools": []}
+
+    assert _drop_rejected_think_param(body, err) == "", "把 reasoning 的 400 当成思考参数被拒了"
+    assert body == {"thinking": {"type": "enabled"}, "tools": []}, "思考参数被误摘了"
+
+
+def test_真_不认某个思考参数时照旧摘掉():
+    """**命门**：上面那条排除不能把正常功能一起打死。"""
+    body = {"thinking": {"type": "disabled"}, "reasoning_effort": "low"}
+    assert _drop_rejected_think_param(
+        body, 'HTTP 400: unknown field "thinking"') == "thinking"
+    assert body == {"reasoning_effort": "low"}

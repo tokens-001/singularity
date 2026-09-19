@@ -1314,6 +1314,50 @@ class TestStreamCall:
         assert tc["function"]["name"] == "write_file"
         assert tc["function"]["arguments"] == '{"path":"a"}'
 
+    def test_带工具调用时_reasoning_content_键必须在(self, monkeypatch):
+        """⚠️ **空串不是没有**：字段**整个丢掉**才会 400，回 `""` 就没事。
+
+        非流式那条路（`choice.get("message")` 原样保留）给的是 `""`，而这条原来
+        `if reasoning:` —— 空串是 falsy ⇒ **键根本不加**。同一轮两条路两种形状，
+        而生产跑的正是流式这条（2026-09-19 夜实测坐实）。
+        """
+        oa, ex = self._ex(monkeypatch)
+        lines = [
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1",'
+            '"function":{"name":"write_file","arguments":"{}"}}]}}]}',
+            'data: [DONE]',
+        ]
+        monkeypatch.setattr(oa, "_get_http_client", lambda: self._client(oa, lines))
+        msg = ex._stream_call({})["choices"][0]["message"]
+        assert msg.get("tool_calls"), "前提：这一轮确实有工具调用"
+        assert "reasoning_content" in msg, \
+            "带 tool_calls 却把键整个丢了 —— 文档说这个形状会被 API 判 400"
+        assert msg["reasoning_content"] == ""
+
+    def test_有思考时不许被空串顶掉(self, monkeypatch):
+        """对照组：真拿到思考时，补的那句不能把它覆盖成 `""`。"""
+        oa, ex = self._ex(monkeypatch)
+        lines = [
+            'data: {"choices":[{"delta":{"reasoning_content":"想一下"}}]}',
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1",'
+            '"function":{"name":"write_file","arguments":"{}"}}]}}]}',
+            'data: [DONE]',
+        ]
+        monkeypatch.setattr(oa, "_get_http_client", lambda: self._client(oa, lines))
+        msg = ex._stream_call({})["choices"][0]["message"]
+        assert msg["reasoning_content"] == "想一下"
+
+    def test_纯文本轮不许加这个字段(self, monkeypatch):
+        """**命门**：规则只管**带工具调用**的轮次 —— 别借机给所有轮加字段。
+
+        纯文本轮加了就是给 Kimi/GLM 平白多送一个字段，而本仓的原则是那两家**零回归**。
+        """
+        oa, ex = self._ex(monkeypatch)
+        lines = ['data: {"choices":[{"delta":{"content":"好的"}}]}', 'data: [DONE]']
+        monkeypatch.setattr(oa, "_get_http_client", lambda: self._client(oa, lines))
+        msg = ex._stream_call({})["choices"][0]["message"]
+        assert "reasoning_content" not in msg, f"纯文本轮被加了字段：{msg}"
+
     def test_bad_chunk_不杀整轮(self, monkeypatch):
         """坏帧（截断 / 厂商噪声）只**跳过 + 告警**，不能抛穿。
 

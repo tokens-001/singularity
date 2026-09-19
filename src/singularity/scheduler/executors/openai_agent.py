@@ -338,6 +338,14 @@ def _drop_rejected_think_param(body: dict, err: str) -> str:
     一次只摘一个：错误通常只报第一个不认识的参数，剩下的下一轮再摘。
     """
     low = err.lower()
+    # ⚠️ **先排掉"这条 400 讲的是 reasoning_content 没回传"**（2026-09-19 夜实测坐实）。
+    # 那句原文是 `…in the thinking mode must be passed back…` —— **里面含 `thinking` 这个词**
+    # ⇒ 光按子串匹配，它会命中 `_THINK_KEYS` 的第一项，被**误读成"模型不吃 thinking 参数"**：
+    # 把参数悄悄摘掉重试，而**真问题一个字都不留痕**，连 `_dump_unknown_400` 也永远不会
+    # 触发（它只接 `else:` 那一支）。**今天没事**只因 `request_template` 没配 thinking ——
+    # 哪天配了，这个坑才发作（而且发作的样子是"模型变笨了"，不是报错）。
+    if "reasoning_content" in low:
+        return ""
     for k in _THINK_KEYS:
         if k in body and k in low:
             del body[k]
@@ -1393,6 +1401,15 @@ class OpenAIAgentExecutor(BaseExecutor):
         if reasoning:
             msg["reasoning_content"] = "".join(reasoning)
         if tool_calls:
+            # ⚠️ **带工具调用的轮次，这个键必须在 —— 哪怕是空串**（2026-09-19 夜）。
+            # 文档："带 `tool_calls` 时 `reasoning_content` 必须原样回传"，且
+            # **"空串不是没有"**：字段**整个丢掉**才 400，回 `""` 就没事。
+            # 原来只有上面那句 `if reasoning:` —— 空串是 falsy ⇒ **键根本不加**，
+            # 于是**非流式那条路**（`choice.get("message")` 原样保留）**和这条产出两种形状**：
+            # 实测同一轮，非流式给的是 `""`、流式给的是"没有这个键"。
+            # ⚠️ 只补**有 tool_calls** 的轮次 —— 那正是规则说的范围；纯文本轮一个字段不加，
+            # 对 Kimi/GLM **零改动**（别借机给所有轮加字段）。
+            msg.setdefault("reasoning_content", "")
             msg["tool_calls"] = [tool_calls[k] for k in sorted(tool_calls)]
         # ⚠️ `_cut` 是**我们自己的**字段（不是 provider 的 schema），下划线标出来。
         # 它回答的是"这次是模型答完了，还是**被我们掐断的**" —— 这两件事
