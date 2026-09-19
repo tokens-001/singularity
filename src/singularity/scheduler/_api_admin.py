@@ -77,6 +77,14 @@ def agent_add(level, model, agent_type="openai-agent", entry_url="", api_key_env
 
 def agent_update(level, model, data):
     from . import dispatcher as disp_mod
+    # 边界先挡：不在该层的模型原来会一路执行到 `update_agent` 末尾才抛
+    # `RuntimeError` ⇒ Flask 回 **500 + HTML**（前端拿到的是页面不是 JSON，
+    # 报错信息也丢了）；而 `disabled` 分支在抛之前**已经把标记写进盘了**
+    # ⇒ 半个动作落了盘。判据用 `agent_models_in`，与 `update_agent` 查同一份数据。
+    # ⚠️ **不写 try/except 翻译**（同 `api_store_add`）：那会被静默-except 棘轮
+    # 判成"既不出声也不上抛"，它看不出我把报文交给了调用方。
+    if model not in disp_mod.agent_models_in(level):
+        return {"ok": False, "error": f"Agent {model} 不在 {level} 层"}, 404
     return {"ok": True, "agent": disp_mod.update_agent(level, model, data)}, 200
 
 

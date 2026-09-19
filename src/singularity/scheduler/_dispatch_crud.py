@@ -1,6 +1,6 @@
 from singularity.scheduler.dispatcher import _ESCALATION, load_agents
 
-__all__ = ['_custom_agents_path', '_load_custom_agents', '_notify_agent_change', '_save_custom_agents', 'add_agent', 'escalate', 'remove_agent', 'purge_disabled', 'update_agent']
+__all__ = ['_custom_agents_path', '_load_custom_agents', '_notify_agent_change', '_save_custom_agents', 'add_agent', 'escalate', 'remove_agent', 'purge_disabled', 'update_agent', 'agent_models_in']
 # ── Agent CRUD (写入自定义 JSON overlay) ──
 
 
@@ -183,6 +183,22 @@ def _merge_tmpl(base: dict, updates: dict) -> dict:
         merged = {**floor, **tmpl}
         return {**updates, "request_template": {k: v for k, v in merged.items() if v is not None}}
     return updates
+
+
+def agent_models_in(level: str) -> list[str]:
+    """某一层里配了哪些模型（自定义 overlay + 内置 TOML，自定义优先）。
+
+    给**边界**用：`update_agent` 找不到模型时会抛 `RuntimeError`，而那会一路冒到
+    Flask 变成 **500 + HTML** —— 前端拿到的是解析不了的页面，看不出发生了什么；
+    更糟的是 `disabled` 分支在抛之前**已经把标记写进盘了**（半个动作落了盘）。
+    所以"查得到才往下走"这条判据要能在调用 `update_agent` **之前**问。
+    ⚠️ 做成**两边共用的一份**（同 `api_store.is_reserved_id` 那条）：各写一份迟早会漂。
+    """
+    custom = _load_custom_agents()
+    models = [a.get("model") for a in custom.get(level, [])]
+    models += [a.get("model") for a in load_agents().get(level, [])
+               if a.get("model") not in models]
+    return [m for m in models if m]
 
 
 def update_agent(level: str, model: str, updates: dict) -> dict:
