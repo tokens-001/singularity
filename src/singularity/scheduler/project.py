@@ -49,6 +49,33 @@ class Phase(str, Enum):
     DONE = "done"
 
 
+# ── 归属：**数据版**（上面那段注释是"为什么"，这里是"是什么"）──
+#
+# 🔴 **必须数据化**（2026-09-19 补）：同一件事在两个地方各写一份，迟早有一条忘了改
+#   （§60 那个形状）。`_api_projects` 原来手抄了一份 `_LOOP_OWNED_PHASES` 元组，
+#   现在它从这张表现算 —— **别再抄第二份**。
+#
+# ⚠️ 加新档位时 `test_每一档都声明了归属` 会红。**那是故意的**：它逼你先回答
+#   上面注释里那个问题（"换掉之后，还有人推它吗？"），而不是加完枚举就走。
+OWNER_SCHEDULER_LOOP = "scheduler_loop"   # 调度循环推（orchestrator._advance_project）
+OWNER_RUN_PHASE = "run_phase"             # 人在界面上点（_api_projects 起后台线程）/ CLI
+OWNER_NONE = "none"                       # **没有推手**：等人填需求 / 已是终态
+
+PHASE_OWNER: dict[Phase, str] = {
+    Phase.TEMPLATE:    OWNER_NONE,          # `run_phase` 只打印"等待 Owner 填写需求"就 break
+    Phase.RESEARCHING: OWNER_RUN_PHASE,
+    Phase.PLANNING:    OWNER_RUN_PHASE,
+    Phase.GATE1:       OWNER_RUN_PHASE,
+    Phase.GATE2:       OWNER_RUN_PHASE,
+    Phase.GATE3:       OWNER_RUN_PHASE,
+    Phase.EXECUTING:   OWNER_SCHEDULER_LOOP,
+    Phase.INTEGRATING: OWNER_SCHEDULER_LOOP,
+    Phase.REVIEWING:   OWNER_SCHEDULER_LOOP,
+    Phase.DELIVERING:  OWNER_SCHEDULER_LOOP,
+    Phase.DONE:        OWNER_NONE,          # 终态：到这儿就结束了
+}
+
+
 # Gate 拒绝 → 回退到哪里
 #
 # ⚠️ **回退目标必须是「有人会推它」的那一档**（2026-09-17）。

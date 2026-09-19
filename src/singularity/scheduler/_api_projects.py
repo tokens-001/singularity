@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 from singularity.scheduler import tracker, witness
+from singularity.scheduler.project import OWNER_SCHEDULER_LOOP, PHASE_OWNER
 
 # ═══════════════════════════════════════════════════════════════
 
@@ -188,8 +189,13 @@ def fs_pick() -> tuple[dict, int]:
     return {"path": r.stdout.strip()}, 200
 
 
-# 归**调度循环**推的四档（权威表在 `project.py` 顶部）。其余档归 `run_phase`。
-_LOOP_OWNED_PHASES = ("executing", "integrating", "reviewing", "delivering")
+# 归**调度循环**推的那几档 —— **从 `project.py` 的 `PHASE_OWNER` 现算，不手抄**。
+#
+# ⚠️ 这里原来是一个写死的元组 `("executing","integrating","reviewing","delivering")`，
+#    和 `project.py` 顶部那张表**各写一份**。同一件事两个定义，迟早有一条忘了改
+#    （§60 的形状），所以改成现算（2026-09-19）。
+_LOOP_OWNED_PHASES = tuple(p.value for p, owner in PHASE_OWNER.items()
+                           if owner == OWNER_SCHEDULER_LOOP)
 
 
 def _loop_status(next_phase) -> dict:
