@@ -79,6 +79,9 @@ class MergeQueue:
         self._merged_files: set[str] = set()
         self._parked: dict[str, MergeRequest] = {}
         self._lock = threading.Lock()
+        # 上次报过的"依赖卡住时的队列长度"（0 = 没卡住，或卡住已解开）。
+        # 只用来给 `drain_dep_blocked` 去重 —— 持续状态不该每 tick 报一次。
+        self._dep_blocked_warned = 0
         self._recover_parked()  # 重启恢复
 
     def _recover_parked(self) -> None:
@@ -133,7 +136,17 @@ class MergeQueue:
             if deferred >= len(self._queue):
                 # 全是依赖未满足 → 这轮不合它们，留到依赖 DONE 后的下一轮。
                 # 必须留痕：静默跳过会让人以为"队列空了"。
-                witness.warn("merge", f"drain_dep_blocked:{len(self._queue)}"[:80])
+                # ⚠️ **只在状态变化时报**（2026-09-19）。drain() 挂在调度主循环里，
+                # 而"有请求在等依赖"是**持续状态**、不是事件 —— 每个 tick 报一次
+                # 就等于把状态写进事件流。实测：`drain_dep_blocked:1` **3180 条**
+                # （msg 一模一样、间隔中位数 0.0s），占 alerts.jsonl 的 **80%**，
+                # 把文件顶到 430KB；而 witness 的轮转是"只留最后 1000 行"
+                # ⇒ **真事故会被这些重复行挤出观测窗口**。
+                # 判据是"队列长度变了"，`_dep_blocked_warned` 见 `__init__`。
+                n = len(self._queue)
+                if self._dep_blocked_warned != n:
+                    self._dep_blocked_warned = n
+                    witness.warn("merge", f"drain_dep_blocked:{n}"[:80])
                 break
             req = self._queue.popleft()
             # 防御性检查: 依赖任务未完成 → 延迟合并
@@ -142,7 +155,10 @@ class MergeQueue:
                 deferred += 1
                 continue
             deferred = 0                 # 有进展就重置，后面的请求还有机会
+            self._dep_blocked_warned = 0  # 卡住解开了 → 下次再卡住要重新报
             results.append(self._drain_one(req))
+        else:
+            self._dep_blocked_warned = 0   # 队列排空（while 正常走完，没 break）
         return results
 
     def _deps_satisfied(self, req: MergeRequest) -> bool:

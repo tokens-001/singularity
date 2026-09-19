@@ -135,6 +135,77 @@ class TestDrainTermination:
         assert [r.task_id for r in res] == ["t1"], "依赖已经是终态(失败)了，不该永远等它"
         assert not q._queue, "合掉之后队列该空 —— 否则调用方的 pending_batches 永不清空"
 
+    def _new_queue(self, monkeypatch, tmp_path):
+        """建队列前**先把 PARKED_DIR 指到 tmp**：默认值是真仓库的 `.qidian/parked`，
+        不隔离就会读进真仓库的现场（本仓踩过「读也不安全」）。
+        """
+        from singularity.scheduler import config
+        from singularity.scheduler.merge import MergeQueue
+        monkeypatch.setattr(config, "PARKED_DIR", tmp_path)
+        return MergeQueue()
+
+    def _drain_repeatedly(self, monkeypatch, queue, times):
+        """在同一个 MergeQueue 上连调 times 次 drain，收每次的告警。"""
+        from singularity.scheduler import merge as M
+        warns: list[str] = []
+        monkeypatch.setattr("singularity.scheduler.witness.warn",
+                            lambda *a, **k: warns.append(str(a[1] if len(a) > 1 else a[0])))
+        monkeypatch.setattr(M.MergeQueue, "_drain_one",
+                            lambda self, req: M.MergeResult(task_id=req.task_id,
+                                                            status="merged"))
+        for _ in range(times):
+            queue.drain()
+        return warns
+
+    def test_卡住时连调_drain_只报一次(self, monkeypatch, tmp_path):
+        """🔴 **2026-09-19 量的**：`drain_dep_blocked` 在真机上积了 **3180 条**
+        （msg 一模一样 `:1`、间隔中位数 0.0 秒），占 alerts.jsonl 的 **80%**，
+        把文件顶到 430KB。而 witness 的轮转是"超 512KB 只留最后 1000 行"
+        ⇒ **真事故会被这些重复行挤出观测窗口**。
+
+        drain() 挂在调度主循环里，"有人等依赖"是**持续状态**、不是事件 ——
+        状态不变就不该再报。
+        """
+        q = self._new_queue(monkeypatch, tmp_path)
+        q.submit(self._req("t1", ["never"]))
+        warns = self._drain_repeatedly(monkeypatch, q, 5)
+        assert len(warns) == 1, f"同一状态报了 {len(warns)} 次，去重没生效：{warns}"
+        assert "drain_dep_blocked" in warns[0]
+
+    def test_卡住的规模变了_要重新报(self, monkeypatch, tmp_path):
+        """边界：去重**不能**把"卡住 1 个"和"卡住 3 个"并成一条 ——
+        规模变了就是新信息，闷掉它等于又造一个"看起来没变化"的静默。"""
+        q = self._new_queue(monkeypatch, tmp_path)
+        q.submit(self._req("t1", ["never"]))
+        warns = self._drain_repeatedly(monkeypatch, q, 1)
+        q.submit(self._req("t2", ["never"]))
+        q.submit(self._req("t3", ["never"]))
+        warns += self._drain_repeatedly(monkeypatch, q, 1)
+        assert len(warns) == 2, f"队列长度变了却只报 {len(warns)} 次：{warns}"
+        assert "drain_dep_blocked:3" in warns[1]
+
+    def test_解开后再卡住_要重新报(self, monkeypatch, tmp_path):
+        """边界：别把去重做成"一辈子只报一次" —— 解开又卡住是**新事件**。"""
+        from singularity.scheduler import tracker as tk
+        from singularity.scheduler.tracker import Task, TaskStatus
+        q = self._new_queue(monkeypatch, tmp_path)
+        q.submit(self._req("t1", ["dep"]))
+        monkeypatch.setattr(tk, "read_task",
+                            lambda tid: Task(id=tid, description="d", status=TaskStatus.RUNNING))
+        warns = self._drain_repeatedly(monkeypatch, q, 1)
+        assert len(warns) == 1 and len(q._queue) == 1, "第一次卡住就该报一次"
+
+        monkeypatch.setattr(tk, "read_task",
+                            lambda tid: Task(id=tid, description="d", status=TaskStatus.DONE))
+        self._drain_repeatedly(monkeypatch, q, 1)
+        assert not q._queue, "依赖好了就该合掉"
+
+        q.submit(self._req("t2", ["dep2"]))
+        monkeypatch.setattr(tk, "read_task",
+                            lambda tid: Task(id=tid, description="d", status=TaskStatus.RUNNING))
+        warns += self._drain_repeatedly(monkeypatch, q, 1)
+        assert len(warns) == 2, f"解开后再次卡住没重新报：{warns}"
+
     def test_依赖还在跑_就还得等(self, monkeypatch):
         """**别把修法改宽**：依赖还没到终态（还在跑）就该继续等。
 
