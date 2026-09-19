@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 
 # `Path` 只出现在 `_phase_output_path`/`_save_phase_output` 的**返回注解**里。
@@ -509,6 +510,25 @@ def run_test_fix_loop(project: ProjectState, agents: dict) -> str:
     verify_msgs = _run_verification(project, agents)
     if verify_msgs:
         msgs.extend(verify_msgs)
+
+    # Step 5.5: **自己回一次实现层**（`docs/最小闭环方案-20260918.md`，2026-09-20 落地）
+    #
+    # 缺的从来不是"AI 决定要不要过门"（那一环 6/27 砍对了，门是人给的输入），
+    # 是"AI 发现实现写错了，能不能自己回炉"。这两件事不是一回事 —— 所以这里
+    # **一个字都不碰 GATE1/2/3**：过门照旧要人点，只是"回炉"这一下自动按一次。
+    #
+    # ⚠️ 判据是**抽出来共用的**那个 `_resolve_fix_route` —— 自动和人工必须用同一把尺子。
+    _route, _src, _no_qa, _ = _resolve_fix_route(project)
+    _ok, _why = _auto_rework_allowed(project, _route)
+    if _ok:
+        msgs.append(f"↩︎ 自动返工一次（{_why}）")
+        # 留痕交给 `handle_gate3_reject`（写 `auto: True`）—— **不在两处各写一遍**：
+        # 自动和人工在账上必须一眼分得开，而"分得开"只能有一个写入点。
+        return "\n".join(msgs) + "\n" + handle_gate3_reject(
+            project, agents, feedback="自动返工: QA 判实现层不合格", auto=True)
+    # 不自动 → 老实升 GATE3 等人。**把"为什么没自动"也说出来**：
+    # 否则"没自动"和"没走到这一步"在界面上长得一模一样（本仓的老形状）。
+    msgs.append(f"→ GATE3（没自动返工：{_why}）")
 
     project.set_phase(Phase.GATE3, "执行完成 → 验收报告完毕, 等人工审")
     save(project)
@@ -1050,40 +1070,62 @@ def _read_observer_rollup(project_id: str) -> str | None:
         return None
 
 
-def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "") -> str:
-    """GATE3 被人工打回: 按 fix_route 分级路由 (D3)。
+_AUTO_REWORK_MAX = 1       # 整个项目最多自动返工几次（默认 1 —— 见 `_auto_rework_allowed`）
 
-    impl   → 回 EXECUTING, **重置全部 DONE 任务**重跑
-      ⚠️ 原文这里写的是"只重做有问题的 task (依赖该 task 的下游一并重测)"，
-      **代码从来不是这么干的**（2026-09-19 外派评审 B5 抓出，逐行核过）。
-      真正做"只重做有问题的那几个"要按 QA issue → 任务匹配。**这条边已经补上了**
-      （2026-09-19：`build_qa_report` 给每条 issue 标 `task_id`，由
-      `workflow._task_of_file_map` 按各任务 trace 的 `changed_files` 现填 ——
-      **平台填，不是模型写的**）。但**边对 ≠ 该换**：那个映射是"先出现者胜"
-      （trace 里没有改动顺序），两个任务都改过同一个文件时指认可能偏，而匹配偏了的
-      失败模式是**转圈**：漏掉的那个任务没重做 → 又冲回 GATE3 → 再打回，每圈都是真金白银。
-      **全量重做贵，但它是收敛的。** ⇒ 这一支**照旧全量**，但把"精准做本会重置哪几个"
-      记进 lineage 的 `precise_reset_would_be` —— 攒够真机数据再决定换不换
-      （"只报不改"，同 `_flag_degraded_tasks` 立的规矩；数据就是那句"没有真机数据
-      不换"要的东西）。
-    design → 回 PLANNING 重新规划
-    note   → 仅记录, 不阻断交付
-    拿不到依据（无报告 / 报告读坏了 / 有报告但没标路由）→ 默认 **impl**
-      ⚠️ 原文这里写的是"默认 design (保守回规划)"，**和代码对不上**（代码 2026-09-19
-      已统一成 impl）。"保守"在那句话里指对代码保守，可 `design` 要清空架构 +
-      `set_phase(PLANNING)`，是这套系统里**代价最大**的动作 —— 两条都是"没依据"，
-      没理由挑相反的那个代价。
+
+def _auto_rework_allowed(project: ProjectState, fix_route: str) -> tuple[bool, str]:
+    """验收不过时**要不要自己回一次实现层** —— 五条全真才放行，返回 (结论, 理由)。
+
+    方案全文 `docs/最小闭环方案-20260918.md`。判据抽成纯函数是为了能单测；
+    **"回去之后任务真的被派下去了"那一半只能真机验**，单测证明不了。
+
+    每一条都对应一次踩过的坑：
+
+    ① **本轮验收真跑了**（issues 里有 `verification_ran`）
+       —— 验收被整段跳过时（架构没产出约束清单），重跑执行层**修不了**那件事
+       ⇒ 纯空转烧钱。⚠️ 别用 `has_verification_evidence()`：它把
+       `verification_skipped` 也算"有结论"，而这一条要的恰恰是**跑了**。
+    ② **`fix_route == "impl"`** —— 只自动回实现层。`design` 要清空架构 +
+       重跑多模型委员会（实测 621 秒），而「理由进提示词 ≠ 模型照做」**已实测证伪**
+       （`uncovered [7,8,9]` 三轮一字未动）⇒ 自动回设计层大概率白烧。`note` 本来就不阻断。
+    ③ **没自动返工过** —— 防无限循环。⚠️ 读的是 lineage 里 `auto: True` 的条数，
+       **是"这个项目累计"，不是"本轮"**（方案原文就这么定的，为的是**不新增状态字段**）。
+       N=1 的依据：上面那次实测说明「同一件事第二次会成」**没有证据支持**。
+    ④ **开关开着** —— `QIDIAN_AUTO_REWORK=0` 一句话关掉；出事时不用改代码。
+    ⑤ 🔴 **调度循环在跑** —— **护栏，2026-09-20 用户拍板加的，本方案最大的一条风险**。
+       回 EXECUTING 只是改了个 phase，**真正派活得靠调度循环**。
+       循环没开 ⇒ 自动返工 = 把项目扔在一个**不动的地方**，
+       而且比"停在 GATE3 等人"**更糟**：人在 GATE3 至少看得见，停在 EXECUTING 看不见。
+       ⚠️ **"查不到循环在不在跑"按"没在跑"处理**（保守一侧）—— 无头/CLI 跑时
+       `_hooks` 没注册，`loop_status()` 回的就是 `running: False`，而那条路本来就没人派活。
     """
-    project.add_lineage({"action": "gate3_rejected", "feedback": feedback[:500]})
+    if os.environ.get("QIDIAN_AUTO_REWORK", "1") == "0":
+        return False, "开关关着（QIDIAN_AUTO_REWORK=0）"
+    if fix_route != "impl":
+        return False, f"路由是 {fix_route or '(空)'}，只自动回实现层"
+    if not any(i.get("type") == "verification_ran" for i in project.issues):
+        return False, "本轮验收没真跑（verification_ran 不在）—— 回执行层修不了它"
+    done = sum(1 for e in (project.lineage or [])
+               if isinstance(e, dict) and e.get("action") == "gate3_rejected" and e.get("auto"))
+    if done >= _AUTO_REWORK_MAX:
+        return False, f"已经自动返工过 {done} 次（上限 {_AUTO_REWORK_MAX}）"
+    from singularity.scheduler import _hooks
+    if not _hooks.loop_status().get("running"):
+        return False, ("调度循环没在跑 —— 回 EXECUTING 只会把项目扔在一个不动的地方"
+                       "（比停在 GATE3 更糟：那儿人至少看得见）")
+    return True, "验收跑过 · 路由 impl · 没返工过 · 开关开着 · 循环在跑"
 
-    # 读 QA 报告的 fix_route 决定路由
-    # ⚠️ **空串 = "还没有依据"，不预置 design**（2026-09-19）。原来初值是 `"design"`、
-    #    注释写着「有报告但没标路由 → 保守回架构」—— 可 **"保守"在这里指的是对代码保守，
-    #    而清空架构 + set_phase(PLANNING) 是这个系统里代价最大的动作**，
-    #    和同函数另一条「无依据时回实现层: 代价最小, 且不动架构」正好相反。
-    #    两条路都是"没依据"，凭什么挑相反的代价？现在统一：**没依据一律回实现层**。
-    # 🔵 现状够不到（`build_qa_report` 给每条 issue 都补 `fix_route`）——
-    #    但**手工写的 / 旧版留下的 `qa_report.json` 会走到**，所以这是补一个等着的地雷。
+
+def _resolve_fix_route(project: ProjectState) -> tuple[str, str, str, list]:
+    """这一步该退回哪一层 —— 读 QA 报告（观察者的 GATE3 汇总裁定优先）。
+
+    返回 `(fix_route, route_source, no_qa_reason, issues)`。
+
+    ⚠️ **本体是从 `handle_gate3_reject` 里原样搬出来的**（2026-09-20，为自动返工）。
+    搬而不是复制是硬要求：自动返工要判断"这次该不该回实现层"，
+    而它**必须和人点按钮时用同一个判据** —— 两套判据 = 同一件事写两遍、
+    改一处漏一处（本仓的老形状，见防御模式「整份覆盖写」那一族）。
+    """
     fix_route = ""
     has_qa = False
     # ⚠️ **在 try 外面先给初值**：`issues` 只在下面那个 try 里赋值，报告不存在 /
@@ -1158,6 +1200,53 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
         # ⚠️ **这个字符串别动** —— 没有报告那条路的行为"一个字都不该变"，
         # `test_gate3_rollup` 里那条回归就是钉它的。
         route_source = "default_no_qa"
+    return fix_route, route_source, no_qa_reason, issues
+
+
+def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "",
+                        auto: bool = False) -> str:
+    """GATE3 被人工打回: 按 fix_route 分级路由 (D3)。
+
+    impl   → 回 EXECUTING, **重置全部 DONE 任务**重跑
+      ⚠️ 原文这里写的是"只重做有问题的 task (依赖该 task 的下游一并重测)"，
+      **代码从来不是这么干的**（2026-09-19 外派评审 B5 抓出，逐行核过）。
+      真正做"只重做有问题的那几个"要按 QA issue → 任务匹配。**这条边已经补上了**
+      （2026-09-19：`build_qa_report` 给每条 issue 标 `task_id`，由
+      `workflow._task_of_file_map` 按各任务 trace 的 `changed_files` 现填 ——
+      **平台填，不是模型写的**）。但**边对 ≠ 该换**：那个映射是"先出现者胜"
+      （trace 里没有改动顺序），两个任务都改过同一个文件时指认可能偏，而匹配偏了的
+      失败模式是**转圈**：漏掉的那个任务没重做 → 又冲回 GATE3 → 再打回，每圈都是真金白银。
+      **全量重做贵，但它是收敛的。** ⇒ 这一支**照旧全量**，但把"精准做本会重置哪几个"
+      记进 lineage 的 `precise_reset_would_be` —— 攒够真机数据再决定换不换
+      （"只报不改"，同 `_flag_degraded_tasks` 立的规矩；数据就是那句"没有真机数据
+      不换"要的东西）。
+    design → 回 PLANNING 重新规划
+    note   → 仅记录, 不阻断交付
+    拿不到依据（无报告 / 报告读坏了 / 有报告但没标路由）→ 默认 **impl**
+      ⚠️ 原文这里写的是"默认 design (保守回规划)"，**和代码对不上**（代码 2026-09-19
+      已统一成 impl）。"保守"在那句话里指对代码保守，可 `design` 要清空架构 +
+      `set_phase(PLANNING)`，是这套系统里**代价最大**的动作 —— 两条都是"没依据"，
+      没理由挑相反的那个代价。
+    """
+    # 🔴 **自动和人工必须在账上分得开**（2026-09-20）。不改的话两者都写
+    # `action: "gate3_rejected"`，形状**一模一样** —— 查"这轮是它自己回的还是我点的"
+    # 只能靠猜，而这正是本仓反复吃亏的「声明 vs 实际」。
+    # ⚠️ **唯一的写入点就是这一句**：`run_test_fix_loop` 那边只传 `auto=True`、
+    # 自己不写 —— 两个写入点迟早会漂（一处记得带 `auto`、一处忘了）。
+    project.add_lineage({"action": "gate3_rejected", "feedback": feedback[:500],
+                         **({"auto": True} if auto else {})})
+
+    # 读 QA 报告的 fix_route 决定路由
+    # ⚠️ **空串 = "还没有依据"，不预置 design**（2026-09-19）。原来初值是 `"design"`、
+    #    注释写着「有报告但没标路由 → 保守回架构」—— 可 **"保守"在这里指的是对代码保守，
+    #    而清空架构 + set_phase(PLANNING) 是这个系统里代价最大的动作**，
+    #    和同函数另一条「无依据时回实现层: 代价最小, 且不动架构」正好相反。
+    #    两条路都是"没依据"，凭什么挑相反的代价？现在统一：**没依据一律回实现层**。
+    # 🔵 现状够不到（`build_qa_report` 给每条 issue 都补 `fix_route`）——
+    #    但**手工写的 / 旧版留下的 `qa_report.json` 会走到**，所以这是补一个等着的地雷。
+    # 路由判据**从这儿搬进了 `_resolve_fix_route`**（2026-09-20）——
+    # 自动返工要用**同一个**判据，两套判据就是同一件事写两遍。
+    fix_route, route_source, no_qa_reason, issues = _resolve_fix_route(project)
 
     if fix_route == "impl":
         # 回实现层: 重置 DONE task 为 PENDING, 让实现层重新执行
