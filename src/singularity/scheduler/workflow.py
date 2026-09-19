@@ -831,7 +831,8 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
         if verdict == _QA_VERDICT_MISSING:
             # 必须出声、必须进 issues —— 否则"QA 没产出"在人审页上跟"QA 说没问题"长得一样
             _flag_missing_qa_verdict(project)
-        qa_report = build_qa_report(passed, issues, verdict, reason)
+        qa_report = build_qa_report(passed, issues, verdict, reason,
+                                    task_of_file=_task_of_file_map(project))
         _save_phase_output(project.id, "qa_report.json",
                           json.dumps(qa_report, ensure_ascii=False, indent=2))
         qa_saved = True
@@ -878,6 +879,24 @@ def _changed_files_of(tid: str) -> set[str]:
         return {str(f).rsplit("/", 1)[-1] for f in (d.get("changed_files") or [])}
     except Exception:
         return set()
+
+
+def _task_of_file_map(project: ProjectState) -> dict[str, str]:
+    """`{文件 basename → 改过它的任务 id}` —— QA 报告的 issue 靠它标 `task_id`。
+
+    判据与 `_flag_file_overlap` **同一份**（`_changed_files_of` 读各任务 trace 里的
+    `changed_files`），不另写一份"谁改了这个文件"。
+
+    ⚠️ **先出现者胜**：两个任务都改过同一个文件时，指向 `task_ids` 里靠前的那个。
+    这里只求"能指到人"，不求"判清是谁的锅" —— 后者要改动顺序，trace 里没有。
+    🔵 **读不到就是空表**（trace 缺 / JSON 坏）：那时 issue 的 `task_id` 一律空串，
+    报告照出、不拦 —— 指认不出责任人不该让整份验收崩（同 `_flag_file_overlap` 的取舍）。
+    """
+    out: dict[str, str] = {}
+    for tid in (project.task_ids or []):
+        for f in _changed_files_of(tid):
+            out.setdefault(f, tid)
+    return out
 
 
 def _flag_file_overlap(project: ProjectState) -> None:
@@ -1023,11 +1042,16 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
     impl   → 回 EXECUTING, **重置全部 DONE 任务**重跑
       ⚠️ 原文这里写的是"只重做有问题的 task (依赖该 task 的下游一并重测)"，
       **代码从来不是这么干的**（2026-09-19 外派评审 B5 抓出，逐行核过）。
-      真正做"只重做有问题的那几个"要按 QA issue ↔ 架构 `estimated_files` ↔ 任务标题
-      做**模糊匹配**，而任务并不记录自己改过哪些文件（`_exec` 只把改动送给范围纪律表，
-      不落盘到 task）。匹配偏了的失败模式是**转圈**：漏掉的那个任务没重做 → 又冲回
-      GATE3 → 再打回，每圈都是真金白银。**全量重做贵，但它是收敛的** ——
-      没有真机数据证明匹配可靠之前，不换。
+      真正做"只重做有问题的那几个"要按 QA issue → 任务匹配。**这条边已经补上了**
+      （2026-09-19：`build_qa_report` 给每条 issue 标 `task_id`，由
+      `workflow._task_of_file_map` 按各任务 trace 的 `changed_files` 现填 ——
+      **平台填，不是模型写的**）。但**边对 ≠ 该换**：那个映射是"先出现者胜"
+      （trace 里没有改动顺序），两个任务都改过同一个文件时指认可能偏，而匹配偏了的
+      失败模式是**转圈**：漏掉的那个任务没重做 → 又冲回 GATE3 → 再打回，每圈都是真金白银。
+      **全量重做贵，但它是收敛的。** ⇒ 这一支**照旧全量**，但把"精准做本会重置哪几个"
+      记进 lineage 的 `precise_reset_would_be` —— 攒够真机数据再决定换不换
+      （"只报不改"，同 `_flag_degraded_tasks` 立的规矩；数据就是那句"没有真机数据
+      不换"要的东西）。
     design → 回 PLANNING 重新规划
     note   → 仅记录, 不阻断交付
     拿不到依据（无报告 / 报告读坏了 / 有报告但没标路由）→ 默认 **impl**
@@ -1048,6 +1072,10 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
     #    但**手工写的 / 旧版留下的 `qa_report.json` 会走到**，所以这是补一个等着的地雷。
     fix_route = ""
     has_qa = False
+    # ⚠️ **在 try 外面先给初值**：`issues` 只在下面那个 try 里赋值，报告不存在 /
+    # 解析失败时它是**未定义**的 —— 后面（impl 分支记账那一行）引用就是 NameError，
+    # 而它会把"报告坏了"这个真因盖成"函数崩了"（同上面 `qa_verdict` 那个初值）。
+    issues: list = []
     # 「报告不在了」和「报告在但读不出来」是**两件事**，决策侧原来并成一个
     # （2026-09-19 外派评审 A9）：`except Exception: has_qa = False` 一读，撕裂写的
     # 半截 JSON 就退化成 `route_source="default_no_qa"`，文案说的是"没有报告"，
@@ -1128,8 +1156,16 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "")
                 # force=True: DONE 是终态, GATE3 打回是唯一合法的 DONE→PENDING 重置
                 tracker.transition(tid, TaskStatus.PENDING, force=True)
                 reset_count += 1
+        # 🔵 **零行为变更**：把"若按 `task_id` 精准重做，本会重置哪几个"一起记进 lineage。
+        # 全量重置是**有意的**（理由见 docstring 的 impl 那段），而那句
+        # "没有真机数据证明匹配可靠之前不换"**要有数据才可能被推翻** —— 数据就是这一行。
+        # `task_id` 由 `build_qa_report` 按各任务 trace 的 `changed_files` 现填（不是模型写的）；
+        # 标不出人的 issue（文件没有任务改过 / 旧报告还没这个键）不计入。
+        _precise = sorted({str(i.get("task_id")) for i in issues
+                           if isinstance(i, dict) and i.get("task_id")})
         project.add_lineage({"action": "gate3_route", "route": "impl", "reset_tasks": reset_count,
                              "source": route_source,
+                             "precise_reset_would_be": _precise,
                              **({"no_qa": True} if no_qa_reason else {})})
         msg = f"GATE3 打回 → 回实现层修复 (重置 {reset_count} 任务, 反馈: {feedback[:80]})"
         if no_qa_reason:

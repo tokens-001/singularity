@@ -791,8 +791,18 @@ def grade_fix_route(issues: list[dict], overall_verdict: str) -> str:
     return "note"
 
 
-def build_qa_report(passed: list, issues: list, verdict: str, verdict_reason: str) -> dict:
-    """D3: 构建 QA 报告 (符合修订案 schema)。"""
+def build_qa_report(passed: list, issues: list, verdict: str, verdict_reason: str,
+                    task_of_file: dict | None = None) -> dict:
+    """D3: 构建 QA 报告 (符合修订案 schema)。
+
+    `task_of_file`: `{文件 basename → 改过它的任务 id}`，由调用方**按各任务 trace 里的
+    `changed_files` 现算**（`workflow._task_of_file_map`）。**不让模型写** ——
+    模型只能凭记忆说"这条问题像是 T3 的"，而这里要的是"这个文件**确实是谁改的**"。
+
+    查不到就留空串。**空串是有意义的**，不是缺失：它表示"报告指着一条没有任何任务
+    改过的文件" —— 那本身就是一条该看的信号（报告在说别的项目 / 文件路径写错了）。
+    """
+    _tof = task_of_file or {}
     return {
         "passed": passed,
         "issues": [{
@@ -802,6 +812,10 @@ def build_qa_report(passed: list, issues: list, verdict: str, verdict_reason: st
             "file": i.get("file", ""),
             "description": i.get("detail", i.get("description", "")),
             "suggested_fix": i.get("suggested_fix", ""),
+            # 谁改的这条文件 —— 报错的是模型，**指认责任人是平台**（同一份 `changed_files`，
+            # 与 `workflow._flag_file_overlap` 同源）。GATE3 打回时"只重做有问题的任务"
+            # 要的正是这条边（见 `workflow.handle_gate3_reject` 的 docstring）。
+            "task_id": _tof.get(str(i.get("file", "")).rsplit("/", 1)[-1], ""),
         } for idx, i in enumerate(issues)],
         "summary": {
             "total_checks": len(passed) + len(issues),
