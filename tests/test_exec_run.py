@@ -77,12 +77,26 @@ S = Scenario()
 # ── 安装桩 (打到 _exec 命名空间) ───────────────────────────
 def install_stubs():
     _tmp = Path(tempfile.mkdtemp())
-    _exec.config.CANCEL_DIR = _tmp / "cancel"
-    (_exec.config.CANCEL_DIR).mkdir(parents=True, exist_ok=True)
-    # 这个脚本是独立跑的、不走 tests/conftest.py —— `_persist_partial_usage` 会
-    # 调 `ensure_dirs()`，而 PARTIAL_USAGE_DIR 是**导入时**算好的真路径：
-    # 不指走，一跑就把生产 `.qidian/partial_usage/` 建出来（§56 同族）。
-    _exec.config.PARTIAL_USAGE_DIR = _tmp / "partial_usage"
+    # 🔴 **整个 `.qidian/` 都要指走，不是只指那几个目录**（2026-09-19 实测补的）。
+    # 这个脚本独立跑、不走 `tests/conftest.py` ⇒ conftest 那套隔离它一样也享受不到。
+    # 原来只改了 CANCEL_DIR / PARTIAL_USAGE_DIR，而 `witness.warn` 是**调用时**读
+    # `config.QIDIAN_DIR` 现算路径的 ⇒ 一跑就往**生产 `alerts.jsonl`** 里写：
+    # 实测 09-19 一共写进 **7 行** `cascade_skip:m1→m2`（m1/m2 是桩里的模型名，
+    # 后端永远不会这么叫）—— 而那个文件是**查故障用的账本**，混进测试噪声就废了
+    # （同族栽过两次：09-18 收集期写 1 行、更早整套跑写 12 行）。
+    # ⚠️ 派生目录（TRACE_DIR 等）是**导入时**算好的，所以两件事都要做：
+    # ① QIDIAN_DIR 指走（管住调用时现算的路径，如 alerts）；
+    # ② 逐个改那些常量（管住已经算好的）。
+    # 照 `tests/conftest.py` 的做法抄的 —— 那边加新常量时**这里也要加**（栽过）。
+    _exec.config.QIDIAN_DIR = _tmp
+    for _n in ("SNAPSHOT_DIR", "PATCH_DIR", "TRACE_DIR", "HOLD_DIR", "CANCEL_DIR",
+               "PAUSE_DIR", "PARKED_DIR", "PARTIAL_USAGE_DIR"):
+        setattr(_exec.config, _n, _tmp / getattr(_exec.config, _n).name)
+    _exec.config.CANCEL_DIR.mkdir(parents=True, exist_ok=True)
+    # 自检：隔离**自己**失效时当场炸，别等哪天又从 alerts.jsonl 里看出来。
+    # （删掉上面那条 `QIDIAN_DIR = _tmp` 就会红 —— 数据守卫该有的"删一行就变红"。）
+    assert Path(_exec.config.QIDIAN_DIR) != _exec.config.PROJECT_ROOT / ".qidian", \
+        "install_stubs 的 .qidian 隔离没生效 —— 这一跑会写进生产账本"
 
     _exec.witness.heartbeat = lambda *a, **k: None
     _exec._inject_memory = lambda d: ""
