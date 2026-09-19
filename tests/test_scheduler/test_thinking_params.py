@@ -309,3 +309,83 @@ def test_真_不认某个思考参数时照旧摘掉():
     assert _drop_rejected_think_param(
         body, 'HTTP 400: unknown field "thinking"') == "thinking"
     assert body == {"reasoning_effort": "low"}
+
+
+# ═══════════════════════════════════════════════════════════════
+# 「被拒过的思考参数」也要**按模型记在模块级**，不能记在实例上
+#
+# 和 `TestToolChoiceRequiredRemembered` **是同一个形状的第二处**（2026-09-20）：
+# `_exec.run()` 的 `for turn` 里每一轮 `dispatch()` 都**新建一个执行器**
+# ⇒ 记在实例上的东西，**换了个人谁也没记住** ⇒ 下一个工具轮把参数拼回来、再撞一次 400。
+#
+# ⚠️ 这一处现在是**隐性的**（生产 `request_template` 没配思考参数，这条路压根不走），
+# 所以它没有真机现场 —— 用例是照着那个形状直接钉的。
+# ⚠️ 也正因为隐性，**别把这条当成"已验"**：它钉的是"记在哪"，不是"生产上会发作"。
+# ═══════════════════════════════════════════════════════════════
+
+class TestThinkParamRejectionRemembered:
+    """判据：**学过一次之后，换轮次、换实例都不再把那个键拼回 body**。"""
+
+    @pytest.fixture(autouse=True)
+    def _清模块级记忆(self, monkeypatch):
+        """必须清：那份记忆是**进程级**的（这正是修复本身），不清用例之间会串味。"""
+        from singularity.scheduler.executors import openai_agent as oa
+        monkeypatch.setattr(oa, "_REJECTED_THINK_KEYS", {})
+
+    def _bodies(self, monkeypatch, model="m"):
+        from singularity.scheduler.executors import openai_agent as oa
+
+        monkeypatch.setenv("TEST_KEY", "k")
+        cfg = {"model": model, "api_key_env": "TEST_KEY", "entry": "http://x",
+               "max_turns": 3,
+               "request_template": {"model": model, "thinking": {"type": "disabled"}}}
+        ex = oa.OpenAIAgentExecutor(cfg, "任务", "tid", skill_tools=[], mcp_tools=[])
+
+        seen: list[dict] = []
+        ok_calls = {"n": 0}
+
+        def fake(body):
+            # 拷一份：`_drop_rejected_think_param` 是**就地删键**的，存引用记下来的是改完的
+            seen.append(dict(body))
+            if "thinking" in body:
+                raise oa._FormatError('HTTP 400: unknown field "thinking"')
+            ok_calls["n"] += 1
+            if ok_calls["n"] == 1:
+                return {"choices": [{"message": {
+                    "content": "", "tool_calls": [{"id": "c1", "type": "function",
+                                                   "function": {"name": "read_file",
+                                                                "arguments": "{}"}}]}}]}
+            return {"choices": [{"message": {"content": "收尾"}}]}
+
+        monkeypatch.setattr(ex, "_api_call", fake)
+        monkeypatch.setattr(ex, "_execute_tool", lambda name, args: "ok")
+        ex.run()
+        return seen
+
+    def test_第一轮确实带了那个参数(self, monkeypatch):
+        """先钉前提：只有在**真的撞过**那次 400 之后，下面的判据才有意义。"""
+        seen = self._bodies(monkeypatch)
+        assert "thinking" in seen[0], f"第一轮压根没带 thinking ⇒ 下面测的是空气：{seen[0]}"
+        # 撞了 400 之后**当次**就摘掉重试（`_drop_rejected_think_param` 是就地删键）
+        assert "thinking" not in seen[1], "撞了 400 之后没有摘掉重试"
+
+    def test_换了实例也不再把参数拼回来(self, monkeypatch):
+        """🔴 **真机形状**：第二个执行器（= 第二轮 dispatch）的**第一次请求**就不该带它。
+
+        变异：把 `_skip_think_keys(self._model)` 改回 `self._rejected_think_keys`
+        （实例级）→ 本条红（第二个实例又先撞一发）。
+        """
+        first = self._bodies(monkeypatch)          # 第一个实例：撞一发、学到
+        assert len(first) >= 3, f"没跑到下一轮，测不到'记没记住'：{len(first)} 次"
+        assert "thinking" not in first[2], "同一个实例的第二轮又把参数拼回来了"
+        second = self._bodies(monkeypatch)         # 第二个实例：**新对象，同一模型**
+        assert "thinking" not in second[0], (
+            "换了实例又把被拒过的参数拼回去了 —— 记忆记在实例上就等于没记"
+            "（同一个形状在 tool_choice 上已经吃过一次：一个任务白打 7 发）")
+
+    def test_不同模型各记各的(self, monkeypatch):
+        """**边界**：A 家不吃 `thinking` 不代表 B 家也不吃 —— 别把桶做成全局一个。"""
+        self._bodies(monkeypatch, model="m1")
+        other = self._bodies(monkeypatch, model="m2")
+        assert "thinking" in other[0], (
+            "m1 学到的拒绝串到 m2 头上了 —— 那就成了'一家不吃、全家不用'")

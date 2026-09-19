@@ -66,6 +66,20 @@ _XML_INVOKE_RE = re.compile(r'<invoke\s+name=["\']([^"\']+)["\']\s*>(.*?)</invok
 # 真机实测（task `1789834349419`）：一个任务里那条告警响了 **7 次**，而侧车 `dispatches` 正好也是 7 条。
 # 🔵 进程级就够了，**不落盘**：重启后多打一发换一个模型的探测，成本可以忽略（同"别为不常发生的事加持久化"）。
 _NO_REQUIRED_TOOL_CHOICE: set[str] = set()
+
+# 🔴 **同一个形状的第二处**：`_rejected_think_keys` 原来也记在实例上。
+# 理由和上面那句一字不差 —— `_exec.run()` 的 `for turn` 里每一轮 `dispatch()`
+# 都新建一个执行器 ⇒ **换了个人，摘掉的那个键名谁也没记住** ⇒ 下一个工具轮
+# 又把它拼回 body、又撞一次 400。
+#
+# ⚠️ **这一处现在还是隐性的**：生产 `request_template` 没配 thinking 参数，
+# `_apply_think_params` 那条路压根不走（`_drop_rejected_think_param` 的注释里
+# 记着同一个前提）。**哪天配了就会发作**，而发作的样子是"每轮白撞一发 400"，
+# 不是报错。同一句话就能修，所以先修掉 —— 不等它发作。
+#
+# 按模型分桶：各家支持面不一样，A 家不吃 `thinking` 不代表 B 家也不吃
+# （`_THINK_KEYS` 那几家就是这么攒出来的）。
+_REJECTED_THINK_KEYS: dict[str, set[str]] = {}
 _XML_PARAM_RE = re.compile(r'<parameter\s+name=["\']([^"\']+)["\']\s*>(.*?)</parameter>', re.S)
 
 # ── DeepSeek 的 DSML ───────────────────────────────────────────
@@ -376,6 +390,24 @@ def _apply_think_params(body: dict, tmpl: dict, skip: set | None = None) -> None
             body[k] = tmpl[k]
 
 
+def _skip_think_keys(model: str) -> set[str]:
+    """这个模型上已被 API 拒过的思考参数 —— 透传给 `_apply_think_params` 的 `skip`。
+
+    🔵 **进程级、不落盘**（同 `_NO_REQUIRED_TOOL_CHOICE`）：重启后多撞一发换一个模型的
+    探测，成本可以忽略，不值得为它加持久化。
+    """
+    return _REJECTED_THINK_KEYS.get(model) or set()
+
+
+def _remember_rejected_think_key(model: str, key: str) -> bool:
+    """记下"这个模型不吃这个参数"。**只在第一次学到时返回 True**（调用方拿它决定要不要出声）。"""
+    bucket = _REJECTED_THINK_KEYS.setdefault(model, set())
+    if key in bucket:
+        return False
+    bucket.add(key)
+    return True
+
+
 def _drop_rejected_think_param(body: dict, err: str) -> str:
     """400 里提到某个思考参数 → 从 body 摘掉并返回键名（没有则 ""）。
 
@@ -428,8 +460,10 @@ class OpenAIAgentExecutor(BaseExecutor):
         self._cwd = (Path(cwd) if cwd else config.PROJECT_ROOT).resolve()  # resolve 掉 /tmp→/private/tmp 等符号链接, 否则 write_file 的 relative_to 会炸
         self._changed_files: list[str] = []
         self._tool_events: list[dict] = []
-        # body 每轮重建，被 API 拒过的思考参数要记住，否则下一轮又加回来、又撞一次 400
-        self._rejected_think_keys: set[str] = set()
+        # body 每轮重建，被 API 拒过的思考参数要记住，否则下一轮又加回来、又撞一次 400。
+        # 🔴 **但"记住"不能记在实例上** —— 执行器每轮重建，记了等于没记（2026-09-20 真机，
+        # 同一个形状在 `tool_choice` 上已经吃过一次）。存的地方是模块级
+        # `_REJECTED_THINK_KEYS`（按模型分桶），读它调 `_skip_think_keys(self._model)`。
         # 同一件事的**另一个面**：thinking 模式不接受 `tool_choice="required"`
         # （DeepSeek 原文 `400 Thinking mode does not support this tool_choice`）。
         # 下面的降级分支原来**只改当次的 body**，而 body 每轮重建 ⇒ **每个带工具的
@@ -528,7 +562,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                 }
                 if "temperature" in tmpl:
                     body["temperature"] = tmpl["temperature"]
-                _apply_think_params(body, tmpl, self._rejected_think_keys)
+                _apply_think_params(body, tmpl, _skip_think_keys(self._model))
             else:
                 body = {
                     "model": self._model,
@@ -550,7 +584,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                     body["max_tokens"] = 8192
                 if "temperature" in tmpl:
                     body["temperature"] = tmpl["temperature"]
-                _apply_think_params(body, tmpl, self._rejected_think_keys)
+                _apply_think_params(body, tmpl, _skip_think_keys(self._model))
 
             try:
                 resp_data = self._api_call(body)
@@ -584,10 +618,12 @@ class OpenAIAgentExecutor(BaseExecutor):
                         return self._fail_result(str(e2), start, exc=e2)
                 elif (bad := _drop_rejected_think_param(body, str(e))):
                     # 该模型不吃这个思考参数（各家支持面不同且会变）→ 摘掉重试一次，
-                    # 并记住键名（body 每轮重建，不记就每轮再撞一次 400）
-                    self._rejected_think_keys.add(bad)
-                    witness.warn("oa_exec",
-                                 f"think_param_rejected:{self._model}:{bad}:{str(e)[:60]}"[:150])
+                    # 并记住键名（body 每轮重建，不记就每轮再撞一次 400）。
+                    # 🔴 **记的**是**按模型的模块级**桶，不是实例字段（理由见模块顶部那段）。
+                    # 同 `tool_choice` 那条：**只在第一次学到时出声**，否则告警被自己的重试刷屏。
+                    if _remember_rejected_think_key(self._model, bad):
+                        witness.warn("oa_exec",
+                                     f"think_param_rejected:{self._model}:{bad}:{str(e)[:60]}"[:150])
                     try:
                         resp_data = self._api_call(body)
                     except _RateLimitError:
