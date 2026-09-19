@@ -14,6 +14,7 @@
 
     .venv/bin/python scripts/delivery_facts.py 1789481895784
     .venv/bin/python scripts/delivery_facts.py --last      # 最近一个项目
+    .venv/bin/python scripts/delivery_facts.py --rounds 3  # 最近 3 轮摆一起对照
     .venv/bin/python scripts/delivery_facts.py --refs      # 孤儿 pending ref（只数不删）
 
 只读。不写任何文件、不碰状态机。
@@ -63,6 +64,43 @@ def _tasks_of(pid: str) -> list:
         if isinstance(t, dict) and t.get("project_id") == pid:
             out.append(t)
     return out
+
+
+# `projects/` 里除了项目本体，还堆着一堆**侧车**（`.qa_report.json` /
+# `.executable_tasks.json` / `.machine-checks.json`）—— 它们**不是项目**。
+# 不做这个过滤，`--rounds` 就会把渲染出来的 QA 报告当成一轮摆上桌（`--last` 早就踩过）。
+_SIDECAR_MARKS = (".qa_report", ".fusion", ".machine", ".executable")
+
+
+def _project_files() -> list:
+    d = config.QIDIAN_DIR / "projects"
+    if not d.exists():
+        return []
+    # `glob` 的顺序**跟着文件系统走**（实测同一目录两次能给出不同顺序）⇒ 这里定死按文件名。
+    # 文件名就是毫秒时间戳，所以名字序 == 时间序，调用方不用再排序。
+    return sorted((p for p in d.glob("*.json")
+                   if not any(m in p.name for m in _SIDECAR_MARKS)),
+                  key=lambda p: p.name)
+
+
+def _ledger_rows(pid: str) -> list:
+    """这一个项目的账本行（**下界**，见 §59 —— 没有行不代表没花钱）。"""
+    led = _j(config.QIDIAN_DIR / "token_usage.json")
+    daily = (led or {}).get("daily") if isinstance(led, dict) else (led or [])
+    return [r for r in (daily or [])
+            if isinstance(r, dict) and r.get("project_id") == pid]
+
+
+def _qa_verdict(pid: str) -> str:
+    """一行 QA 结论。**「没有」和「读不出来」在这儿也必须分得开**（见 ② 那段）。"""
+    p = config.QIDIAN_DIR / "projects" / f"{pid}.qa_report.json"
+    if not p.exists():
+        return "—"
+    qa = _j(p)
+    if qa is None:
+        return "⚠️坏"
+    s = _maybe_json(qa.get("summary"))
+    return s.get("verdict", "?") if isinstance(s, dict) else "?"
 
 
 def facts(pid: str) -> None:
@@ -158,9 +196,7 @@ def facts(pid: str) -> None:
     print()
 
     # ⑤ 账本 —— 花销的说法
-    led = _j(config.QIDIAN_DIR / "token_usage.json")
-    rows = [r for r in ((led or {}).get("daily") if isinstance(led, dict) else (led or []))
-            if isinstance(r, dict) and r.get("project_id") == pid]
+    rows = _ledger_rows(pid)
     print("⑤ 账本（.qidian/token_usage.json）")
     if rows:
         tot = sum(r.get("tokens", 0) or 0 for r in rows)
@@ -194,6 +230,70 @@ def facts(pid: str) -> None:
     print("\n（以上都是事实，判不判「成了」由你定。→ 来源路径都印在上面的括号里）")
 
 
+def _round_lines(proj) -> list:
+    """一轮 = 两行。第 1 行是身份，第 2 行是**固定顺序**的事实 —— 顺序固定是为了让几轮
+    叠着看时同一件东西落在同一列上（"摆在一起"要的正是这个）。"""
+    ts = _tasks_of(proj.id)
+    by_status = {}
+    for t in ts:
+        k = t.get("status", "?")
+        by_status[k] = by_status.get(k, 0) + 1
+    n_ids = len(proj.task_ids or [])
+    head = (f"  {proj.id}  {getattr(proj.phase, 'value', proj.phase):<10} "
+            f"任务 {len(ts)} 个")
+    if by_status:
+        head += "（" + " · ".join(f"{k} {v}" for k, v in sorted(by_status.items())) + "）"
+    head += f" · QA={_qa_verdict(proj.id)}"
+
+    try:
+        from singularity.scheduler._api_projects import project_integration
+        ig = project_integration(proj)
+        mg, nm = ig["merged"], ig["not_merged"]
+        files = mg["files"]
+        shown = ", ".join(files[:2]) + (f" …+{len(files) - 2}" if len(files) > 2 else "")
+        body = (f"     进仓 {len(mg['tasks'])}/{n_ids} 任务 · {mg['commits']} 提交 · "
+                f"+{mg['insertions']} 行 · 文件 {shown or '（无）'}"
+                f"   |   没进仓 {len(nm['tasks'])} 任务 · +{nm['insertions']} 行")
+    except Exception as e:
+        body = f"     ⚠️ 集成读不出来：{type(e).__name__}: {e}"
+
+    rows = _ledger_rows(proj.id)
+    tok = f"{sum(r.get('tokens', 0) or 0 for r in rows):,} tokens" if rows else "无账（下界）"
+    body += f"   |   {tok}"
+    return [head, body]
+
+
+def rounds_table(limit: int | None = None) -> None:
+    """**跨轮次对照** —— 把最近几轮摆在一起，看「这一轮比上一轮好没好」。
+
+    来历（`docs/外派评审-20260920.md` §九）：单轮的事实已经能读了，但**"摆在一起"那一下没有**
+    —— 而外派给的那个靶子（「三轮内 6/11 → 9/11，且单轮 token 下降」）要的正是这个。
+
+    🔴 **这一栏存在的唯一理由，是那把假尺子**：真机上出现过「进仓 +478 行」——看着像好消息，
+    拆开一看**全是 README / pyproject 样板**，产物一行没进树。所以每轮都印**文件名**，
+    行数**从不单独出现**。
+    """
+    pids = [p.stem for p in sorted(_project_files())]   # id 就是毫秒时间戳 ⇒ 字典序 == 时间序
+    if limit:
+        pids = pids[-limit:]
+    if not pids:
+        print("没有项目"); return
+    print(f"跨轮次对照（{len(pids)} 轮，按创建时刻，越靠下越新）")
+    print("  `进仓` = 真躺在项目仓 HEAD 树上的产物 —— **不是**「提交在不在历史里」；"
+          "行数一律连着文件名读。")
+    print()
+    for pid in pids:
+        proj = proj_mod.load(pid)
+        if proj is None:
+            print(f"  {pid}  ⚠️ project.load 返回 None（文件在但读不出来）")
+            continue
+        for line in _round_lines(proj):
+            print(line)
+    print()
+    print("  ⚠️ 「没进仓」行数是各锚相对各自父提交的合计、**含重复**（多任务改同一文件）"
+          "—— 要的是量级，不是精确值。")
+
+
 def orphan_refs_report() -> None:
     """**孤儿 pending ref** —— 只数不删（定义写在 `_api_tasks.orphan_refs` 的 docstring 里）。
 
@@ -224,11 +324,12 @@ def main() -> int:
     if args[0] == "--refs":
         orphan_refs_report()
         return 0
+    if args[0] == "--rounds":
+        limit = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
+        rounds_table(limit)
+        return 0
     if args[0] == "--last":
-        ps = sorted((config.QIDIAN_DIR / "projects").glob("*.json"),
-                    key=lambda p: p.stat().st_mtime) if (config.QIDIAN_DIR / "projects").exists() else []
-        cands = [p for p in ps if ".qa_report" not in p.name and ".fusion" not in p.name
-                 and ".machine" not in p.name and ".executable" not in p.name]
+        cands = sorted(_project_files(), key=lambda p: p.stat().st_mtime)
         if not cands:
             print("没有项目"); return 1
         pid = cands[-1].stem

@@ -98,25 +98,92 @@ def make_scene(tmp: Path, *, qa_report="ok", junk=False):
     return repo
 
 
-def run_facts(tmp: Path) -> str:
-    """把现场指到临时目录，跑一遍 facts()，收回 stdout。
+def _with_qd(tmp: Path, fn):
+    """把现场指到临时目录，跑 `fn()`，原样返回它的结果。
 
     ⚠️ **只用内存 patch**，不调 `project.set_projects_root` —— 那个会写
     `settings.json`（`_settings_path` 就是 `config.QIDIAN_DIR/settings.json`）。
     虽然这里 QIDIAN_DIR 已经先指到 temp 了，但少一次持久化就少一个"跑测试把生产改了"的机会
     （本仓栽过，见 §56 同族）。
+
+    🔵 `--rounds` 那节也要用同一份 patch —— **两份 patch 就是两个"还原顺序写反"的机会**，
+    而那正是下面 `_PROD_SETTINGS` 那个守卫在防的事，所以合并成一个。
     """
     old_qd, old_repo_dir = config.QIDIAN_DIR, proj_mod.repo_dir
     config.QIDIAN_DIR = tmp / ".qidian"
     proj_mod.repo_dir = lambda pid: tmp / "项目仓库" / "演示项目"
-    buf = io.StringIO()
     try:
-        with redirect_stdout(buf):
-            df.facts("P1")
+        return fn()
     finally:
         config.QIDIAN_DIR = old_qd
         proj_mod.repo_dir = old_repo_dir
+
+
+def run_facts(tmp: Path) -> str:
+    """跑一遍 `facts()`，收回 stdout。"""
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        _with_qd(tmp, lambda: df.facts("P1"))
     return buf.getvalue()
+
+
+def run_rounds(tmp: Path) -> str:
+    """跑一遍 `rounds_table()`，收回 stdout。"""
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        _with_qd(tmp, df.rounds_table)
+    return buf.getvalue()
+
+
+def make_rounds_scene(tmp: Path) -> None:
+    """两轮 + 三个侧车。**照抄 2026-09-20 真机那个形状**：
+
+      轮 1001 —— 进仓的那个提交**只动了 README.md**（样板），真产物 `jsonlstat/stats.py`
+                  挂在 `refs/qidian/pending/2002` 上没进仓；
+      轮 1002 —— 一个都没进仓，**没有产物文件**。
+
+    这个形状就是「进仓 +N 行」那把假尺子的案发现场：数字看着像好消息，拆开全是样板。
+    """
+    qd = tmp / ".qidian"
+    (qd / "tasks").mkdir(parents=True, exist_ok=True)
+    (qd / "projects").mkdir(parents=True, exist_ok=True)
+    repo = tmp / "项目仓库" / "演示项目"
+    repo.mkdir(parents=True, exist_ok=True)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@t"); _git(repo, "config", "user.name", "t")
+    (repo / "README.md").write_text("hello\n", encoding="utf-8")
+    _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "init")
+
+    # 2001：标题是 `_AGENT_COMMIT` 认的那个格式（`agent changes in <数字>_`），但内容是样板
+    (repo / "README.md").write_text("hello\nworld\n" * 20, encoding="utf-8")
+    _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "agent changes in 2001_any")
+
+    # 2002：真产物 —— 提交完锚在 pending ref 上（`_anchor_ref` 干的事），没合并
+    (repo / "jsonlstat").mkdir(exist_ok=True)
+    (repo / "jsonlstat" / "stats.py").write_text("def stats():\n    return 1\n" * 10, encoding="utf-8")
+    _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "wip 2002")
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                         capture_output=True, text=True).stdout.strip()
+    _git(repo, "update-ref", "refs/qidian/pending/2002", sha)
+
+    for pid, name, tids, phase in (("1001", "第一轮", [2001, 2002], "gate2"),
+                                   ("1002", "第二轮", [2003], "executing")):
+        json.dump({"id": pid, "name": name, "phase": phase, "auto_mode": False,
+                   "task_ids": tids, "description": name},
+                  open(qd / "projects" / f"{pid}.json", "w", encoding="utf-8"),
+                  ensure_ascii=False)
+    json.dump({"id": "2001", "project_id": "1001", "status": "done", "description": "任务一"},
+              open(qd / "tasks" / "2001.json", "w", encoding="utf-8"), ensure_ascii=False)
+    json.dump({"id": "2003", "project_id": "1002", "status": "failed", "description": "任务三"},
+              open(qd / "tasks" / "2003.json", "w", encoding="utf-8"), ensure_ascii=False)
+
+    json.dump({"summary": json.dumps({"total_checks": 5, "passed": 0, "failed": 5,
+                                      "verdict": "no_go"}), "issues": "[]"},
+              open(qd / "projects" / "1001.qa_report.json", "w", encoding="utf-8"))
+    # 侧车三件套：**没有一件是项目**，一件都不许被当成一轮摆上桌
+    json.dump({}, open(qd / "projects" / "1001.executable_tasks.json", "w", encoding="utf-8"))
+    json.dump({}, open(qd / "projects" / "1001.machine-checks.json", "w", encoding="utf-8"))
+    (qd / "projects" / "1002.qa_report.json").write_text("{坏掉的 json", encoding="utf-8")
 
 
 # 🔴 **守卫**：这个脚本曾经把生产的 `projects_root` 覆盖掉过（2026-09-16 晚）。
@@ -184,6 +251,51 @@ if __name__ == "__main__":
     finally:
         for d in (tmp, tmp2, tmp3, tmp4, tmp5):
             shutil.rmtree(d, ignore_errors=True)
+
+    print("── ④ 跨轮次对照：几轮要摆得在一起，且「行数」必须连着「文件名」 ──")
+    t6 = Path(tempfile.mkdtemp())
+    make_rounds_scene(t6)
+    try:
+        out_r = run_rounds(t6)
+        # ⚠️ 别用 `"进仓" in l` —— **表头那句解释里也有「进仓」**，会把表头当成一轮。
+        # 只认正文那些行（正文行是缩进后**以「进仓」开头**的）。
+        rows = [l for l in out_r.splitlines() if l.strip().startswith("进仓")]
+
+        # ⚠️ 这条钉的是「每一轮都印出了集成那一行」，**不是**「屏幕上有几轮」——
+        # 侧车冒充轮次时它照样是绿的（`load` 返 None，那一类压根不印「进仓」行）。
+        # 管"轮数"的是下面那条「名字一个都不许出现」。
+        check("每一轮都印出了「进仓」那一行", len(rows) == 2, f"拿到 {len(rows)} 行：\n{out_r}")
+        check("侧车没被摆上桌 —— 名字一个都不许出现在输出里",
+              not any(s in out_r for s in (".qa_report", ".executable_tasks",
+                                           ".machine-checks")),
+              f"这些名字冒出来了：\n{out_r}")
+        check("越新越靠下（顺序 = 时间）",
+              out_r.index("1001") < out_r.index("1002"), out_r)
+
+        # 🔴 **这条是这个脚本存在的理由**：真机上「进仓 +478 行」看着像好消息，
+        # 拆开全是 README / pyproject 样板、产物一行没进树。所以行数**不许单独出现**。
+        check("进仓那行把文件名印出来了（数字不许单独出现）",
+              "README.md" in rows[0], f"第一轮那行是：{rows[0]}")
+        check("进仓数字对得上（1/2 任务）", "进仓 1/2 任务" in rows[0], rows[0])
+        check("「文件」栏只列进仓的，不许混进没进仓的产物",
+              "jsonlstat" not in rows[0], rows[0])
+        check("没进仓那半边也在同一行", "没进仓 1 任务" in rows[0], rows[0])
+
+        check("一个都没进仓时印「（无）」，不是留空", "文件 （无）" in rows[1], rows[1])
+        check("第二轮进仓 0/1", "进仓 0/1 任务" in rows[1], rows[1])
+
+        # 侧车（`.qa_report` / `.executable_tasks` / `.machine-checks`）**一件都不是项目**
+        stems = _with_qd(t6, lambda: [p.stem for p in df._project_files()])
+        check("侧车三件套一个都没被当成轮次",
+              stems == ["1001", "1002"], f"拿到 {stems}")
+
+        # `_qa_verdict` 是本轮新增的：**「没有」和「读不出来」在这儿也得分开**
+        check("QA：没有 ⇒「—」", _with_qd(t6, lambda: df._qa_verdict("9999")) == "—")
+        check("QA：文件坏了 ⇒「⚠️坏」且**不是**「—」",
+              _with_qd(t6, lambda: df._qa_verdict("1002")) == "⚠️坏",
+              "坏文件被当成了「没跑过」—— 这正是要防的那个形状")
+    finally:
+        shutil.rmtree(t6, ignore_errors=True)
 
     print("── 守卫：生产 settings.json 一个字都没动 ──")
     check("生产 settings.json 指纹不变",
