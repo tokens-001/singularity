@@ -1557,6 +1557,7 @@ def _apply_baseline(findings, path: Path) -> int:
     old = json.loads(path.read_text(encoding="utf-8"))
     old_map = {e["key"]: e["message"] for e in old["findings"]}
     cur_map = {_finding_key(f): f.message for f in findings}
+    judged = sum(1 for e in old["findings"] if (e.get("verdict") or "").strip())
 
     new = sorted(set(cur_map) - set(old_map))
     changed = sorted(k for k in (set(cur_map) & set(old_map)) if cur_map[k] != old_map[k])
@@ -1575,15 +1576,37 @@ def _apply_baseline(findings, path: Path) -> int:
         print(f"\n合计 {len(new)} 新增 / {len(changed)} 内容变了 / 基线 {len(old_map)} 条。"
               f"\n确认无误后更新基线: {Path(__file__).name} shapes --write-baseline {path}")
         return 1
-    print(f"✅ 相对基线无新增（基线 {len(old_map)} 条，命中 {len(findings)} 条）")
+    # ⚠️ 把"判过几条"一并报出来：基线存在的意义是「这些已经有人判过了」，
+    # 而不是「这些被静音了」。判过 0 条 = 这扇门在替一堆没人看过的命中背书。
+    print(f"✅ 相对基线无新增（基线 {len(old_map)} 条，命中 {len(findings)} 条，"
+          f"其中 {judged} 条有人判过）")
+    if judged < len(old_map):
+        print(f"   🔵 还有 {len(old_map) - judged} 条没人判 —— 每条都该有人判，"
+              f"在 {path} 的对应 `verdict` 里写结论")
     return 0
 
 
 def _write_baseline(findings, path: Path) -> int:
-    payload = {"note": "已知命中基线 —— 只有新增/内容变了的才让门变红。人看过后手动更新。",
-               "findings": [{"key": _finding_key(f), "message": f.message} for f in findings]}
+    """写基线。**已有的 `verdict` 会按 key 带过来** —— 那是人判过的结论，不能丢。
+
+    工具自己的边界是「命中不代表是 bug，每条都要人判」；判完的结论如果只活在
+    某个人的脑子里，下一个人（或下一轮的我）会把同一件事**重新查一遍** ——
+    `docs/防御模式.md` §86.5 那条「格式对、内容旧比缺失更坏」的同族。
+    """
+    old = {}
+    try:
+        old = {e["key"]: e.get("verdict", "") for e in json.loads(
+            path.read_text(encoding="utf-8")).get("findings", [])}
+    except Exception:
+        old = {}                       # 第一次写 / 文件坏了 —— 没得带，不是错
+    payload = {
+        "note": "已知命中基线 —— 只有新增/内容变了的才让门变红。人看过后手动更新。",
+        "verdict": "每条都该有人判过：'verdict' 写结论 + 依据（空 = 还没人判，等于欠一笔账）。",
+        "findings": [{"key": _finding_key(f), "message": f.message,
+                      "verdict": old.get(_finding_key(f), "")} for f in findings]}
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"已写入基线 {len(findings)} 条 -> {path}")
+    print(f"已写入基线 {len(findings)} 条 -> {path}"
+          f"（带过来 {sum(1 for e in payload['findings'] if e['verdict'])} 条已判结论）")
     return 0
 
 

@@ -32,7 +32,12 @@
 
 ### 验证
 
-- **`make check`**（= `lint` + `test-fast`，退出码 0 = 全绿）—— **本地判据，和 CI 同一条 lint 命令**。
+- **`make check`**（= `lint` + `test-fast` + `audit-fast`，退出码 0 = 全绿）——
+  **本地判据，和 CI 同一条 lint 命令**。
+  ⚠️ 2026-09-20 加了 `audit-fast`（审计脚本的自测 + `preflight` 形状棘轮）。
+  **`make audit`（全量）比 `make check` 多一条 `audit-preflight`** —— 那条要
+  `git archive` 5 个历史 rev 整棵重扫（~100s），**只在 CI 跑**，
+  刻意不放进日常那条（2 分钟的完成判据没人会跑）。**但它仍然是门，只是不在本机那条路上。**
   ⚠️ 2026-09-19 才修好：它原来调裸 `python3`/`ruff`，而系统 python3 没装 singularity、
   `ruff` 只在 `.venv/bin/` ⇒ **这条"完成判据"从来跑不起来**（审计见 `docs/CI与发布审计-20260919.md`）。
 - `pytest tests/test_scheduler/ -q`（**~48s**，1670 条；全量 `pytest tests/` **1677 条**）

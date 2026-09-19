@@ -1,4 +1,4 @@
-.PHONY: install test lint typecheck build-frontend clean run audit audit-selftest audit-shapes
+.PHONY: install test lint typecheck build-frontend clean run audit audit-fast audit-selftest audit-shapes audit-preflight
 
 # 🔴 **必须优先用仓库自己的 venv**（2026-09-19 修）。
 # 原来这里全是裸 `python3` / `ruff` —— 而系统的 python3 是 homebrew 的，
@@ -45,9 +45,18 @@ build-frontend:
 #    但 CI 0 次命中、Makefile 0 次命中 —— **工具写了、自测写了，没人跑** ⇒
 #    改坏了不会红，跟没写一样（`docs/外派评审-20260920.md` 第三节排序的第 0 步）。
 audit-selftest:
-	$(PY) scripts/test_preflight.py
 	$(PY) scripts/test_delivery_facts.py
 	$(PY) scripts/test_dispatch.py
+
+# ⚠️ **preflight 的自测单独一个靶子，因为它慢一个数量级**（实测 ~100s vs 其余 ~1s）：
+#    它的成绩单是拿 `git archive` 把 **5 个历史 rev** 各取一棵树出来整棵重扫
+#    —— 那是刻意的（"用已确认的历史现场当成绩单"），不能为了快把它砍掉，
+#    但**不能让日常那条 2 分钟**。
+# ⇒ 分工：`make check`（本地完成判据，要天天跑）只带快的那半；
+#    **慢的这半进 CI 那个 `audit` job**（CI 没人等）—— **它仍然是门，只是不在本机那条路上**。
+#    ⚠️ 别因为"本地不跑"就把它从 CI 里也拿掉：那就退回"工具写了没人跑"。
+audit-preflight:
+	$(PY) scripts/test_preflight.py
 
 # 静态形状扫的**棘轮**：只有新出现的形状才红。
 # ⚠️ 别改成裸 `preflight.py shapes` —— 它对已知的 4 条也返回 1，是**恒红**，
@@ -55,10 +64,15 @@ audit-selftest:
 audit-shapes:
 	$(PY) scripts/preflight.py shapes --baseline scripts/preflight-baseline.json
 
-audit: audit-selftest audit-shapes
+# 日常那条：快。
+audit-fast: audit-shapes audit-selftest
+	@echo "✅ audit-fast passed"
+
+# 全量（CI 用 / 手动跑）。`make check` **不带这一条**，理由见 `audit-preflight`。
+audit: audit-fast audit-preflight
 	@echo "✅ audit passed"
 
-check: lint test-fast audit
+check: lint test-fast audit-fast
 	@echo "✅ all checks passed"
 
 clean:

@@ -252,6 +252,33 @@ def case_baseline():
         rc, out = run(entries + [{"key": "X-yyy | nowhere.py | gone", "message": "早修好了"}])
         check("基线里多一条、实际没有 ⇒ 仍绿（修好了不罚）", rc == 0, f"rc={rc}")
         check("但提示可以收窄", "现在没了" in out, out[-200:])
+
+        # ── `verdict`（人判过的结论）不许在重写基线时被冲掉 ──
+        #
+        # 🔴 这条是**给「命中不代表是 bug，每条都要人判」那句话兜底的**：
+        # 判完的结论只活在脑子里的话，下一轮会把同一件事重查一遍
+        # （2026-09-20 我自己就把 4 条基线逐条重核了一遍，才发现它们全是有意为之）。
+        # 变异：`_write_baseline` 里 `"verdict": old.get(...)` 改成 `""` ⇒ 红。
+        judged = [dict(e, verdict="人判过：不是 bug") for e in entries]
+        bl = tmp / "judged.json"
+        bl.write_text(json.dumps({"findings": judged}, ensure_ascii=False), encoding="utf-8")
+        subprocess.run([sys.executable, str(TOOL), "shapes", "--write-baseline", str(bl)],
+                       cwd=REPO, capture_output=True, text=True)
+        kept = json.loads(bl.read_text(encoding="utf-8"))["findings"]
+        check("重写基线时 verdict 要带过来", all(e.get("verdict") for e in kept),
+              f"被冲掉了：{[e.get('verdict') for e in kept]}")
+
+        subprocess.run([sys.executable, str(TOOL), "shapes", "--write-baseline", str(bl)],
+                       cwd=REPO, capture_output=True, text=True)   # 再写一次（幂等）
+        again = json.loads(bl.read_text(encoding="utf-8"))["findings"]
+        check("再写一次还带得回来（幂等）", all(e.get("verdict") for e in again))
+
+        blank = [dict(e, verdict="") for e in entries]
+        bl.write_text(json.dumps({"findings": blank}, ensure_ascii=False), encoding="utf-8")
+        r = subprocess.run([sys.executable, str(TOOL), "shapes", "--baseline", str(bl)],
+                           cwd=REPO, capture_output=True, text=True)
+        check("有人没判过 ⇒ 出声提醒（绿但要说）", r.returncode == 0 and "没人判" in r.stdout,
+              f"rc={r.returncode}：{r.stdout[-200:]}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

@@ -65,7 +65,12 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
-      # 和 Makefile 的 `audit` **同两条命令**，别在这儿另写一套判据。
+      # 和 Makefile 的 `make audit` **同一组命令**，别在这儿另写一套判据。
+      #
+      # ⚠️ **`test_preflight.py` 这条本地不在 `make check` 里**（它要 `git archive`
+      #    5 个历史 rev 整棵重扫，实测 ~100s，而其余三条加起来 ~1s）——
+      #    日常那条不能被拖到 2 分钟，否则没人跑。**但它仍然是门，就设在 CI 这一条上**：
+      #    本地图快、CI 求全。别因为"本地不跑"顺手把它从这儿也删掉。
       - run: python scripts/test_preflight.py
       - run: python scripts/test_delivery_facts.py
       - run: python scripts/test_dispatch.py

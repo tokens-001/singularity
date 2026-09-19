@@ -1,21 +1,26 @@
 {
   "note": "已知命中基线 —— 只有新增/内容变了的才让门变红。人看过后手动更新。",
+  "verdict": "每条都该有人判过：'verdict' 写结论 + 依据（空 = 还没人判，等于欠一笔账）。",
   "findings": [
     {
       "key": "B1-denylist-family-divergence | src/singularity/scheduler/_sensitive.py | BLOCKED_COMMANDS, BLOCKED_PATH_PATTERNS",
-      "message": "与 src/singularity/web/app.py（_SENSITIVE_FILES, _SENSITIVE_SUFFIXES）是同一族名单（两侧都是文件模式的共享条目: [('*.key', '.key'), ('*.p12', '.p12'), ('*.pem', '.pem'), ('*.pfx', '.pfx')]），但条目已经不一致。"
+      "message": "与 src/singularity/web/app.py（_SENSITIVE_FILES, _SENSITIVE_SUFFIXES）是同一族名单（两侧都是文件模式的共享条目: [('*.key', '.key'), ('*.p12', '.p12'), ('*.pem', '.pem'), ('*.pfx', '.pfx')]），但条目已经不一致。",
+      "verdict": "**有意差异，不是漂**（2026-09-20 逐条核过）。两张表治**不同的威胁面**：`_sensitive.py` 拦的是**模型 read_file 工具**（所以必须挡 `.qidian/`/`.git/`/`.ssh/`），`web/app.py:_SENSITIVE_FILES` 拦的是**界面经 HTTP 读文件内容**（所以挡显示、不挡仓库内部路径）。唯一真正的分歧是 `.crt`：`_sensitive.py` 那边**有意不拦**并写了理由（证书是公开材料，拦它会把「加 HTTPS / 配 mTLS」这类任务的显式读写弄瘸），app.py 那边**有意拦**（界面显示保守一点没坏处）。⇒ 两边各自都对。真要收成一份，先定「威胁面不同要不要共用一张表」——那是决定，不是 bug 修。"
     },
     {
       "key": "B2a-dead-word | src/singularity/scheduler/_task_runner.py | finalize.TaskRunner",
-      "message": "字面量 'escalation_exhausted' 按匹配语义（in）对全仓任何产出值都永不命中 —— 消费侧在等一个不会再来的词（同通道的现役词是 'no_escalation_path (level='）。"
+      "message": "字面量 'escalation_exhausted' 按匹配语义（in）对全仓任何产出值都永不命中 —— 消费侧在等一个不会再来的词（同通道的现役词是 'no_escalation_path (level='）。",
+      "verdict": "**误报，消费侧没死**（2026-09-20 逐条核过）。工具只看了**一个**字面量，而这两个消费点写的都是 `\"新词\" in x or \"旧词\" in x` —— 旧词确实没有写者（改名留的，注释里写了「两个词都收：新词现役，旧词只在历史 trace / 旧数据里出现」），**新词是活的** ⇒ 分支照常触发。"
     },
     {
       "key": "B2a-dead-word | src/singularity/scheduler/executors/openai_agent.py | _tests_green.OpenAIAgentExecutor",
-      "message": "字面量 'exit=0' 按匹配语义（in）对全仓任何产出值都永不命中 —— 消费侧在等一个不会再来的词（同通道的现役词是 'exit_code'）。"
+      "message": "字面量 'exit=0' 按匹配语义（in）对全仓任何产出值都永不命中 —— 消费侧在等一个不会再来的词（同通道的现役词是 'exit_code'）。",
+      "verdict": "**误报，消费侧没死**（2026-09-20 逐条核过）。工具只看了**一个**字面量，而这两个消费点写的都是 `\"新词\" in x or \"旧词\" in x` —— 旧词确实没有写者（改名留的，注释里写了「两个词都收：新词现役，旧词只在历史 trace / 旧数据里出现」），**新词是活的** ⇒ 分支照常触发。"
     },
     {
       "key": "B3-duplicated-wrapper | src/singularity/scheduler/snapshot.py | _current_head / _is_git_repo",
-      "message": "同一件事的两份实现（归一化相似度 0.53）——subprocess 实参差：（kwarg 无差，见证据里的常量/调用差）"
+      "message": "同一件事的两份实现（归一化相似度 0.53）——subprocess 实参差：（kwarg 无差，见证据里的常量/调用差）",
+      "verdict": "**真重复，但改不改是取舍不是 bug**（2026-09-20 看过）。`snapshot.py` 的 `_current_head` / `_is_git_repo` 各包一层 `subprocess.run`，实参确实一样。合成一个 helper 省几行，但它俩的**失败语义不同**（一个要空串、一个要布尔），合并之后得在调用点再分叉 —— 省下的行数还不如加回去的多。留着重扫；哪天真要动，先看有没有第三个同形状的。"
     }
   ]
 }
