@@ -251,9 +251,18 @@ def _round_lines(proj) -> list:
         mg, nm = ig["merged"], ig["not_merged"]
         files = mg["files"]
         shown = ", ".join(files[:2]) + (f" …+{len(files) - 2}" if len(files) > 2 else "")
+        # 🔴 **两栏会重叠**，而且屏幕上看着像 `2 + 7 = 9` 的干净划分 —— **2026-09-20 实测抓到**：
+        # 真机任务 `1789836336312` 前一次尝试只交了 `pyproject.toml +36`（**这笔进了 HEAD**），
+        # 一小时后的那次交了 `jsonlstat/*.py` 八个文件 `+1217 行`（**锚在 ref 上没进仓**）
+        # ⇒ 同一个任务两栏都在。**重叠是正常的**（`169081e` 起"被取代"不再提前松锚），
+        # 但**读者把两栏相加 = 假的全覆盖**（同族：计数判据掩盖缺口）。
+        # 所以这个数**每轮都印**（哪怕是 0）—— 有条件的字段会破坏"几轮叠着看对齐"这件事。
+        both = sorted(set(mg["tasks"]) & set(nm["tasks"]))
         body = (f"     进仓 {len(mg['tasks'])}/{n_ids} 任务 · {mg['commits']} 提交 · "
                 f"+{mg['insertions']} 行 · 文件 {shown or '（无）'}"
-                f"   |   没进仓 {len(nm['tasks'])} 任务 · +{nm['insertions']} 行")
+                f"   |   没进仓 {len(nm['tasks'])} 任务 · +{nm['insertions']} 行"
+                f" · 两栏都在 {len(both)} 个"
+                + (f"（{', '.join(both)}）" if both else ""))
     except Exception as e:
         body = f"     ⚠️ 集成读不出来：{type(e).__name__}: {e}"
 

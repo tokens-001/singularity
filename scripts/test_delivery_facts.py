@@ -158,7 +158,13 @@ def make_rounds_scene(tmp: Path) -> None:
     (repo / "README.md").write_text("hello\nworld\n" * 20, encoding="utf-8")
     _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "agent changes in 2001_any")
 
-    # 2002：真产物 —— 提交完锚在 pending ref 上（`_anchor_ref` 干的事），没合并
+    # 2002 —— **两栏都在**那个形状（2026-09-20 真机任务 `1789836336312` 的实况）：
+    # 先一笔样板进 HEAD，**一小时后又交了真产物、锚在 ref 上没进仓**。
+    # 真机那个是 `pyproject.toml +36` 进仓 / `jsonlstat/*.py +1217` 留在锚上。
+    (repo / "pyproject.toml").write_text("[project]\nname='x'\n" * 5, encoding="utf-8")
+    _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "agent changes in 2002_any")
+
+    # 2002 的真产物 —— 提交完锚在 pending ref 上（`_anchor_ref` 干的事），没合并
     (repo / "jsonlstat").mkdir(exist_ok=True)
     (repo / "jsonlstat" / "stats.py").write_text("def stats():\n    return 1\n" * 10, encoding="utf-8")
     _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "wip 2002")
@@ -276,10 +282,17 @@ if __name__ == "__main__":
         # 拆开全是 README / pyproject 样板、产物一行没进树。所以行数**不许单独出现**。
         check("进仓那行把文件名印出来了（数字不许单独出现）",
               "README.md" in rows[0], f"第一轮那行是：{rows[0]}")
-        check("进仓数字对得上（1/2 任务）", "进仓 1/2 任务" in rows[0], rows[0])
+        check("进仓数字对得上（2/2 任务）", "进仓 2/2 任务" in rows[0], rows[0])
         check("「文件」栏只列进仓的，不许混进没进仓的产物",
               "jsonlstat" not in rows[0], rows[0])
         check("没进仓那半边也在同一行", "没进仓 1 任务" in rows[0], rows[0])
+
+        # 🔴 **两栏的重叠必须印出来**：真机上 `…312` 两栏都在，而屏幕上看着像 `2 + 7 = 9`
+        # 的干净划分 —— 读者一相加就得到一个**假的全覆盖**（计数判据掩盖缺口同族）。
+        check("两栏重叠的个数和任务号都印出来了",
+              "两栏都在 1 个（2002）" in rows[0], rows[0])
+        check("没有重叠时也印（哪怕是 0）—— 有条件的字段会让几轮对不齐",
+              "两栏都在 0 个" in rows[1], rows[1])
 
         check("一个都没进仓时印「（无）」，不是留空", "文件 （无）" in rows[1], rows[1])
         check("第二轮进仓 0/1", "进仓 0/1 任务" in rows[1], rows[1])
