@@ -45,11 +45,20 @@ def _persist_alert(alert: dict) -> None:
     `logging` 那条第二通道 —— 见它的实现）。套一层只会让"这条落盘路断了"更难看出来。
     """
     tid = alert.get("task_id") or ""
-    witness.warn(
-        "observer",
-        f"{alert.get('kind', '?')}: {alert.get('message', '')}"
-        f"{(' task=' + str(tid)) if tid else ''}"[:400],
-        key=f"observer_{alert.get('kind', 'alert')}")
+    # 🔴 **为什么 + 怎么办一起落**（2026-09-19）。这条落盘路是异常告警**唯一**
+    #    真有人读的出口（告警页按 key 聚合读的就是它）—— 只写事实等于把排查原样
+    #    退还给读的人。`why` / `todo` 由 `_check_anomalies` 给。
+    # ⚠️ 顺序固定：事实 → 为什么 → 怎么办。`witness.warn` 内部截到 500 字符，
+    #    真要截也该先丢"为什么"，所以**别把 why 放到 todo 后面**。
+    bits = [f"{alert.get('kind', '?')}: {alert.get('message', '')}"]
+    if alert.get("why"):
+        bits.append(f"为什么：{alert['why']}")
+    if alert.get("todo"):
+        bits.append(f"怎么办：{alert['todo']}")
+    if tid:
+        bits.append(f"task={tid}")
+    witness.warn("observer", " ｜ ".join(bits)[:500],
+                 key=f"observer_{alert.get('kind', 'alert')}")
 
 
 def _broadcast_via_bridge(alert: dict) -> None:
@@ -232,15 +241,15 @@ def _observer_worker() -> None:
                 #    ⇒ **"出声了但没人听"和"根本没出声"分不开**，
                 #    而落盘是唯一分得开的手段。
                 _persist_alert(alert)
-                # ② **再走真正连着界面的那条通道**（`bridge.broadcast_observer`）。
-                #    原来走 `_pending_replies` —— 而那个字典**几乎永远是空的**：
-                #    唯一正经的注册入口 `register_client` **全仓零调用者**，
-                #    唯一写入点是**聊天路径**（有人问问题的那一刻才写），
-                #    `unregister_client` 同样零调用者。
-                #    ⇒ 没人聊天时，告警**广播给一个空字典、无声消失**。
-                #    ⚠️ **桥里早就有能用的** `broadcast_observer`（走 Observer Server、
-                #    带频道、还返回"发给了几个客户端"）—— `app.py` 的调度事件就在用它，
-                #    偏偏这里没走。（"出声了但没人听"——同 §16 那个病。）
+                # ② 再走 `bridge.broadcast_observer`。
+                #    ⚠️ **2026-09-19 更正：这条不是"连着界面的那条通道"。**
+                #    这里原来写的是「再走**真正连着界面的**那条通道（`broadcast_observer`）」，
+                #    而**本文件上面那段注释自己就写着**：前端对
+                #    `bridge.broadcast_observer` **压根没有监听者**（grep 零命中）——
+                #    当时代码里 `observer_alert` 全仓也没有消费者，实测确认。
+                #    ⇒ 真正通到界面的是 ①（落盘 → 告警页按 key 聚合读 `alerts.jsonl`）。
+                #    保留 ② 是因为它无害且将来接上监听者就能用，**但别再把它当出口依据** ——
+                #    "以为发出去有人听"正是 §77.5 / §16 那个病。
                 _broadcast_via_bridge(alert)
                 # ③ 聊天路径注册的老通道**保留**：有人正卡在一个没答完的问题上时，
                 #    它确实能把告警送到那个正在等的客户端手里。
