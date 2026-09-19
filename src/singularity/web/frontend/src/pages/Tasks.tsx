@@ -14,6 +14,9 @@ const STATUS_COLOR: Record<string,string> = { pending:'#9a9993', running:'#2563e
 export default function Tasks() {
   const [tasks, setTasks] = useState<Task[]>([])
   const [projectNames, setProjectNames] = useState<Record<string,string>>({})
+  // 每个项目**当前批次**的任务 id（= `project.task_ids`）。
+  // 挂在这个项目下、却不在这里面的任务 = 重规划后没清掉的**上一批**。
+  const [projectTaskIds, setProjectTaskIds] = useState<Record<string, Set<string>>>({})
   const [showCreate, setShowCreate] = useState(false)
   const [desc, setDesc] = useState('')
   const [search, setSearch] = useState('')
@@ -35,8 +38,13 @@ export default function Tasks() {
       .finally(() => { if (initial) setLoading(false) })
     api.projects().then((ps: any[]) => {
       const m: Record<string,string> = {}
-      ps.forEach((p: any) => { if (p.id) m[p.id] = p.name || p.id })
-      setProjectNames(m)
+      const ids: Record<string, Set<string>> = {}
+      ps.forEach((p: any) => {
+        if (!p.id) return
+        m[p.id] = p.name || p.id
+        ids[p.id] = new Set<string>(p.task_ids || [])
+      })
+      setProjectNames(m); setProjectTaskIds(ids)
     }).catch(() => {})
     api.dagMetrics().then(setDag).catch(() => {})   // 图结构指标，拿不到就不显示
   }, [])
@@ -63,13 +71,22 @@ export default function Tasks() {
   })
 
   const projKey = (t: Task) => (t.project_id ? (projectNames[t.project_id] || t.project_id) : '')
+  // 上一批：挂在某项目下、但不在它的 `task_ids` 里。
+  // ⚠️ **必须要求"这个项目的 task_ids 拿得到且非空"** —— 项目列表还没拉回来、
+  // 或者项目已被删（`task_ids` 为空集）时拿空集去判，会把整个项目的任务全标成"上一轮"。
+  const isPrevBatch = (t: Task) =>
+    !!t.project_id && !!projectTaskIds[t.project_id]?.size && !projectTaskIds[t.project_id].has(t.id)
+  const prevCount = tasks.filter(t =>
+    (!projectFilter || t.project_id === projectFilter) && isPrevBatch(t)).length
   const list = tasks
     .filter(t =>
       (!projectFilter || t.project_id === projectFilter) &&
       (!search || t.description.toLowerCase().includes(search.toLowerCase())))
-    // 同项目的聚在一起（独立任务垫底），省得"这条是谁的"要逐条看标签
+    // 同项目的聚在一起（独立任务垫底），省得"这条是谁的"要逐条看标签；
+    // **项目内当前批次在前、上一轮垫底** —— 不然按 created_at 排，旧的那批反而在上面。
     .sort((a, b) => (a.project_id ? 0 : 1) - (b.project_id ? 0 : 1)
       || projKey(a).localeCompare(projKey(b))
+      || (isPrevBatch(a) ? 1 : 0) - (isPrevBatch(b) ? 1 : 0)
       || (a.created_at || 0) - (b.created_at || 0))
   // 行高固定 36px + 间距 4px（单行截断，不换行）；列表短时 start/end 覆盖全部，占位为 0
   const V = useVirtualRows(list.length, 36, 4)
@@ -79,6 +96,13 @@ export default function Tasks() {
       <div className="flex-center gap-8" style={{ marginBottom: 12 }}>
         <h2 className="page-title">任务</h2>
         <span className="fs-11 text-muted">{tasks.length} 个</span>
+        {prevCount > 0 && (
+          // 不加这句的话，"17 个任务"看着像一直在累积（09-17 用户当场问过）
+          <span className="fs-10 text-muted"
+            title="重规划会换一批新任务，旧的那批有意不清（审计痕迹 + 可打捞的产物挂在它们上面），但它们不属于当前批次">
+            含 {prevCount} 条上一轮
+          </span>
+        )}
         {dag && dag.node_count > 1 && (
           <span className="fs-10 text-muted"
             title={`任务依赖图：并行度上限 ω=${dag.omega}，关键路径 δ=${dag.delta}，耦合密度 γ=${dag.gamma}（${dag.topology_hint}）`}>
@@ -121,9 +145,12 @@ export default function Tasks() {
       ) : (
         <div ref={V.ref} onScroll={V.onScroll} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: V.padTop, paddingBottom: V.padBottom }}>
-          {list.slice(V.start, V.end).map(t => (
+          {list.slice(V.start, V.end).map(t => {
+            const prev = isPrevBatch(t)
+            return (
             <div key={t.id} className="flex-center gap-8" title={t.description}
-              style={{ padding: '8px 10px', background: '#fff', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}>
+              style={{ padding: '8px 10px', background: '#fff', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12,
+                       opacity: prev ? 0.55 : 1 }}>
               <span className="status-dot" style={{ background: STATUS_COLOR[t.status] || '#9a9993', flexShrink: 0 }}/>
               {t.project_id ? (
                 <button onClick={() => setParams({ project: t.project_id })} title="只看该项目的任务"
@@ -132,6 +159,10 @@ export default function Tasks() {
                 </button>
               ) : (
                 <span className="fs-10" style={{ flexShrink: 0, padding: '1px 6px', borderRadius: 4, background: '#f3f2ec', color: '#9a9993', border: '1px solid var(--border)', whiteSpace: 'nowrap' }}>独立</span>
+              )}
+              {prev && (
+                <span className="fs-10" style={{ flexShrink: 0, padding: '1px 6px', borderRadius: 4, background: '#f3f2ec', color: '#9a9993', border: '1px solid var(--border)', whiteSpace: 'nowrap' }}
+                  title="重规划后留下的上一批，不属于当前批次（有意不清：审计痕迹 + 可打捞的产物挂在它们上面）">上一轮</span>
               )}
               <span className="truncate" style={{ flex: 1, color: '#141413' }}>{t.description.split('\n')[0]}</span>
               <span className="fs-10" style={{ color: STATUS_COLOR[t.status] || '#9a9993', flexShrink: 0 }}>{STATUS_CN[t.status] || t.status}</span>
@@ -144,7 +175,8 @@ export default function Tasks() {
                 <button onClick={() => confirmDelete(t)} className="btn-icon" title="删除" aria-label="删除" style={{ color: '#dc2626' }}><Trash2 size={12}/></button>
               </span>
             </div>
-          ))}
+            )
+          })}
           </div>
         </div>
       )}
