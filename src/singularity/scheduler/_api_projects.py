@@ -137,7 +137,7 @@ def project_integration(proj) -> dict:
         elif e.get("action") == "machine_checks":
             out["machine_checks"] = {"ran": e.get("ran", 0), "passed": e.get("passed", 0)}
 
-    from . import project as proj_mod       # 本模块的惯例：`project` 在函数内导入
+    from . import project as proj_mod  # 本模块的惯例：`project` 在函数内导入
     root = proj_mod.repo_dir(proj.id)
     if not root.exists():
         return out
