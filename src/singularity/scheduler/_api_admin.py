@@ -606,6 +606,11 @@ def status_overview():
         # 按 key 归并的近 24h 告警 —— "常驻条件"那一栏的数据源。
         # 常亮不是"最近问题多"，是判据跟配置脱节；混在 `alerts` 里会把真事故盖住。
         "alert_summary": witness.alert_summary(since=time.time() - 86400),
+        # 「**这个进程是谁**」—— 代码版本（按轮 `round-*` tag 算）+ 界面产物跟不跟得上。
+        # 挂在已有的 `/api/status` 上，**不新增接口、不新增文件**；它本来就是
+        # "这机器现在什么状况"那一类。理由见 `config.runtime_identity` 的 docstring：
+        # 原来只能拿 `ps -o lstart=` 和 `git log -1` 对时间，间接又容易看错。
+        "identity": config.runtime_identity(),
         "workdir": str(proj_mod.get_projects_root())}, 200
 
 

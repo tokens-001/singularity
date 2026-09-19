@@ -2388,6 +2388,24 @@ if __name__ == "__main__":
 
     _startup_log = _setup_startup_logger()
 
+    # 🔴 **先把"我是谁"打进日志**（2026-09-20）。回头查"这轮跑的到底是不是这份代码"时，
+    # 原来只能拿 `ps -o lstart=` 和 `git log -1 --format=%ad` **对时间** —— 间接，
+    # 而且**对错了看不出来**。现在这条日志和 `/api/status` 的 `identity` 同一个来源。
+    # ⚠️ 放在**起循环之前**：起循环就开始花钱，身份得先落下来。
+    try:
+        _id = sched_config.runtime_identity()   # 它自己不会抛（拿不到 git 回 unknown）
+        _startup_log.info("身份: git=%s | 源码有未提交改动=%s | 界面产物=%s%s",
+                          _id["git"], _id["dirty_src"], _id["dist_built"],
+                          " (⚠️ 落后于前端源码，要 npm run build)"
+                          if _id["frontend_stale"] else "")
+    except Exception as _e:
+        # 再兜一层：身份拿不到**不该挡住启动**。
+        # ⚠️ 这里用 `_al.warning` 而不是上面那个 logger 变量 —— 本仓
+        # `test_no_silent_except` 那台守卫**只认 `witness.*` / `logging.*` / `log.*` 三个根**
+        # （别名会按 import 解析）。写 `_startup_log.warning(...)` 它看不见，会把这一处
+        # 记成"静默吞噬" —— 而这一处**明明出声了**。守卫是尺子，别去迁就它、也别让它虚报。
+        _al.warning("身份读取失败（不致命，不挡启动）: %s", _e)
+
     # 审计日志/目录改成懒初始化了（原来在 import 期，测试一 import 就污染真 .qidian/）。
     # 真正跑服务时在这里显式建一次 —— 别指望"第一个请求碰巧会调 audit_log"。
     _setup_audit_logger()

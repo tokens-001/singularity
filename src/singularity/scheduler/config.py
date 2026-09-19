@@ -6,7 +6,10 @@
   - 强 D 阈值可调 (审计 6.2)
 """
 
+import logging
 import os
+import subprocess
+import time
 from pathlib import Path
 
 # ── 路径 ──────────────────────────────────────────────────────────────
@@ -135,6 +138,82 @@ def ensure_dirs() -> None:
             logging.getLogger("scheduler").info(f"cleaned {n} orphan worktrees from previous run")
     except Exception as _e:
         logging.getLogger(__name__).warning("worktree cleanup failed: %s", _e)
+
+
+def runtime_identity() -> dict:
+    """这个**跑着的进程**是谁 —— 代码版本 + 界面产物跟不跟得上。
+
+    ## 为什么需要它
+
+    2026-09-20 查清：`pyproject.toml` 里那个 `2.1.156` **全仓没有任何人读**
+    （没有 `importlib.metadata` / `__version__` / 发布流水线 / `Dockerfile` / 界面显示），
+    所以"真机跑的到底是哪一版"**在 git 层面不可回答**，只能拿
+    `ps -o lstart= -p <pid>` 去和 `git log -1` 对时间 —— **间接、又容易看错**。
+    真痛点不是"号写错了"，是**跑着的进程不知道自己是谁**。
+
+    ## 两个字段各治一个病
+
+    · `git` / `dirty_src` —— 「这轮代码是哪一版」。按轮打的 `round-*` tag 是唯一锚点：
+      `round-20260920b-7-g455d2445` 里的 `7` = **这轮带着但没验过的修复有几笔**。
+    · `dist_built` / `frontend_stale` —— 「界面产物跟不跟得上」。`dist/` 是构建产物
+      且在 `.gitignore` 里，**改了 `frontend/src/` 不会改到界面、没有任何东西提醒你**
+      （09-15 实锤：dist 停在 09-13，之后 17 个提交没进去，症状是"代码改了界面没变"、
+      看着像"修复没生效"）。原来判据是**比时间戳**，这里把它换成**读事实**。
+
+    ⚠️ **拿不到就回 `unknown`，不抛**：无 git 仓库 / 打包分发 / 竞态都算正常处境，
+    为它让启动失败是本末倒置。整个函数**没有任何一条路径会抛异常**。
+
+    ⚠️ **`dirty_src` 只看 `src/`**：`.qidian/` 是运行数据、天天在变，
+    拿它当"脏"的话这个字段永远说"脏"，等于没说（本仓"常亮的假红换掉一个真红"那条）。
+    """
+    out: dict = {"git": "unknown", "dirty_src": None, "dist_built": None,
+                 "frontend_stale": None}
+
+    def _git(*args: str) -> str:
+        # ⚠️ **不回退成静默**（本仓 `test_no_silent_except` 那台守卫会点它的名，点得对）：
+        # "git 说不是仓库"（非零退出）是**正常处境**，字段回 unknown 就是答案、不用出声；
+        # 而"git 压根起不来 / 超时"（抛异常）是**另一回事**，得留一句 ——
+        # 不然两种处境在盘上长得一模一样，这正是本仓反复吃亏的「没走到 ≠ 修好了」。
+        try:
+            p = subprocess.run(["git", *args], cwd=PROJECT_ROOT,
+                               capture_output=True, text=True, timeout=5)
+            return p.stdout.strip() if p.returncode == 0 else ""
+        except Exception as e:
+            logging.getLogger(__name__).info(
+                "runtime_identity: git %s 起不来（%s）—— 这一项回 unknown", args[0], e)
+            return ""
+
+    desc = _git("describe", "--tags", "--always")
+    if desc:
+        out["git"] = desc
+        out["dirty_src"] = bool(_git("status", "--porcelain", "--", "src/"))
+
+    dist = PROJECT_ROOT / "src" / "singularity" / "web" / "static" / "dist"
+    if dist.is_dir():
+        try:
+            newest = max((f.stat().st_mtime for f in dist.rglob("*") if f.is_file()),
+                         default=None)
+        except OSError as e:
+            # 读不动 dist（权限 / 竞态 / 被删）⇒ 这一项回 unknown，但**别不出声**：
+            # 否则"界面产物落后"和"压根没读到"会共用一个 `None`，分不开。
+            logging.getLogger(__name__).info(
+                "runtime_identity: dist 目录读不动（%s）—— 这一项回 unknown", e)
+            newest = None
+        if newest is not None:
+            out["dist_built"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(newest))
+            fe_commit = _git("log", "-1", "--format=%ct", "--",
+                             "src/singularity/web/frontend/src")
+            if fe_commit.isdigit():
+                # ⚠️ **方向**：dist 比前端源码最后一次提交**旧** = 落后（要重新 build）。
+                #
+                # ⚠️ **要留秒级余量**（写这行的当天就踩到）：git 的 `%ct` 是**整秒**、
+                # 文件 mtime 有小数位，"提交完紧接着构建"这两者会**差几秒**，
+                # 严格 `<` 于是把刚构建完的 dist 报成落后 —— 而"常亮的假红"正是
+                # 这个字段想避免的东西（喊狼来了几次之后，真的落后也没人看了）。
+                # 取 90 秒：够盖住"构建→提交"和"提交→构建"两个方向的手抖，
+                # 而真正要抓的那种落后是**以小时/天计**的（09-15 那次差了两天）。
+                out["frontend_stale"] = newest < int(fe_commit) - 90
+    return out
 
 
 def missing_deps() -> list:
