@@ -196,6 +196,33 @@ export default function Projects() {
                     )}
                     <div className="text-secondary" style={{ marginBottom: 4 }}>{detail.description}</div>
                     {detail.repo_dir && <div className="fs-10 text-muted" style={{ marginBottom: 4 }}>📁 成品：{detail.repo_dir}</div>}
+                    {detail.integration && (
+                      /* 「集成」的账（2026-09-20）。原来集成在界面上**只有一个词**，
+                         合并了几个、**哪些没进仓** 全埋在 lineage 里等人 grep ——
+                         本轮真机 5654 行产出、进仓 0 行，页面上一个字都看不出来。 */
+                      <div style={{ margin: '6px 0 8px', padding: '6px 10px', background: '#faf9f5', borderRadius: 6 }}>
+                        <div className="fs-10 text-muted" style={{ marginBottom: 3 }}>集成实况</div>
+                        <div className="fs-11">
+                          进仓：<b>{detail.integration.merged?.tasks?.length ?? 0}</b> 个任务
+                          {' · '}{detail.integration.merged?.commits ?? 0} 个提交
+                          {' · +'}{detail.integration.merged?.insertions ?? 0} 行
+                        </div>
+                        {(detail.integration.not_merged?.tasks?.length ?? 0) > 0 && (
+                          <div className="fs-11" style={{ color: '#b45309' }}>
+                            ⚠️ 没进仓：<b>{detail.integration.not_merged.tasks.length}</b> 个任务
+                            {' · +'}{detail.integration.not_merged.insertions} 行
+                            <span className="fs-10">（各任务合计、有重复）</span>
+                            {' '}—— 锚还在 refs/qidian/pending/
+                          </div>
+                        )}
+                        <div className="fs-10 text-muted">
+                          集成测试：{detail.integration.tests_ran === true ? '跑过'
+                            : detail.integration.tests_ran === false ? '⚠️ 没跑' : '没记录'}
+                          {detail.integration.machine_checks
+                            && ` · 机械检查 ${detail.integration.machine_checks.passed}/${detail.integration.machine_checks.ran}`}
+                        </div>
+                      </div>
+                    )}
                     {detail.research_report && <ResearchReport report={detail.research_report} projectId={detail.id} />}
                     {detail.architecture && <ArchitectureDetails arch={detail.architecture} />}
                     {detail.phase && detail.phase.startsWith('gate') && (

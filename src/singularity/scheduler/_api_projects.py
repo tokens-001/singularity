@@ -12,6 +12,7 @@ Section 分组:
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import threading
 import time
@@ -55,6 +56,128 @@ def project_create(name: str, template: str = "product_dev",
             "suggested_flow": ({"weight": sug.weight, "reason": sug.reason} if sug else None)}, 200
 
 
+_AGENT_COMMIT = re.compile(r"agent changes in (\d+)_")
+
+
+def _git_ro(root, *args: str, timeout: int = 5) -> str:
+    """在一个仓里跑一条**只读** git 命令，返回 stdout。失败回 `""` 并出声。
+
+    ⚠️ **只读**：这里只允许 `log` / `for-each-ref` / `show --shortstat` 这类查询。
+    ⚠️ 失败**必须出声**（仓里「禁止新增静默 except」闸门；同 `salvageable_refs` 那条）。
+    """
+    try:
+        r = subprocess.run(["git", *args], cwd=str(root),
+                           capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as e:
+        witness.warn("_api", f"integration_git_failed:{type(e).__name__}"[:120],
+                     key="integration_git_failed")
+        return ""
+    return r.stdout or ""
+
+
+def _parse_log_numstat(text: str) -> list[tuple[str, str, int]]:
+    """把 `git log --numstat --format=@@%H%x09%s` 拆成 `[(sha, subject, 新增行数)]`。
+
+    ⚠️ 二进制文件的 `--numstat` 那一列是 `-` 不是数字 ⇒ **必须 `isdigit()` 挡一下**，
+    否则一个 `.png` 就让整个解析炸掉。`(sha, subject, ...)` 之间用 `%x09`(tab) 分隔 ——
+    用空格分会被中文标题里的空格切碎。
+    """
+    commits: list[tuple[str, str, int]] = []
+    sha = subj = ""
+    added = 0
+    for line in text.splitlines():
+        if line.startswith("@@"):
+            if sha:
+                commits.append((sha, subj, added))
+            head = line[2:]
+            sha, _, subj = head.partition("\t")
+            added = 0
+        elif commits or sha:
+            parts = line.split("\t")
+            if len(parts) >= 3 and parts[0].isdigit():
+                added += int(parts[0])
+    if sha:
+        commits.append((sha, subj, added))
+    return commits
+
+
+def project_integration(proj) -> dict:
+    """这个项目「集成」到底干了什么 —— **进仓了多少、没进仓多少**。
+
+    🔴 来历（2026-09-20 `round-20260920b` 真机）：一轮跑完，各任务往
+    `refs/qidian/pending/<task_id>` 锚了 **5654 行**产物，而**合并进项目仓的代码是 0 行**
+    （主分支只有 `.gitignore` / `README.md` / `pyproject.toml`）—— **界面上一个字都看不出来**。
+    「有可打捞的产物」那个标只挂在**单张任务卡**上（`TaskCard`），
+    **没人把项目级的账加起来**。这一块就是那个账。
+
+    ⚠️ **两个词在这儿的确切含义**（别读岔）：
+      · **进仓** = 项目仓 HEAD 上**真躺着**那个任务的提交（标题 `agent changes in <task_id>_any`）；
+      · **没进仓** = `refs/qidian/pending/<task_id>` 还在（`_anchor_ref` 打的；成功合并会
+        `_release_ref` 删掉它 ⇒ **ref 还在 = 有产物没进仓**）。
+
+    ⚠️ **"没进仓"的行数是各锚相对各自父提交的合计、含重复** ——
+    多个任务会改同一个文件（本项目实测 `types.py` 被 4 个任务各写了一遍），
+    **不能读成"这么多行可用程序"**。要的是**量级**，不是精确值。
+    """
+    out = {
+        "merged": {"tasks": [], "commits": 0, "insertions": 0},
+        "not_merged": {"tasks": [], "insertions": 0, "refs": []},
+        "tests_ran": None,          # None = 没记录（不是"没跑"）
+        "machine_checks": None,
+    }
+    if proj is None:
+        return out
+
+    # ── 集成自己报的账：跑没跑测试 / 机械检查过几条（`lineage` 里现成的，取最后一次）──
+    for e in (proj.lineage or []):
+        if not isinstance(e, dict):
+            continue
+        if e.get("action") == "integration_merge":
+            out["tests_ran"] = bool(e.get("tests_ran"))
+        elif e.get("action") == "machine_checks":
+            out["machine_checks"] = {"ran": e.get("ran", 0), "passed": e.get("passed", 0)}
+
+    from . import project as proj_mod       # 本模块的惯例：`project` 在函数内导入
+    root = proj_mod.repo_dir(proj.id)
+    if not root.exists():
+        return out
+    want = {str(t) for t in (proj.task_ids or [])}
+
+    # ── 进仓 ──（一次 `git log` 拿全：逐条查 `git show` 会在任务多的项目上拖死）
+    for _sha, subj, ins in _parse_log_numstat(
+            _git_ro(root, "log", "--numstat", "--format=@@%H%x09%s", "HEAD")):
+        m = _AGENT_COMMIT.search(subj or "")
+        if not m or m.group(1) not in want:
+            continue
+        out["merged"]["tasks"].append(m.group(1))
+        out["merged"]["commits"] += 1
+        out["merged"]["insertions"] += ins
+    out["merged"]["tasks"] = sorted(set(out["merged"]["tasks"]))
+
+    # ── 没进仓 ──
+    for line in _git_ro(root, "for-each-ref",
+                        "--format=%(refname) %(objectname)",
+                        "refs/qidian/pending/").splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        refname, sha = parts
+        tid = refname.rsplit("/", 1)[-1]
+        if tid not in want:
+            continue
+        # `git show --shortstat` 而不是 `diff <sha>^ <sha>`：**根提交**（没有父）也走得通，
+        # 那种情况下 git 会把全部文件记成新增，正是我们想要的。
+        txt = _git_ro(root, "show", "--shortstat", "--format=", sha)
+        m = re.search(r"(\d+) insertion", txt)
+        ins = int(m.group(1)) if m else 0
+        out["not_merged"]["tasks"].append(tid)
+        out["not_merged"]["insertions"] += ins
+        out["not_merged"]["refs"].append(
+            {"task_id": tid, "sha": sha[:7], "insertions": ins})
+    out["not_merged"]["tasks"].sort()
+    return out
+
+
 def project_detail(project_id: str) -> tuple[dict, int]:
     """GET /api/projects/<id>"""
     from . import project as proj_mod
@@ -63,6 +186,15 @@ def project_detail(project_id: str) -> tuple[dict, int]:
         return {"error": "项目不存在"}, 404
     d = proj.to_dict() if hasattr(proj, 'to_dict') else {"ok": True}
     d["repo_dir"] = str(proj_mod.repo_dir(project_id))  # 成品保存路径
+    # 「集成」的账（2026-09-20）：进仓几个任务 / **没进仓几个**。
+    # 挂在详情上而不是新开接口 —— 前端展开项目时本来就在调这个，省一次请求和一份加载态。
+    try:
+        d["integration"] = project_integration(proj)
+    except Exception as e:
+        # 这一块坏掉**不能拖垮整个详情**（页面还要靠它渲染），但必须出声。
+        witness.warn("_api", f"integration_view:{type(e).__name__}"[:120],
+                     key="integration_view")
+        d["integration"] = None
     # 重量判据**在服务端算完给前端**，前端不许在 TS 里重推（§5 过线同理）
     fd = proj_mod.resolve_flow(proj)
     d["flow_decision"] = {"weight": fd.weight, "research": fd.research,
