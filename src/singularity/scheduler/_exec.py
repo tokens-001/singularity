@@ -103,7 +103,8 @@ _PARTIAL_TOOL_EVENTS_CAP = 500
 
 def _persist_partial_usage(task_id: str, level: str, model: str, delta: int,
                            tool_events: list | None = None,
-                           elapsed: float | None = None) -> None:
+                           elapsed: float | None = None,
+                           turn: int = 0, attempt: int = 0) -> None:
     """把执行中**累计**的 token 落一盘，给超时路径用。
 
     为什么必须边跑边落：超时被杀的任务**走不到收尾记账**
@@ -146,7 +147,17 @@ def _persist_partial_usage(task_id: str, level: str, model: str, delta: int,
         # 超时任务走不到收尾 ⇒ 这份只能落盘（跟 token 一个理由，见函数头）。
         if elapsed is not None:
             _disp = list(_prev.get("dispatches") or [])
-            _disp.append({"at": round(time.time(), 1), "elapsed": round(float(elapsed), 1)})
+            # `turn` / `attempt` 是**这次 dispatch 属于哪一轮**（2026-09-19 加）：
+            # 「这个任务自动返工了几轮」原来答不上 —— 内层那圈（同 wt 带反馈重派，
+            # `_decide_cascade` 的 "continue"）只活在内存里，外层那圈
+            # （`_run_with_retry` 整个 run() 重跑）连变量都出不了那个函数。
+            # 两个数都是**当场的事实**，不是算出来的派生值（§34）：
+            #   turn    = `run()` 里那个 `for turn in range(...)` 的第几圈；
+            #   attempt = `ctx.retry_count`，`_run_with_retry` 每次进 run() 前写的。
+            # 读法：同一 attempt 里 turn>1 的条数 = 内层返工轮数；
+            #       max(attempt)+1 = 这个任务被整个重跑了几次。
+            _disp.append({"at": round(time.time(), 1), "elapsed": round(float(elapsed), 1),
+                          "turn": int(turn or 0), "attempt": int(attempt or 0)})
             payload["dispatches"] = _disp[-20:]
         if tool_events is not None:
             # tool_events 平时只在内存和 SSE 里过一遍、**从来不落盘**
@@ -661,6 +672,8 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                         getattr(exec_result, "token_count", 0) or 0,
                         tool_events=all_tool_events,
                         elapsed=getattr(exec_result, "elapsed", 0.0),
+                        # 「返工了几轮」的两个坐标（见 `_persist_partial_usage` 里那段）
+                        turn=turn, attempt=getattr(ctx, "retry_count", 0),
                     )
 
                 # 收尾前**再查一次取消**。原来只在每轮开头查，于是超时（或人工取消）

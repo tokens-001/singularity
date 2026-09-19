@@ -13,7 +13,7 @@
 绿 = 重构没破坏 run() 行为。红 = 立刻停手, 看哪条路径断了。
 不依赖 pytest。退出码 0=全过, 1=有失败。
 """
-import os, sys, tempfile, time
+import json, os, sys, tempfile, time
 os.environ["QIDIAN_SKIP_EMBED"] = "1"
 
 from pathlib import Path
@@ -189,6 +189,30 @@ if __name__ == "__main__":
     # 取的是**chain 里那个** model（agent_cfg["model"]），不是 FakeDispResult 里那个 ——
     # _exec 手上只有前者。对，因为真要记账的就是这条链上跑的模型。
     check("模型名也带上 (记账要按单价算钱, 空串会进 unpriced)", _mdl == "m1", f"读到 {_mdl!r}")
+
+    print("── 接线: 返工轮次 / 重跑次数落盘（「返工了几轮」的读数）──")
+    # 为什么要有这条：内层返工（`_decide_cascade` 的 "continue"）和外层重跑
+    # （`_run_with_retry` 整个 run() 重来）**都只活在内存里** —— 前者是循环里那个
+    # `turn`，后者是那个函数的局部变量 `retry`。跑完就答不上"这任务返工了几轮"。
+    # `_persist_partial_usage` 自己有单测，但**函数对 ≠ 接线通**（同上面 §59 那条）。
+    reset_wt()
+    S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2}]
+    S.dispatch_queue = [("ok", FakeExec(success=True)), ("ok", FakeExec(success=True))]
+    # 第 1 轮中置信 → 判 "continue"（同 wt 带失败反馈重派）；第 2 轮过。
+    S.validate_queue = [FakeVal(action="retry", confidence=0.5), FakeVal(action="pass")]
+    _t = make_task()
+    # sidecar 是**累加**写的（同一个 task_id 上一条用例也写过）⇒ 先清掉，
+    # 否则读回来的是几条用例混在一起的历史（这正是"账本数字先问是谁写的"那个形状）。
+    (_exec.config.PARTIAL_USAGE_DIR / f"{_t.id}.json").unlink(missing_ok=True)
+    _ctx = make_ctx(v3=True)
+    _ctx.retry_count = 3          # = `_run_with_retry` 每次进 run() 前写的那个数
+    _exec.run(_t, _ctx, {"any": list(S.chain)})
+    _side = json.loads((_exec.config.PARTIAL_USAGE_DIR / f"{_t.id}.json").read_text())
+    _disp = _side.get("dispatches") or []
+    check("两次 dispatch 各带自己的轮次 (1 → 2)",
+          [d.get("turn") for d in _disp] == [1, 2], f"读到 {_disp}")
+    check("重跑次数也带上 (取 ctx.retry_count)",
+          all(d.get("attempt") == 3 for d in _disp), f"读到 {_disp}")
 
     print("── 路径2: 用户取消 ──")
     reset_wt()
