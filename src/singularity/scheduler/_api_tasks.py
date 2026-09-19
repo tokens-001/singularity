@@ -63,6 +63,35 @@ def salvageable_refs() -> dict[str, str]:
     return out
 
 
+def orphan_refs() -> dict[str, str]:
+    """**孤儿 pending ref**：`{task_id: sha}` —— ref 还在，而**任务文件已经不在了**。
+
+    ## 什么算"孤儿"（2026-09-20 定的，这是那条待办要的答案）
+
+    `refs/qidian/pending/<task_id>` 在项目仓里**存在**，而
+    `.qidian/tasks/<task_id>.json` **不在了**。
+
+    ## 为什么它**不能自动清**
+
+    产物的**本体**没丢 —— ref 就指着那个提交，`git show` 得出来。
+    丢的是「**它是什么**」：描述 / 状态 / 父项目 / 它当时在干什么，**全在那份没了的任务文件里**
+    （这也是 `_api_tasks.task_delete` 的注释说的"任务 JSON 是锚的唯一线索"）。
+
+    ⇒ 清掉一条孤儿 ref = **永久删掉一份还在的产物**，而且**没有任何人能判它该不该留**
+    （判据本身已经没了）。所以它只能**报出来给人判**，不能进任何自动清理。
+    ⚠️ 09-19 已摸清两条路的差别：`rm` 直删任务 JSON **不碰 ref**（安全）；
+    走 `DELETE /api/tasks/<id>` 会**显式 `_release_ref`**（产物真丢）。
+    这里另开一条只读的，只数不删。
+
+    ⚠️ **看不见的那一半**：项目仓**被删掉**时，它里面的 ref 跟着一起没了 ——
+    那个盲区**扫不出来**（ref 的存储就是那个仓）。这里只数"仓还在、ref 还在"的那部分。
+    """
+    refs = salvageable_refs()
+    tasks_dir = tracker.tasks_dir()
+    have = {f.stem for f in tasks_dir.glob("*.json")} if tasks_dir.exists() else set()
+    return {tid: sha for tid, sha in refs.items() if tid not in have}
+
+
 def _list_all_tasks() -> list[dict]:
     tasks_dir = tracker.tasks_dir()
     if not tasks_dir.exists():

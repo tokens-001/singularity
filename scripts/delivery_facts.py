@@ -14,6 +14,7 @@
 
     .venv/bin/python scripts/delivery_facts.py 1789481895784
     .venv/bin/python scripts/delivery_facts.py --last      # 最近一个项目
+    .venv/bin/python scripts/delivery_facts.py --refs      # 孤儿 pending ref（只数不删）
 
 只读。不写任何文件、不碰状态机。
 """
@@ -193,11 +194,36 @@ def facts(pid: str) -> None:
     print("\n（以上都是事实，判不判「成了」由你定。→ 来源路径都印在上面的括号里）")
 
 
+def orphan_refs_report() -> None:
+    """**孤儿 pending ref** —— 只数不删（定义写在 `_api_tasks.orphan_refs` 的 docstring 里）。
+
+    为什么它值得单开一条：这些 ref 的产物**还在**，而界面上**一个字都看不见**
+    （`salvageable_refs()` 那张表是**按 task_id 挂到任务行上**的，
+    任务文件没了的那些**没有行能挂**）—— 本仓的老形状，"盘上有一份、界面上看不见"。
+    """
+    from singularity.scheduler._api_tasks import salvageable_refs, orphan_refs
+    allr = salvageable_refs()
+    orph = orphan_refs()
+    print("⑥ 孤儿 pending ref（产物还在、**任务文件已经没了**）")
+    print(f"   pending ref {len(allr)} 条 · 其中**孤儿 {len(orph)} 条** "
+          f"（另有 {len(allr) - len(orph)} 条挂得上任务，在任务页看得到）")
+    for tid, sha in sorted(orph.items()):
+        print(f"   · {tid}  → {sha[:7]}   （⚠️ 它是什么，已经查不到了 —— 任务文件没了）")
+    if orph:
+        print("   ⚠️ **别自动清**：清一条 = 永久删掉一份**还在**的产物，而"
+              "「该不该留」的判据（任务文件）已经没了 ⇒ 只能人判。")
+        print("   ⚠️ **扫不到的盲区**：项目仓自己被删掉时，里面的 ref 跟着没了，这里数不出来。")
+    print()
+
+
 def main() -> int:
     args = sys.argv[1:]
     if not args:
         print(__doc__)
         return 2
+    if args[0] == "--refs":
+        orphan_refs_report()
+        return 0
     if args[0] == "--last":
         ps = sorted((config.QIDIAN_DIR / "projects").glob("*.json"),
                     key=lambda p: p.stat().st_mtime) if (config.QIDIAN_DIR / "projects").exists() else []

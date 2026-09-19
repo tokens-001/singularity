@@ -69,3 +69,76 @@ def test_任务列表带上_salvage_ref(tmp_path, monkeypatch):
     assert code == 200
     row = next(r for r in payload["tasks"] if r["id"] == "T1")
     assert row.get("salvage_ref") == sha, f"载荷里没有 salvage_ref ⇒ 界面还是看不见: {row}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 「孤儿 pending ref」—— 上线把两件事分清（2026-09-20）
+#
+# 上面那套说的是"**任务还在**、产物也在"（挂到任务卡上看得见）。
+# 这一套说的是另一种：**ref 还在，而任务文件已经没了** ⇒
+# `salvageable_refs()` 那张表是**按 task_id 挂到任务行上**的，**没有行能挂** ⇒
+# **盘上有一份、界面上一个字看不见**。真机此刻盘上是 **14 条**。
+# ═══════════════════════════════════════════════════════════════
+
+def test_孤儿是_ref在而任务文件没了(tmp_path, monkeypatch):
+    """判据：`refs/qidian/pending/<task_id>` 在 ∧ `.qidian/tasks/<task_id>.json` 不在。
+
+    变异：把 `orphan_refs` 里那句 `if tid not in have` 去掉 ⇒ 本条红
+    （那样孤儿会退化成"所有 ref"，包括挂得上任务的）。
+    """
+    from singularity.scheduler import config, _git_worktree
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path / ".qidian")
+    (tmp_path / ".qidian" / "tasks").mkdir(parents=True)
+    # 一个**有任务文件**的、一个**没有**的
+    (tmp_path / ".qidian" / "tasks" / "T-alive.json").write_text("{}", encoding="utf-8")
+
+    repo = _git_repo(tmp_path)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                         capture_output=True, text=True).stdout.strip()
+    for tid in ("T-alive", "T-gone"):
+        subprocess.run(["git", "update-ref", f"refs/qidian/pending/{tid}", sha],
+                       cwd=str(repo), capture_output=True, text=True)
+    monkeypatch.setattr(_git_worktree, "_project_repo_roots", lambda: [repo])
+
+    assert set(_api_tasks.salvageable_refs()) == {"T-alive", "T-gone"}
+    assert set(_api_tasks.orphan_refs()) == {"T-gone"}, "孤儿认错了"
+
+
+def test_一条孤儿都没有时是空的(tmp_path, monkeypatch):
+    """**边界**：都挂得上任务 ⇒ 孤儿 0 条。不许把正常的也报成孤儿。"""
+    from singularity.scheduler import config, _git_worktree
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path / ".qidian")
+    (tmp_path / ".qidian" / "tasks").mkdir(parents=True)
+    (tmp_path / ".qidian" / "tasks" / "T1.json").write_text("{}", encoding="utf-8")
+
+    repo = _git_repo(tmp_path)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                         capture_output=True, text=True).stdout.strip()
+    subprocess.run(["git", "update-ref", "refs/qidian/pending/T1", sha],
+                   cwd=str(repo), capture_output=True, text=True)
+    monkeypatch.setattr(_git_worktree, "_project_repo_roots", lambda: [repo])
+    assert _api_tasks.orphan_refs() == {}
+
+
+def test_孤儿只读不删(tmp_path, monkeypatch):
+    """🔴 **命门**：`orphan_refs()` 是**只读**的 —— 它数出来的东西**一个都不许动**。
+
+    清一条 = 永久删掉一份**还在**的产物，而「该不该留」的判据（任务文件）已经没了。
+    ⇒ 只能人判，不能进任何自动清理。变异：在函数里加一句 `_release_ref` ⇒ 本条红。
+    """
+    from singularity.scheduler import config, _git_worktree
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path / ".qidian")
+    (tmp_path / ".qidian" / "tasks").mkdir(parents=True)
+
+    repo = _git_repo(tmp_path)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                         capture_output=True, text=True).stdout.strip()
+    subprocess.run(["git", "update-ref", "refs/qidian/pending/T-gone", sha],
+                   cwd=str(repo), capture_output=True, text=True)
+    monkeypatch.setattr(_git_worktree, "_project_repo_roots", lambda: [repo])
+
+    assert _api_tasks.orphan_refs() == {"T-gone": sha}
+    after = subprocess.run(["git", "for-each-ref", "--format=%(refname:short)",
+                            "refs/qidian/pending/"], cwd=str(repo),
+                           capture_output=True, text=True).stdout.split()
+    assert after == ["qidian/pending/T-gone"], f"数了一遍就把 ref 动了：{after}"
