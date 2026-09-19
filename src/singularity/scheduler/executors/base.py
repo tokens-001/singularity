@@ -72,7 +72,7 @@ class ExecutorResult:
     # `deadline` = **我方主动收尾/掐断**（预算到、单次撞 240s 上限），不是模型坏或限流；
     # `timeout` 同族（CLI 超时）。两者的读者见 `_dispatch_exec` —— 它按 kind 决定
     # 「是不是这个模型的锅」（据 2026-09-13 真机：把收尾记成"空输出"会换模型把时间再烧一遍）。
-    error_kind: str = ""                # timeout | ratelimit | format | exec | deadline | ""
+    error_kind: str = ""                # timeout | ratelimit | format | exec | deadline | stalled | ""
     # ⚠️ **与 `error_kind` 分开，别合并**：那档说的是"**为什么失败**"，而这一档
     #    **成功时也会出现** —— 非空 = 这次的产出是**达到我方上限才停的**（值说明哪一种），
     #    但产出仍然算数。目前只有 `"max_turns"`（工具轮次用尽、文件已落盘）。

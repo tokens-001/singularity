@@ -511,7 +511,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                         time.sleep(min(2 ** turn, 60))
                         continue
                     except (_NetworkError, _FormatError) as e2:
-                        return self._fail_result(str(e2), start)
+                        return self._fail_result(str(e2), start, exc=e2)
                 elif (bad := _drop_rejected_think_param(body, str(e))):
                     # 该模型不吃这个思考参数（各家支持面不同且会变）→ 摘掉重试一次，
                     # 并记住键名（body 每轮重建，不记就每轮再撞一次 400）
@@ -524,16 +524,16 @@ class OpenAIAgentExecutor(BaseExecutor):
                         time.sleep(min(2 ** turn, 60))
                         continue
                     except (_NetworkError, _FormatError) as e2:
-                        return self._fail_result(str(e2), start)
+                        return self._fail_result(str(e2), start, exc=e2)
                 else:
-                    return self._fail_result(str(e), start)
+                    return self._fail_result(str(e), start, exc=e)
             except _NetworkError as e:
                 # 预算已到 → 这多半是上面封顶超时导致的断流，**不是**该换模型重来的
                 # 瞬时网络故障。报成网络错会被上层 failover 掉，白烧剩下的时间。
                 if time.time() >= self._deadline_at:
                     _wrapped = True
                     break
-                return self._fail_result(str(e), start)
+                return self._fail_result(str(e), start, exc=e)
 
             if self._is_responses_api:
                 # responses API → chat format
@@ -963,7 +963,8 @@ class OpenAIAgentExecutor(BaseExecutor):
             except Exception:
                 pass
 
-    def _fail_result(self, error: str, started: float) -> ExecutorResult:
+    def _fail_result(self, error: str, started: float,
+                     exc: BaseException | None = None) -> ExecutorResult:
         """失败返回 —— **已经改过的文件必须跟着交回去**。
 
         ⚠️ 2026-09-18：这几条 `return` 原来**都不带 `changed_files=`**（只有成功路径和
@@ -981,7 +982,12 @@ class OpenAIAgentExecutor(BaseExecutor):
         """
         self._track()
         return ExecutorResult(
-            success=False, error=error, error_kind="exec",
+            success=False, error=error,
+            # `exc` 只用来**给种类起个名**，不改任何判定：`stalled` 和 `exec` 在
+            # 下游走**完全同一条路**（换模型重试 + 记 breaker，见 `_dispatch_exec`）——
+            # 全仓**没有任何分支认 `exec`**（2026-09-19 核过）。差别只在日志/终态/
+            # `unverified` 里写的是 `stalled 未产出` 还是 `exec 未产出`。
+            error_kind=("stalled" if isinstance(exc, _StalledError) else "exec"),
             changed_files=list(self._changed_files),
             elapsed=time.time() - started, tool_events=list(self._tool_events))
 
@@ -1166,7 +1172,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                             # **抛**，不是"出声后返回空" —— 返回空会被上层当成
                             # "这次调用成功了、只是模型没说话"，于是同一个卡住的模型
                             # 继续被派下一轮；抛错才走 failover，换一个 agent。
-                            raise _NetworkError(
+                            raise _StalledError(
                                 f"流停滞 {_idle:.0f}s 无新 token"
                                 f"（一直在收数据，但 content/reasoning/tool_calls 一样都没有）")
                         buf += text
@@ -1243,7 +1249,7 @@ class OpenAIAgentExecutor(BaseExecutor):
                         _last_progress = time.time()
         except httpx.TimeoutException:
             # read timeout = 流停滞（不是整体超时）—— 报清楚，方便区分
-            raise _NetworkError(f"流停滞 {_STALL_TIMEOUT:.0f}s 无新 token")
+            raise _StalledError(f"流停滞 {_STALL_TIMEOUT:.0f}s 无新 token")
         except httpx.HTTPError as e:
             raise _NetworkError(f"网络错误: {e}")
 
@@ -1517,6 +1523,19 @@ class _RateLimitError(Exception):
 class _FormatError(Exception):
     pass
 class _NetworkError(Exception):
+    pass
+
+
+class _StalledError(_NetworkError):
+    """流停滞（`_STALL_TIMEOUT` 秒没有任何新 token）。
+
+    ⚠️ **它是 `_NetworkError` 的子类，不是新的一类失败** —— 走 failover 的判定
+    一个字没变（`_fail_result` 只多写一个种类名 `stalled`，而**没有任何下游分支认它**）。
+    存在的理由（2026-09-19 复核审计 A6）：它和"模型吐了个空"原来在 `error_kind` 上
+    **长得一样**（都是 `exec`），只能靠 error 文本区分 —— 又是"只活在文本里"。
+    ⚠️ **别把它算进"我方掐断"**（`supervisor.our_side_stop_of` 只认 `deadline`）：
+    停滞是服务端/网络的事，不是我们的刀。
+    """
     pass
 class _TransientError(Exception):
     pass     # 5xx —— 可重试（429 由 _RateLimitError 单独走）
