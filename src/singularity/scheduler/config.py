@@ -158,7 +158,8 @@ def runtime_identity() -> dict:
     · `dist_built` / `frontend_stale` —— 「界面产物跟不跟得上」。`dist/` 是构建产物
       且在 `.gitignore` 里，**改了 `frontend/src/` 不会改到界面、没有任何东西提醒你**
       （09-15 实锤：dist 停在 09-13，之后 17 个提交没进去，症状是"代码改了界面没变"、
-      看着像"修复没生效"）。原来判据是**比时间戳**，这里把它换成**读事实**。
+      看着像"修复没生效"）。原来是"人自己 `ls -la` 比时间戳"，现在**一行布尔**。
+      ⚠️ **比的是前端源码文件的 mtime，不是最后一次提交的时间** —— 理由见下面那段。
 
     ⚠️ **拿不到就回 `unknown`，不抛**：无 git 仓库 / 打包分发 / 竞态都算正常处境，
     为它让启动失败是本末倒置。整个函数**没有任何一条路径会抛异常**。
@@ -188,32 +189,44 @@ def runtime_identity() -> dict:
         out["git"] = desc
         out["dirty_src"] = bool(_git("status", "--porcelain", "--", "src/"))
 
+    # ── 界面产物 ──
+    #
+    # ⚠️ **比的是"前端源码文件"的 mtime，不是"最后一次提交"的时间**。
+    # 本仓 CLAUDE.md 上写的那条老判据是拿 `git log -1 --format=%ad -- frontend/src`
+    # 去比 —— **它是错的，写这个函数的当天就被它咬了一次**：
+    # 正常顺序是"改 → `npm run build` → 提交"，**提交必然晚于构建几分钟**，
+    # 于是老判据把**刚构建完**的 dist 报成"落后"。我加了个 90 秒余量去补，
+    # 补完还是假红（那次提交与构建差了 2 分钟）—— 因为**病根是拿"提交时间"
+    # 当"源码变了"的代理**：提交不改变源码内容，它凭什么让构建作废。
+    # ⇒ 直接看源码文件本身：**git 会改 mtime 的地方（checkout / 合并 / 拉取）
+    # 恰恰都是"这次构建不再可信"的地方**，所以它比提交时间更贴题。
     dist = PROJECT_ROOT / "src" / "singularity" / "web" / "static" / "dist"
-    if dist.is_dir():
-        try:
-            newest = max((f.stat().st_mtime for f in dist.rglob("*") if f.is_file()),
-                         default=None)
-        except OSError as e:
-            # 读不动 dist（权限 / 竞态 / 被删）⇒ 这一项回 unknown，但**别不出声**：
-            # 否则"界面产物落后"和"压根没读到"会共用一个 `None`，分不开。
-            logging.getLogger(__name__).info(
-                "runtime_identity: dist 目录读不动（%s）—— 这一项回 unknown", e)
-            newest = None
-        if newest is not None:
-            out["dist_built"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(newest))
-            fe_commit = _git("log", "-1", "--format=%ct", "--",
-                             "src/singularity/web/frontend/src")
-            if fe_commit.isdigit():
-                # ⚠️ **方向**：dist 比前端源码最后一次提交**旧** = 落后（要重新 build）。
-                #
-                # ⚠️ **要留秒级余量**（写这行的当天就踩到）：git 的 `%ct` 是**整秒**、
-                # 文件 mtime 有小数位，"提交完紧接着构建"这两者会**差几秒**，
-                # 严格 `<` 于是把刚构建完的 dist 报成落后 —— 而"常亮的假红"正是
-                # 这个字段想避免的东西（喊狼来了几次之后，真的落后也没人看了）。
-                # 取 90 秒：够盖住"构建→提交"和"提交→构建"两个方向的手抖，
-                # 而真正要抓的那种落后是**以小时/天计**的（09-15 那次差了两天）。
-                out["frontend_stale"] = newest < int(fe_commit) - 90
+    fe_src = PROJECT_ROOT / "src" / "singularity" / "web" / "frontend" / "src"
+    newest = _newest_mtime(dist)
+    if newest is not None:
+        out["dist_built"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(newest))
+    src_newest = _newest_mtime(fe_src)
+    if src_newest is not None:
+        # dist 不存在（还没 build 过）也算落后 —— 那时界面压根起不来，比"旧"更严重。
+        out["frontend_stale"] = newest is None or src_newest > newest
     return out
+
+
+def _newest_mtime(d: Path) -> float | None:
+    """目录里最新一个文件的 mtime；目录不在 / 空目录 / 读不动都回 None。
+
+    ⚠️ **两种"没有"要分得开**：`is_dir()` 为假是**正常的**（目录本来就不存在，
+    调用方拿 `None` 表达"不知道"）；而"目录在、stat 却抛 OSError"（权限 / 竞态 /
+    扫到一半被删）是**另一回事** ⇒ 那一支出声（本仓禁止新增静默 except 那台守卫会点名）。
+    """
+    if not d.is_dir():
+        return None
+    try:
+        return max((f.stat().st_mtime for f in d.rglob("*") if f.is_file()), default=None)
+    except OSError as e:
+        logging.getLogger(__name__).info(
+            "runtime_identity: 读 %s 里的 mtime 失败（%s）—— 这一项回 unknown", d, e)
+        return None
 
 
 def missing_deps() -> list:

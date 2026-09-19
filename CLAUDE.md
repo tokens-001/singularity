@@ -53,8 +53,14 @@
 > 实测那次：`dist` 停在 **09-13 19:53**，之后**前端源码动了 17 个提交**都没进去
 > （含"任务卡把阻断渲染成绿勾"、"SSE 断了不重连"、"useRun 吞响应"…）。
 > **症状是"代码明明改了、界面一点没变"** —— 会被误判成"修复没生效 / 功能是死的"。
-> 判据：`ls -la src/singularity/web/static/dist/assets/ | head -1` 的时间
-> **必须晚于** `git log -1 --format=%ad -- src/singularity/web/frontend/src/`。
+> ✅ **判据 2026-09-20 换成机器读了**（原来要人自己 `ls -la` 比时间戳）：
+> `GET /api/status` 的 `identity.frontend_stale`，启动日志里也有一行。
+> ⚠️ **别再用旧的"比 `git log -1 --format=%ad`"那条** —— 它是**错的**，写那个字段的当天
+> 就被咬了一次：正常顺序是"改 → `npm run build` → 提交"，**提交必然晚于构建几分钟**
+> ⇒ 那条会把**刚构建完**的 dist 报成落后（加了 90 秒余量还是假红）。
+> 病根是**拿"提交时间"当"源码变了"的代理** —— 提交不改变源码内容。
+> 现在比的是**前端源码文件的 mtime**（git 会改 mtime 的地方 —— checkout / 合并 / 拉取 ——
+> 恰好都是"这次构建不再可信"的地方）。
 
 > 后三条必须用 venv 解释器：系统 `python3`（homebrew 3.14）没装 singularity，直接跑会 `ModuleNotFoundError`。
 > `pytest` 那条不受影响 —— `pyproject.toml` 给 pytest 配了 `pythonpath`。

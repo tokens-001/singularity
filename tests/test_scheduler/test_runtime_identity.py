@@ -8,11 +8,12 @@
 
   ① `dirty_src` **只看 `src/`** —— `.qidian/` 是运行数据、天天在变，
      拿它当"脏"的话这个字段永远说"脏"，等于没说。**真跑起来第一天就会撞上这条。**
-  ② `frontend_stale` 的**方向**和**秒级余量** —— 前者反了就是每轮都喊狼来了；
-     后者没有的话，"提交完紧接着构建"会被报成落后（写这个函数的当天就撞上了）。
+  ② `frontend_stale` **比的是源码文件的 mtime，不是"最后一次提交"的时间** ——
+     用提当代proxy 会把**刚构建完**的 dist 报成落后（正常顺序是
+     "改 → build → 提交"，提交必然晚几分钟）。**写这个函数的当天就被咬了一次。**
 
 **变异**：把 ① 的路径参数 `--  src/` 去掉 ⇒ `test_qidian_里改了不算脏` 红；
-把 ② 的 `- 90` 去掉 ⇒ `test_紧接着构建不算落后` 红。
+把 ② 换回"比最后一次提交" ⇒ `test_源码没动过_只是提交了_不算落后` 红。
 """
 import subprocess
 import time
@@ -103,42 +104,50 @@ def test_qidian_里改了不算脏(repo):
 
 
 # ═══════════════════════════════════════════════════════════════
-# ③ `frontend_stale` 的方向 + 秒级余量
+# ③ `frontend_stale`：**比源码文件的 mtime，不比提交时间**
+#
+# 老判据（本仓 CLAUDE.md 里那条）是拿 `git log -1 --format=%ad -- frontend/src`
+# 跟 dist 比。**写这个函数的当天就被它咬了一次**：正常顺序是"改 → build → 提交"，
+# 提交**必然晚于构建几分钟** ⇒ 把刚构建完的 dist 报成落后。
+# 补了个 90 秒余量还是假红（那次差 2 分钟）—— 因为病根是**拿"提交时间"当"源码变了"的代理**：
+# 提交不改变源码内容，它凭什么让构建作废。
 # ═══════════════════════════════════════════════════════════════
 
-def _commit_frontend(repo: Path, when: int) -> None:
-    _touch(repo / FE_SRC / "App.tsx", when)
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "fe", date=when)
+def test_源码没动过_只是提交了_不算落后(repo):
+    """🔴 **回归那一脚**（判据换掉之前，这条会红）。
 
-
-def test_紧接着构建不算落后(repo):
-    """**回归本仓当天踩的那一脚**：git 的 `%ct` 是整秒、mtime 有小数位 ——
-    提交完紧接着构建，这两者会差几秒，严格 `<` 会把**刚构建完**的产物报成落后。
-
-    这里故意让 dist 比提交**早 30 秒**（同一个构建流程里完全正常的顺序）。
+    顺序完全正常：先 `build`（dist=now），**几分钟后**才 `git commit`。
+    ⇒ 不算落后。**拿提交时间当基准就会把这条读成落后。**
     """
-    when = int(time.time())
-    _commit_frontend(repo, when)
-    _touch(repo / DIST / "index.html", when - 30)
+    now = time.time()
+    _touch(repo / FE_SRC / "App.tsx", now - 300)     # 5 分钟前改的源码
+    _touch(repo / DIST / "index.html", now - 240)    # 4 分钟前构建的（晚于源码 ✓）
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "fe")                # 现在才提交
     assert config.runtime_identity()["frontend_stale"] is False, \
-        "刚构建完就报落后 —— 这就是『常亮的假红』，喊几次狼来了真落后也没人看"
+        "只是提交晚了几分钟 —— 这就是『常亮的假红』，喊几次狼来了真落后也没人看"
 
 
-def test_落后两天的产物要点名(repo):
+def test_源码改过没重建就算落后(repo):
     """**正题**（09-15 真机那次：dist 停在 09-13，之后 17 个提交没进去，
     症状是"代码改了界面一点没变"，被误判成"修复没生效"）。"""
-    when = int(time.time())
-    _commit_frontend(repo, when)
-    _touch(repo / DIST / "index.html", when - 2 * 86400)
+    now = time.time()
+    _touch(repo / DIST / "index.html", now - 2 * 86400)   # 两天前的构建
+    _touch(repo / FE_SRC / "App.tsx", now)                # 刚改的源码
     assert config.runtime_identity()["frontend_stale"] is True
 
 
-def test_前端压根没提交过就不下结论(repo):
-    """拿不到"前端最后一次提交"这个基准时回 None —— **不猜**。
+def test_压根没构建过也算落后(repo):
+    """`dist/` 不存在 = 界面压根起不来（`app.py` 读 `static/dist/index.html`），
+    比"旧"更严重 —— 不是"不知道"，是**确定跟不上**。"""
+    _touch(repo / FE_SRC / "App.tsx", time.time())
+    assert config.runtime_identity()["frontend_stale"] is True
+    assert config.runtime_identity()["dist_built"] is None
+
+
+def test_前端源码目录都没有就不下结论(repo):
+    """拿不到"前端源码"这个基准时回 None —— **不猜**。
     （本仓的规矩：说"过没过期"之前先答"依据从哪读出来的"。）"""
     _touch(repo / "src" / "a.py", time.time())
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "init", date=int(time.time()))
     _touch(repo / DIST / "index.html", time.time())
     assert config.runtime_identity()["frontend_stale"] is None
