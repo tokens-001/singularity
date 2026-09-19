@@ -50,8 +50,8 @@ def load() -> list[dict]:
 def record(project, extra: dict | None = None) -> dict:
     """把一次交付的结局追加进账本。返回写进去的那一行。
 
-    **只记账，不下结论。** 各项失败计数（fix_round / review_failures /
-    integrate_failures）与 issues 的**条数**照实记；成本取现有累计口径。
+    **只记账，不下结论。** 各项失败计数（review_failures / integrate_failures）
+    与 issues 的**条数**照实记；成本取现有累计口径。
     """
     # 这里**绕过 `load()` 直取三态** —— 它要知道"坏"和"空"的区别（读侧可以降级，
     # 写侧不行）。本文件的铁律是"记账失败不能把交付带崩"，所以**不 raise**，
@@ -97,7 +97,6 @@ def record(project, extra: dict | None = None) -> dict:
         "phase": getattr(getattr(project, "phase", None), "value", None),
         "tasks_total": len(ids),
         "tasks_done": done,
-        "fix_round": getattr(project, "fix_round", 0) or 0,
         "review_failures": getattr(project, "review_failures", 0) or 0,
         "integrate_failures": getattr(project, "integrate_failures", 0) or 0,
         "issues": issue_kinds,
@@ -145,8 +144,11 @@ def digest(limit: int = 5) -> str:
         bits = [f"任务 {r.get('tasks_done', 0)}/{r.get('tasks_total', 0)} 成功"]
         if fail > 0:
             bits.append(f"失败 {fail}")
-        if r.get("fix_round"):
-            bits.append(f"返工 {r['fix_round']} 轮")
+        # ⚠️ 这里原来还有一句 `if r.get("fix_round"): "返工 N 轮"` —— **永不触发**
+        #    （`project.fix_round` 全仓没有 `+= 1`，恒为 0）。2026-09-19 连同字段一起删了。
+        #    真要回答"返工了几轮"，现成的是 `review_failures` / `integrate_failures`
+        #    这两条已经记着的；**任务内的轮次重试**（`_exec._decide_cascade` 的
+        #    `("continue", feedback)`）仍然只活在内存里，没落盘。
         if r.get("integrate_failures"):
             bits.append(f"集成失败 {r['integrate_failures']} 次")
         top = sorted((r.get("issues") or {}).items(), key=lambda kv: -kv[1])[:2]

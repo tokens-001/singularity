@@ -97,7 +97,7 @@ class TestDigest:
     def test_states_facts_not_lessons(self, ledger, monkeypatch):
         """"上一轮发生了什么"，**不是"你该怎么做"** —— 系统没资格下那个结论。"""
         _fake_tasks(monkeypatch, {"a": tracker.TaskStatus.DONE})
-        p = _proj(task_ids=["a"], fix_round=2)
+        p = _proj(task_ids=["a"])
         p.phase = pm.Phase.DONE
         pl.record(p)
         d = pl.digest()

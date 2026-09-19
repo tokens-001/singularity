@@ -280,7 +280,7 @@ def _run_research(project: ProjectState, agents: dict) -> str:
         # 只有"这事之前栽过"才值得花几倍 token 去读全文：
         # 项目有返工/失败记录 → 走 deep，把历史任务的实际产出也取回来。
         # 没栽过就只用标题（depth 1，与改动前行为一致）。
-        _deep = bool(getattr(project, "fix_round", 0) or getattr(project, "review_failures", 0))
+        _deep = bool(getattr(project, "review_failures", 0))
         pre = pre_mod.pre_search(project.description, route, use_hybrid=True, deep=_deep)
         if pre.memory and pre.memory.adapted:
             # **优先用改写后的计划**：检索到的是"别人的经验"，改写成"这个任务该怎么干"
@@ -759,7 +759,6 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
             id_map[tid] = child.id
             created += 1
 
-        project.fix_round = 0
         project.constraints_checklist = constraints
         project.set_phase(Phase.EXECUTING, "架构确认 → 建任务进执行")
         save(project)

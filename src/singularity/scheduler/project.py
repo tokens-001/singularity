@@ -112,7 +112,6 @@ class ProjectState:
     lineage: list[dict] = field(default_factory=list)               # 血缘日志
     handoffs: list[dict] = field(default_factory=list)              # Agent 交接记录
     token_budget_total: float = 5.0        # $ (默认 $5)
-    fix_round: int = 0                      # 内循环修复轮次 —— ⚠️ **无实现**：全仓只有 `= 0`，没有 `+= 1`，恒为 0
     review_failures: int = 0                # D1: 审查自动修失败计数 (上限 _REVIEW_MAX_AUTO_FIX)
     integrate_failures: int = 0             # D2: 集成合并失败计数 (上限 _INTEGRATE_MAX_RETRIES)
     # 验收（run_test_fix_loop）**连续**没走到 GATE3 的次数（上限 orchestrator._VERIFY_MAX_ATTEMPTS）。
@@ -193,7 +192,6 @@ class ProjectState:
         d.setdefault("handoffs", [])
         d.setdefault("auto_mode", False)
         d.setdefault("token_budget_total", 5.0)
-        d.setdefault("fix_round", 0)
         d.setdefault("review_failures", 0)
         d.setdefault("integrate_failures", 0)
         d.setdefault("verify_attempts", 0)
