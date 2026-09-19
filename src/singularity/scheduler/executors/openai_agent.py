@@ -59,6 +59,13 @@ def _is_sensitive_env(name: str) -> bool:
 # 讽刺的是 prompt 里早就写着"不要输出 <invoke> 块" —— **知道这个格式，却只有禁令、
 # 没有解析器**。禁令挡不住换了模型/换了心情的那一次，所以这里把它接住。
 _XML_INVOKE_RE = re.compile(r'<invoke\s+name=["\']([^"\']+)["\']\s*>(.*?)</invoke>', re.S)
+
+# 🔴 **"这个模型不吃 `tool_choice=required`"要按模型记，不能记在实例上**（2026-09-20）。
+# 原来记在 `self._no_required_tool_choice`，而 `_exec.run()` 的 `for turn` 里
+# **每一轮 `dispatch()` 都新建一个执行器** ⇒ 换了个人，谁也没记住 ⇒ **每个工具轮白打一发 400**。
+# 真机实测（task `1789834349419`）：一个任务里那条告警响了 **7 次**，而侧车 `dispatches` 正好也是 7 条。
+# 🔵 进程级就够了，**不落盘**：重启后多打一发换一个模型的探测，成本可以忽略（同"别为不常发生的事加持久化"）。
+_NO_REQUIRED_TOOL_CHOICE: set[str] = set()
 _XML_PARAM_RE = re.compile(r'<parameter\s+name=["\']([^"\']+)["\']\s*>(.*?)</parameter>', re.S)
 
 # ── DeepSeek 的 DSML ───────────────────────────────────────────
@@ -428,7 +435,6 @@ class OpenAIAgentExecutor(BaseExecutor):
         # 下面的降级分支原来**只改当次的 body**，而 body 每轮重建 ⇒ **每个带工具的
         # 轮次都重撞一次 400**。2026-09-19 夜真机复现的量：3 个工具轮 = 6 次 HTTP，
         # 其中 3 次是白撞的（探针 `/tmp/probe_exec_400.py`）。记在实例上，一次就够。
-        self._no_required_tool_choice = False
         # `_agent_level` 删了（2026-09-14）：闸门收进基类后它一个读者都没有，
         # 而同一件事存两份正是本仓反复吃亏的形状（改一处漏一处）。现在只有
         # `self.agent_level` 一份，由上面的 super() 赋值。
@@ -529,9 +535,10 @@ class OpenAIAgentExecutor(BaseExecutor):
                     "messages": messages,
                     "tools": tools,
                     # tools 清空(测试通过即停/死循环强制输出)后别再 required, 否则 API 拒收空 tools + required
-                    # `_no_required_tool_choice` = 这个模型已经拒过一次，别再每轮重撞（见 __init__）
+                    # `_NO_REQUIRED_TOOL_CHOICE` = **按模型**记住它拒过一次，别再每轮重撞
+                    # ⚠️ 判据必须是模块级那个集合：实例级的那个**每轮都会重建**，等于没记（2026-09-20）
                     "tool_choice": ("required"
-                                    if tools and not self._no_required_tool_choice
+                                    if tools and self._model not in _NO_REQUIRED_TOOL_CHOICE
                                     else "auto"),
                 }
                 # GPT-5.5+ 用 max_completion_tokens, 旧模型用 max_tokens
@@ -556,9 +563,11 @@ class OpenAIAgentExecutor(BaseExecutor):
                     body["tool_choice"] = "auto"
                     # ⚠️ **这个降级原来只活在这一次调用里** —— 记住它，否则下一轮的 body
                     # 又把 required 拼回来、又撞一次（2026-09-19 夜复现：每个工具轮都白打一发）。
+                    # 🔴 **记在实例上不算数**（2026-09-20 真机）：执行器**每轮重建** ⇒ 换了个人谁也没记住。
+                    # ⇒ 记到**按模型的模块级集合**，这样同一个进程里只白打一次。
                     # 只在**第一次**学到时出声，不然告警会被自己的重试刷屏。
-                    if not self._no_required_tool_choice:
-                        self._no_required_tool_choice = True
+                    if self._model not in _NO_REQUIRED_TOOL_CHOICE:
+                        _NO_REQUIRED_TOOL_CHOICE.add(self._model)
                         witness.warn("oa_exec",
                                      f"tool_choice_required_rejected:{self._model}:{str(e)[:60]}"[:150])
                     # 光说不做防护: auto 模式 thinking 模型可能只回文字不调工具 → 注入强制工具指令

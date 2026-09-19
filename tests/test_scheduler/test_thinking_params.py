@@ -4,6 +4,8 @@
 （GLM-5.2 能关思考、5.3 强制开；kimi-k2.6 能关、k2.7 强制开）。所以配了就传，
 不支持由 400 容错自动摘掉。
 """
+import pytest
+
 from singularity.scheduler import _dispatch_crud as crud
 from singularity.scheduler.executors.openai_agent import (
     _apply_think_params, _drop_rejected_think_param)
@@ -184,16 +186,30 @@ def test_没有_reasoning_content_时两种都无所谓():
 # 钉住的是**跨轮次的记忆**，不是单次的降级 —— 单次降级原来就是对的，坏的是一直没记住。
 
 class TestToolChoiceRequiredRemembered:
-    """判据：**第二轮起不再要 `required`**。删掉 `_no_required_tool_choice` 那两处，两条都红。"""
+    """判据：**学过一次之后，换轮次、换实例都不再要 `required`**。
 
-    def _bodies(self, monkeypatch):
+    ⚠️ 判据在 2026-09-20 改过：原来只钉"**同一个实例**的第二轮"，而真机上执行器
+    **每轮都是新建的** ⇒ 那条用例全绿、生产上照样每轮白打一发
+    （task `1789834349419`：告警响 7 次，侧车 `dispatches` 也是 7 条）。
+    ⇒ 记的地方从实例挪到**按模型的模块级集合**，用例也跟着钉**跨实例**。
+
+    变异：判据改回 `self._no_required_tool_choice`（实例级）→ `test_换了实例也不重撞` 红。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _清模块级记忆(self, monkeypatch):
+        """🔴 **必须清**：那条记忆是**进程级**的（这正是修复本身），
+        不清的话用例之间串味 —— 前一条学到的"m 不吃 required"会让后一条的
+        `test_第一轮确实要了_required` 直接红，而红的是测试脏、不是代码坏。"""
+        from singularity.scheduler.executors import openai_agent as oa
+        monkeypatch.setattr(oa, "_NO_REQUIRED_TOOL_CHOICE", set())
+
+    def _bodies(self, monkeypatch, model="m"):
         """跑一次真 `run()`，把每次 HTTP 的 body 按顺序记下来。"""
-        import pytest
-
         from singularity.scheduler.executors import openai_agent as oa
 
         monkeypatch.setenv("TEST_KEY", "k")
-        cfg = {"model": "m", "api_key_env": "TEST_KEY", "entry": "http://x",
+        cfg = {"model": model, "api_key_env": "TEST_KEY", "entry": "http://x",
                "max_turns": 3}
         ex = oa.OpenAIAgentExecutor(cfg, "任务", "tid", skill_tools=[], mcp_tools=[])
 
@@ -247,6 +263,22 @@ class TestToolChoiceRequiredRemembered:
         self._bodies(monkeypatch)
         learned = [h for h in hits if "tool_choice_required_rejected" in h]
         assert len(learned) == 1, f"报了 {len(learned)} 条：{learned}"
+
+    def test_换了实例也不重撞_跨轮次记忆(self, monkeypatch):
+        """🔴 **真机抓到的那个洞**：执行器每轮重建 ⇒ 记在实例上等于没记。
+
+        判据：**同一个进程里、同一个模型，第二个执行器（= 第二轮 dispatch）
+        的第一次请求就不该再要 `required`**。
+
+        变异：把 `_NO_REQUIRED_TOOL_CHOICE` 改回 `self._no_required_tool_choice`
+        （实例级）→ 本条红（第二个实例又会先撞一发）。
+        """
+        first = self._bodies(monkeypatch)                 # 第一个实例：撞一发、学到
+        assert first[0]["tool_choice"] == "required", "前提没成立：第一个实例压根没要 required"
+        second = self._bodies(monkeypatch)                # 第二个实例：**新对象，同一模型**
+        assert second[0]["tool_choice"] == "auto", (
+            "换了实例又去撞 required 了 —— 记忆记在实例上就等于没记"
+            "（真机：一个任务白打 7 发，侧车 dispatches 正好 7 条）")
 
 
 def test_那条_reasoning_400_不许当成_模型不吃思考参数():
