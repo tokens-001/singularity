@@ -387,6 +387,28 @@ export const ArchitectureDetails = memo(function ArchitectureDetails(
 
 const secTitle = { fontSize: 11, color: '#6b6b68', fontWeight: 600, marginBottom: 4 } as const
 
+/** 项目级问题清单（`info.issues`）—— **两处共用**：GATE3 的验收面板里，
+ *  以及非 GATE3 阶段的「📦 交付」抽屉。
+ *
+ *  🔴 为什么非 GATE3 也要渲染：验收明细走单独接口、**只在 gate3 拉**
+ *  （`Chat.tsx` 那句 `if (activePhase !== 'gate3') { setAcceptance(null); return }`），
+ *  而 `info.issues` 是项目状态自带的、随时都在。2026-09-20 之前那儿的抽屉条件写的是
+ *  `acceptance || info?.issues?.length`，身体却只有 `acceptance && …`
+ *  ⇒ **非 GATE3 阶段只要项目有 issue，就必然出现一个点开全空的「N 条 issue」盒子**
+ *  （round c 1 条 · round b 8 条）。同一个"我核不了"，不该一边给数字、一边给空白。 */
+function ProjectIssues({ issues }: { issues?: any[] }) {
+  if (!(issues || []).length) return null
+  return (
+    <div style={{ marginTop: 8, background: '#fffdf5', border: '1px solid #e8dcc0', borderRadius: 10, padding: '10px 14px' }}>
+      {(issues as any[]).map((it: any, i: number) => (
+        <div key={i} style={{ fontSize: 11, color: '#b45309', lineHeight: 1.6 }}>
+          ⚠ {it.detail || it.reason || it.message || JSON.stringify(it)}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /** GATE3 验收摘要。以前这道门只显示几周前的调研/架构，QA 报告生成完没人看得见。
  *  摘要行刻意放在折叠框外：不展开也能判断该不该过。 */
 export const AcceptancePanel = memo(function AcceptancePanel({ acceptance, projectIssues, bare }: { acceptance: any; projectIssues?: any[]; bare?: boolean }) {
@@ -424,15 +446,7 @@ export const AcceptancePanel = memo(function AcceptancePanel({ acceptance, proje
         )}
       </div>
       {/* 项目 issues 放在折叠框外：验收被跳过这类事必须一眼看见，不能再是静默的 */}
-      {(projectIssues || []).length > 0 && (
-        <div style={{ marginTop: 8, background: '#fffdf5', border: '1px solid #e8dcc0', borderRadius: 10, padding: '10px 14px' }}>
-          {(projectIssues as any[]).map((it: any, i: number) => (
-            <div key={i} style={{ fontSize: 11, color: '#b45309', lineHeight: 1.6 }}>
-              ⚠ {it.detail || it.reason || it.message || JSON.stringify(it)}
-            </div>
-          ))}
-        </div>
-      )}
+      <ProjectIssues issues={projectIssues} />
       {(issues.length > 0 || conf?.reason) && (
         <details open={bare} style={{ background: '#ffffff', border: '1px solid #e5e2d8', borderRadius: 10, marginTop: 8, overflow: 'hidden' }}>
           <summary style={{ cursor: 'pointer', padding: '12px 14px', fontSize: 13, fontWeight: 700, color: '#0f766e', listStyle: 'none', display: 'flex', alignItems: 'center', gap: 8, userSelect: 'none' }}>
@@ -496,6 +510,14 @@ const Bar = ({ items, tone = 'normal' }: { items: (string | null | undefined)[];
 /** 每道门的摘要 —— **放在折叠框外面**：不点开就能判断该不该过。
  *  以前三道门长一个样（两个折叠框 + 两个按钮），要判断只能全部展开读一遍。 */
 const GateSummary = memo(function GateSummary({ gateNum, research, arch, projectIssues }: any) {
+  // 🔴 项目级问题（`project.issues`）**得在一眼能看见的地方**。
+  // 2026-09-20 之前它只活在侧滑面板的「📦 交付」抽屉里 —— 要**点开面板 + 展开抽屉**两步，
+  // 而里面那条恰恰是「进 GATE3 时没有任何验收记录 —— 本页的结论不构成有效验收」这种
+  // **直接影响"该不该点通过"**的事。参数 `GateBody` 一直在传，渲染那段从来没写（死参数）。
+  // ⚠️ 兜底那支不能省：GATE1 还没出调研、GATE2 还没出架构时上面两个分支都不进，
+  //    只在末尾返回 null 的话 —— 问题又回到"看不见"（那正是这条要修的东西）。
+  const nIssues = (projectIssues || []).length
+  const 问题项 = nIssues ? `⚠ ${nIssues} 条项目问题` : null
   if (gateNum === '1' && research) {
     const prods = (research.competitive_analysis?.products || []).length
     const pits: string[] = research.pitfalls || []
@@ -510,19 +532,22 @@ const GateSummary = memo(function GateSummary({ gateNum, research, arch, project
         : research.recommendation ? `推荐：${research.recommendation}` : '⚠ 调研没给推荐方案',
       prods ? `${prods} 个竞品` : null,
       pits.length ? `${pits.length} 个坑` : null,
-    ]} />
+      问题项,
+    ]} tone={问题项 ? 'warn' : 'normal'} />
   }
   if (gateNum === '2' && arch) {
     const high = (arch.risks || []).filter((r: any) => r.impact === 'high').length
     const nTasks = (arch.tasks || []).length
-    return <Bar tone={nTasks ? 'normal' : 'warn'} items={[
+    return <Bar tone={nTasks && !问题项 ? 'normal' : 'warn'} items={[
       nTasks ? `${nTasks} 个任务` : '⚠ 架构没拆出任务（下一步会卡住）',
       `${(arch.modules || []).length} 个模块`,
       `${(arch.constraints || []).length} 条约束`,
       high ? `⚠ ${high} 条高风险` : null,
+      问题项,
     ]} />
   }
-  return null
+  // 上面两条都不进（还没出调研 / 还没出架构）—— 只要有问题就仍然摆出来
+  return 问题项 ? <Bar tone="warn" items={[问题项]} /> : null
 })
 
 /**
@@ -727,7 +752,12 @@ export const ProjectMaterials = memo(function ProjectMaterials(
         <MatGroup label="📦 交付"
                   summary={acceptance ? '验收明细' : `${info.issues.length} 条 issue`}
                   open={isOpen('deliver')}>
-          {acceptance && <AcceptancePanel acceptance={acceptance} projectIssues={info.issues} bare />}
+          {/* 🔴 非 GATE3 阶段 `acceptance` 恒为 null（那个接口只在 gate3 拉）——
+              以前这里写成 `{acceptance && …}` ⇒ 标题数着 issue、点开全空。
+              没有验收明细时退到 issues 清单：那是同一件事在"核不了"下的如实呈现。 */}
+          {acceptance
+            ? <AcceptancePanel acceptance={acceptance} projectIssues={info.issues} bare />
+            : <ProjectIssues issues={info.issues} />}
         </MatGroup>
       )}
     </div>

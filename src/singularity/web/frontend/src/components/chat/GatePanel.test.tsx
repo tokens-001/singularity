@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest'
 import { act, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { AcceptancePanel, ProjectArchive, GatePanel, gateCopy, ResearchReport } from './GatePanel'
+import { AcceptancePanel, ProjectArchive, ProjectMaterials, GateBody, GatePanel, gateCopy, ResearchReport } from './GatePanel'
 
 function render(node: ReactNode): string {
   const el = document.createElement('div')
@@ -106,6 +106,64 @@ describe('GATE3 验收摘要', () => {
     ]} />)
     expect(t).toContain('验收跳过')
     expect(t).toContain('架构没产出约束清单')
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════
+// 「📦 交付」不许是空盒子（2026-09-20 用户报的）
+// ═══════════════════════════════════════════════════════════════
+// 抽屉的**出现条件**写的是 `acceptance || info.issues.length`，**身体**却只有
+// `acceptance && …`，而 `acceptance` 走单独接口、**只在 gate3 拉**
+// ⇒ 非 GATE3 阶段只要项目有 issue，就必然出现一个"标题数着 N 条、点开全空"的盒子
+// （真机 round c 1 条 · round b 8 条，两次都是空的）。
+// 修法：把 issues 那段抽成 `ProjectIssues`，没有验收明细时退到它 —— 两处共用。
+// ⚠️ **删掉 `: <ProjectIssues …>` 那一支，第一条就红**（那是接线本身，不是函数）。
+describe('「📦 交付」抽屉', () => {
+  const 项目 = {
+    id: 'p1',
+    issues: [{ type: 'gate3_no_evidence', detail: '进 GATE3 时没有任何验收记录 —— QA/安全审计没跑过' }],
+  }
+
+  it('非 GATE3（acceptance 恒为 null）⇒ 标题数着几条，点开就得有几条', () => {
+    const t = render(<ProjectMaterials info={项目} tasks={[]} gateNum="2" acceptance={null} />)
+    expect(t).toContain('1 条 issue')
+    expect(t, '抽屉里是空的 —— 标题数着 issue、点开什么都没有').toContain('没有任何验收记录')
+  })
+
+  it('GATE3 拉到验收明细时仍走验收面板，issues 照样露出来', () => {
+    const t = render(<ProjectMaterials info={项目} tasks={[]} gateNum="3" acceptance={{}} />)
+    expect(t).toContain('QA：无报告')
+    expect(t).toContain('没有任何验收记录')
+  })
+
+  it('没有 issue 也没有验收明细 ⇒ 整个抽屉不出现（别修成常驻空壳）', () => {
+    const t = render(<ProjectMaterials info={{ id: 'p1' }} tasks={[]} gateNum="2" acceptance={null} />)
+    expect(t).not.toContain('📦 交付')
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════
+// 门禁页的摘要条也要带上项目问题（2026-09-20 用户拍板）
+// ═══════════════════════════════════════════════════════════════
+// 抽屉里能看见 ≠ 看得见：那条 issue 会影响"该不该点通过"，得摆在**不用点开**的地方。
+// `GateSummary` 一直收着 `projectIssues` 这个参数（`GateBody` 也在传），渲染从来没写。
+describe('门禁页摘要条', () => {
+  const 问题 = [{ type: 'verification_skipped', detail: '验收跳过: QA/安全审计师都没跑' }]
+  const body = (info: any) => render(<GateBody info={info} gateNum="1" gatePhase="gate1"
+                                               tasks={[]} onGate={() => {}} />)
+
+  it('GATE1 有调研时，摘要条里带着问题数', () => {
+    expect(body({ id: 'p1', research_report: RESEARCH, issues: 问题 })).toContain('1 条项目问题')
+  })
+
+  it('还没出调研/架构时不进那两个分支 —— 也别在这丢掉它', () => {
+    // ⚠️ 这是接线的兜底那一支：上面两个分支都 return null 的话，
+    //    问题又回到"看不见"，等于只接了一半。
+    expect(body({ id: 'p1', issues: 问题 })).toContain('1 条项目问题')
+  })
+
+  it('没有问题时摘要条上不出现这句', () => {
+    expect(body({ id: 'p1', research_report: RESEARCH })).not.toContain('条项目问题')
   })
 })
 
