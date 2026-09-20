@@ -69,17 +69,26 @@ def _tasks_of(pid: str) -> list:
 # `projects/` 里除了项目本体，还堆着一堆**侧车**（`.qa_report.json` /
 # `.executable_tasks.json` / `.machine-checks.json`）—— 它们**不是项目**。
 # 不做这个过滤，`--rounds` 就会把渲染出来的 QA 报告当成一轮摆上桌（`--last` 早就踩过）。
-_SIDECAR_MARKS = (".qa_report", ".fusion", ".machine", ".executable")
-
-
 def _project_files() -> list:
     d = config.QIDIAN_DIR / "projects"
     if not d.exists():
         return []
     # `glob` 的顺序**跟着文件系统走**（实测同一目录两次能给出不同顺序）⇒ 这里定死按文件名。
     # 文件名就是毫秒时间戳，所以名字序 == 时间序，调用方不用再排序。
-    return sorted((p for p in d.glob("*.json")
-                   if not any(m in p.name for m in _SIDECAR_MARKS)),
+    #
+    # 🔴 **判据是白名单**：只有 `<毫秒时间戳>.json` 才算项目文件。
+    #
+    # ⚠️ 原来是反过来的 —— 一张"已知旁挂文件"的黑名单（`.qa_report` / `.fusion` /
+    # `.machine` / `.executable`）。2026-09-21 真机：新加了一种旁挂
+    # `<id>.e2e_checklist.json`（顶层是 **list**），黑名单没跟上 ⇒ 它被当成项目文件
+    # 送进 `ProjectState.from_dict` ⇒ `ValueError` ⇒ **整个 `--rounds` 表当场崩**，
+    # 而且前两轮已经印出来了，看着像"跑到一半坏了"而不是"名单漏了"。
+    #
+    # 白名单的方向是**默认排除**：以后再加多少种旁挂都不会漏（§89 同族：
+    # 判据要选"默认安全"的那一边）。
+    # 判据用"stem 里不能再有点"而不是"全是数字"：真项目名恒为 `<id>.json`，
+    # 旁挂恒为 `<id>.<标记>.json`。这样写不绑死 id 的具体形态（测试夹具用的是 `P1.json`）。
+    return sorted((p for p in d.glob("*.json") if "." not in p.stem),
                   key=lambda p: p.name)
 
 

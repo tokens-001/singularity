@@ -191,6 +191,16 @@ def make_rounds_scene(tmp: Path) -> None:
     json.dump({}, open(qd / "projects" / "1001.machine-checks.json", "w", encoding="utf-8"))
     (qd / "projects" / "1002.qa_report.json").write_text("{坏掉的 json", encoding="utf-8")
 
+    # 🔴 **第 4 件侧车 —— 名字是"没见过的"，正文顶层是 list**（2026-09-21 真机的形状）。
+    #
+    # 上面三条**验收不了那个真 bug**：它们钉的是"**已知**的三件侧车"，而当时的实现
+    # 正是一张"已知侧车"的黑名单 ⇒ 新加第 4 种就漏进来（真机漏的是
+    # `<id>.e2e_checklist.json`）⇒ `ProjectState.from_dict` 当场 ValueError、
+    # **整个 `--rounds` 表崩掉**（前两轮已经印出来了，看着像"跑到一半坏了"）。
+    # 所以这一条**故意用一个黑名单里不可能有的名字**，钉的是"判据的方向"而不是"名单的内容"。
+    json.dump([{"name": "e2e", "user_flow": "跑一条命令", "expect": "出表"}],
+              open(qd / "projects" / "1001.some_new_sidecar.json", "w", encoding="utf-8"))
+
 
 # 🔴 **守卫**：这个脚本曾经把生产的 `projects_root` 覆盖掉过（2026-09-16 晚）。
 # 当时的错在 `run_facts` 的 `finally`：先把 `config.QIDIAN_DIR` **还原成生产**，
@@ -297,10 +307,12 @@ if __name__ == "__main__":
         check("一个都没进仓时印「（无）」，不是留空", "文件 （无）" in rows[1], rows[1])
         check("第二轮进仓 0/1", "进仓 0/1 任务" in rows[1], rows[1])
 
-        # 侧车（`.qa_report` / `.executable_tasks` / `.machine-checks`）**一件都不是项目**
+        # 侧车（`.qa_report` / `.executable_tasks` / `.machine-checks` / **没见过的那个**）
+        # **一件都不是项目**
         stems = _with_qd(t6, lambda: [p.stem for p in df._project_files()])
-        check("侧车三件套一个都没被当成轮次",
-              stems == ["1001", "1002"], f"拿到 {stems}")
+        check("已知三件侧车没被当成轮次", stems == ["1001", "1002"], f"拿到 {stems}")
+        check("🔴 名字没见过的侧车同样没被当成轮次（判据是白名单，不是黑名单）",
+              "1001.some_new_sidecar" not in stems, f"拿到 {stems}")
 
         # `_qa_verdict` 是本轮新增的：**「没有」和「读不出来」在这儿也得分开**
         check("QA：没有 ⇒「—」", _with_qd(t6, lambda: df._qa_verdict("9999")) == "—")
