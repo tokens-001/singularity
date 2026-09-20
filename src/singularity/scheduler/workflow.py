@@ -741,27 +741,25 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
                 r = mchk.run_check(c.get("check"), root)
                 results.append({"rule": c.get("rule", c.get("text", "")), **r})
             passed = sum(1 for r in results if r.get("passed"))
-            # 🔵 **"我们没跑完"和"跑了没过"是两件事**（2026-09-19 复核 B4）：`run_check`
-            #    超时返回 `ran=True, passed=False, reason="超时 Ns"`，跑不动返回 `ran=False`。
-            #    原来那句"x/y 通过"把这两种都算进分母 ⇒ GATE3 上读到的是"它没过"，
-            #    真相是**我们给的 60 秒不够**（或命令压根起不来）。
-            # ⚠️ `passed` 一分没动 —— 超时**绝不能**算通过（fail-closed）；这里只是**分开说**。
-            _unran = [r for r in results if not r.get("ran")]
-            _timed_out = [r for r in results
-                          if r.get("ran") and not r.get("passed")
-                          and "超时" in str(r.get("reason", ""))]
+            _unran, _timed_out, _missing = _split_check_results(results)
             _ours = len(_unran) + len(_timed_out)
             note = f"机械检查 {passed}/{len(results)} 条通过"
             if _ours:
                 note += (f"；另有 {_ours} 条**是我们没跑完**（超时/命令起不来），"
                          f"不计入通过、也不算它失败")
+            if _missing:
+                _files = sorted({f for r in _missing for f in r["missing_inputs"]})
+                _shown = "、".join(_files[:5]) + ("…" if len(_files) > 5 else "")
+                note += (f"；另有 {len(_missing)} 条**是产物没到**（点名的文件不存在：{_shown}）"
+                         f"—— 它仍算不通过，但根子在**上游有任务没交付**，别当「没写对」去修")
             if dropped:
                 note += f"（另有 {len(dropped)} 条超出上限 {_max_machine_checks}，本轮未跑）"
             project.issues = [i for i in project.issues if i.get("type") != "machine_checks"]
             project.issues.append({"type": "machine_checks", "detail": note})
             project.add_lineage({"action": "machine_checks", "ran": len(results),
                                  "passed": passed, "skipped": len(dropped),
-                                 "our_side": _ours})
+                                 "our_side": _ours,
+                                 "missing_inputs": len(_missing)})
             _save_phase_output(project.id, "machine-checks.json",
                                json.dumps(results, ensure_ascii=False, indent=2))
             msgs.append(note)
@@ -1201,6 +1199,31 @@ def _resolve_fix_route(project: ProjectState) -> tuple[str, str, str, list]:
         # `test_gate3_rollup` 里那条回归就是钉它的。
         route_source = "default_no_qa"
     return fix_route, route_source, no_qa_reason, issues
+
+
+def _split_check_results(results: list) -> tuple[list, list, list]:
+    """把机械检查的结果分成**三种失败**，返回 `(没跑成, 超时, 产物没到)`。
+
+    🔴 **为什么要分**：那句"机械检查 x/y 条通过"把三种完全不同的处境说成了一件事，
+    而它们的下一步动作**各不相同**：
+
+      · **没跑成**（`ran=False`：命令起不来 / 不是 argv / 根目录没了）→ 查我们这边
+      · **超时**（`ran=True` 但超了 `DEFAULT_TIMEOUT`）→ **我们给的秒数不够**，不是它不合格
+        （2026-09-19 复核 B4 加的这一类）
+      · **产物没到**（`ran=True` 但 pytest 报 `file or directory not found`）→ **上游有任务
+        没交付**，不是"代码写错了"（2026-09-20 加的第三类；真机 round b/c 那些
+        `file or directory not found` 就卡在这个歧义上）
+
+    ⚠️ **这只是"分开说"** —— `passed` 一分没动：超时和缺文件**都仍算不通过**
+    （fail-closed 不许松）。抽成独立函数是为了能单测：这三个分类一旦写错，
+    界面上的文案会**静默地**说错话，而没人会因此收到告警。
+    """
+    unran = [r for r in results if not r.get("ran")]
+    failed = [r for r in results if r.get("ran") and not r.get("passed")]
+    timed_out = [r for r in failed if "超时" in str(r.get("reason", ""))]
+    # 超时那条分支压根不带这个键（`run_check` 里超时是提前 return 的）⇒ 不用再排一次
+    missing = [r for r in failed if r.get("missing_inputs")]
+    return unran, timed_out, missing
 
 
 def _clear_cancel_marker_for_rewind(task_id: str) -> str:

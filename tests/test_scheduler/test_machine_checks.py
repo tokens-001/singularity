@@ -217,3 +217,109 @@ class TestArchSchemaCoversContract:
         from singularity.scheduler.workflow import _ARCHITECT_CONTEXT
         assert "covers" in _ARCHITECT_CONTEXT
         assert "0 起算的索引" in _ARCHITECT_CONTEXT
+
+
+# ═══════════════════════════════════════════════════════════════
+# 「产物没到」≠「测试没过」（2026-09-20）
+# ═══════════════════════════════════════════════════════════════
+# 真机 round b/c 里那些 `file or directory not found` 卡在一个歧义上：
+# `run_check` 在"跑了但没过"时 `reason` 是空的，调用方那句汇总只读 `passed`
+# ⇒ GATE3 上写的是「机械检查 8/10 条通过」，**分不出**那 2 条是
+# 「测试真的挂了」还是「测试文件根本没被交付」。
+# 这两件事的下一步动作完全不同：前者修代码，后者去查**哪个任务没交付**。
+
+class TestMissingInputs:
+    """`missing_inputs` —— 纯函数，从输出里抠不存在的路径。"""
+
+    def test_抠得出_pytest那句(self):
+        from singularity.scheduler._machine_checks import missing_inputs
+        err = "ERROR: file or directory not found: tests/test_filters.py\n"
+        assert missing_inputs("", err) == ["tests/test_filters.py"]
+
+    def test_去重且保序(self):
+        from singularity.scheduler._machine_checks import missing_inputs
+        err = ("ERROR: file or directory not found: b.py\n"
+               "ERROR: file or directory not found: a.py\n"
+               "ERROR: file or directory not found: b.py\n")
+        assert missing_inputs("", err) == ["b.py", "a.py"]
+
+    def test_断言失败抠不出东西(self):
+        """**对照**：真的是测试没过时，这里必须是空的 ——
+        不然"产物没到"会变成每一条失败都挂的常亮标签（本仓管这叫假红）。"""
+        from singularity.scheduler._machine_checks import missing_inputs
+        err = ("FAILED tests/test_x.py::test_a - AssertionError: assert 1 == 2\n"
+               "1 failed, 2 passed in 0.03s\n")
+        assert missing_inputs("", err) == []
+
+    def test_输出为空也不炸(self):
+        from singularity.scheduler._machine_checks import missing_inputs
+        assert missing_inputs("", "") == []
+        assert missing_inputs(None, None) == []
+
+
+class TestRunCheckAttribution:
+    """接线：真起子进程跑，验 `run_check` 真的把那个字段填上了。
+
+    ⚠️ 用**真的 pytest**（`python -m pytest`）—— 被测的就是"pytest 在文件不存在时
+    输出长什么样、我们读不读得懂"，喂替身等于测替身。
+    """
+
+    def test_文件不存在时填missing_inputs且仍然passed_False(self, tmp_path):
+        import sys
+        from singularity.scheduler._machine_checks import run_check
+        chk = {"argv": [sys.executable, "-m", "pytest", "tests/test_根本不存在.py"],
+               "expect_exit": 0}
+        r = run_check(chk, tmp_path)
+        assert r["ran"] is True, r
+        assert r["passed"] is False, "缺文件绝不能算通过（fail-closed）"
+        assert r["missing_inputs"] == ["tests/test_根本不存在.py"], r
+
+    def test_测试真挂了时missing_inputs是空的(self, tmp_path):
+        """**对照**：同一个 run_check，换一个"文件在但断言失败"的输入 ⇒ 空。"""
+        import sys
+        from singularity.scheduler._machine_checks import run_check
+        (tmp_path / "test_fails.py").write_text(
+            "def test_x():\n    assert 1 == 2\n", encoding="utf-8")
+        chk = {"argv": [sys.executable, "-m", "pytest", "test_fails.py"], "expect_exit": 0}
+        r = run_check(chk, tmp_path)
+        assert r["passed"] is False, r
+        assert r["missing_inputs"] == [], f"断言失败被误标成产物没到: {r}"
+
+    def test_通过时也带这个键且为空(self, tmp_path):
+        """键**永远在**（下游不用 `if 'missing_inputs' in r`），通过时是空表。"""
+        import sys
+        from singularity.scheduler._machine_checks import run_check
+        (tmp_path / "test_ok.py").write_text(
+            "def test_x():\n    assert 1 == 1\n", encoding="utf-8")
+        chk = {"argv": [sys.executable, "-m", "pytest", "test_ok.py"], "expect_exit": 0}
+        r = run_check(chk, tmp_path)
+        assert r["passed"] is True, r
+        assert r["missing_inputs"] == []
+
+
+class TestSplitCheckResults:
+    """三分类的**接线**：分错了界面会静默说错话，而不会有人因此收到告警。"""
+
+    @staticmethod
+    def _split(rs):
+        from singularity.scheduler.workflow import _split_check_results
+        return _split_check_results(rs)
+
+    def test_三类各归各的(self):
+        unran, timed_out, missing = self._split([
+            {"ran": False, "passed": False, "reason": "无法执行: FileNotFoundError"},
+            {"ran": True, "passed": False, "reason": "超时 60s"},
+            {"ran": True, "passed": False, "missing_inputs": ["tests/test_filters.py"]},
+            {"ran": True, "passed": False, "missing_inputs": []},     # 真没过
+            {"ran": True, "passed": True, "missing_inputs": []},      # 通过
+        ])
+        assert len(unran) == 1 and len(timed_out) == 1 and len(missing) == 1
+
+    def test_超时那条不算产物没到(self):
+        """超时是**我们的秒数不够**，不是"上游没交付" —— 两者都报的话，
+        人会去查错方向（去问哪个任务没交付，而其实是该加 timeout）。"""
+        _, timed_out, missing = self._split([{"ran": True, "passed": False, "reason": "超时 60s"}])
+        assert len(timed_out) == 1 and missing == []
+
+    def test_空结果是三个空表(self):
+        assert self._split([]) == ([], [], [])

@@ -28,8 +28,35 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
+
+# pytest 报"这条路径压根不存在"时的写法（大小写、版本差异都收）。
+# ⚠️ **别把它当"测试失败"** —— 文件不存在是**上游没交付**，不是被验收的东西不合格。
+_MISSING_INPUT_RE = re.compile(r"file or directory not found:\s*(\S+)", re.IGNORECASE)
+
+
+def missing_inputs(stdout: str, stderr: str) -> list[str]:
+    """从输出里抠出**压根不存在的输入文件**（去重、保序）。
+
+    🔴 **为什么要单独抠**（2026-09-20）：`run_check` 在"跑了但没过"时 `reason` 是**空的**，
+    而调用方那句汇总只读 `passed` ⇒ GATE3 上看到的是「机械检查 8/10 条通过」，
+    **分不出那 2 条是「测试真的挂了」还是「测试文件根本没被交付」** ——
+    而这两件事的下一步动作完全不同：前者修代码，后者要问**哪个任务没交付**。
+    真机 round b/c 里那些 `file or directory not found` 就卡在这个歧义上
+    （清单里「计划期臆造」那条的 09-20 更正；详见 `docs/防御模式.md`）。
+
+    ⚠️ **它只负责"说清楚"，不负责"改判"**：`passed` 依旧 False（fail-closed）。
+    """
+    files: list[str] = []
+    for text in (stderr, stdout):
+        for m in _MISSING_INPUT_RE.finditer(text or ""):
+            f = m.group(1).rstrip(":,.；;")
+            if f and f not in files:
+                files.append(f)
+    return files
+
 
 # argv[0] 白名单（按 basename 比）
 ALLOWED_ARGV0 = {
@@ -207,11 +234,16 @@ def run_check(check, root: str | os.PathLike, timeout: float = DEFAULT_TIMEOUT) 
         return {"ran": False, "passed": False, "exit": None, "stdout": "", "stderr": "",
                 "reason": f"无法执行: {type(e).__name__}: {e}"}
 
+    _out, _err = (proc.stdout or "")[:2000], (proc.stderr or "")[:2000]
     return {
         "ran": True,
         "passed": proc.returncode == parsed["expect_exit"],
         "exit": proc.returncode,
-        "stdout": (proc.stdout or "")[:2000],
-        "stderr": (proc.stderr or "")[:2000],
+        "stdout": _out,
+        "stderr": _err,
+        # 🔴 **"跑了没过"要说清是哪一种**（2026-09-20）：`reason` 在这个分支里原来是空的，
+        # 汇总只读 `passed` ⇒ 分不出"测试真挂了"和"产物压根没交付"。
+        # 抠出来的文件名会被调用方点着名报出去（"哪个任务没交付"是从这儿接上的）。
+        "missing_inputs": missing_inputs(_out, _err) if proc.returncode != parsed["expect_exit"] else [],
         "reason": "",
     }
