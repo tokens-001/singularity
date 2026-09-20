@@ -106,6 +106,47 @@ const clickText = async (el: HTMLElement, label: string) => {
 }
 
 /**
+ * 🔴 **2026-09-20 真机看界面时抓到的**：`GateSummary`（「⚠ N 条项目问题」）和
+ * 「为什么又问你一次」原来只被 `GateBody` 渲染，而 `GateBody` ← `GatePanel`
+ * **早就没人挂了**（09-17 `2cd18a31` 那次侧滑面板重构把 `<GateBody/>` 换成了
+ * `<ProjectMaterials/>`）⇒ 09-20 加进去的东西**落地即隐身**，而 `GatePanel.test.tsx`
+ * 直接渲染 `<GatePanel>` 所以照绿 —— 又一次「函数对 ≠ 接线通」。
+ *
+ * ⇒ 这一组守的是**页面**：删掉 `Chat.tsx` 里那行 `<GateSummaryBar/>` 就会红。
+ * ⚠️ 别拿"`GateSummaryBar` 自己渲染得对"当替代 —— 那正是当初漏掉它的原因。
+ */
+describe('门禁摘要条 + 兜底来路必须在**页面**上（不是某个没人挂的组合件）', () => {
+  const 兜底项目 = {
+    ...PROJECT, phase: 'gate2',
+    owner_confirm: { gate2: 'approved' },
+    issues: [{ detail: '机械检查 0/8 条通过', type: 'machine_checks' },
+             { detail: '本阶段席位只有 1 家，委员会没有开', kind: 'committee_not_engaged' }],
+    lineage: [{ to: 'gate2', reason: '审查自动修已达上限(2轮), 升GATE2人工兜底' }],
+  }
+
+  it('项目问题条 + 为什么又问你一次 + 兜底改口，三样都在页面上', async () => {
+    ;(api.projects as any).mockResolvedValue({ projects: [兜底项目] })
+    const { el, done } = await mount()
+    const text = (el.textContent || '').replace(/\s+/g, ' ')
+    expect(text, '兜底升上来没改口 —— 人分不出"初审"和"出事后来上的人工兜底"')
+      .toContain('出事后升上来的人工兜底')
+    expect(text, '「N 条项目问题」没渲染 —— 项目级问题又回到"看不见"')
+      .toContain('2 条项目问题')
+    expect(text, '打回理由没摆出来 —— "为什么又问你一次"没得看').toContain('为什么又问你一次')
+    expect(text, 'lineage 里那条 reason 没被读出来').toContain('审查自动修已达上限')
+    done()
+  })
+
+  it('**没有**项目问题时，那条摘要不许凭空出现（常亮的假红）', async () => {
+    ;(api.projects as any).mockResolvedValue({ projects: [{ ...兜底项目, issues: [] }] })
+    const { el, done } = await mount()
+    const text = (el.textContent || '').replace(/\s+/g, ' ')
+    expect(text, '没问题还挂个"0 条问题"').not.toContain('条项目问题')
+    done()
+  })
+})
+
+/**
  * 布局：**状态钉住、材料侧滑、正文留给观察者**（2026-09-17 用户提：
  * 「之前忽略了观察者对话窗口，导致现在调研架构等任务都堆在对话窗口」）。
  *

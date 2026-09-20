@@ -766,32 +766,54 @@ export const ProjectMaterials = memo(function ProjectMaterials(
 
 /** 门禁要看的**材料**：摘要 / 验收明细 / 按阶段分组的材料。放进「材料」侧滑面板。
  *  ⚠️ 它和 `GateBar` 分开是有意的：条要**钉在视野里**，材料可以滚、可以收起。 */
-export const GateBody = memo(function GateBody({ info, gateNum, acceptance, tasks }: Props) {
+/** 门禁**摘要条** + 兜底来路 —— 钉在审批条下面那一小块（**由页面直接挂**）。
+ *
+ *  🔴 **2026-09-20 真机看界面时抓到的**：这两块原来只被 `GateBody` 渲染，而
+ *  `GateBody` ← `GatePanel` 已经**没有任何调用方**（`Chat.tsx` 只导 `GateBar` +
+ *  `ProjectMaterials`）⇒ 09-20 加进 `GateSummary` 的「⚠ N 条项目问题」和那行
+ *  「为什么又问你一次」**从落地那天起就没在界面上出现过**，而单测直接渲染
+ *  `<GatePanel>`（把两半拼起来）所以照绿 —— 又一次「函数对 ≠ 接线通」。
+ *
+ *  ⚠️ 抽出来是为了**让它有活人挂**：谁再把它收进一个没人挂的组合件里，
+ *  `Chat.test.tsx` 那条接线测试会红 —— 它渲染的是**页面**，不是这个组件。
+ */
+export const GateSummaryBar = memo(function GateSummaryBar({ info, gateNum }: any) {
   const copy = gateCopy(gateNum, info)
+  return (
+    <>
+      {/* 摘要和"该看的东西"都按门分 —— 三道门以前长一个样，且显示的内容不对：
+          GATE1 那时还没有架构却显示"架构方案"；GATE3 要审交付物，却把几周前的
+          调研/架构摆在最前面。 */}
+      <GateSummary gateNum={gateNum} research={info?.research_report}
+                   arch={info?.architecture} projectIssues={info?.issues} />
+      {/* 兜底升上来的 GATE2：**把来路摆出来** —— 理由一直在 `lineage` 里，界面以前不读它。
+          人此刻要判的是"该不该点通过"，而这条解释的正是**为什么又轮到人**。 */}
+      {copy.reason && (
+        <div style={{ fontSize: 12, color: '#b45309', background: '#fdf6ec',
+                      border: '1px solid #e8c99b', borderRadius: 8, textAlign: 'left',
+                      padding: '8px 12px', lineHeight: 1.6, maxWidth: 760, margin: '8px auto 0' }}>
+          <b>为什么又问你一次：</b>{copy.reason}
+        </div>
+      )}
+    </>
+  )
+})
+
+export const GateBody = memo(function GateBody({ info, gateNum, acceptance, tasks }: Props) {
   return (
     <div style={{ textAlign: 'left' }}>
       <div style={{ maxWidth: 760, margin: '0 auto', textAlign: 'left' }}>
-        {/* 摘要和"该看的东西"都按门分 —— 三道门以前长一个样，且显示的内容不对：
-            GATE1 那时还没有架构却显示"架构方案"；GATE3 要审交付物，却把几周前的
-            调研/架构摆在最前面。 */}
-        <GateSummary gateNum={gateNum} research={info.research_report}
-                     arch={info.architecture} projectIssues={info.issues} />
+        <GateSummaryBar info={info} gateNum={gateNum} />
         {/* 🔴 **材料按阶段收进各自的抽屉**（2026-09-17 用户提：「每个阶段的任务都收纳到抽屉」）。
             改之前这里是三段写死的渲染顺序（`gateNum === '2' && 架构` …）——
             于是"这道门该看什么"靠**门号硬编码**，材料本身没有归属。
             ⚠️ 那条 `gateNum !== '1'` 的挡板也在这段历史里：GATE1（审调研的门）当时
                一处都看不到调研报告 —— 现在按阶段分组，调研永远在「📋 调研」那一组里，
                不再依赖"哪道门渲染哪一段"。
-            ⚠️ 当前这道门对应的一组**默认展开**（见 `ProjectMaterials`）。 */}
+            ⚠️ 当前这道门对应的一组**默认展开**（见 `ProjectMaterials`）。
+            ⚠️ **但 `ProjectMaterials` 页面是直接挂的**（侧滑面板里），不靠这里 ——
+               所以 `GateBody` / `GatePanel` 目前**只被测试用**，留待死代码处置。 */}
         <ProjectMaterials info={info} tasks={tasks} gateNum={gateNum} acceptance={acceptance} />
-        {/* 兜底升上来的 GATE2：**把来路摆出来** —— 理由一直在 `lineage` 里，界面以前不读它 */}
-        {copy.reason && (
-          <div style={{ fontSize: 12, color: '#b45309', background: '#fdf6ec',
-                        border: '1px solid #e8c99b', borderRadius: 8,
-                        padding: '8px 12px', marginTop: 8, lineHeight: 1.6 }}>
-            <b>为什么又问你一次：</b>{copy.reason}
-          </div>
-        )}
       </div>
     </div>
   )

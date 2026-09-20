@@ -8,7 +8,7 @@ import { Loader2, CheckCircle2, AlertCircle, FolderOpen } from 'lucide-react'
 import FilePanel from '../components/FilePanel'
 import { MessageBubble } from '../components/chat/MessageBubble'
 import { TaskCard, taskStateKind, type ProgressItem, type ToolLog } from '../components/chat/TaskCard'
-import { GateBar, ProjectMaterials } from '../components/chat/GatePanel'
+import { GateBar, GateSummaryBar, ProjectMaterials } from '../components/chat/GatePanel'
 import { ChatOptions, type ExecMode } from '../components/chat/ChatOptions'
 
 const PHASE_NAMES: Record<string, string> = { template: '待开始', researching: '调研中', planning: '架构设计中', executing: '实现中', integrating: '集成合并中', reviewing: '审查中', delivering: '交付中', done: '已完成' }
@@ -338,6 +338,12 @@ export default function Chat() {
               {isGate && (
                 <div style={{ padding: '0 12px 8px' }}>
                   <GateBar info={info} gateNum={gateNum} gatePhase={gatePhase} onGate={gateConfirm} />
+                  {/* 🔴 **摘要条和"为什么又问你一次"必须挂在真路上**（2026-09-20）。
+                      这两块原来只活在 `GateBody` 里，而 `GateBody` 的调用方
+                      `GatePanel` 早就没人挂了（09-17 `2cd18a31` 那次侧滑面板重构）
+                      ⇒ 09-20 往里加的东西落地即隐身。细节见 `GateSummaryBar` 的注释。
+                      ⚠️ 别收进某个"组合件"就完事 —— 判据是**页面渲染出来没有**。 */}
+                  <GateSummaryBar info={info} gateNum={gateNum} />
                 </div>
               )}
             </div>
