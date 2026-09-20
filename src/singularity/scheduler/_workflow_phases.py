@@ -1,5 +1,5 @@
 __all__ = ['_run_execution', '_run_planning', '_run_research', '_validate_architecture',
-           'classify_arch_issues', 'ACCEPTANCE_UNSTATED']
+           'classify_arch_issues', 'lineup_seats', 'ACCEPTANCE_UNSTATED']
 
 # 验收"没表态"的标记串。`_validate_architecture` 产它、致命判据认它 ——
 # ⚠️ 两处共用同一个常量，是因为 `arch_issues` 现在只有 `list[str]`、没有严重度。
@@ -119,6 +119,26 @@ def _phase_selection(phase: str, project: ProjectState):
     """
     from singularity.scheduler import phase_models
     return phase_models.selection(phase, project)
+
+
+def lineup_seats(lineup) -> int:
+    """`_phase_selection` 的返回值 → **席位数**（几个模型）。
+
+    ⚠️ `lineup` 的形状是 `{level: [模型...]}`（`phase_models.selection` 的契约），
+    所以 `len(lineup)` 数的是**层级数** —— 恒等于 1，跟配了几家无关。
+
+    真实后果（2026-09-21 真机实测）：`planning` 配了三家（deepseek-flash ·
+    glm-5.3-flash · deepseek-v4-pro），**三家都真跑出了初稿**（账上各 27k~31k token），
+    而告警/界面上写的是「本阶段席位只有 1 家，委员会没有开」。
+    ⇒ **把"配了委员会"报成"委员会没开"**，方向正好反了；而且这是**假红**，
+    会让人据此以为多模型碰撞没生效。
+
+    抽成独立函数是为了**能单独测** —— 同 `classify_arch_issues` 那条理由：
+    内联的表达式（尤其字符串/长度匹配）正是这个仓反复栽的地方。
+    """
+    if not lineup:
+        return 0
+    return sum(len(v) for v in lineup.values() if isinstance(v, (list, tuple)))
 
 
 def _index_phase_memory(project: ProjectState, prefix: str, stage: str, raw: str) -> None:
@@ -455,13 +475,14 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     # 可能返回 None），而且**方向也错**：None 时候选是全场最多，委员会恰恰开得起来。
     from singularity.scheduler import witness
     from singularity.scheduler.project import resolve_flow
-    if lineup is not None and len(lineup) < 2 and resolve_flow(project).committee:
-        witness.warn("planning", f"committee_not_engaged:seats={len(lineup)}"[:80],
+    seats = lineup_seats(lineup)   # ⚠️ 不是 `len(lineup)` —— 那个数的是层级，见该函数
+    if lineup is not None and seats < 2 and resolve_flow(project).committee:
+        witness.warn("planning", f"committee_not_engaged:seats={seats}"[:80],
                      key="committee_not_engaged")
         if not any(i.get("kind") == "committee_not_engaged" for i in project.issues):
             project.issues.append({
                 "kind": "committee_not_engaged",
-                "detail": (f"本阶段席位只有 {len(lineup)} 家，**委员会没有开**："
+                "detail": (f"本阶段席位只有 {seats} 家，**委员会没有开**："
                            f"这份架构是单个模型出的，没有多模型碰撞。"
                            f"（在「模型」页把 planning 的候选加到 2 家以上可恢复）")})
             save(project)

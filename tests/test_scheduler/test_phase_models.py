@@ -128,3 +128,38 @@ class TestSelection:
     def test_level_is_honoured(self):
         phase_models.save({"executing": ["a"]})
         assert phase_models.selection("executing", level="D") == ({"D": ["a"]}, True)
+
+
+class TestLineupSeats:
+    """`selection()` 的返回值是 ``{level: [模型...]}`` —— **数席位要数值，不是数键**。
+
+    来历（2026-09-21 真机）：`planning` 配了三家、三家都真跑出了初稿（账上各
+    27k~31k token），而告警写的是「本阶段席位只有 1 家，委员会没有开」——
+    因为它量的是 `len(lineup)`，而那个数恒等于 1（只有一个 level 键）。
+    ⇒ **把"配了委员会"报成"委员会没开"**，方向正好反了。
+    """
+
+    def test_三家就是三家(self):
+        """🔴 这条是命门：配三家必须数出 3。旧写法 `len(lineup)` 会数出 1。"""
+        from singularity.scheduler.workflow import lineup_seats
+        lineup = {"any": ["deepseek-flash", "glm-5.3-flash", "deepseek-v4-pro"]}
+        assert lineup_seats(lineup) == 3, "数成了层级的个数（恒为 1）"
+
+    def test_一家就是一家(self):
+        from singularity.scheduler.workflow import lineup_seats
+        assert lineup_seats({"any": ["a"]}) == 1
+
+    def test_没限制是零不是一(self):
+        """`None` = "不限制，用整个池"（合法值，委员会照样开得起来）——
+        这里只能返回 0，**调用方必须靠 `lineup is not None` 单独判**。"""
+        from singularity.scheduler.workflow import lineup_seats
+        assert lineup_seats(None) == 0
+        assert lineup_seats({}) == 0
+
+    def test_跨层级相加(self):
+        from singularity.scheduler.workflow import lineup_seats
+        assert lineup_seats({"any": ["a", "b"], "D": ["c"]}) == 3
+
+    def test_脏值不炸(self):
+        from singularity.scheduler.workflow import lineup_seats
+        assert lineup_seats({"any": None}) == 0
