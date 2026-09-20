@@ -142,3 +142,73 @@ def test_孤儿只读不删(tmp_path, monkeypatch):
                             "refs/qidian/pending/"], cwd=str(repo),
                            capture_output=True, text=True).stdout.split()
     assert after == ["qidian/pending/T-gone"], f"数了一遍就把 ref 动了：{after}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# `refs/qidian/salvaged/` —— **删任务时留下的**那批（2026-09-20）
+#
+# `task_delete` 换了桩（见 `_worktree._salvage_ref`）：待捞的产物不剪断，改挂到
+# `salvaged/` 底下。那批**任务已经删了** ⇒ 同样"没有行能挂"，只能靠
+# `delivery_facts.py --refs` 看。这里钉的是"扫得出来"，别让它变成第二个看不见。
+# ═══════════════════════════════════════════════════════════════
+
+def test_扫得出_salvaged_ref(tmp_path, monkeypatch):
+    """**两个命名空间不许串** —— 扫 pending 的别把 salvaged 一起捞进来，反之亦然。
+
+    变异：把 `salvaged_refs` 里的 `"salvaged"` 改成 `"pending"` ⇒ 本条红
+    （那样"删任务留下的"和"任务还在的"会混成一批，界面上分不出哪批挂了活任务）。
+    """
+    from singularity.scheduler import _git_worktree
+    repo = _git_repo(tmp_path)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                         capture_output=True, text=True).stdout.strip()
+    subprocess.run(["git", "update-ref", "refs/qidian/pending/T-live", sha],
+                   cwd=str(repo), capture_output=True, text=True)
+    subprocess.run(["git", "update-ref", "refs/qidian/salvaged/T-deleted", sha],
+                   cwd=str(repo), capture_output=True, text=True)
+    monkeypatch.setattr(_git_worktree, "_project_repo_roots", lambda: [repo])
+
+    assert _api_tasks.salvageable_refs() == {"T-live": sha}, "pending 那批扫串了"
+    assert _api_tasks.salvaged_refs() == {"T-deleted": sha}, "salvaged 那批扫串了"
+
+
+def test_salvaged_扫出来是只读的(tmp_path, monkeypatch):
+    """命门同「孤儿只读不删」：数一遍**不许动盘**。"""
+    from singularity.scheduler import _git_worktree
+    repo = _git_repo(tmp_path)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                         capture_output=True, text=True).stdout.strip()
+    subprocess.run(["git", "update-ref", "refs/qidian/salvaged/T1", sha],
+                   cwd=str(repo), capture_output=True, text=True)
+    monkeypatch.setattr(_git_worktree, "_project_repo_roots", lambda: [repo])
+
+    assert _api_tasks.salvaged_refs() == {"T1": sha}
+    after = subprocess.run(["git", "for-each-ref", "--format=%(refname:short)",
+                            "refs/qidian/salvaged/"], cwd=str(repo),
+                           capture_output=True, text=True).stdout.split()
+    assert after == ["qidian/salvaged/T1"], f"数了一遍就把 ref 动了：{after}"
+
+
+def test_账本半行坏掉不炸掉整份报告(tmp_path, monkeypatch):
+    """`salvaged.jsonl` 是 append-only 的 —— 写到一半被打断会留半行。
+
+    半行只该让**那一条**没有线索，不该让 `delivery_facts.py --refs` 整个抛掉
+    （那正是"报现场的工具自己先炸了"）。
+    """
+    import sys
+    from pathlib import Path
+
+    from singularity.scheduler import config
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path / ".qidian")
+    (tmp_path / ".qidian").mkdir()
+    (tmp_path / ".qidian" / "salvaged.jsonl").write_text(
+        '{"task_id": "T1", "repo": "/x", "sha": "abc", "description": "d", "status": "failed"}\n'
+        '{"task_id": "T2", "repo": "/x", "sh\n',      # ← 半行
+        encoding="utf-8")
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    import delivery_facts
+
+    clues = delivery_facts._salvaged_clues()
+    assert clues["T1"]["description"] == "d"
+    assert "T2" not in clues, "半行被当成线索用了"

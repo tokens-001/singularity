@@ -303,14 +303,23 @@ def rounds_table(limit: int | None = None) -> None:
           "—— 要的是量级，不是精确值。")
 
 
-def orphan_refs_report() -> None:
-    """**孤儿 pending ref** —— 只数不删（定义写在 `_api_tasks.orphan_refs` 的 docstring 里）。
+def refs_report() -> None:
+    """**两批"产物还在、界面上看不见"的 ref** —— 只数不删。
 
-    为什么它值得单开一条：这些 ref 的产物**还在**，而界面上**一个字都看不见**
+    · **孤儿 pending ref**（定义写在 `_api_tasks.orphan_refs` 的 docstring 里）：
+      任务文件被手工删了，ref 还在。**线索已经没了**。
+    · **salvaged ref**（`_api_tasks.salvaged_refs`）：走 `task_delete` 删的任务，
+      换桩换过来的。**线索还在** —— 改桩那一刻写进了 `.qidian/salvaged.jsonl`。
+
+    为什么值得单开一条：这两批的产物**都还在**，而界面上**一个字都看不见**
     （`salvageable_refs()` 那张表是**按 task_id 挂到任务行上**的，
-    任务文件没了的那些**没有行能挂**）—— 本仓的老形状，"盘上有一份、界面上看不见"。
+    任务文件没了的那些**没有行能挂**）—— 本仓的老形状："盘上有一份、界面上看不见"。
     """
-    from singularity.scheduler._api_tasks import salvageable_refs, orphan_refs
+    from singularity.scheduler._api_tasks import (
+        orphan_refs,
+        salvageable_refs,
+        salvaged_refs,
+    )
     allr = salvageable_refs()
     orph = orphan_refs()
     print("⑥ 孤儿 pending ref（产物还在、**任务文件已经没了**）")
@@ -324,6 +333,44 @@ def orphan_refs_report() -> None:
         print("   ⚠️ **扫不到的盲区**：项目仓自己被删掉时，里面的 ref 跟着没了，这里数不出来。")
     print()
 
+    salv = salvaged_refs()
+    print("⑦ salvaged ref（**删任务时**留下的产物 —— 没进仓，也没丢）")
+    if not salv:
+        print("   （无）")
+        print()
+        return
+    print(f"   {len(salv)} 条 · 线索在 `.qidian/salvaged.jsonl`（谁 / 什么项目 / 什么状态）")
+    clues = _salvaged_clues()
+    for tid, sha in sorted(salv.items()):
+        c = clues.get(tid)
+        what = (f"{c['status']} · {c['description'][:40]}" if c
+                else "⚠️ 账里没有这一条（换桩时没记上？）")
+        print(f"   · {tid}  → {sha[:7]}   [{what}]")
+        if c:
+            print(f"       捞法: git -C {c['repo']} show {sha}   （提交还在，gc 收不走）")
+    print("   ⚠️ 这些是**已经删掉的任务**的产物 —— 没人认领就一直躺着；"
+          "要清得先看这条 clue 再决定（别拿 ref 名猜）。")
+    print()
+
+
+def _salvaged_clues() -> dict[str, dict]:
+    """读 `.qidian/salvaged.jsonl`，取每个 task_id 最后一次的线索（append-only ⇒ 取后写的）。"""
+    import json
+
+    from singularity.scheduler import config
+    out: dict[str, dict] = {}
+    p = config.QIDIAN_DIR / "salvaged.jsonl"
+    if not p.exists():
+        return out
+    for line in p.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue          # 半行（写到一半被打断）—— 跳过，不要让整份报告炸掉
+        if isinstance(row, dict) and row.get("task_id"):
+            out[row["task_id"]] = row
+    return out
+
 
 def main() -> int:
     args = sys.argv[1:]
@@ -331,7 +378,7 @@ def main() -> int:
         print(__doc__)
         return 2
     if args[0] == "--refs":
-        orphan_refs_report()
+        refs_report()
         return 0
     if args[0] == "--rounds":
         limit = int(args[1]) if len(args) > 1 and args[1].isdigit() else None

@@ -29,6 +29,32 @@ from singularity.scheduler.tracker import TaskStatus
 
 # ═══════════════════════════════════════════════════════════════
 
+def _scan_refs(namespace: str) -> dict[str, str]:
+    """扫 `refs/qidian/<namespace>/`，收出 `{task_id: commit_sha}`。
+
+    ⚠️ 只调 `git for-each-ref`（**每仓一次**），别在任务循环里逐条查 git。
+    ⚠️ 仓库根用 `_project_repo_roots()` —— 这些 ref 打在**项目仓**上，不是奇点仓
+    （"读错仓库"这一族本仓踩过三次）。
+    """
+    from singularity.scheduler._git_worktree import _project_repo_roots
+    prefix = f"refs/qidian/{namespace}/"
+    out: dict[str, str] = {}
+    for root in _project_repo_roots():
+        try:
+            r = subprocess.run(
+                ["git", "for-each-ref", "--format=%(refname) %(objectname)", prefix],
+                cwd=str(root), capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError) as e:
+            witness.warn("_api", f"salvage_scan_failed:{type(e).__name__}"[:120],
+                         key="salvage_scan_failed")
+            continue
+        for line in (r.stdout or "").splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[0].startswith(prefix):
+                out[parts[0].rsplit("/", 1)[-1]] = parts[1]
+    return out
+
+
 def salvageable_refs() -> dict[str, str]:
     """一次扫描，收出所有**可打捞的产物**：`{task_id: commit_sha}`。
 
@@ -39,28 +65,22 @@ def salvageable_refs() -> dict[str, str]:
 
     真机那轮就是：3 个任务全判 `failed`，而产物好好躺在 pending ref 上
     （拼起来 `pytest 40 passed`）—— **界面上一个字都不显示**，只有 CLI 路径有一句提示。
-
-    ⚠️ 只调 `git for-each-ref`（**每仓一次**），别在任务循环里逐条查 git。
-    ⚠️ 仓库根用 `_project_repo_roots()` —— pending ref 打在**项目仓**上，不是奇点仓
-    （"读错仓库"这一族本仓踩过三次）。
     """
-    from singularity.scheduler._git_worktree import _project_repo_roots
-    out: dict[str, str] = {}
-    for root in _project_repo_roots():
-        try:
-            r = subprocess.run(
-                ["git", "for-each-ref", "--format=%(refname) %(objectname)",
-                 "refs/qidian/pending/"],
-                cwd=str(root), capture_output=True, text=True, timeout=5)
-        except (OSError, subprocess.SubprocessError) as e:
-            witness.warn("_api", f"salvage_scan_failed:{type(e).__name__}"[:120],
-                         key="salvage_scan_failed")
-            continue
-        for line in (r.stdout or "").splitlines():
-            parts = line.split()
-            if len(parts) == 2 and parts[0].startswith("refs/qidian/pending/"):
-                out[parts[0].rsplit("/", 1)[-1]] = parts[1]
-    return out
+    return _scan_refs("pending")
+
+
+def salvaged_refs() -> dict[str, str]:
+    """**删任务时留下**的产物：`{task_id: commit_sha}`（`refs/qidian/salvaged/`）。
+
+    `task_delete` 换桩换过来的（见 `_worktree._salvage_ref`）—— 任务已经删了，
+    产物**没进仓也没丢**，就停在这儿等谁来捞。
+
+    ⚠️ 和 `salvageable_refs()` 的区别：那批**挂得上任务行**（界面按 task_id 显示
+    "可打捞"）；这批**没有行能挂**（任务文件删了）⇒ 除了 `delivery_facts.py --refs`
+    那条只读的路，界面上看不见。线索在 `.qidian/salvaged.jsonl`（谁、什么项目、
+    什么状态），改桩那一刻写的。
+    """
+    return _scan_refs("salvaged")
 
 
 def orphan_refs() -> dict[str, str]:
