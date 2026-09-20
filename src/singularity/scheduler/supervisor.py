@@ -146,7 +146,8 @@ def qa_context(task) -> tuple[list, list]:
             if proj.architecture:
                 for tdef in proj.architecture.get("tasks", []):
                     if tdef.get("title", "") in task.description or tdef.get("id", "") in task.description:
-                        acc = tdef.get("acceptance", "")
+                        from singularity.scheduler import _machine_checks as _mc3
+                        acc = _mc3.acceptance_text(tdef.get("acceptance", ""))
                         if acc:
                             checklist.append(acc)
     except Exception as e:

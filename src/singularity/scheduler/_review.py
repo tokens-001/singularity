@@ -173,7 +173,8 @@ def _review_requirements(task) -> str:
             desc = getattr(task, 'description', '')
             for tdef in proj.architecture.get("tasks", []):
                 if tdef.get("title", "") in desc or tdef.get("id", "") in desc:
-                    acc = tdef.get("acceptance", "")
+                    from singularity.scheduler import _machine_checks as _mc4
+                    acc = _mc4.acceptance_text(tdef.get("acceptance", ""))
                     if acc:
                         parts.append(f"[验收标准] {acc}")
                     break

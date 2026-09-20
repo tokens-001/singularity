@@ -76,10 +76,15 @@ _ARCHITECT_CONTEXT = """项目需求: {description}
       "complexity": "low|medium|high (必填)",
       "layer": "frontend/backend/data/devops (必填)",
       "depends_on": ["T0"],
-      "acceptance": "验收标准 (必填, <100字)",
+      "acceptance": [{{"text": "这一条验收标准 (必填)", "check": {{"argv": ["python3","-m","pytest","-q","tests/test_x.py"], "expect_exit": 0}}}}],
       "estimated_files": ["涉及文件路径"]
     }}
   ],
+
+**`acceptance` 的每一条都必须表态，`check` 不许省**：
+  能给命令的 ⇒ `{{"text":"...","check":{{"argv":[...],"expect_exit":0}}}}`
+  验不了的   ⇒ `{{"text":"...","check":{{"text_only_reason":"为什么机器验不了（要具体）"}}}}`
+⚠️ 写了"验不了"是**诚实**，照单放行；**两样都不给**算架构不合格、会被挡下来。
 
 ⚠️ **不需要改动任何文件的任务，`title` 必须以 `[只读]` 开头**（例：`[只读] 独立验收：
 在干净检出上跑测试、逐条核对需求`）。这类"只跑不改"的活是**合法**的，但验收端有一条

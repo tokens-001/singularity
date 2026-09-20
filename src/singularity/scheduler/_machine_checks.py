@@ -180,6 +180,75 @@ def requirement_coverage(constraints, requirements) -> dict:
             "no_covers": no_covers}
 
 
+ACCEPTANCE_TEXT_ONLY = "text_only_reason"
+
+
+def parse_acceptance(acceptance) -> tuple[list[dict], list[str]]:
+    """`acceptance` 字段 → (逐条判定, 违规原因)。**判据与 `constraints[].check` 共用一套。**
+
+    三态（沿用 `parse_check` 那句"两种写法是**故意的**"）：
+
+      兑现  ``{"text": "...", "check": {"argv": [...], "expect_exit": 0}}``
+      诚实  ``{"text": "...", "check": {"text_only_reason": "观感指标，机器验不了"}}``
+      漏    ``check`` 缺失 / null / 两种都不是   ← **只有这个算违规**
+
+    ⚠️ **为什么"诚实"必须放行**：`parse_check` 的文档写着"逼着模型必须给出命令，
+    它就会**编一条假命令**出来" —— 那是假门（§78：假门比没门坏）。
+
+    🔴 **旧的散文形态（`acceptance` 是 str）整条算「漏」，不是「诚实」。**
+    两者的区别是整件事的判据：**"验不了"是表过态的，"没被要求表态"不是。**
+    混为一谈的话，改前改后一个数 —— 那就白改了。
+
+    真实来历（2026-09-20 `验证-日志统计-20260920c`）：T1 的 acceptance 白纸黑字写着
+    「`CONTRACTS.md` 列出三个契约的全部字段」，而那个文件**全历史不存在**，
+    任务**照样判 done** —— 因为那条验收**从没进过机器检查**。
+    """
+    if acceptance is None or acceptance == "":
+        return [], ["acceptance 为空"]
+    if isinstance(acceptance, str):
+        return ([{"text": acceptance, "kind": "unstated", "check": None}],
+                ["整条还是散文（没表态：既没给命令，也没说验不了）"])
+    if not isinstance(acceptance, list):
+        return [], [f"acceptance 形态不对：{type(acceptance).__name__}（要 list 或 str）"]
+
+    items, problems = [], []
+    for i, a in enumerate(acceptance, 1):
+        if not isinstance(a, dict):
+            problems.append(f"第 {i} 条不是对象")
+            continue
+        text = str(a.get("text", "")).strip()
+        if not text:
+            problems.append(f"第 {i} 条没有 text")
+            continue
+        check = a.get("check")
+        if isinstance(check, dict) and str(check.get(ACCEPTANCE_TEXT_ONLY, "")).strip():
+            items.append({"text": text, "kind": "text_only", "check": check})
+        elif parse_check(check) is not None:
+            items.append({"text": text, "kind": "argv", "check": check})
+        else:
+            items.append({"text": text, "kind": "unstated", "check": None})
+            problems.append(f"第 {i} 条没表态（既没给命令，也没说验不了）")
+    return items, problems
+
+
+def acceptance_text(acceptance) -> str:
+    """拍平成一行给人和 prompt 用。**下游别再各写一份**（同 `describe` 那条规矩）。"""
+    items, _ = parse_acceptance(acceptance)
+    if not items:
+        return "" if acceptance is None else str(acceptance)
+    return "；".join(it["text"] for it in items)
+
+
+def acceptance_coverage(acceptance) -> tuple[int, int]:
+    """(兑现条数, 总条数)。**分母是全部条目** —— 包含"诚实承认验不了"的那些。
+
+    ⚠️ 分母不能只数兑现的，否则这个数恒等于 100% —— 那正是 `coverage()` 那条注释
+    警告过的口径坑（"自洽率"被读成"覆盖率"）。
+    """
+    items, _ = parse_acceptance(acceptance)
+    return sum(1 for it in items if it["kind"] == "argv"), len(items)
+
+
 def describe(check) -> str:
     """给人看的一行。前端 / prompt 都用它，保证两边口径一致。"""
     parsed = parse_check(check)

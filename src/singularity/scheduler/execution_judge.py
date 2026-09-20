@@ -315,7 +315,7 @@ _MACHINE_CHECK_HINT = (
 _ARCH_SCHEMA = """{
   "architecture": "综述 (<500字)",
   "modules": [{"name":"","responsibility":"","depends_on":[],"interfaces":[]}],
-  "tasks": [{"id":"","title":"","description":"","complexity":"","layer":"","depends_on":[],"acceptance":""}],
+  "tasks": [{"id":"","title":"","description":"","complexity":"","layer":"","depends_on":[],"acceptance":[{"text":"","check":{"argv":["python3","-m","pytest","-q","tests/test_x.py"],"expect_exit":0}}]}],
   "risks": [{"risk":"","impact":"","mitigation":""}],
   "data_model": {"database":"","entities":[],"relationships":[]},
   "api_contracts": [{"method":"","path":"","description":"","input":{},"output":{},"errors":[]}],
@@ -334,7 +334,14 @@ _ARCH_SCHEMA = """{
     "dedup_stats": "模块/实体/API/任务/约束 各项去重数量",
     "confidence": "high/medium/low — 合成结果的可信度"
   }
-}"""
+}
+
+acceptance 的写法（**每一条都必须表态，`check` 不许省**）：
+  能给命令的 ⇒ {"text":"...","check":{"argv":["python3","-m","pytest","-q","tests/test_x.py"],"expect_exit":0}}
+  验不了的   ⇒ {"text":"...","check":{"text_only_reason":"为什么机器验不了（要具体）"}}
+⚠️ 两种都行，**唯独不许两样都不给**。写了"验不了"是诚实，会照单放行；
+   而"没表态"会被当成**架构不合格**挡下来 —— 那条验收永远不会有人去判。
+⚠️ 别为了过关编一条跑不通的命令 —— 假门比没门坏（那条命令会在收尾时红，白烧一轮）。"""
 
 
 def _warn_same_model(model: str, members: list[str] | None, role: str) -> None:

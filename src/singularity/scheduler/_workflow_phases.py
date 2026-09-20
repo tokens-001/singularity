@@ -1,4 +1,10 @@
-__all__ = ['_run_execution', '_run_planning', '_run_research', '_validate_architecture']
+__all__ = ['_run_execution', '_run_planning', '_run_research', '_validate_architecture',
+           'classify_arch_issues', 'ACCEPTANCE_UNSTATED']
+
+# 验收"没表态"的标记串。`_validate_architecture` 产它、致命判据认它 ——
+# ⚠️ 两处共用同一个常量，是因为 `arch_issues` 现在只有 `list[str]`、没有严重度。
+# 想彻底干净就把 issues 改成带 severity 的结构；在那之前，**至少别写两份字面量**。
+ACCEPTANCE_UNSTATED = "acceptance 没表态"
 
 import json
 
@@ -555,7 +561,7 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     #     一个单文件 CLI 本来就没有 data_model，按"六字段齐全"拦会把好活挡在门外
     project.issues = [i for i in project.issues
                       if i.get("type") not in ("arch_invalid", "arch_warning")]
-    fatal = [i for i in blockers if "tasks" in i]
+    fatal = classify_arch_issues(blockers)[0]
     if blockers:
         kind = "arch_invalid" if fatal else "arch_warning"
         project.issues.append({"type": kind,
@@ -632,8 +638,26 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     return f"架构完成: {len(arch.get('tasks', []))} 个任务, {len(arch.get('constraints', []))} 条约束, {len(traceability)} 条追溯{block_warn}"
 
 
+def classify_arch_issues(blockers: list[str]) -> tuple[list[str], list[str]]:
+    """架构校验的 blocker → (致命的, 只记的)。**判据是"下一步还能不能干"，不是"字段全不全"。**
+
+      致命：`tasks` 段本身坏 ⇒ 拆不出任务
+            某条 acceptance 没表态 ⇒ 那条验收**永远不会被判**
+            （2026-09-20 §88 的真根因：T1 的验收写着要 `CONTRACTS.md`，那文件全历史不存在，
+              任务照样判 done —— 因为那条验收从没进过机器检查）
+      只记：`data_model` / `tech_stack` 等 —— 一个单文件 CLI 本来就没有 data_model，
+            按"六字段齐全"拦会把好活挡在门外
+
+    ⚠️ 抽成独立函数是为了**能单独测** —— 它原来是内联在 `_run_planning` 里的一行字符串匹配，
+    而字符串匹配正是这个仓栽过的地方（改措辞就静默失效，且没人会注意到）。
+    """
+    fatal = [i for i in blockers if "tasks" in i or ACCEPTANCE_UNSTATED in i]
+    return fatal, [i for i in blockers if i not in fatal]
+
+
 def _validate_architecture(arch: dict) -> list[str]:
     """校验架构产出完整性。"""
+    from singularity.scheduler import _machine_checks as _mc  # 本模块的惯例：懒导入
     issues = []
     for key in ["architecture", "modules", "data_model", "tech_stack", "tasks", "constraints"]:
         if not arch.get(key):
@@ -651,6 +675,17 @@ def _validate_architecture(arch: dict) -> list[str]:
             for f in ["id", "title", "description", "complexity", "layer", "acceptance"]:
                 if not t.get(f):
                     issues.append(f"任务 {tid}: 缺少 {f}")
+            # 🔴 验收必须【表态】（2026-09-20 定，来历见 docs/防御模式.md §88）：
+            # T1 的 acceptance 白纸黑字写着「CONTRACTS.md 列出三个契约的全部字段」，
+            # 而那个文件**全历史不存在**，任务**照样判 done** —— 因为那条验收从没进过机器检查。
+            # 口径与 `constraints[].check` 共用一套（_machine_checks.parse_check）：
+            # 给得出一条命令 = 兑现；写清"为什么机器验不了" = 诚实放行；**两样都没有 = 漏**。
+            # ⚠️ 判据是"表没表态"，**不是"判不判得出来"** —— 后者会逼出假命令（假门比没门坏）。
+            acc = t.get("acceptance")
+            if acc:
+                _, acc_problems = _mc.parse_acceptance(acc)
+                for prob in acc_problems:
+                    issues.append(f"任务 {tid}: {ACCEPTANCE_UNSTATED} —— {prob}")
             if t.get("complexity") not in ("low", "medium", "high"):
                 issues.append(f"任务 {tid}: complexity 无效")
             if not isinstance(t.get("estimated_files", []), list):
@@ -735,7 +770,9 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
 
             # 注入项目上下文 + 角色信息 + 拆解器上下文片段
             ctx_snippet = tdef.get("context_snippet", "")
-            acceptance = tdef.get("acceptance", "") or tdef.get("acceptance_criteria", "")
+            from singularity.scheduler import _machine_checks as _mc2  # 本模块的惯例：懒导入
+            acceptance = _mc2.acceptance_text(
+                tdef.get("acceptance", "") or tdef.get("acceptance_criteria", ""))
             task_desc = (
                 f"[{tid}] {title}\n"
                 f"{desc}\n"

@@ -1185,7 +1185,8 @@ def _decompose_and_create_tasks(proj, agents: dict) -> None:
             arch_deps = t.get("depends_on", []) or t.get("depends_on_local_id", [])
             dep_ids = [id_map[d] for d in arch_deps if d in id_map]
             ctx_snippet = t.get("context_snippet", "")
-            acceptance = t.get("acceptance", "") or "代码可运行，功能完整"
+            from singularity.scheduler import _machine_checks as _mc
+            acceptance = _mc.acceptance_text(t.get("acceptance", "")) or "代码可运行，功能完整"
             task_desc = (
                 f"[{local_id}] {t['desc']}\n"
                 f"验收标准: {acceptance}\n"
