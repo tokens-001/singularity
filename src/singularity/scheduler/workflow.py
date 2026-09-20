@@ -1203,11 +1203,68 @@ def _resolve_fix_route(project: ProjectState) -> tuple[str, str, str, list]:
     return fix_route, route_source, no_qa_reason, issues
 
 
+def _clear_cancel_marker_for_rewind(task_id: str) -> str:
+    """返工要重派一个 **FAILED** 任务之前，先处置它的"停"标记。返回 `"none"/"timeout"/"user"`。
+
+    🔴 **为什么必须做**（2026-09-20，`handle_gate3_reject` 开始重置 FAILED 的当天发现）：
+    超时那条路是**成对**写的 —— `orchestrator._reap_futures` 先写
+    `cancels/<id>.json`（`{"by": "timeout"}`）**再** `transition(FAILED)`。标记不消费的话，
+    重派下去的任务**一上场就被 `_exec._check_cancelled` 判成"取消"** ⇒ 白跑一轮，
+    账还记在"取消"上。
+    📌 `docs/防御模式.md` §82.3 的泄漏面核验（"三条重排队路都够不着它"）里，
+    **`handle_gate3_reject` 只重置 DONE 是其中一条** —— 这一支打破了它，
+    所以清理必须在这里显式做，**不是"顺手"**，是那条核验缺的另一半。
+
+    三种处置（判据沿用 §82.3 定的口径：**读不出 `by` 一律当用户取消**）：
+      · 没有标记      → `"none"`（本来就够得着，可以直接重派）
+      · `by: timeout` → 删掉标记，`"timeout"`（我们自己的临时中断，该重派）
+      · 其他 / 读不出 → **不删**，`"user"`（人明确取消过 ⇒ 尊重它，这个任务**不重派**）
+    """
+    from singularity.scheduler import witness
+    p = config.CANCEL_DIR / f"{task_id}.json"
+    try:
+        if not p.exists():
+            return "none"
+    except OSError as e:
+        # 连"文件在不在"都问不出来 ⇒ **保守当"有标记"**（不重派）。
+        # ⚠️ 退回 `"none"` 才是危险的：那会被解读成"够得着、可以重派"，
+        #    而实际标记可能就在那儿 ⇒ 重派下去一上场被判取消（正是本函数要防的事）。
+        witness.warn("workflow", f"cancel_marker_stat_failed:{task_id}:"
+                                 f"{type(e).__name__}"[:180],
+                     key="cancel_marker_stat_failed")
+        return "user"
+    by = ""
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            by = str(raw.get("by") or "")
+    except Exception as e:
+        # 读不出来（坏 JSON / 读失败）⇒ 按 §82.3 的口径退回"用户取消"。
+        # ⚠️ **§82.3 那句话是「退回旧行为 = 用户取消，**且不静默**」** —— 文件在那儿
+        #    却读不出来本身是异常，而它的后果是"这个任务不被重派"，人得看得见。
+        #    （"没有 `by` 键"不算这一类：那是合法的旧格式，不报警。）
+        by = ""
+        witness.warn("workflow", f"cancel_marker_unreadable:{task_id}:"
+                                 f"{type(e).__name__}"[:180],
+                     key="cancel_marker_unreadable")
+    if by != "timeout":
+        return "user"
+    try:
+        p.unlink()
+    except Exception as e:
+        # 删不掉 ⇒ 重派后一上场就被判取消，白跑一轮。那是钱，不许静默。
+        witness.warn("workflow", f"cancel_marker_unlink_failed:{task_id}:"
+                                 f"{type(e).__name__}"[:180],
+                     key="cancel_marker_unlink_failed")
+        return "user"                # 删不掉就别重派 —— 同"尊重取消"的处置
+    return "timeout"
+
+
 def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "",
                         auto: bool = False) -> str:
     """GATE3 被人工打回: 按 fix_route 分级路由 (D3)。
 
-    impl   → 回 EXECUTING, **重置全部 DONE 任务**重跑
+    impl   → 回 EXECUTING：**重置全部 DONE + FAILED 任务**重跑
       ⚠️ 原文这里写的是"只重做有问题的 task (依赖该 task 的下游一并重测)"，
       **代码从来不是这么干的**（2026-09-19 外派评审 B5 抓出，逐行核过）。
       真正做"只重做有问题的那几个"要按 QA issue → 任务匹配。**这条边已经补上了**
@@ -1216,10 +1273,18 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "",
       **平台填，不是模型写的**）。但**边对 ≠ 该换**：那个映射是"先出现者胜"
       （trace 里没有改动顺序），两个任务都改过同一个文件时指认可能偏，而匹配偏了的
       失败模式是**转圈**：漏掉的那个任务没重做 → 又冲回 GATE3 → 再打回，每圈都是真金白银。
-      **全量重做贵，但它是收敛的。** ⇒ 这一支**照旧全量**，但把"精准做本会重置哪几个"
-      记进 lineage 的 `precise_reset_would_be` —— 攒够真机数据再决定换不换
+      ⇒ 这一支**照旧全量**，但把"精准做本会重置哪几个"记进 lineage 的
+      `precise_reset_would_be` —— 攒够真机数据再决定换不换
       （"只报不改"，同 `_flag_degraded_tasks` 立的规矩；数据就是那句"没有真机数据
       不换"要的东西）。
+
+      🔴 **FAILED 那一半是 2026-09-20 补的（A 档，用户拍板）** —— 原先只重置 DONE，
+      而 `tracker.ready_tasks` 只扫 PENDING/ROUTED/BLOCKED ⇒ **失败的任务原地不动、
+      永远不会被重派** ⇒ 返工一次 = 把做成的推倒重做、没做成的照旧缺 ⇒ 又冲回 GATE3。
+      ⚠️ 原文给"全量"写的辩护词是「全量重做贵，但它是收敛的」—— **那个论据不成立**：
+      它重做的**不是欠的那些**。现在 DONE 全量的行为一个字没动，只是把 FAILED 也捞回来。
+      ⚠️ 带**人工取消标记**的失败任务**不重置**（尊重"别继续"），
+      超时标记则清掉再重置 —— 见 `_clear_cancel_marker_for_rewind`。
     design → 回 PLANNING 重新规划
     note   → 仅记录, 不阻断交付
     拿不到依据（无报告 / 报告读坏了 / 有报告但没标路由）→ 默认 **impl**
@@ -1253,12 +1318,33 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "",
         # (否则打回后所有 task 仍 DONE, 队列无活任务 → 空转直达 GATE3, 缺陷从未修复)
         project.set_phase(Phase.EXECUTING, f"GATE3 打回(impl): {feedback[:60]}")
         reset_count = 0
+        failed_reset = 0
+        held_back = 0
         for tid in list(project.task_ids):
             t = tracker.read_task(tid)
-            if t is not None and t.status == TaskStatus.DONE:
+            if t is None:
+                continue
+            if t.status == TaskStatus.DONE:
                 # force=True: DONE 是终态, GATE3 打回是唯一合法的 DONE→PENDING 重置
                 tracker.transition(tid, TaskStatus.PENDING, force=True)
                 reset_count += 1
+            elif t.status == TaskStatus.FAILED:
+                # 🔴 **A 档：失败的任务也要重派**（2026-09-20 用户拍板）。
+                # 改之前只重置 DONE，而 `tracker.ready_tasks` 只扫 PENDING/ROUTED/BLOCKED
+                # ⇒ **失败的任务原地不动、永远不会被重派** ⇒ 返工一次 = 把做成的推倒重做、
+                # 没做成的照旧缺 ⇒ 又冲回 GATE3 ⇒ **转圈**。
+                # ⚠️ 顺序不能反：**先处置取消标记再重置**。超时那条路写标记在前、
+                #    转 FAILED 在后（`orchestrator._reap_futures`），标记留着的话
+                #    重派下去一上场就被判"取消"（`_exec._check_cancelled`）。
+                # ⚠️ **"尊重用户取消"是刻意的一半**：带人工取消标记的任务**不重置**
+                #    —— 人明确说过不要它，返工不该把它又拉起来（`_clear_cancel_marker_for_rewind`
+                #    返回 `"user"` 就是这一支）。
+                if _clear_cancel_marker_for_rewind(tid) == "user":
+                    held_back += 1
+                    continue
+                # FAILED→PENDING 在 `_TERMINAL_EXIT` 里本来就合法，不需要 force
+                tracker.transition(tid, TaskStatus.PENDING)
+                failed_reset += 1
         # 🔵 **零行为变更**：把"若按 `task_id` 精准重做，本会重置哪几个"一起记进 lineage。
         # 全量重置是**有意的**（理由见 docstring 的 impl 那段），而那句
         # "没有真机数据证明匹配可靠之前不换"**要有数据才可能被推翻** —— 数据就是这一行。
@@ -1266,11 +1352,18 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "",
         # 标不出人的 issue（文件没有任务改过 / 旧报告还没这个键）不计入。
         _precise = sorted({str(i.get("task_id")) for i in issues
                            if isinstance(i, dict) and i.get("task_id")})
+        # ⚠️ **两栏必须分开记**（"两栏相加 ≠ 全集"是这个仓反复吃亏的形状）：
+        # `reset_tasks` = 原行为（DONE 全量重做）· `reset_failed` = 2026-09-20 新增的那一半。
+        # 合成一个数的话，"返工到底补没补上欠的活"又变得读不出来。
         project.add_lineage({"action": "gate3_route", "route": "impl", "reset_tasks": reset_count,
+                             "reset_failed": failed_reset, "held_back_user_cancelled": held_back,
                              "source": route_source,
                              "precise_reset_would_be": _precise,
                              **({"no_qa": True} if no_qa_reason else {})})
-        msg = f"GATE3 打回 → 回实现层修复 (重置 {reset_count} 任务, 反馈: {feedback[:80]})"
+        msg = (f"GATE3 打回 → 回实现层修复 (重置 {reset_count} 个已交付 + "
+               f"{failed_reset} 个失败任务, 反馈: {feedback[:80]})")
+        if held_back:
+            msg += f"（{held_back} 个带人工取消标记，按「别继续」处理，没重派）"
         if no_qa_reason:
             msg += f" ⚠ {no_qa_reason}"
     elif fix_route == "note":
