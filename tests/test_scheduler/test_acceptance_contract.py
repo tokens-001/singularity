@@ -124,6 +124,33 @@ def test_没表态是致命档不只是一条warning():
     assert len(noted) == 1 and "data_model" in noted[0], noted
 
 
+def test_执行器提示词里的验收要拍平不能是字典字面(monkeypatch):
+    """🔴 `bf571c57` 改了 `acceptance` 的**形状**（str → list[dict]），这是漏掉的第 5 个消费者。
+
+    `_exec_context._build_project_context` 直接 `f"验收标准: {acceptance}"` 插值 ——
+    执行器会在提示词里收到 `[{'text': ..., 'check': {...}}]` 这种 Python 字面样子。
+    （同族教训：改"值的形状"必须扫全部消费者、看到最后一跳怎么渲染。）
+    """
+    from types import SimpleNamespace
+    from singularity.scheduler import project as pm
+    from singularity.scheduler import _exec_context as ctx
+
+    acc = [{"text": "import 成功",
+            "check": {"argv": ["python3", "-c", "import jsonlstats"], "expect_exit": 0}}]
+    proj = SimpleNamespace(
+        name="演示", research_report=None, handoffs=[], constraints_checklist=[],
+        architecture={"tasks": [{"id": "T1", "title": "T1 解析器", "acceptance": acc}]})
+    monkeypatch.setattr(pm, "load", lambda pid: proj)
+
+    out = ctx._build_project_context(
+        SimpleNamespace(project_id="p1", description="T1 解析器：写它"))
+    # 先钉"这段真的产出了" —— 那个函数用 `except Exception: return ""` 兜底，
+    # 光断言"不含字典"的话，它整个哑掉也照样绿（假绿）。
+    assert "验收标准" in out, f"上下文根本没产出（被兜底吞了）: {out!r}"
+    assert "{" not in out, f"喂了字典字面给执行器: {out!r}"
+    assert "import 成功" in out, out
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-q"]))

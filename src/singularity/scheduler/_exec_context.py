@@ -137,7 +137,11 @@ def _build_project_context(task) -> str:
             desc = getattr(task, 'description', '')
             for tdef in tasks:
                 if tdef.get("title", "") in desc or tdef.get("id", "") in desc:
-                    acceptance = tdef.get("acceptance", "")
+                    # ⚠️ 必须拍平：`acceptance` 现在是 list[dict]（2026-09-20 `bf571c57` 起），
+                    # 直接插值会把 Python 字典的字面样子喂进执行器的提示词。
+                    # 同族教训：改"值的形状"要扫全部消费者、看到最后一跳怎么渲染。
+                    from singularity.scheduler import _machine_checks as _mc
+                    acceptance = _mc.acceptance_text(tdef.get("acceptance", ""))
                     if acceptance:
                         parts.append(f"验收标准: {acceptance}")
                     break
