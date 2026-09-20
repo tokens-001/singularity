@@ -327,6 +327,11 @@ class Test关键告警出口:
         # 这一组要测的正是"关掉/打开"本身 ⇒ 打开它，并把真正执行的那条命令换掉。
         monkeypatch.setenv("QIDIAN_NOTIFY", "1")
         monkeypatch.setattr(witness, "_last_notified", {})
+        # 🔴 **平台也要钉**（2026-09-20，CI 当场抓到的）：出口只在 macOS 上开
+        # （`sys.platform != "darwin"` 直接返回），而 **CI 跑在 ubuntu 上** ⇒
+        # 不钉的话这几条在 CI 上必红 —— 又一出"本机绿、CI 红"。
+        # 钉成 darwin 才是在测**真那条路**；"非 macOS 不推"另有一条专门的测试。
+        monkeypatch.setattr(witness.sys, "platform", "darwin")
 
     @pytest.fixture
     def pushes(self, monkeypatch):
@@ -407,3 +412,14 @@ class Test关键告警出口:
             witness.warn("exec", "merge_queue_stuck:队列卡住", key="merge_queue_stuck")
         assert any("桌面通知没发出去" in r.getMessage() for r in caplog.records), \
             f"通知没弹出来却一声不吭：{[r.getMessage() for r in caplog.records]}"
+
+    def test_非macOS就不推(self, qdir, pushes, monkeypatch):
+        """**有意限制**：出口只在 macOS 上开 —— 别的平台是"没验证过的不写"，
+        不是漏了。这条把它钉住：哪天有人去掉平台判断、在 CI 上真去调 `osascript`，
+        这里会红。
+
+        ⚠️ 上一条夹具把平台钉成 darwin 了，这条**必须自己钉回 linux**。
+        """
+        monkeypatch.setattr(witness.sys, "platform", "linux")
+        witness.warn("exec", "merge_queue_stuck:队列卡住", key="merge_queue_stuck")
+        assert pushes == [], f"非 macOS 上也去弹通知了：{pushes}"
