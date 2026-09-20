@@ -124,6 +124,37 @@ def test_没表态是致命档不只是一条warning():
     assert len(noted) == 1 and "data_model" in noted[0], noted
 
 
+def test_散文验收真的会被致命档拦下_端到端接线():
+    """🔴 **这条才是 bf571c57 缺的那条测试** —— 它把三个函数**串起来**跑。
+
+    原来两条测试各自绿着：一条只测 `_validate_architecture` **报不报违规**，
+    另一条把一个**手写的字符串**直接喂给 `classify_arch_issues` 看它判不判致命。
+    而 `_run_planning` 中间还有一行过滤 —— `bf571c57` 那条文案三个关键词一个都不含
+    ⇒ 被滤掉 ⇒ 分类器压根没见过它 ⇒ **致命档永远是空的**（13 条测试全绿，门是装饰）。
+    2026-09-21 真机实测：散文验收走完这条路，`blockers == []`、`fatal == []`。
+
+    判据：**删掉 `split_arch_issues` 里那句前缀判断** ⇒ 这条红。
+    """
+    from singularity.scheduler.workflow import (
+        _validate_architecture, split_arch_issues, classify_arch_issues, ACCEPTANCE_UNSTATED)
+    arch = _arch("CONTRACTS.md 列出三个契约的全部字段")   # ← 旧写法：整条散文
+    audit, _noted = split_arch_issues(_validate_architecture(arch))
+    assert any(ACCEPTANCE_UNSTATED in i for i in audit), \
+        f"「没表态」被那行过滤滤掉了，分类器看不到它: {audit}"
+    fatal, _ = classify_arch_issues(audit)
+    assert fatal, "致命档是空的 ⇒ GATE2 照过，那道门等于没建"
+
+
+def test_只记的那类仍然只记():
+    """反例也要钉：`建议补充字段` 是**有意**不拦的（单文件 CLI 本来就没有 data_model）。"""
+    from singularity.scheduler.workflow import split_arch_issues, classify_arch_issues
+    audit, noted = split_arch_issues(["建议补充字段: api_contracts", "缺少必填字段: data_model"])
+    assert audit == ["缺少必填字段: data_model"], audit
+    assert noted == ["建议补充字段: api_contracts"], noted
+    fatal, _ = classify_arch_issues(audit)
+    assert not fatal, "缺 data_model 不该致命 —— 那会把好活挡在门外"
+
+
 def test_执行器提示词里的验收要拍平不能是字典字面(monkeypatch):
     """🔴 `bf571c57` 改了 `acceptance` 的**形状**（str → list[dict]），这是漏掉的第 5 个消费者。
 

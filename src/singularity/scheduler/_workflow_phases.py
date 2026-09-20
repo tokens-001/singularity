@@ -1,5 +1,5 @@
 __all__ = ['_run_execution', '_run_planning', '_run_research', '_validate_architecture',
-           'classify_arch_issues', 'lineup_seats', 'ACCEPTANCE_UNSTATED']
+           'classify_arch_issues', 'split_arch_issues', 'lineup_seats', 'ACCEPTANCE_UNSTATED']
 
 # 验收"没表态"的标记串。`_validate_architecture` 产它、致命判据认它 ——
 # ⚠️ 两处共用同一个常量，是因为 `arch_issues` 现在只有 `list[str]`、没有严重度。
@@ -192,8 +192,13 @@ def preflight_external(agents: dict) -> list[str]:
 
     # ① 嵌入模型：能不能在**不联网**的前提下加载出来
     try:
-        from . import _memory_core as _mc
-        if _mc._get_embed_model() is None:
+        # ⚠️ 别名**不能也叫 `_mc`**：本文件里 `_mc` 已被 `_machine_checks` 占了
+        # （`_validate_architecture` 等三处）。同名指两个模块会让
+        # `test_no_undefined_names.test_module_attributes_exist` 张冠李戴
+        # —— 它按遍历顺序取最后一个别名，于是这行的 `_get_embed_model`
+        # 被拿去 `_machine_checks` 里找，报"属性不存在"（假阳性）。
+        from . import _memory_core as _mem
+        if _mem._get_embed_model() is None:
             problems.append(
                 "嵌入模型不可用（本地无缓存或加载失败）→ 记忆语义检索会退化成空")
     except Exception as e:
@@ -570,7 +575,7 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
         _save_phase_output(project.id, "test-plan.md",
                           json.dumps(test_plan, ensure_ascii=False, indent=2))
     arch_issues = _validate_architecture(arch)
-    blockers = [i for i in arch_issues if "缺少" in i or "无效" in i or "应为" in i]
+    blockers = split_arch_issues(arch_issues)[0]
 
     # 校验结果**落盘**。原来只进 lineage 的计数 + 一条返回文案（SSE 一闪而过）——
     # 于是"架构缺必填字段"这件事在项目状态里查不到、GATE2 面板上也看不见，
@@ -657,6 +662,36 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     save(project)
     block_warn = f" (⚠阻塞: {'; '.join(blockers[:2])})" if blockers else ""
     return f"架构完成: {len(arch.get('tasks', []))} 个任务, {len(arch.get('constraints', []))} 条约束, {len(traceability)} 条追溯{block_warn}"
+
+
+#: 架构校验里唯一一类「只记不拦」的问题。**判据是前缀，只此一处。**
+#: ⚠️ 新加的校验规则**默认落进"要审"那一边** —— 方向是刻意的：
+#: 漏配的代价是"多审一条"，而不是"新规则静默失效"。
+_ARCH_ADVISORY_PREFIX = "建议补充字段:"
+
+
+def split_arch_issues(issues: list[str]) -> tuple[list[str], list[str]]:
+    """校验产出 → ``(要审的, 只记的)``。
+
+    🔴 **来历（2026-09-21 真机，这就是它存在的理由）**：这个判断原来是
+    `_run_planning` 里一行内联的子串匹配 ——
+    ``[i for i in arch_issues if "缺少" in i or "无效" in i or "应为" in i]``。
+    `bf571c57` 新加的「**acceptance 没表态**」那条**三个词一个都不含** ⇒ 被这行滤掉
+    ⇒ `classify_arch_issues` **压根没见过它** ⇒ 致命档永远是空的 ⇒ **GATE2 照过**。
+    实测：把 b/c 轮那种「散文验收」的架构喂进这条路，`blockers == []`、`fatal == []`
+    —— 那道门（13 条测试、两次变异全绿）**是装饰**。
+
+    **为什么改成前缀**：散落的子串匹配，判据写在**产问题的地方之外**，
+    新规则一加就静默掉队（出洞的方式还跟"修好了"长得一样：测试绿、`validation_issues` 也在涨，
+    只有 `blockers` 是 0）。前缀只此一处，且**默认方向是"要审"**。
+
+    ⚠️ `classify_arch_issues` 仍按 `"tasks"` / `ACCEPTANCE_UNSTATED` 两个子串判致命档 ——
+    那条**没动**：它的默认方向是"只记"，改错方向会把"单文件 CLI 没有 data_model"
+    这种好活挡在门外（那条注释写明了）。这里只保证**该进分类器的都进得去**。
+    """
+    audit = [i for i in issues if not i.startswith(_ARCH_ADVISORY_PREFIX)]
+    noted = [i for i in issues if i.startswith(_ARCH_ADVISORY_PREFIX)]
+    return audit, noted
 
 
 def classify_arch_issues(blockers: list[str]) -> tuple[list[str], list[str]]:

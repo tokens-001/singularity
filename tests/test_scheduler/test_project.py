@@ -120,7 +120,10 @@ class TestProjectWorkflow:
         self.p.auto_mode = True
         self.p.phase = self.p.phase.__class__.GATE1
         mock_result = MagicMock()
-        mock_result.executor_result.raw_output = '{"architecture":"x","tasks":[{"id":"T1","title":"t","description":"d","complexity":"low","acceptance":"a","estimated_files":["f.py"]}],"constraints":[],"risks":[],"test_strategy":"x"}'
+        # acceptance 用**新形态**（list + check）：散文形态现在会被判"没表态"⇒ 致命档
+        # ⇒ GATE2 不放行，串不到 executing（那条规矩见 test_acceptance_contract.py）。
+        # 这个测试要钉的是"自动串阶段"，所以桩数据得是一份**合格**的架构。
+        mock_result.executor_result.raw_output = '{"architecture":"x","tasks":[{"id":"T1","title":"t","description":"d","complexity":"low","acceptance":[{"text":"a","check":{"text_only_reason":"桩数据，机器验不了"}}],"estimated_files":["f.py"]}],"constraints":[],"risks":[],"test_strategy":"x"}'
         mock_result.agent_cfg = {"model": "test"}
         with patch("singularity.scheduler.workflow.disp_mod.dispatch", return_value=mock_result):
             msg = run_phase(self.p, {})
