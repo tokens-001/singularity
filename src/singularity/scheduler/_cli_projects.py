@@ -248,7 +248,9 @@ def _cmd_project_delete(project_id: str) -> int:
     if proj is None:
         print(f"项目不存在: {project_id}", file=sys.stderr)
         return 1
-    # 删关联任务及全部残留 (复用 task_delete: trace/worktree/snapshot/pending ref)
+    # 删关联任务及全部残留 (复用 task_delete: trace/worktree/snapshot)。
+    # ⚠️ 产物**不删**：task_delete 把还没进仓的锚换桩到 `refs/qidian/salvaged/`
+    #    —— 所以 `project delete` 也不会顺手丢掉谁的可打捞产物。
     from ._api_tasks import task_delete
     for tid in list(proj.task_ids):
         task_delete(tid)

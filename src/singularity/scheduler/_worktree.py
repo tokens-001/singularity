@@ -64,6 +64,44 @@ def _release_ref(task_id: str, repo_root=None) -> bool:
     return r.returncode == 0
 
 
+def _salvage_ref(task_id: str, repo_root=None) -> str:
+    """把锚从 `pending/` 改挂到 `salvaged/`，返回搬过去的 sha（没有可搬的就空串）。
+
+    ## 治的是哪条路
+
+    `_api_tasks.task_delete` 原来是直接 `_release_ref` —— **产物真丢**（09-18 实测掉过 3 个）。
+    那条路的取舍写在 `task_delete` 的注释里，代价是"用户要留就先别删任务"；可**界面上
+    没有任何地方说过这句话**，而且用户看到也没处使劲（F3 只给徽标，没有"先捞一下"的动作）
+    ⇒ 点一下删除，产物一声不吭地没了。
+
+    换桩只花一条 ref：对象照样是 gc root、`git show <sha>` 永远拿得到；而
+    `refs/qidian/pending/` 底下干干净净（任务都删了，"有可打捞的产物"自然不该再挂在它身上）。
+
+    ⚠️ **先建新桩、再拆旧桩** —— 反过来中间挂了就两边都没有 = 纯丢。
+    ⚠️ 新桩建不出来 ⇒ 返回空串、**旧桩一个字都不动**。调用方要把它当"没搬成"：
+    宁可留一条能报出来的孤儿（`_api_tasks.orphan_refs` 数得出来），也别丢产物。
+    """
+    root = repo_root or config.PROJECT_ROOT
+    pend = f"refs/qidian/pending/{task_id}"
+    r = _sp.run(
+        ["git", "rev-parse", "--verify", "-q", pend],
+        cwd=str(root), capture_output=True, text=True, timeout=15,
+    )
+    sha = (r.stdout or "").strip()
+    if r.returncode != 0 or not sha:
+        return ""          # 没有可搬的（常态：产物已合并进仓，那条路早释放了）
+    if _sp.run(
+        ["git", "update-ref", f"refs/qidian/salvaged/{task_id}", sha],
+        cwd=str(root), capture_output=True, timeout=15,
+    ).returncode != 0:
+        return ""
+    _sp.run(
+        ["git", "update-ref", "-d", pend],
+        cwd=str(root), capture_output=True, timeout=15,
+    )
+    return sha
+
+
 def cleanup_task_artifacts(task_id: str, repo_root) -> int:
     """清任务衍生残留 (patch/snapshot/worktree/标记/累计用量)，不动任务本体 json。返回删除数。
 
@@ -81,8 +119,10 @@ def cleanup_task_artifacts(task_id: str, repo_root) -> int:
     （`1789658497832` / `1789658497834` / `1789662504534`，靠 git 还没 gc 才按 SHA 捞回来）。
     ⚠️ **同一形状不止删任务这一处**：超时 / worker 异常 / 合并冲突那三条路也松过手 ——
     而它们恰恰是"产物在、只是没进仓"最多的地方（09-18 那天 62 次被 240s 掐断全走这条）。
-    ⇒ 释放改由**知道产物落没落地**的调用方显式做，见 `_api_tasks.task_delete` /
-    `task_retry` / `orchestrator._drain_pending`。
+    ⇒ 释放改由**知道产物落没落地**的调用方显式做。**改完只剩一处**（2026-09-20 复核）：
+    `orchestrator._drain_pending` 的 merged 分支 —— 那是唯一让"已进仓"成立的地方。
+    另外两条都**不再调 `_release_ref`**：`_api_tasks.task_retry` 明写不释放，
+    `task_delete` 改成了**换桩**（`_salvage_ref`：pending → salvaged，产物不丢）。
     """
     from singularity.scheduler import witness
     from singularity.scheduler._git_worktree import _worktrees_dir

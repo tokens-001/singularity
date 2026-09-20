@@ -49,6 +49,20 @@ def _ref_exists(repo, task_id) -> bool:
     return r.returncode == 0
 
 
+def _salvaged_sha(repo, task_id) -> str:
+    r = subprocess.run(["git", "rev-parse", "--verify", "-q",
+                        f"refs/qidian/salvaged/{task_id}"],
+                       cwd=str(repo), capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def _obj_reachable(repo, sha) -> bool:
+    """对象本身还捞得到吗 —— `git gc` 会不会收走它，就看这个。"""
+    r = subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"],
+                       cwd=str(repo), capture_output=True, text=True)
+    return r.returncode == 0
+
+
 def test_清临时残留时锚必须留下(tmp_path):
     """`cleanup_task_artifacts` 清掉了 patch 残留，**而锚纹丝不动**。
 
@@ -77,23 +91,96 @@ def test_清临时残留时锚必须留下(tmp_path):
     assert _ref_exists(repo, "T1"), "清临时残留顺手把可打捞产物的锚剪了（2026-09-18 那个事故）"
 
 
-def test_删除任务仍然释放锚(tmp_path, monkeypatch):
-    """**删除**是明说要丢：任务文件马上没了，锚留着就是界面上看不见的孤儿。
+def test_删任务时产物换桩_不丢(tmp_path, monkeypatch):
+    """删任务改挂桩：`pending/` 拆掉、`salvaged/` 接上、**对象还捞得到**。
 
-    这条钉的是"没有顺手改坏现状"—— 释放从 `cleanup_task_artifacts` 挪到
-    `task_delete` 里显式做，行为不变。
+    🔵 **2026-09-20 加的**。原来是直接 `_release_ref`（产物真丢，09-18 实测掉过 3 个），
+    取舍写着"用户要留就先别删任务"—— 可界面上从没说过这句话，用户也没有"先留"的动作。
+    改法的完整理由在 `_worktree._salvage_ref` 的 docstring 里。
+
+    ⚠️ 三条断言缺一不可：只验"pending 没了"的话，**把整个换桩删掉也绿**；
+    只验"salvaged 在"的话，换了桩却没拆旧绳（任务读不到、界面照旧说有"可打捞产物"）也绿。
+    """
+    import json
+
+    from singularity.scheduler import _api_tasks as A
+    from singularity.scheduler import config
+    from singularity.scheduler._worktree import _anchor_ref
+
+    repo = _git_repo(tmp_path)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                         capture_output=True, text=True).stdout.strip()
+    _anchor_ref("T1", sha, repo_root=repo)
+
+    tasks_dir = tmp_path / "tasks"; tasks_dir.mkdir()
+    (tasks_dir / "T1.json").write_text("{}", encoding="utf-8")
+    qidian = tmp_path / ".qidian"
+    # 🔴 账本别写进真 `.qidian/` —— 跑测试往真账上写字，以后没人分得清这行是谁写的
+    monkeypatch.setattr(config, "QIDIAN_DIR", qidian)
+    for name in ("CANCEL_DIR", "PAUSE_DIR", "PARKED_DIR", "HOLD_DIR", "TRACE_DIR"):
+        monkeypatch.setattr(config, name, qidian / name.lower())
+    monkeypatch.setattr(A, "_cleanup_task_artifacts", lambda *a, **k: 0)
+    monkeypatch.setattr(A, "tracker", _FakeTracker(tasks_dir))
+    monkeypatch.setattr("singularity.scheduler.project.repo_root_for", lambda t: repo)
+
+    body, code = A.task_delete("T1")
+
+    assert code == 200
+    assert not _ref_exists(repo, "T1"), "旧绳没拆 —— 已删的任务还挂着'有可打捞的产物'"
+    assert _salvaged_sha(repo, "T1") == sha, "产物没换到 salvaged 桩上"
+    assert _obj_reachable(repo, sha), "换了桩却捞不到对象 —— 那这次修法等于没修"
+    assert body["salvaged"] == sha, f"返回值没把这件事说出来: {body}"
+    rows = [json.loads(x) for x in (qidian / "salvaged.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert rows and rows[-1]["task_id"] == "T1" and rows[-1]["sha"] == sha, rows
+
+
+def test_换桩建不出来时_旧绳一个字都不许动(tmp_path):
+    """**先建新桩、再拆旧桩** —— 反过来中间挂了就两边都没有 = 纯丢。
+
+    故障注入用真 git：往 `refs/qidian/salvaged/T1/` 底下挂一条子 ref，
+    那个目录就占住了 `salvaged/T1` 这个名字，`update-ref` 必然失败。
+    """
+    from singularity.scheduler._worktree import _anchor_ref, _salvage_ref
+
+    repo = _git_repo(tmp_path)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                         capture_output=True, text=True).stdout.strip()
+    _anchor_ref("T1", sha, repo_root=repo)
+    subprocess.run(["git", "update-ref", "refs/qidian/salvaged/T1/x", sha],
+                   cwd=str(repo), capture_output=True, text=True)
+
+    assert _salvage_ref("T1", repo_root=repo) == "", "新桩建不出来时不该说自己搬成了"
+    assert _ref_exists(repo, "T1"), "新桩没建成，旧绳却被剪了 —— 产物纯丢"
+
+
+def test_搬不动时_删任务不许走释放(tmp_path, monkeypatch):
+    """**搬不成 ⇒ 旧绳原样留着**，不许"顺手释放"兜底。
+
+    🔵 **2026-09-20 反过来了** —— 这条原来是 `test_删除任务仍然释放锚`，
+    钉的是相反的行为。原来那句话（"删任务 = 明说要丢，锚留着是界面看不见的孤儿"）
+    现在不成立了：孤儿有 `_api_tasks.orphan_refs()` 报得出来，**而产物丢了就真没了**。
+
+    变异：在 `task_delete` 里给搬不动那条加一句 `_release_ref(...)` 兜底 ⇒ 本条红。
     """
     from singularity.scheduler import _api_tasks as A
 
-    released = []
+    from singularity.scheduler._worktree import _anchor_ref
+
+    repo = _git_repo(tmp_path)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                         capture_output=True, text=True).stdout.strip()
+    _anchor_ref("T1", sha, repo_root=repo)
+
     tasks_dir = tmp_path / "tasks"; tasks_dir.mkdir()
-    monkeypatch.setattr(A, "_release_ref", lambda tid, repo_root=None: released.append(tid))
+    (tasks_dir / "T1.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(A, "_salvage_ref", lambda tid, repo_root=None: "")   # 搬不动
     monkeypatch.setattr(A, "_cleanup_task_artifacts", lambda *a, **k: 0)
     monkeypatch.setattr(A, "tracker", _FakeTracker(tasks_dir))
-    monkeypatch.setattr("singularity.scheduler.project.repo_root_for", lambda t: tmp_path)
+    monkeypatch.setattr("singularity.scheduler.project.repo_root_for", lambda t: repo)
 
     A.task_delete("T1")
-    assert released == ["T1"], f"删除不再释放锚了（现状被改坏了？）: {released}"
+    assert _ref_exists(repo, "T1"), "搬不动就顺手剪了 —— 产物纯丢"
+    assert _obj_reachable(repo, sha), "锚还在，对象却捞不到了"
 
 
 def test_重试不释放锚(tmp_path, monkeypatch):
@@ -121,7 +208,11 @@ def test_重试不释放锚(tmp_path, monkeypatch):
     from singularity.scheduler import _api_tasks as A
 
     released = []
-    monkeypatch.setattr(A, "_release_ref", lambda tid, repo_root=None: released.append(tid))
+    # `raising=False`（2026-09-20 加）：`_api_tasks` 里现在**没有** `_release_ref` 这个名字了
+    # （task_delete 改成换桩之后连 import 都撤了）。这里仍然**注入**一个同名假货 ——
+    # 真代码按模块全局名找它，所以哪天有人把这个名字加回 `task_retry`，这条照样当场红。
+    monkeypatch.setattr(A, "_release_ref",
+                        lambda tid, repo_root=None: released.append(tid), raising=False)
     monkeypatch.setattr(A, "_cleanup_task_artifacts", lambda *a, **k: 0)
     monkeypatch.setattr(A, "_supersede_trace", lambda tid: None)
     monkeypatch.setattr(A, "tracker",

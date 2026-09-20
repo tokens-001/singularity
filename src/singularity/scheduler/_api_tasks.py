@@ -20,7 +20,7 @@ from pathlib import Path
 
 from singularity.scheduler import config, tracker, witness
 from singularity.scheduler._worktree import (
-    _release_ref,
+    _salvage_ref,
 )
 from singularity.scheduler._worktree import (
     cleanup_task_artifacts as _cleanup_task_artifacts,
@@ -79,8 +79,11 @@ def orphan_refs() -> dict[str, str]:
 
     ⇒ 清掉一条孤儿 ref = **永久删掉一份还在的产物**，而且**没有任何人能判它该不该留**
     （判据本身已经没了）。所以它只能**报出来给人判**，不能进任何自动清理。
-    ⚠️ 09-19 已摸清两条路的差别：`rm` 直删任务 JSON **不碰 ref**（安全）；
-    走 `DELETE /api/tasks/<id>` 会**显式 `_release_ref`**（产物真丢）。
+    ⚠️ **两条路的差别已经没了**（2026-09-20）：`rm` 直删任务 JSON 不碰 ref；
+    走 `DELETE /api/tasks/<id>` 现在也**不丢产物**了 —— `task_delete` 改成了换桩
+    （`_worktree._salvage_ref`：pending → `refs/qidian/salvaged/<id>`，
+    线索记进 `.qidian/salvaged.jsonl`）。⇒ 以后盘上再出现孤儿，只可能是
+    "绕过 `task_delete` 手工删的任务文件"。
     这里另开一条只读的，只数不删。
 
     ⚠️ **看不见的那一半**：项目仓**被删掉**时，它里面的 ref 跟着一起没了 ——
@@ -439,8 +442,39 @@ def task_set_mode(task_id: str, mode: str) -> tuple[dict, int]:
     return {"ok": True, "task_id": task_id, "execution_mode": mode}, 200
 
 
+def _record_salvaged(task, task_id: str, sha: str, repo_root) -> None:
+    """把"删任务留下来的产物"记一行进 `.qidian/salvaged.jsonl`（只增不删）。
+
+    任务文件是「这个 ref 是什么」（描述 / 状态 / 父项目 / 当时在干什么）的**唯一**线索，
+    它马上就被删了 ⇒ 不记这一行，产物就成了查无来处的孤儿 ref
+    （09-19 清那 10 个孤儿任务时，正因为没有对照表才得先人工补一份）。
+    """
+    row = {
+        "task_id": task_id,
+        "repo": str(repo_root),
+        "ref": f"refs/qidian/salvaged/{task_id}",
+        "sha": sha,
+        "description": (getattr(task, "description", "") or "")[:200],
+        "project_id": getattr(task, "project_id", "") or "",
+        "status": str(getattr(getattr(task, "status", ""), "value", "") or ""),
+        "deleted_at": time.time(),
+    }
+    try:
+        p = config.QIDIAN_DIR / "salvaged.jsonl"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError as e:
+        # 静默 = 线索没了而产物还在，以后没人说得清它是谁的
+        witness.warn('_api', f'salvaged_record:{task_id}:{type(e).__name__}'[:100],
+                     key="salvaged_record_failed")
+
+
 def task_delete(task_id: str) -> tuple[dict, int]:
-    """POST /api/tasks/<id>/delete — 清任务本体 + 衍生残留 (worktree/snapshot/标记/ref)。"""
+    """POST /api/tasks/<id>/delete — 清任务本体 + 衍生残留 (worktree/snapshot/标记)。
+
+    ⚠️ **锚不在这里释放**（2026-09-20 改）：还没进仓的产物**换桩**留着，见下面那段注释。
+    """
     config.ensure_dirs()
     task = tracker.read_task(task_id)  # 先读: worktree/ref 清理需要 repo_root
     try:
@@ -451,20 +485,29 @@ def task_delete(task_id: str) -> tuple[dict, int]:
 
     deleted = _cleanup_task_artifacts(task_id, repo_root)
 
-    # 🔴 **锚定 ref 在这里显式释放**（2026-09-18 从 `cleanup_task_artifacts` 里挪出来的）。
-    # 它不再藏在"清垃圾"里，是因为**释放 = 断言"产物已经安全进项目仓了"**，
-    # 而删除这条路的理由完全不同、且是个取舍：
-    #   · 任务文件马上就没了 ⇒ `salvageable_refs()` 那个 `{task_id: sha}` 表**没有行能挂**，
-    #     界面按任务 id 去查（`_list_all_tasks` 里 `salvage.get(t.get("id"))`）⇒
-    #     ref 留着就是**盘上有、界面看不见**的孤儿 —— 正是另一条待办
-    #     「清理孤儿 pending ref」要定义的东西。
-    #   · 代价是真丢：删一个"判失败但产物还在"的任务，那份产物**没人引用、gc 会收走**
-    #     （2026-09-18 实测掉过 3 个）。**用户要留就先别删任务。**
+    # 🔴 **锚在这里「换桩」，不是「释放」**（2026-09-20 改）。
+    #
+    # 原来是 `_release_ref` —— 删任务顺手剪断"产物可打捞"那根绳，产物**真丢**
+    # （09-18 实测掉过 3 个）。当时的取舍是"任务文件没了 ⇒ 界面看不见这个 ref ⇒
+    # 留着就是孤儿"，代价写着"**用户要留就先别删任务**"。可界面上**没有任何地方
+    # 说过这句话**，用户也没有"先留"的动作可用（F3 只给徽标），而这套系统里
+    # 最贵的恰恰就是产物（09-16 那轮："完全交付，只是系统没认出来"）。
+    #
+    # 换桩两件事都占：`refs/qidian/salvaged/<id>` 让对象永远是 gc root（产物不丢），
+    # 而 `refs/qidian/pending/` 底下干干净净（"有可打捞的产物"不再挂在已删的任务上）。
+    # 任务文件一删就丢了「这个 ref 是什么」的线索 ⇒ 顺手往 `.qidian/salvaged.jsonl`
+    # 记一行（只增不删的账，跟 alerts.jsonl 一个性质，给人查的）。
+    #
+    # ⚠️ **搬不成时一个字都不动**（`_salvage_ref` 返回空串）：旧绳留着 ——
+    #    那种形态 `orphan_refs()` 数得出来、人也捞得回，比丢掉强。
+    salvaged = ""
     try:
-        _release_ref(task_id, repo_root=repo_root)
+        salvaged = _salvage_ref(task_id, repo_root=repo_root)
     except Exception as e:
-        witness.warn('_api', f'release_ref:{task_id}:{type(e).__name__}:{e}'[:100],
-                     key="task_delete_release_ref_failed")
+        witness.warn('_api', f'salvage_ref:{task_id}:{type(e).__name__}:{e}'[:100],
+                     key="task_delete_salvage_ref_failed")
+    if salvaged:
+        _record_salvaged(task, task_id, salvaged, repo_root)
 
     # 任务本体/取消/暂停/parking/扣留 单文件 (delete 一并清, retry 不动)
     def _rm(p: Path) -> None:
@@ -504,7 +547,16 @@ def task_delete(task_id: str) -> tuple[dict, int]:
                 witness.warn('_api', f'orphan_project_task:{task.project_id}:{e}'[:80])
 
     if deleted:
-        return {"ok": True, "message": f"已删除 {deleted} 个文件"}, 200
+        msg = f"已删除 {deleted} 个文件"
+        if salvaged:
+            msg += (f"；它还没进仓的产物**没丢** —— 已改挂 "
+                    f"refs/qidian/salvaged/{task_id}（{salvaged[:7]}），"
+                    f"账记在 .qidian/salvaged.jsonl")
+        return {"ok": True, "message": msg, "salvaged": salvaged}, 200
+    if salvaged:
+        # 任务文件早就不在了（手工删过），可盘上确实动了一下 —— 别让响应说"什么都没发生"
+        return {"error": f"任务文件不存在（但它的产物没丢，已改挂 "
+                         f"refs/qidian/salvaged/{task_id}）", "salvaged": salvaged}, 404
     return {"error": "任务文件不存在"}, 404
 
 
