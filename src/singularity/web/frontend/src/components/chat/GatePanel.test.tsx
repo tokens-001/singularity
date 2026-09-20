@@ -143,6 +143,47 @@ describe('「📦 交付」抽屉', () => {
 })
 
 // ═══════════════════════════════════════════════════════════════
+// 架构任务里的「验收」——值的形状变了（2026-09-21 真机白屏）
+// ═══════════════════════════════════════════════════════════════
+// `bf571c57` 把 `acceptance` 从字符串改成 `[{text, check}]`，后端扫了一遍消费者，
+// **前端这一处漏了**：`ArchitectureDetails` 里直接 `{t.acceptance}` ⇒
+// **React error #31**（"对象不能当 React 子节点"）⇒ 「📁 文件」侧滑面板**整个白屏**，
+// 页面只显示一句"页面出错了"，完全看不出是验收字段的锅。
+// 同族教训：**改值的形状要扫全部消费者**（后端那处是 `_exec_context`，也是漏网的）。
+//
+// ⚠️ 判据渲染的是 **`ProjectMaterials`** —— `Chat.tsx:412` 真正挂的那个。
+// 直接渲染 `ArchitectureDetails` 会绕开"页面到底挂没挂它"，那正是 09-20 栽过的那条。
+describe('架构任务里的验收（新形态 list[{text,check}]）', () => {
+  const 任务 = (acceptance: any) => ({
+    id: 'p1',
+    architecture: { modules: [{ name: 'm' }], constraints: [], tasks: [
+      { id: 'T1', title: '实现 parser', complexity: 'medium', depends_on: [], acceptance }] },
+  })
+
+  it('新形态不炸，且把每条的正文显示出来', () => {
+    const t = render(<ProjectMaterials info={任务([
+      { text: 'import 成功', check: { argv: ['python3', '-c', 'import x'], expect_exit: 0 } },
+      { text: '表格美观', check: { text_only_reason: '观感指标' } },
+    ])} tasks={[]} gateNum="2" acceptance={null} />)
+    expect(t).toContain('import 成功')
+    expect(t).toContain('表格美观')
+  })
+
+  it('能机器跑的条数要露出来 —— 那正是人批 GATE2 时该看见的', () => {
+    const t = render(<ProjectMaterials info={任务([
+      { text: 'a', check: { argv: ['python3', '-m', 'pytest'], expect_exit: 0 } },
+      { text: 'b', check: { text_only_reason: '验不了' } },
+    ])} tasks={[]} gateNum="2" acceptance={null} />)
+    expect(t).toContain('1 条机器可验')
+  })
+
+  it('旧形态（整条字符串）原样透传 —— 盘上还有老项目，别让它们白屏', () => {
+    const t = render(<ProjectMaterials info={任务('跑通就行')} tasks={[]} gateNum="2" acceptance={null} />)
+    expect(t).toContain('跑通就行')
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════
 // 门禁页的摘要条也要带上项目问题（2026-09-20 用户拍板）
 // ═══════════════════════════════════════════════════════════════
 // 抽屉里能看见 ≠ 看得见：那条 issue 会影响"该不该点通过"，得摆在**不用点开**的地方。

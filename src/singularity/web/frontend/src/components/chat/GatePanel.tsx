@@ -96,6 +96,29 @@ function summarize(v: any): string {
   return String(v)
 }
 
+/** `acceptance` 拍平成一行。
+ *
+ *  🔴 **它现在是 `[{text, check}]`，不是字符串**（2026-09-20 `bf571c57` 起）。
+ *  直接 `{t.acceptance}` 会抛 **React error #31**（"对象不能当 React 子节点"）——
+ *  **整个 GATE2 面板白屏**，而页面只显示一句"页面出错了"，完全看不出是验收字段的锅。
+ *  2026-09-21 真机撞上（round-20260921b 之后点开架构页）。
+ *
+ *  ⚠️ 同一个坑后端已经踩过一次：`_exec_context` 把新形状原样插进提示词。
+ *  **改值的形状要扫全部消费者** —— 后端扫过一遍，前端这一处是补扫才发现的。
+ *
+ *  旧形态（整条字符串）原样透传：盘上还存着老项目，不能让它们白屏。
+ */
+function acceptanceText(a: any): string {
+  if (typeof a === 'string') return a
+  if (!Array.isArray(a)) return ''
+  const items = a
+    .map((x: any) => (typeof x === 'string' ? x : String(x?.text ?? '')))
+    .filter(Boolean)
+  // 有几条是**真能机器跑的** —— 人批 GATE2 时该看见这个，那正是这道契约的意义
+  const runnable = a.filter((x: any) => x?.check?.argv?.length).length
+  return items.join('；') + (runnable ? `（${runnable} 条机器可验）` : '')
+}
+
 /** 通用正文渲染。**兜底永远是 JSON，绝不能是空** ——
  *  少了那句，`competitive_analysis: {}`（没有 products）点开就是一个空框，
  *  跟"这段本来就没内容"长得一模一样（防御模式 #77.10 的形状：报"没有"而实际是"没渲染"）。 */
@@ -291,7 +314,7 @@ export const ArchitectureDetails = memo(function ArchitectureDetails(
                 <div style={{ fontSize: 10, color: '#6b6b68', marginTop: 2 }}>
                   {t.depends_on?.length > 0 && <span>依赖：{t.depends_on.join(', ')}</span>}
                   {t.depends_on?.length > 0 && t.acceptance && <span> · </span>}
-                  {t.acceptance && <span>验收：{t.acceptance}</span>}
+                  {t.acceptance && <span>验收：{acceptanceText(t.acceptance)}</span>}
                 </div>
               )}
             </div>
