@@ -684,7 +684,12 @@ def test_dispatch_start_is_marked_before_dispatch_runs(monkeypatch, tmp_path):
     # `_exec.tracker.read_task = ...` 改的是 tracker 模块、`_exec.witness.heartbeat = ...`
     # 改的是 witness 模块。只还原 `_exec` 等于没还（2026-09-13 实测：
     # 漏了那两个，跑完这条再跑 `test_tracker.py` 挂两条，而单独跑是绿的）。
-    snap = [(m, dict(vars(m))) for m in (_exec, _exec.tracker, _exec.witness, _sup)]
+    # ⚠️ **`_exec.val_mod` 也漏过**（2026-09-20 补）：桩里那句
+    # `_exec.val_mod.validate = _validate` 改的是 **validator 模块本身** ——
+    # 名单里没有它 ⇒ 跑完这条，全进程的 `validator.validate` 都被换成了那个弹队列的假货。
+    # 症状一模一样：`test_validator.py` 单独跑绿、全量跑挂（`S.validate_queue.pop(0)` IndexError）。
+    snap = [(m, dict(vars(m))) for m in (_exec, _exec.tracker, _exec.witness, _sup,
+                                         _exec.val_mod)]
     snap_s = dict(vars(harness.S))
     seen: dict = {}
     try:

@@ -810,13 +810,28 @@ class OpenAIAgentExecutor(BaseExecutor):
                     # 同文件里还有一条方向相反的（`tool_choice` 兜底那条：
                     # 「必须调用工具产出文件，禁止只输出文字描述」）—— 两条对着干，
                     # **谁后出现谁赢**，而这条更靠后。补上这句，让它不再互相抵消。
-                    messages.append({
-                        "role": "system",
-                        "content": "[系统] 已收集足够信息。停止使用工具，直接输出最终答案。"
-                                   "但**交付物必须以文件形式存在**：还没写进文件的代码/文档，"
-                                   "先用 write_file 落盘再收尾 —— "
-                                   "**只写在回答正文里的内容不会被交付**。"
-                    })
+                    # 🔴 **只读任务要反过来说**（2026-09-20）：本任务的协议就是"别改文件"
+                    # （`config.READONLY_TAG`，planner 写在标题里）—— 再叫它"交付物必须以
+                    # 文件形式存在"就是**两条对着干**。真机 trace 里模型正是被这句逼得来回
+                    # 横跳、把轮次烧光：*"The system says to stop using tools and output the
+                    # final answer, but deliverables must exist as files. I haven't written
+                    # the test files yet!"* —— 而这类任务的**交付物就是结论本身**。
+                    if config.is_readonly_task(self.task):
+                        messages.append({
+                            "role": "system",
+                            "content": "[系统] 已收集足够信息。停止使用工具，直接输出最终答案。"
+                                       "**本任务是只读任务（描述里的 [只读] 声明）：不要写任何文件**"
+                                       " —— 交付物就是你的结论本身，直接写在回答正文里即可，"
+                                       "正文里的结论**算数**。"
+                        })
+                    else:
+                        messages.append({
+                            "role": "system",
+                            "content": "[系统] 已收集足够信息。停止使用工具，直接输出最终答案。"
+                                       "但**交付物必须以文件形式存在**：还没写进文件的代码/文档，"
+                                       "先用 write_file 落盘再收尾 —— "
+                                       "**只写在回答正文里的内容不会被交付**。"
+                        })
                 last_tool_calls = call_fingerprint
                 continue  # 继续下一轮，让模型看工具结果
 

@@ -43,7 +43,7 @@ class ValidationReport:
     fix_route: str = ""  # impl|design|note
 
 def validate(candidate, gate_required, task_type, changed_files, snap, turn, max_turns, cwd=None,
-             gate_unknown: bool = False):
+             gate_unknown: bool = False, readonly: bool = False):
     report = ValidationReport(turns_used=turn)
     for pat in _DANGEROUS_PATTERNS:
         if pat.search(candidate):
@@ -51,12 +51,22 @@ def validate(candidate, gate_required, task_type, changed_files, snap, turn, max
             report.action = "abort"
             report.unverified.append(f"L1: {pat.pattern}")
             return report
-    # 修复 #2: 执行器未产出任何文件 → 硬判失败逼重试, 不默认通过
-    if not changed_files:
+    # 🔴 **只读任务不走这条**（2026-09-20）。协议标记是 `config.READONLY_TAG`，
+    # `supervisor` 那层早就认了，**验收层这一层一直不认** —— 而决定 retry/abort 的是这一层：
+    # 只读任务（"独立验收：只跑不改"）零改动是**预期结果**，却被判 `信息不足` → 逼一轮返工
+    # → 返工当然还是没有文件 → `abort`。真机 6 条 trace 全是这个形状
+    # （`turns_used=2` + `changed_files: []` + `validate_verdict` 空 = 死在下面这条提前返回）。
+    # ⚠️ **不是"放行"**：跳过这一条之后照样往下走（危险模式 / 门 / LLM 验收 / 硬规则检查
+    # 一条不少）—— 和 `supervisor` 那条豁免同一个口径："声明了只读 ≠ 免检"。
+    if not changed_files and not readonly:
         report.verdict = "信息不足"
         report.action = "retry" if turn < max_turns else "abort"
         report.unverified.append("执行器未产出任何文件 (changed_files 空)")
         return report
+    if not changed_files:
+        report.unverified.append(
+            "只读任务（描述带 " + config.READONLY_TAG + " 声明）：零文件改动是预期结果，"
+            "已跳过「必须有文件产出」这条 —— 其余检查照跑")
     # 🔴 **第三态**（2026-09-20）：`gate_required` 有第三种来源 —— **分类没判出来**。
     # 那时 `gate_required=False` 是**折出来的**，不是"分类器说不用跑门"。
     # 门的行为**一个字不改**（仍然靠下面 `_gate_check_by_files` 兜住核心引擎文件那一类；

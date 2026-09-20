@@ -258,3 +258,118 @@ class TestMultiModelReview:
         assert r["models_used"] == ["m1"]
         assert r["issues"][0]["severity"] == "critical"
         assert r["verdicts"][0]["verdict"] == "retry"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 🔴 只读任务不该被「零文件改动」判死（2026-09-20）
+# ═══════════════════════════════════════════════════════════════
+# `[只读]`（`config.READONLY_TAG`）是 planner 写在任务标题里的**协议标记**，
+# 含义是"这类活本就不改文件"。`supervisor`（机械层）早就认它了，
+# **而 `validator` 这一层不认** —— 偏偏决定 retry/abort 的是这一层：
+# 零改动 ⇒ 判 `信息不足` ⇒ 逼一轮返工 ⇒ 返工当然还是没有文件 ⇒ `abort`。
+# 真机 6 条 trace 全是这个形状（`turns_used=2` + `changed_files: []` +
+# `validate_verdict` 空 = 死在下面那条**提前返回**上，`_run_validate` 压根没跑到）。
+class Test只读任务:
+
+    def _validate(self, monkeypatch, readonly, turn=1):
+        from singularity.scheduler import validator as v
+        # 把 LLM 那道验收脚本桩掉：这条测的是"有没有走过去"，不是验收本身
+        monkeypatch.setattr(
+            v, "_run_validate",
+            lambda c: {"verdict": "通过", "verdict_reason": "ok"})
+        return v.validate(
+            candidate="只跑不改。结论：7 条契约逐条通过。",
+            gate_required=False, task_type="default",
+            changed_files=[], snap=None, turn=turn, max_turns=2,
+            cwd=tempfile.gettempdir(), readonly=readonly)
+
+    def test_只读任务零改动不再判死(self, monkeypatch):
+        """判据 = **走过去了**（`validate_verdict` 被填上），而不是"放行"。
+
+        ⚠️ 断言 `verdict == 信息不足` 会假绿 —— 跳过这条之后，下游要是再判出
+        `信息不足`（LLM 验收说的），值是一样的、但含义天差地别。
+        ⇒ 钉 `validate_verdict` 被填了（只有走过去才填）+ 留下一句"跳过了哪条"。
+        """
+        r = self._validate(monkeypatch, readonly=True)
+        assert r.validate_verdict == "通过", \
+            f"没走过那条提前返回（validate_verdict 仍空）⇒ 只读任务又被判死了：{r.verdict}/{r.action}"
+        assert r.verdict == "通过" and r.action == "pass"
+        assert any("只读任务" in u for u in r.unverified), \
+            f"跳过了「必须有文件产出」这条却没留痕：{r.unverified}"
+
+    def test_普通任务零改动照旧判死(self, monkeypatch):
+        """**对照**：别把这条硬规则一起放过了。
+
+        变异：把 `if not changed_files and not readonly` 里的 `and not readonly` 删掉
+        （= 所有任务都豁免）⇒ 本条红。
+        """
+        r = self._validate(monkeypatch, readonly=False)
+        assert r.verdict == "信息不足" and r.action == "retry", \
+            f"普通任务空手回来也不判失败了 —— 那条硬规则被放过：{r.verdict}/{r.action}"
+        assert r.validate_verdict == "", "普通任务不该跳过这条，却走到了 LLM 验收"
+
+    def test_普通任务到顶了是_abort_不是无限重试(self, monkeypatch):
+        r = self._validate(monkeypatch, readonly=False, turn=2)
+        assert r.action == "abort", f"到顶了还 retry = 转圈：{r.action}"
+
+
+def test_调用点把只读标记传下去了(tmp_path, monkeypatch):
+    """🔴 **接线**：接口层改对了 ≠ 接线通。
+
+    `_exec.py` 那句 `readonly=config.is_readonly_task(task.description)` 被删掉的话，
+    上面那三条（直接调 `validate`）**照样全绿** —— 而线上就又回到"只读任务被判死"。
+    这条借 `test_exec_run.py` 的桩驱动一遍**真的 `_exec.run`**，把 `validate` 换成
+    记录实参的间谍，看那个 kwarg 到底有没有传下来。
+
+    ⚠️ 桩是**直接改模块属性**的，必须原样还原。还原名单漏一个模块的教训，
+    见 `test_task_archive.py` 里同一段注释（2026-09-13 挂过别的测试，2026-09-20 又漏了
+    `val_mod` 一次）。
+    """
+    import importlib.util
+    import pathlib
+
+    from singularity.scheduler import _exec, config
+    from singularity.scheduler import supervisor as _sup
+
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+    monkeypatch.setattr(config, "PARTIAL_USAGE_DIR", tmp_path / "partial_usage")
+    (tmp_path / "partial_usage").mkdir()
+
+    spec = importlib.util.spec_from_file_location(
+        "exec_run_harness_for_readonly",
+        pathlib.Path(__file__).resolve().parents[1] / "test_exec_run.py")
+    h = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(h)
+
+    snap = [(m, dict(vars(m))) for m in (_exec, _exec.tracker, _exec.witness, _sup,
+                                         _exec.val_mod)]
+    snap_s = dict(vars(h.S))
+    seen: list[dict] = []
+    try:
+        h.install_stubs()
+        h.reset_wt()
+        h.S.chain = [{"model": "m1", "sandbox": "worktree", "max_turns": 2}]
+        h.S.dispatch_queue = [("ok", h.FakeExec(success=True, changed_files=[]))]
+        t = h.make_task()
+        t.description = "[只读] 独立验收：跑测试、逐条核对，不改任何文件"
+        h.S.task = t
+
+        def _spy(**k):
+            seen.append(k)
+            return h.FakeVal(action="pass")
+
+        _exec.val_mod.validate = _spy
+        _exec.run(t, h.make_ctx(v3=True), {"any": list(h.S.chain)})
+    finally:
+        for mod, saved in snap:
+            for k in [k for k in vars(mod) if k not in saved]:
+                delattr(mod, k)
+            for k, v in saved.items():
+                setattr(mod, k, v)
+        vars(h.S).clear()
+        vars(h.S).update(snap_s)
+
+    assert seen, "validate 根本没被调到 —— 这条测试什么都没验"
+    assert seen[-1].get("readonly") is True, (
+        f"只读标记没传到验收层（`_exec.py` 那行被删了？）"
+        f"—— 线上就又回到「只读任务被零文件改动判死」：{seen[-1]}")

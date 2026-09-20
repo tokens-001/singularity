@@ -155,27 +155,9 @@ def qa_context(task) -> tuple[list, list]:
     return constraints, checklist
 
 
-_READONLY_TAG = "[只读]"
-
-
-def _is_readonly_task(task_description: str) -> bool:
-    """这个任务是不是被**明确声明**为"不改文件"。
-
-    ⚠️ **刻意只认一个固定的协议标记**（`[只读]`，约定写进 `_ARCHITECT_CONTEXT`
-    的任务 schema，由架构师把它写进**标题**、标题又会拼进 `description`）。
-    **不做自然语言推断** —— "只跑不改 / 不修改 / 纯核对 / 只验证…"是个**开集**，
-    永远有下一个说法（同仓 `_observer_answer` 那个函数就是栽在开集枚举上，
-    见 `docs/防御模式.md`）。判据必须是**我们定义的协议**，不是猜模型怎么措辞。
-
-    来历（2026-09-15 真机）：planner 拆出一个「独立验收：**只跑不改**」的任务，
-    它**活干对了**（真跑 pytest 8 passed、逐条核对 PRD、给了证据），
-    却被 `无文件改动` 判 fail（412 秒就死，**与 900s 超时无关**）。
-    而那条硬规则本身是**对的**（原意是逮"兄弟任务抢活、自己空手"，见 `_flag_file_overlap`）
-    —— 它只是**分不开**"该有产出却空手"和"本就不该有产出"。
-    """
-    return _READONLY_TAG in (task_description or "")
-
-
+# 🔵 **协议标记不在这儿了**（2026-09-20）：搬到 `config.READONLY_TAG` / `config.is_readonly_task`
+# —— 认它的判官有三个（`supervisor` 机械层 · `validator` 验收层 · `openai_agent` 收尾话术），
+# 常量留在一个判官家里、另外两个各自抄一份，就正是这次出事的原因（只读任务被验收层判死）。
 def _all_empty(changed_files: list[str], root) -> list[str]:
     """改动的文件里，**存在但 0 字节**的那些。
 
@@ -245,7 +227,7 @@ def _check_completeness(
         # 判据不能靠猜描述里的字（开集枚举，`_observer_answer` 栽过）⇒ 认**上游的显式声明**。
         # ⚠️ 声明了只读**不等于免检**：TODO/模糊措辞那两条硬信号在 `_check_laziness`
         # 里**照常生效**，LLM 语义核对也照跑 —— 这里省的只是"必须改文件"这一条。
-        if _is_readonly_task(task_description):
+        if config.is_readonly_task(task_description):
             return CheckResult(
                 passed=True,
                 reason="只读任务（描述带 [只读] 声明），零改动是预期结果",
@@ -347,7 +329,7 @@ def _check_laziness(
     ⚠️ 但**硬信号（TODO / 模糊措辞）照常生效** —— 只读任务也可能糊弄。
     """
     hard_signals, soft_signals = [], []
-    readonly = _is_readonly_task(task_description)
+    readonly = config.is_readonly_task(task_description)
 
     # 1. 输出远少于 checklist 预期 (软)
     if not readonly and checklist and len(changed_files) < max(1, len(checklist) // 3):

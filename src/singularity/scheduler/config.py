@@ -85,6 +85,37 @@ STRONG_D_TOPK = 3
 DEFAULT_MAX_TURNS = 2          # validate 打回上限
 ARCHITECT_FALLBACK_FAILS = 3   # 同 agent 连续失败 → 升 architect (审计 6.3)
 
+# ── 任务协议标记 ──────────────────────────────────────────────────────
+# "不改任何文件"的活（独立验收 / 只跑不改）＝ planner 必须在**标题**里带这个标记，
+# 约定写在 `workflow._ARCHITECT_CONTEXT` 的任务 schema 里（标题会拼进 description）。
+#
+# 🔴 **一份标记、三个判官，必须都认它**（2026-09-20 核出来的）：
+#   · `supervisor`（机械层：零改动算不算"没产出"）
+#   · `validator`（验收层：**决定 retry/abort 的就是它**）
+#   · `openai_agent`（收尾话术：叫不叫模型"落盘再收尾"）
+# 09-20 之前**只有 supervisor 认** ⇒ 只读任务被验收层按"零文件改动"判 `信息不足` →
+# 逼一轮返工 → 还是零改动 → `abort`。真机 6 条 trace 全是这个形状
+# （`turns_used=2` + `changed_files: []` + `validate_verdict` 空 = 死在验收层那条提前返回）。
+# 顺带：返工那一轮**本来就报不出来**"是这条规则逼的"，只看见"返工了还是没过"。
+READONLY_TAG = "[只读]"
+
+
+def is_readonly_task(task_description: str) -> bool:
+    """这个任务是不是被**明确声明**为"不改文件"。
+
+    ⚠️ **刻意只认一个固定的协议标记**（`READONLY_TAG`）。
+    **不做自然语言推断** —— "只跑不改 / 不修改 / 纯核对 / 只验证…"是个**开集**，
+    永远有下一个说法（同仓 `_observer_answer` 那个函数就是栽在开集枚举上，
+    见 `docs/防御模式.md`）。判据必须是**我们定义的协议**，不是猜模型怎么措辞。
+
+    来历（2026-09-15 真机）：planner 拆出一个「独立验收：**只跑不改**」的任务，
+    它**活干对了**（真跑 pytest 8 passed、逐条核对 PRD、给了证据），
+    却被 `无文件改动` 判 fail（412 秒就死，**与 900s 超时无关**）。
+    而那条硬规则本身是**对的**（原意是逮"兄弟任务抢活、自己空手"，见 `_flag_file_overlap`）
+    —— 它只是**分不开**"该有产出却空手"和"本就不该有产出"。
+    """
+    return READONLY_TAG in (task_description or "")
+
 # zhipu API 限流重试 (审计 5.3): 429 指数退避, 不计入 max_turns
 ZHIPU_MAX_RETRIES = 3
 ZHIPU_BACKOFF_BASE = 1.0       # 1s, 2s, 4s

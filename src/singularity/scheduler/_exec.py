@@ -746,6 +746,10 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     changed_files=getattr(exec_result, 'changed_files', []),
                     snap=snap, turn=turn, max_turns=level_max,
                     cwd=cwd, gate_unknown=route_gate_unknown,
+                    # 🔴 只读任务（`[只读]` 声明）的"零文件改动"是**预期**，不是"没产出"。
+                    # 协议标记的单一出处是 `config.READONLY_TAG` —— 三个判官共用一份
+                    # （2026-09-20 之前只有 supervisor 认它，验收层把这类任务判死）。
+                    readonly=config.is_readonly_task(task.description),
                 )
                 # 补充质量信号
                 try:

@@ -113,6 +113,15 @@ def test_收尾指令必须要求落盘():
     from pathlib import Path
     src = Path(supervisor.__file__).with_name("executors").joinpath("openai_agent.py").read_text(encoding="utf-8")
     i = src.index("已收集足够信息。停止使用工具")
-    seg = src[i:i + 400]
-    assert "write_file" in seg and "落盘" in seg, \
-        "收尾指令里必须写清「先把交付物写进文件再收尾」，否则模型会只写在正文里"
+    # ⚠️ **两支分开钉**（2026-09-20 改）：这句现在**按任务分岔**（只读 / 普通）。
+    # 原来是从第一处往后抓 400 字 —— 那样只会抓到只读那支，而"普通任务必须落盘"
+    # 这句就**没人看着**了（删掉照样绿）。
+    j = src.index("交付物必须以文件形式存在", i)
+    assert "write_file" in src[j:j + 200] and "落盘" in src[j:j + 200], \
+        "普通任务的收尾指令必须写清「先把交付物写进文件再收尾」，否则模型会只写在正文里"
+    # 🔴 **只读那支要说反话**：它的协议（`config.READONLY_TAG`）就是"别改文件"，
+    # 再叫它"交付物必须以文件形式存在"就是两条对着干 —— 真机 trace 里模型正是被
+    # 这句逼得在"写"和"不写"之间反复横跳，把工具轮次烧光的。
+    k = src.index("只读任务", i)
+    assert "不要写任何文件" in src[k:k + 200], \
+        "只读任务的收尾指令没说「别写文件」—— 它还会去写，而它的验收不认文件"
