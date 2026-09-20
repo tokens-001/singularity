@@ -1412,6 +1412,12 @@ class OpenAIAgentExecutor(BaseExecutor):
             except Exception:
                 pass
 
+        # 正文 / 思考分开数 —— F1 兜底那条、以及下面"整轮只想不产出"那条都要用。
+        # ⚠️ **必须分开**：合起来记时"产出 67385 字符"看不出那是思考还是正文，
+        # 而"240 秒是不够、还是它在原地打转"这个判断题的答案就在这两者之比上。
+        _content_chars = sum(len(c) for c in content)
+        _reasoning_chars = sum(len(r) for r in reasoning)
+
         if _over_budget:
             # 同上，而且更该说：这是**我们主动断的**，不是模型答完了。
             # 不说的话，下游只看到"这轮输出特别短"，会去怀疑模型而不是看这里。
@@ -1441,6 +1447,25 @@ class OpenAIAgentExecutor(BaseExecutor):
                     f"流式撞上限 {int(_cap)}s 且零产出 —— 按调用失败处理"
                     f"（不是「模型答完了、只是没说话」）")
 
+            # 🔴 **「整轮只想不产出」要出声**（2026-09-20 拍板：**先出声、不打断**）。
+            # 判据 = **被掐 ∧ 正文 0 ∧ 工具 0**（推理多长都不算产出）。
+            #   · 和"正常的正文 0"分得开：248 条分诊账里正文 0 的有 75 条，其中
+            #     **58 条调了工具** —— 那是在干活，不是在打转。
+            #   · 和上面 F1 那条**不重**：F1 还要求 **reasoning 也空**（那种直接抛出去），
+            #     所以"想了几万字、正文一个字没有"**落在这儿** —— 真账里这个形状有
+            #     **30 条**（reasoning 从 9 千到 5.3 万字符，`elapsed` 21~947 秒）。
+            # ⚠️ **不带时间阈值**：被掐的 32 条里 7 条是最快的 `deepseek-flash`，
+            #    且有 4 条 **21~62 秒**就被掐（被**剩余预算**掐的，不是 cap）
+            #    ⇒ "加时间"和"按时长判"两条路都被数据否掉（`防御模式.md` §87）。
+            # ⚠️ **只出声、不打断**：真掐会误杀"想了很久然后一次吐完"的调用 ——
+            #    那正是"打断要先定阈值"里始终没定的那个阈值。
+            if _content_chars == 0 and not tool_calls:
+                witness.warn('oa_exec',
+                             f'llm_spin_no_output:{int(time.time() - _call_started)}s'
+                             f':cap={int(_cap)}s:reasoning={_reasoning_chars}'
+                             f':loops={_loops}:model={payload.get("model") or self._model or "?"}'[:200],
+                             key='llm_spin_no_output')
+
         # ── 慢调用的分诊账（2026-09-17 加）────────────────────────────
         # 背景：真机上模型调用动辄 90~240 秒，而**直连同一个接口**（同 key、同模型、
         # 8 并发）实测首字节 0.1~0.2s、整批 8 秒 ⇒ **外部原因全排除了**
@@ -1467,8 +1492,8 @@ class OpenAIAgentExecutor(BaseExecutor):
                         # "产出 67385 字符"根本看不出那是思考还是正文 —— 而
                         # **"240 秒是不够、还是它在原地打转"**这个判断题，答案就在这两者之比上。
                         # 分开之前，只能靠"另跑一次拿真 prompt 直打"去猜（见 OPEN.md 那条未答）。
-                        "content_chars": sum(len(c) for c in content),
-                        "reasoning_chars": sum(len(r) for r in reasoning),
+                        "content_chars": _content_chars,
+                        "reasoning_chars": _reasoning_chars,
                         "tool_calls": len(tool_calls),
                         "loops": _loops,
                         "cut": bool(_over_budget),

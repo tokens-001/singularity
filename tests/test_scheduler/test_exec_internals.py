@@ -1831,6 +1831,88 @@ class TestStreamTotalBudget:
 
         monkeypatch.setattr(oa, "_get_http_client", lambda: _C())
 
+    def _spin_client(self, monkeypatch, kind: str, stop_after_lines=300):
+        """一个**永不结束**的流，每次只吐同一种东西 —— 造"被掐"的三种样子。
+
+        `kind`: `reasoning`（只想不产出）/ `content`（在写正文）/ `tool_calls`（在干活）。
+        ⚠️ 每次都要 `sleep`（同 `_endless_client` 的理由）：不睡的话 300 行瞬间吐完、
+        循环是**生成器耗尽**退出的 ⇒ 走不到"被掐"那条判据，用例会假绿。
+        """
+        from singularity.scheduler.executors import openai_agent as oa
+
+        _DELTA = {
+            "reasoning": '{"delta":{"reasoning_content":"想"}}',
+            "content": '{"delta":{"content":"x"}}',
+            "tool_calls": ('{"delta":{"tool_calls":[{"index":0,"id":"c1",'
+                           '"function":{"name":"read_file","arguments":"{}"}}]}}'),
+        }[kind]
+
+        class _Resp:
+            status_code = 200
+            text = ""
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): pass
+            def iter_text(self):
+                import time as _t
+                for i in range(stop_after_lines):
+                    _t.sleep(0.01)
+                    yield f'data: {{"choices":[{_DELTA}]}}\n'
+
+        class _C:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def stream(self, *a, **k): return _Resp()
+
+        monkeypatch.setattr(oa, "_get_http_client", lambda: _C())
+
+    def _warns_during(self, monkeypatch, kind):
+        import time
+        from singularity.scheduler.executors import openai_agent as oa
+        seen = []
+        monkeypatch.setattr(oa.witness, "warn", lambda *a, **k: seen.append((a, k)))
+        ex = self._executor()
+        ex._deadline_at = time.time() + 1.0        # 剩余预算 1 秒 ⇒ _cap≈1s
+        self._spin_client(monkeypatch, kind)
+        ex._stream_call({"model": "m", "messages": []})
+        return seen
+
+    def test_整轮只想不产出要出声(self, monkeypatch):
+        """🔴 「被掐 ∧ 正文 0 ∧ 工具 0」= 打转 —— 2026-09-20 拍板：**先出声、不打断**。
+
+        这个形状是**真账量出来的**（248 条分诊账里 **30 条**长这样：reasoning 从 9 千到
+        5.3 万字符、elapsed 21~947 秒）⇒ "240 秒不够"其实是"它在原地打转"。
+
+        ⚠️ 和上面 F1 那条**不是一回事**：F1 要求 **reasoning 也空**（那种直接抛
+        `_NetworkError`，根本走不到这儿）—— 所以"想了几万字、正文一个字没有"只有这条管。
+        ⚠️ 判据里**不许加时间阈值**：被掐的 32 条里 7 条是最快的 `deepseek-flash`，
+        且有 4 条 **21~62 秒**就被掐（被**剩余预算**掐的，不是 cap）——"加时间"数据已否。
+
+        变异：把那条 `if` 整段删掉 ⇒ 本条红。
+        """
+        seen = self._warns_during(monkeypatch, "reasoning")
+        assert any(k.get("key") == "llm_spin_no_output" for _, k in seen), \
+            f"整轮只想不产出没出声 —— 下一轮还是只能读代码猜：{[a for a, _ in seen]}"
+
+    def test_正文在长不许报打转(self, monkeypatch):
+        """**边界**：被掐但正文一直在长 ⇒ 那是"长回答被截断"，不是打转。
+
+        变异：把判据里的 `_content_chars == 0` 去掉 ⇒ 本条红（正常的长回答也报警）。
+        """
+        seen = self._warns_during(monkeypatch, "content")
+        assert not any(k.get("key") == "llm_spin_no_output" for _, k in seen), \
+            f"正文在长也报打转 —— 那条告警会变成噪声：{[a for a, _ in seen]}"
+
+    def test_在调工具不许报打转(self, monkeypatch):
+        """**边界**：被掐但一直在调工具 ⇒ 那是在干活。
+
+        真账撑腰：正文 0 的 75 条里 **58 条调了工具** —— 光看"正文 0"会把这类全冤枉了。
+        变异：把判据里的 `and not tool_calls` 去掉 ⇒ 本条红。
+        """
+        seen = self._warns_during(monkeypatch, "tool_calls")
+        assert not any(k.get("key") == "llm_spin_no_output" for _, k in seen), \
+            f"在调工具也报打转 —— 冤枉干活的：{[a for a, _ in seen]}"
+
     def test_流跑过总时长就断开_不再无限跑(self, monkeypatch):
         """判据：跑到 `_call_deadline` 就必须断，而不是一直被流拖着。"""
         import time
