@@ -71,6 +71,11 @@ def _isolate_qidian_dir(tmp_path, monkeypatch):
     for name in ("SNAPSHOT_DIR", "PATCH_DIR", "TRACE_DIR", "HOLD_DIR",
                  "CANCEL_DIR", "PAUSE_DIR", "PARKED_DIR", "PARTIAL_USAGE_DIR"):
         monkeypatch.setattr(config, name, tmp_path / getattr(config, name).name)
+    # 🔴 **跑测试不许弹桌面通知**（2026-09-20）：关键告警现在会**推出机器**
+    # （`witness._CRITICAL_ALERT_KEYS`），而测试里到处在造 `stale_write` /
+    # `observer_stalled_task` 这类告警 —— 不关掉就是"每跑一次测试，用户的桌面被刷一遍"。
+    # 和上面那条隔离是**同一个理由**（跑测试别污染排查现场），只是出口换成了人的桌面。
+    monkeypatch.setenv("QIDIAN_NOTIFY", "0")
 
 
 @pytest.fixture

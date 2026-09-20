@@ -311,3 +311,99 @@ class TestCorruptHeartbeatLeavesATrace:
         assert [a["msg"] for a in witness.read_alerts()] == []
         assert (qdir / "heartbeats" / f"{tid}_any.json").exists(), \
             "还在跑的任务的心跳被误删了 —— check_stalled 再也看不见它"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 关键告警的**真出口**：桌面通知（2026-09-20）
+# ═══════════════════════════════════════════════════════════════
+# 落进 `alerts.jsonl` 只是"记下来了" —— 人不在看告警页时它等于没发生。
+# 而盘上 4159 条告警里 `drain_dep_blocked` 一个 key 就占 3180（76%），
+# ⇒ 只有**罕见 ∧ 人现在就得动手**的那几个才推出去，其余留在页面上。
+class Test关键告警出口:
+
+    @pytest.fixture(autouse=True)
+    def _notify_on(self, monkeypatch):
+        # conftest 的全局夹具把 `QIDIAN_NOTIFY` 关了（跑测试不该刷人桌面），
+        # 这一组要测的正是"关掉/打开"本身 ⇒ 打开它，并把真正执行的那条命令换掉。
+        monkeypatch.setenv("QIDIAN_NOTIFY", "1")
+        monkeypatch.setattr(witness, "_last_notified", {})
+
+    @pytest.fixture
+    def pushes(self, monkeypatch):
+        """把"真的去调 osascript"换成记录 —— 测试**不许**弹窗。"""
+        got: list[list[str]] = []
+        monkeypatch.setattr(witness.subprocess, "run",
+                            lambda cmd, **k: got.append(cmd))
+        return got
+
+    def test_关键key会推出去(self, qdir, pushes):
+        """判据：命令里**带上了那句告警原文**（不是只推个"有新告警"——那样还得回页面找）。"""
+        witness.warn("exec", "observer_stalled_task:任务卡了 12 分钟",
+                     key="observer_stalled_task")
+        assert len(pushes) == 1, f"关键告警没推出去：{pushes}"
+        cmd = " ".join(pushes[0])
+        assert "osascript" in cmd and "display notification" in cmd
+        assert "任务卡了 12 分钟" in cmd, f"推出去的通知里没有正文 ⇒ 人还得回页面找：{cmd}"
+
+    def test_常驻噪声不许推(self, qdir, pushes):
+        """**边界**（这条才是这个白名单存在的理由）：占 76% 的那个 key 不许推。
+
+        变异：把 `_CRITICAL_ALERT_KEYS` 改成"什么都进"（或去掉 warn 里那句判断）⇒ 本条红。
+        """
+        for noise in ("drain_dep_blocked", "decompose", "collect_changes",
+                      "lazy_spoke_import_failed", "designated_reviewer_is_writer"):
+            witness.warn("orch", f"{noise}:xxx", key=noise)
+        assert pushes == [], f"常驻噪声也推了 —— 人会被刷到把通知关掉：{pushes}"
+
+    def test_同一个key一分钟内只叫一次(self, qdir, pushes):
+        """判据：连报 5 次只推 1 次。**冷却的是同一个 key**，不是全局 —— 换了 key 照推。"""
+        for _ in range(5):
+            witness.warn("exec", "observer_stalled_task:卡了", key="observer_stalled_task")
+        assert len(pushes) == 1, f"同一个 key 刷了 {len(pushes)} 条通知"
+        witness.warn("exec", "merge_queue_stuck:队列卡住", key="merge_queue_stuck")
+        assert len(pushes) == 2, "换了个 key 也不推了 —— 冷却被写成了全局"
+
+    def test_总闸能关(self, qdir, pushes, monkeypatch):
+        """**通知发出去收不回来** ⇒ 得有一个不改代码就能关的开关。"""
+        monkeypatch.setenv("QIDIAN_NOTIFY", "0")
+        witness.warn("exec", "merge_queue_stuck:队列卡住", key="merge_queue_stuck")
+        assert pushes == [], f"总闸关了还推：{pushes}"
+
+    def test_通知炸了不许连累告警本身(self, qdir, monkeypatch):
+        """`osascript` 挂了（没装/没权限）⇒ 告警**照旧落盘**，且**不许递归**再报一条。"""
+        def boom(*a, **k):
+            raise OSError("没有 osascript")
+
+        monkeypatch.setattr(witness.subprocess, "run", boom)
+        witness.warn("exec", "merge_queue_stuck:队列卡住", key="merge_queue_stuck")
+        lines = [json.loads(x) for x in (qdir / "alerts.jsonl").read_text(
+            encoding="utf-8").splitlines()]
+        assert len(lines) == 1, f"通知炸了把告警本身也弄丢了 / 递归报了第二条：{lines}"
+        assert lines[0]["key"] == "merge_queue_stuck"
+
+    def test_引号换行不许把命令拼坏(self):
+        """告警正文来自异常/模型输出，**引号和换行必须有转义**（否则 AppleScript 语法错、
+        通知静默失败）。⚠️ 用 `json.dumps` 也不行 —— 它的 `\\uXXXX` AppleScript 不认。"""
+        s = witness._as_applescript_string('他说"别动"\n还有\\反斜杠')
+        assert s.startswith('"') and s.endswith('"')
+        assert '\n' not in s, "换行没被处理 —— AppleScript 单行语法会断在这"
+        assert '\\"' in s and "\\\\" in s
+
+    def test_通知没弹出来不许静默(self, qdir, monkeypatch, caplog):
+        """⚠️ **返回码要看**：`osascript` 语法错/没权限时是**非零退出**。
+
+        不看的话"没弹出来"和"发出去了"长得一模一样 —— 而这条通道的**全部意义**
+        就是"人真的看到了"。变异：把 `if r.returncode != 0` 那段删掉 ⇒ 本条红。
+        """
+        import logging as _logging
+
+        class _R:
+            returncode = 1
+            stderr = "osascript: 语法错误"
+            stdout = ""
+
+        monkeypatch.setattr(witness.subprocess, "run", lambda *a, **k: _R())
+        with caplog.at_level(_logging.WARNING, logger="witness"):
+            witness.warn("exec", "merge_queue_stuck:队列卡住", key="merge_queue_stuck")
+        assert any("桌面通知没发出去" in r.getMessage() for r in caplog.records), \
+            f"通知没弹出来却一声不吭：{[r.getMessage() for r in caplog.records]}"

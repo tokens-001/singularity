@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -33,6 +36,74 @@ _ALERT_KEEP = 1000
 
 
 _ALERT_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]{0,40}):")
+
+
+# ═══════════════════════════════════════════
+# 关键告警的**真出口**：macOS 桌面通知（2026-09-20）
+# ═══════════════════════════════════════════
+# 为什么需要它：2026-09-20 数了盘上 **4159 条**告警，其中 `drain_dep_blocked` 一个 key
+# 就占 **3180 条（76%）**，`decompose` 386 —— 一屋子**常驻噪声**。而人不会一直盯着告警页，
+# 真正**得动手**的那几条就淹在里面（本仓 §62 说的就是这个：常亮把真事故盖住）。
+#
+# ⚠️ **白名单故意短**。进这里的判据是「**罕见 ∧ 人现在就得动手**」，不是"看着不顺眼"：
+#    常驻条件（`drain_dep_blocked` / `decompose` / `collect_changes` / `lazy_spoke_import_failed`
+#    —— 后者在**后端启动那一刻**就会报）**一个都不在里面**。质量类的高频告警
+#    （`designated_reviewer_is_writer` 56 次）同样不进：它该出现在配置问题栏。
+# ⚠️ **总闸**：`QIDIAN_NOTIFY=0` 关掉（通知发出去收不回来，得留一个不靠改代码的开关）。
+_CRITICAL_ALERT_KEYS = frozenset({
+    "llm_spin_no_output",        # 整轮只想不产出、白烧预算（2026-09-20 加）
+    "observer_stalled_task",     # 观察者判「这个任务停滞了」—— 得有人看一眼
+    "task_killed_no_wrapup",     # 被外层砍掉、没来得及收尾
+    "merge_queue_stuck",         # 合并队列卡住 ⇒ 整个项目不动
+    "project_all_tasks_failed",  # 一整轮全失败 ⇒ 等人拍板
+    "stale_write",               # 有人拿旧快照覆盖了新状态（"批准被抹掉"那一族）
+    "no_permission_checker",     # 权限闸门没装 —— 安全项
+})
+_NOTIFY_COOLDOWN_S = 60          # 同一个 key 一分钟内只叫一次（防刷屏）
+_last_notified: dict[str, float] = {}
+
+
+def _as_applescript_string(s: str) -> str:
+    """转成 AppleScript 字符串字面量。
+
+    ⚠️ **不用 `json.dumps`**：JSON 的 `\\uXXXX` 转义 AppleScript 不认（换行也不行）。
+    这里只做它认的三样：反斜杠、双引号、换行。
+    """
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")[:300] + '"'
+
+
+def _notify_desktop(key: str, text: str) -> None:
+    """推一条桌面通知。**失败只走 `logging`** —— 绝不回头调 `warn()`（会无限递归）。
+
+    只认 macOS（本机就是），别的平台直接返回 —— 这不是功能缺失，是**没验证过的不写**。
+
+    ⚠️ `subprocess` / `os` / `sys` 是**模块级 import**（2026-09-20）：放函数里的话
+    `witness.subprocess` 不存在，测试没法把"真去弹窗"换成记录 —— 而**跑测试弹通知**
+    正是这件东西最容易犯的错。
+    """
+    if sys.platform != "darwin" or os.environ.get("QIDIAN_NOTIFY", "1") == "0":
+        return
+    now = time.time()
+    if now - _last_notified.get(key, 0.0) < _NOTIFY_COOLDOWN_S:
+        return
+    _last_notified[key] = now
+    try:
+        r = subprocess.run(
+            ["osascript", "-e",
+             f"display notification {_as_applescript_string(text)} "
+             f"with title {_as_applescript_string('奇点 · ' + key)}"],
+            capture_output=True, timeout=5, text=True)
+        if r.returncode != 0:
+            # ⚠️ **返回码必须看**（2026-09-20）：`osascript` 语法错/没权限时是**非零退出**，
+            # 不看的话"通知没弹出来"和"发出去了"长得一模一样 —— 而这条通道的**全部意义**
+            # 就是"人真的看到了"。仍然走 `logging`（不能回头调 `warn`，递归）。
+            logging.getLogger("witness").warning(
+                "桌面通知没发出去 (rc=%s): %s", r.returncode, (r.stderr or "").strip()[:200])
+    except Exception as e:  # noqa: BLE001
+        # 第二通道（同 `warn` 自己那条的理由）：出声失败也要留下痕迹。
+        # ⚠️ **不能调 `witness.warn`** —— 那是递归（warn → 通知 → warn → …）。
+        logging.getLogger("witness").warning(
+            "桌面通知发不出去: %s: %s", type(e).__name__, e)
 
 
 def _derive_alert_key(msg: str) -> str:
@@ -70,6 +141,12 @@ def warn(scope: str, msg: str, key: str = "") -> None:
         if p.stat().st_size > _ALERT_MAX_BYTES:
             lines = p.read_text(encoding="utf-8").splitlines()
             p.write_text("\n".join(lines[-_ALERT_KEEP:]) + "\n", encoding="utf-8")
+        # 🔴 关键告警**推出机器**（2026-09-20）：落进 alerts.jsonl 只是"记下来了"，
+        # 而人不在看告警页时它等于没发生。只推白名单里的（见上面的理由）。
+        # ⚠️ 放在**写盘之后**：写不进去说明盘有问题，这时通知也跟着不发是**可接受的**
+        #    （而写失败本身已有 `logging` 那条第二通道兜着）。
+        if _k in _CRITICAL_ALERT_KEYS:
+            _notify_desktop(_k, f"[{scope}] {text}")
     except Exception as e:  # noqa: BLE001
         # 记告警失败**不该再抛**（否则错误处理本身变成错误源）—— 这个决定不变。
         # ⚠️ 但原来那个 `except OSError: pass` 是**静默**的，而这里是**全仓告警的唯一汇聚点**：
