@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest'
 import { act, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { AcceptancePanel, ProjectArchive, ProjectMaterials, GateBody, GatePanel, gateCopy, ResearchReport } from './GatePanel'
+import { AcceptancePanel, GateBar, GateSummaryBar, ProjectArchive, ProjectMaterials, gateCopy, ResearchReport } from './GatePanel'
 
 function render(node: ReactNode): string {
   const el = document.createElement('div')
@@ -147,10 +147,24 @@ describe('「📦 交付」抽屉', () => {
 // ═══════════════════════════════════════════════════════════════
 // 抽屉里能看见 ≠ 看得见：那条 issue 会影响"该不该点通过"，得摆在**不用点开**的地方。
 // `GateSummary` 一直收着 `projectIssues` 这个参数（`GateBody` 也在传），渲染从来没写。
+/**
+ * 测试用的「整扇门」——**页面真正挂的那三件**拼起来（`Chat.tsx` 挂的也是这三件）。
+ *
+ * ⚠️ **别把它当组件抽回生产代码**：09-17 抽的那个 `GatePanel` 就是这么变成"没人挂的
+ * 组合件"的 —— 09-20 有两条修复（项目问题条 / 兜底来路）被加进它里面，界面上一字不显示，
+ * 而单测直接渲染它、照绿（见 `~/OPEN.md` 那条 🔴）。页面级接线由 `Chat.test.tsx` 钉着。
+ */
+const GateUI = ({ info, gateNum, onGate = () => {} }: any) => (
+  <>
+    <GateBar info={info} gateNum={gateNum} gatePhase={`gate${gateNum}`} onGate={onGate} />
+    <GateSummaryBar info={info} gateNum={gateNum} />
+    <ProjectMaterials info={info} tasks={[]} gateNum={gateNum} acceptance={null} />
+  </>
+)
+
 describe('门禁页摘要条', () => {
   const 问题 = [{ type: 'verification_skipped', detail: '验收跳过: QA/安全审计师都没跑' }]
-  const body = (info: any) => render(<GateBody info={info} gateNum="1" gatePhase="gate1"
-                                               tasks={[]} onGate={() => {}} />)
+  const body = (info: any) => render(<GateSummaryBar info={info} gateNum="1" />)
 
   it('GATE1 有调研时，摘要条里带着问题数', () => {
     expect(body({ id: 'p1', research_report: RESEARCH, issues: 问题 })).toContain('1 条项目问题')
@@ -282,8 +296,7 @@ describe('GATE2 兜底升上来时要说真话', () => {
   })
 
   it('面板上真的渲染出来了（接线，不只是函数对）', () => {
-    const text = render(<GatePanel info={兜底项目} gateNum="2" gatePhase="gate2"
-                                   onGate={() => {}} />)
+    const text = render(<GateUI info={兜底项目} gateNum="2" />)
     expect(text).toContain('审查自动修已达上限')
     expect(text).not.toContain('架构完成·请审核方案')
   })
@@ -325,8 +338,7 @@ describe('GATE3 集成没跑到测试要说真话', () => {
   })
 
   it('面板上真的渲染出来了（接线，不只是函数对）', () => {
-    const text = render(<GatePanel info={留痕(false)} gateNum="3" gatePhase="gate3"
-                                   onGate={() => {}} />)
+    const text = render(<GateUI info={留痕(false)} gateNum="3" />)
     expect(text).toContain('没跑到测试')
     expect(text).not.toContain('验收完成·请审核交付物')
   })
@@ -461,17 +473,17 @@ describe('调研报告：每段一行、点开看', () => {
 
 describe('摘要条不许把锅甩给调研', () => {
   it('解析失败时要说"解析失败"，**不能说成"调研没给推荐方案"**', () => {
-    const text = render(<GatePanel info={{ id: 'p1', research_report: {
+    const text = render(<GateUI info={{ id: 'p1', research_report: {
       parse_error: true, raw_output: 'x', raw_chars: 20442, raw_truncated: true,
-    } }} gateNum="1" gatePhase="gate1" onGate={() => {}} />)
+    } }} gateNum="1" />)
     expect(text).toContain('解析失败')
     expect(text, '又把锅甩给调研了 —— 报告明明写了推荐方案，只是解不开')
       .not.toContain('调研没给推荐方案')
   })
 
   it('报告正常时**还是原来那句**（别把修法改宽）', () => {
-    const text = render(<GatePanel info={{ id: 'p1',
-      research_report: { recommendation: '用 Python' } }} gateNum="1" gatePhase="gate1" onGate={() => {}} />)
+    const text = render(<GateUI info={{ id: 'p1',
+      research_report: { recommendation: '用 Python' } }} gateNum="1" />)
     expect(text).toContain('推荐：用 Python')
     expect(text).not.toContain('解析失败')
   })
@@ -482,8 +494,8 @@ describe('GATE1 上看得见调研报告', () => {
   // 又把 `ProjectArchive` 藏了 ⇒ **两道门一起把报告挡死**。偏偏 GATE1 就是审调研的那道门
   // —— 用户在门上**一处都看不到报告**，只剩那条摘要。昨夜修的红字提示就修在这个不渲染的组件里。
   it('**GATE1 就要渲染调研报告**（删掉那道 `gateNum !== \'1\'` 挡板）', () => {
-    const text = render(<GatePanel info={{ id: 'p1', research_report: { recommendation: '用 Python' } }}
-                                   gateNum="1" gatePhase="gate1" onGate={() => {}} />)
+    const text = render(<GateUI info={{ id: 'p1', research_report: { recommendation: '用 Python' } }}
+                                   gateNum="1" />)
     // ⚠️ 断言**报告内容**而不是标题字符串 —— 报告现在进「📋 调研」那一组、
     //    标题由分组提供（`bare`），盯标题会盯了个会搬家的东西。
     expect(text, 'GATE1 上看不到报告内容 —— 审调研的门上没有调研').toContain('用 Python')
@@ -496,9 +508,9 @@ describe('GATE1 上看得见调研报告', () => {
     // ⚠️ **只钉架构，不钉调研**：调研组里确实有 8 个嵌套 `<details>`，
     //    但那是「每段一行」本身（用户点名要的功能），不是多余的壳。
     //    **"有嵌套"不是病，"套了个重复标题的壳"才是** —— 判据别写成前者。
-    const el = dom(<GatePanel info={{ id: 'p1',
+    const el = dom(<GateUI info={{ id: 'p1',
         architecture: { architecture: '主设计', modules: [], tasks: [] } }}
-      gateNum="2" gatePhase="gate2" onGate={() => {}} />)
+      gateNum="2" />)
     const g = Array.from(el.querySelectorAll('details'))
       .find(d => (d.querySelector('summary')?.textContent || '').includes('🏗 架构'))
     expect(g, '没有「🏗 架构」这一组').toBeTruthy()
@@ -508,9 +520,9 @@ describe('GATE1 上看得见调研报告', () => {
   })
 
   it('解析失败的原文一进来就要看得见（默认展开），不是再点一下', () => {
-    const el = dom(<GatePanel info={{ id: 'p1', research_report: {
+    const el = dom(<GateUI info={{ id: 'p1', research_report: {
       parse_error: true, raw_output: '{"competitive_analysis"', raw_chars: 100,
-    } }} gateNum="1" gatePhase="gate1" onGate={() => {}} />)
+    } }} gateNum="1" />)
     const open = Array.from(el.querySelectorAll('details')).filter(d => d.hasAttribute('open'))
     expect(open.length, '解析失败的红框默认收起了 —— 用户还是看不到').toBeGreaterThan(0)
     el.remove()
@@ -531,8 +543,8 @@ describe('打回时能写理由', () => {
     act(() => { (btn as HTMLElement).click() })
   }
   const gate = (onGate: any) => dom(
-    <GatePanel info={{ id: 'p1', research_report: { recommendation: 'x' } }}
-               gateNum="1" gatePhase="gate1" onGate={onGate} />)
+    <GateUI info={{ id: 'p1', research_report: { recommendation: 'x' } }}
+               gateNum="1" onGate={onGate} />)
 
   it('点了打回**先弹出输入框**，不直接退回', () => {
     const got: any[] = []

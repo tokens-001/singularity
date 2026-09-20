@@ -799,28 +799,15 @@ export const GateSummaryBar = memo(function GateSummaryBar({ info, gateNum }: an
   )
 })
 
-export const GateBody = memo(function GateBody({ info, gateNum, acceptance, tasks }: Props) {
-  return (
-    <div style={{ textAlign: 'left' }}>
-      <div style={{ maxWidth: 760, margin: '0 auto', textAlign: 'left' }}>
-        <GateSummaryBar info={info} gateNum={gateNum} />
-        {/* 🔴 **材料按阶段收进各自的抽屉**（2026-09-17 用户提：「每个阶段的任务都收纳到抽屉」）。
-            改之前这里是三段写死的渲染顺序（`gateNum === '2' && 架构` …）——
-            于是"这道门该看什么"靠**门号硬编码**，材料本身没有归属。
-            ⚠️ 那条 `gateNum !== '1'` 的挡板也在这段历史里：GATE1（审调研的门）当时
-               一处都看不到调研报告 —— 现在按阶段分组，调研永远在「📋 调研」那一组里，
-               不再依赖"哪道门渲染哪一段"。
-            ⚠️ 当前这道门对应的一组**默认展开**（见 `ProjectMaterials`）。
-            ⚠️ **但 `ProjectMaterials` 页面是直接挂的**（侧滑面板里），不靠这里 ——
-               所以 `GateBody` / `GatePanel` 目前**只被测试用**，留待死代码处置。 */}
-        <ProjectMaterials info={info} tasks={tasks} gateNum={gateNum} acceptance={acceptance} />
-      </div>
-    </div>
-  )
-})
-
-/** 条 + 材料拼起来 —— 老的调用方（和既有测试）不用改。
- *  ⚠️ 顺序不能反：**先看见"该审批了"，再看见"审什么"**。 */
-export const GatePanel = memo(function GatePanel(props: Props) {
-  return <><GateBar {...props} /><GateBody {...props} /></>
-})
+/** 🔴 **这里原来还有 `GateBody` 和 `GatePanel`（"条 + 材料"拼成一个组合件），2026-09-20 删了。**
+ *
+ *  删的理由不是"没人用"，而是**它们的存在方式会藏 bug**：页面是按需分别挂
+ *  `GateBar`（钉在顶栏）/ `GateSummaryBar`（审批条下面）/ `ProjectMaterials`（侧滑面板）
+ *  三件的，那个组合件**没有任何调用方**、却一直看着像个正经出口 ⇒ 09-20 有两条修复
+ *  （`3d3ca0f0` 的项目问题条、`6aa1539` 的兜底来路）被加进它里面，**界面上一字不显示**，
+ *  而单测直接渲染它、照绿（见 `~/OPEN.md` 那条 🔴）。
+ *
+ *  ⚠️ **别再抽一个"把几件拼起来"的导出** —— 真要一起渲染，去 `Chat.tsx` 看页面挂的是哪几件；
+ *     测试要拼就在测试里拼（`GatePanel.test.tsx` 顶部那个 `GateUI`）。
+ *  ⚠️ 页面级的接线由 `Chat.test.tsx` 钉着：**它渲染的是页面**，删掉 `Chat.tsx` 里任一件会红。
+ */
