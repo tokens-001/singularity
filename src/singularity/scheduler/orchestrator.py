@@ -1262,6 +1262,42 @@ def _run_integration_merge_async(project_id: str, agents: dict) -> None:
                     witness.warn("integrating",
                                  f"verification_before_fallback:{type(e).__name__}:{e}"[:160],
                                  key="verification_before_fallback_failed")
+                # 🔴 **交人之前先给「回炉」一次机会**（2026-09-20 用户拍板）。
+                # 原来这一支直接 `set_phase(GATE2)`，而**自动返工长在 `run_test_fix_loop` 里**
+                # ⇒ 这条路把它整个绕过，`949ed80b`（最小闭环）**一次都没机会发生**
+                # （round c 真机坐实：7 个任务全失败 · 审查触顶 · 项目躺在 GATE2 等人）。
+                # ⚠️ **「触顶就该交人」本身站得住** —— 站不住的是**顺手把回炉也省了**：
+                #    审查修不动往往正是因为实现层欠着活，"回炉"恰恰是最该先试的那一下。
+                #    同族旧账：这条路 09-17 也绕过过整个验收层（当时是"补一句"修的）——
+                #    **兜底要穷举它绕过了什么，不能发现一样补一样**。
+                # ⚠️ 判据用 `_auto_rework_allowed` 那五道闸门（含「只自动返一次」+「循环没开不自动」）
+                #    ⇒ 不会无限回炉；**不自动时把理由说出来**（"没回炉"和"没走到"要分得开）。
+                # ⚠️ 顺序不能反：验收得先跑 —— `_auto_rework_allowed` 有一道闸门就是
+                #    「验收真跑过」（`has_verification_evidence`）。
+                _rw_ok, _rw_why = False, ""
+                try:
+                    from singularity.scheduler import workflow as wf_mod
+                    _rw_route, _src, _no_qa, _ = wf_mod._resolve_fix_route(proj)
+                    _rw_ok, _rw_why = wf_mod._auto_rework_allowed(proj, _rw_route)
+                except Exception as e:      # noqa: BLE001
+                    from singularity.scheduler import witness
+                    _rw_why = f"判定失败: {type(e).__name__}"
+                    witness.warn("integrating", f"auto_rework_check:{type(e).__name__}:{e}"[:160],
+                                 key="auto_rework_check_failed")
+                if _rw_ok:
+                    proj.issues.append({"type": "auto_rework_before_fallback",
+                                        "detail": f"审查触顶，但先自动回炉一次（{_rw_why}）"[:300]})
+                    proj_mod.save(proj)
+                    _amsg = wf_mod.handle_gate3_reject(
+                        proj, agents, feedback="自动返工: 审查触顶，先回实现层", auto=True)
+                    _pending_sse_events.append({
+                        "kind": "system", "msg": f"审查触顶 → 先自动回炉一次 → {_amsg[:120]}",
+                        "ts": time.time(), "task_id": proj.id,
+                    })
+                    return
+                if _rw_why:
+                    proj.issues.append({"type": "no_auto_rework",
+                                        "detail": f"审查触顶且没自动回炉：{_rw_why}"[:300]})
                 proj.set_phase(proj_mod.Phase.GATE2, fail_check["reason"])
                 proj_mod.save(proj)
                 _pending_sse_events.append({

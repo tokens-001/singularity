@@ -80,3 +80,62 @@ def test_验收自己塌了不该连累兜底(tmp_path, monkeypatch):
     assert warns, "验收塌了却一声不吭 —— 「没跑」和「跑了没事」长得一模一样"
     assert any("verification_before_fallback" in m for _s, m in warns), \
         f"留痕没带上关键词，查不到: {warns}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 触顶不再直接交人 —— 先给「回炉」一次机会（2026-09-20 用户拍板）
+# ═══════════════════════════════════════════════════════════════
+# `949ed80b`（最小闭环）的自动返工长在 `run_test_fix_loop` 里，而**触顶那一支不走它**
+# ⇒ 自动返工**一次都没机会发生**。round c 真机坐实：7 个任务全失败 · 审查触顶 ·
+# 项目躺在 GATE2 等人 —— 而那正是最该回炉的时候。
+# ⚠️ 代价是真的（回炉 = 再跑一轮 = 再烧一截 token），所以五道闸门一个都不能少。
+
+def test_触顶时先自动回炉一次再交人(tmp_path, monkeypatch):
+    """允许 ⇒ 调 `handle_gate3_reject(auto=True)` 回实现层，**不再** `set_phase(GATE2)`。
+
+    ⚠️ 判据钉在「**那个函数真的被调了、且 auto=True**」上 —— 只断言 phase 的话，
+    把调用整段删掉、直接改成 `set_phase(EXECUTING)` 也照样绿（假接线）。
+    """
+    p = _mk(tmp_path, monkeypatch)
+    from singularity.scheduler import workflow as wf
+    monkeypatch.setattr(wf, "_run_verification", lambda _proj, _agents: [])
+    monkeypatch.setattr(wf, "_resolve_fix_route", lambda _proj: ("impl", "qa_report", "", []))
+    monkeypatch.setattr(wf, "_auto_rework_allowed", lambda _proj, _route: (True, "QA 判实现层不合格"))
+
+    calls = []
+
+    def _fake_reject(proj, agents, feedback="", auto=False):
+        calls.append({"auto": auto, "feedback": feedback})
+        proj.phase = proj_mod.Phase.EXECUTING      # 真函数就是这么做的
+        return "GATE3 打回 → 回实现层修复"
+
+    monkeypatch.setattr(wf, "handle_gate3_reject", _fake_reject)
+
+    orch._run_integration_merge_async("proj1", {})
+
+    assert calls == [{"auto": True, "feedback": "自动返工: 审查触顶，先回实现层"}], (
+        f"触顶没回炉 —— 自动返工一次都没机会发生（round c 就是停在这儿）: {calls}")
+    assert p.phase == proj_mod.Phase.EXECUTING, f"回炉后该回实现层，实际 {p.phase}"
+    assert any(i.get("type") == "auto_rework_before_fallback" for i in p.issues), \
+        f"回炉这件事没落进 issues（界面/账上看不见）: {p.issues}"
+
+
+def test_不允许回炉时照旧交人_且把理由写出来(tmp_path, monkeypatch):
+    """闸门拦下 ⇒ 回到原来的行为（GATE2），**并且说清为什么没回炉** ——
+    "没回炉"和"没走到这一步"在界面上长得一模一样，是本仓反复吃亏的形状。"""
+    p = _mk(tmp_path, monkeypatch)
+    from singularity.scheduler import workflow as wf
+    monkeypatch.setattr(wf, "_run_verification", lambda _proj, _agents: [])
+    monkeypatch.setattr(wf, "_resolve_fix_route", lambda _proj: ("impl", "qa_report", "", []))
+    monkeypatch.setattr(wf, "_auto_rework_allowed",
+                        lambda _proj, _route: (False, "已经自动返过一次（防无限循环）"))
+    called = []
+    monkeypatch.setattr(wf, "handle_gate3_reject",
+                        lambda *a, **k: called.append(k) or "不该被调到")
+
+    orch._run_integration_merge_async("proj1", {})
+
+    assert called == [], f"闸门说不允许，却还是回炉了: {called}"
+    assert p.phase == proj_mod.Phase.GATE2, f"该照旧交人，实际 {p.phase}"
+    assert any(i.get("type") == "no_auto_rework" for i in p.issues), \
+        f"没说清为什么没回炉: {p.issues}"
