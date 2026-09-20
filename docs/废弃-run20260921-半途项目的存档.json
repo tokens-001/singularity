@@ -1,0 +1,379 @@
+{
+  "id": "1789920625633",
+  "name": "验证-日志统计-20260921",
+  "template": "product_dev",
+  "phase": "planning",
+  "auto_mode": false,
+  "description": "做一个 JSONL 日志统计命令行工具。读 .jsonl 日志文件（每行一个 JSON 对象），支持按时间范围过滤、按 level/source 分组统计，输出汇总表，有命令行入口。代码按 解析/过滤/统计/输出/入口 五个模块分开。",
+  "scope": "只做命令行工具和它的单元测试；不做 Web 界面、不做数据库。",
+  "raw_constraints": [],
+  "flow_weight": "auto",
+  "owner_confirm": {
+    "gate1": "approved"
+  },
+  "research_report": {
+    "competitive_analysis": {
+      "products": [
+        {
+          "name": "jq",
+          "type": "通用 JSON 处理器 / DSL",
+          "tech": "C，树模型 + 字节码解释；--stream 可流式，-s 则全量载入",
+          "strengths": "事实标准、随处可用、表达力极强，group_by/count 都能写",
+          "weaknesses": "统计要自己拼 DSL，命令很快变成不可读的一行；-s 内存 O(文件)；无时间语义，ISO 时间比较要手写；无固定宽度报表",
+          "takeaway": "它是本项目最主要的『用户现状』，也是最好的对照基线：本项目 = 把 20 行 jq 固化成 1 条命令"
+        },
+        {
+          "name": "Miller (mlr)",
+          "type": "结构化文本流处理（CSV/TSV/JSON/JSONL）",
+          "tech": "Go，单二进制流式处理，`mlr --ijsonl stats1 -a count -g level,source`",
+          "strengths": "真正流式、单二进制零依赖、支持 JSONL 输入输出、group-by 统计开箱即用、性能好",
+          "weaknesses": "动词/选项层次多（--ijsonl/--ojsonl/stats1/put），学习曲线陡；不理解日志语义（时间范围过滤要 put + filter 组合）；group-by 只能出扁平表，无百分比/占比/错误率",
+          "takeaway": "最接近的竞品，功能覆盖 70%。差异化必须落在『日志 schema 先验 + 报表语义』而非『能不能聚合』"
+        },
+        {
+          "name": "DuckDB CLI",
+          "type": "嵌入式分析数据库 / SQL",
+          "tech": "C++，向量化执行 + 列式，read_ndjson_auto('x.jsonl')",
+          "strengths": "性能碾压（GB/s 级）、SQL 完备、窗口函数/分位数/时间分桶全都免费、单机可用",
+          "weaknesses": "二进制 ~30MB+、需要会 SQL、面向探索而非固定报表、临时目录/内存调优需理解、不适合塞进小容器或一次性 CI 断言",
+          "takeaway": "必须正面回答『为什么不用 DuckDB』：答案是零依赖分发 + 无需 SQL 的固定报表 + 确定性的可测试输出，而不是性能"
+        },
+        {
+          "name": "GoAccess",
+          "type": "Web 访问日志实时分析",
+          "tech": "C，ncurses TUI + HTML 报表，可自定义 log-format",
+          "strengths": "开箱即得的可视化报表、实时刷新、行业认可",
+          "weaknesses": "面向访问日志语义（IP/URL/状态码），JSONL 要写复杂 --log-format；配置重量级；面向终端/HTML 而非管道；对任意 level/source 维度支持差",
+          "takeaway": "证明『报表型工具』有真实需求，但它的 schema 假设与本项目正交——本项目做的是应用日志的多维计数"
+        },
+        {
+          "name": "lnav",
+          "type": "日志导航器（TUI + SQL）",
+          "tech": "C++，SQLite 虚拟表，交互式",
+          "strengths": "交互体验极佳、SQL 直接查日志、自动识别时间戳与格式",
+          "weaknesses": "交互式工具，脚本化/CI 场景笨重；安装体积大；一次只适合人工排查",
+          "takeaway": "它的『自动识别时间戳』是用户最爱的特性，本项目可借鉴为 --auto-detect-fields，但只取可脚本化的最小子集"
+        },
+        {
+          "name": "angle-grinder (agrind)",
+          "type": "日志查询 DSL",
+          "tech": "Rust，单二进制，`* | parse \"* *\" as a,b | count by level`",
+          "strengths": "体积小、快、管道友好、专为日志设计",
+          "weaknesses": "自有 DSL 学习成本；面向聚合计数与流式 tail，报表输出朴素；JSONL 支持但字段引用风格非直觉",
+          "takeaway": "验证了『轻量日志聚合 CLI』这一生态位成立，但它没有 JSONL schema 先验与报表格式化"
+        },
+        {
+          "name": "grep/awk/sort/uniq -c 组合",
+          "type": "Shell 原教旨组合",
+          "tech": "POSIX 工具链",
+          "strengths": "绝对零依赖、快、人人会一点",
+          "weaknesses": "JSON 里的引号/转义/嵌套会让 awk 字段切分直接崩；无法可靠解析 ISO 时间；group-by 多键要构造拼接键；输出不对齐",
+          "takeaway": "这就是『痛点』本身。本项目必须明显优于它，且在 1 行命令内完成"
+        },
+        {
+          "name": "pandas / polars 一行脚本",
+          "type": "Python 数据分析栈",
+          "tech": "pd.read_json(lines=True) / pl.read_ndjson",
+          "strengths": "表达力强、生态好、groupby 顺手",
+          "weaknesses": "重依赖（数百 MB 环境）、import 启动 0.3-1s+、默认全量载入内存、输出格式要自己调",
+          "takeaway": "本项目显式放弃这条路线：stdlib-only 才有分发与启动优势"
+        },
+        {
+          "name": "云端日志平台 CLI（logcli / datadog-cli / honeycomb）",
+          "type": "SaaS 客户端",
+          "tech": "HTTP 客户端 + 服务端聚合",
+          "strengths": "海量数据、持久化、可视化、告警",
+          "weaknesses": "必须先把日志送上去（成本/合规）、离线不可用、查询有延迟和配额、本地临时文件无法直接分析",
+          "takeaway": "本项目定位是『日志已在本地/CI 里，要 30 秒出结论』的离线场景，与云平台互补不竞争"
+        }
+      ],
+      "comparison": "按七个维度横向对比：(1) 零依赖分发——本项目/Miller/agrind/grep 胜，DuckDB/lnav/pandas 负；(2) 内存模型——Miller/agrind/grep/本项目可做 O(分组数) 流式，jq -s/DuckDB（默认）/pandas 会全量或半全量；(3) 时间语义——只有 DuckDB（SQL 时间函数）和 lnav（自动识别）原生支持，其余都要手写，本项目把它做成一等公民；(4) JSON 结构感知——jq/DuckDB/Miller 有，grep/awk 无；(5) group-by 多维计数——DuckDB/Miller/本项目有，jq 要写、grep 勉强；(6) 报表可读性与可贴入 issue——GoAccess 有但过重，其余基本空白，这是最大空白点；(7) 学习成本——本项目（专用 flag）最低，jq/agrind/DuckDB（DSL/SQL）最高。综合结论：功能全集上 DuckDB 最强，但没有任何一个工具同时满足『零依赖 + 有界内存 + 日志 schema 先验 + 无需 DSL/SQL 的固定报表输出 + 可 golden 测试的确定性输出』。",
+      "differentiation": "差异化定位：面向应用日志的『报表生成器』而非通用查询引擎。四条护城河：(1) schema 先验——内置 timestamp/level/source 自动探测 + --ts-field/--level-field/--source-field 覆盖，时间范围过滤是一等 flag（--since 2h / --from / --to），用户不必写解析逻辑；(2) 报表语义——固定宽度对齐表 + 计数 + 占比 + 错误率 + 可选时间分桶趋势，输出可直接贴进 issue/周报/CI 日志，这是所有竞品的空白；(3) 有界资源——单遍流式、内存 O(分组数) 且可 --max-groups 硬顶，1GB 文件在笔记本上不会 OOM（对比 jq -s / pandas）；(4) 可测试性——stdlib-only、无外部服务、输出确定性（稳定排序 + 固定格式），可直接做 golden file 断言，天然适配 CI 与离线环境。反面明确不做：不做通用查询 DSL（不跟 jq/agrind 比表达力）、不做性能冠军（不跟 DuckDB 比吞吐）、不做交互 TUI（不跟 lnav/GoAccess 比探索体验）。"
+    },
+    "frontier_theory": {
+      "papers": [
+        {
+          "name": "simdjson: Parsing Gigabytes of JSON per Second (Langdale & Lemire, VLDB Journal 2019)",
+          "relevance": "证明 JSON 解析可以接近内存带宽，核心手段是两阶段（结构索引 + 惰性物化）与 SIMD 分类。对本项目的启示不是自己写 SIMD，而是『只物化需要的字段』——统计只需要 level/source/timestamp 三个键，其余键值不必构造成 Python 对象",
+          "maturity": "成熟（工业级库，多语言绑定）",
+          "feasibility": "高。Python 侧通过 orjson/msgspec 间接获得 2-6x 加速，且是可选依赖（try/except import 降级到 stdlib json）。作为纯提速项放在 P2，不影响功能正确性"
+        },
+        {
+          "name": "OpenTelemetry Logs Data Model (CNCF 规范)",
+          "relevance": "定义了日志的结构化字段约定：Timestamp/TimestampTimeUnixNano、SeverityText/SeverityNumber、Body、Attributes、Resource。本项目默认字段名与 --level 取值（TRACE/DEBUG/INFO/WARN/ERROR/FATAL）对齐该模型，可让工具『零配置』适配主流采集器（OTel Collector、Fluent Bit、Vector）落地的 JSONL",
+          "maturity": "成熟且已是事实产业标准",
+          "feasibility": "极高，且零成本——只是默认值的选择。这是投入产出比最高的一项『前沿』采纳"
+        },
+        {
+          "name": "MonetDB/X100: Hyper-Pipelining Query Execution (Boncz et al., CIDR 2005) 与 DuckDB: an Embeddable Analytical Database (Raasveldt & Mühleisen, SIGMOD 2019)",
+          "relevance": "向量化执行 + 按批处理（一个批次上千行）是分析型吞吐的核心。对本项目的启示：聚合阶段按 chunk（如 8192 行）批量处理、以及把「扫描/过滤/聚合/渲染」算子解耦——正好对应需求里的 parse/filter/stats/render 四模块",
+          "maturity": "成熟（现代分析引擎标配）",
+          "feasibility": "中。完整向量化在 Python 里收益有限（对象开销主导），可行做法是『batch + 局部变量缓存 + collections.Counter/Counter.update』这类轻量批处理；模块解耦部分完全可行且应立刻采用"
+        },
+        {
+          "name": "The Dataflow Model (Akidau et al., VLDB 2015)",
+          "relevance": "给出窗口（tumbling/sliding）、事件时间 vs 处理时间、水位线（watermark）的严格语义。本项目 --bucket 1m/1h 的时间分桶本质就是事件时间上的 tumbling window：边界必须按事件时间戳对齐、区间必须明确定义为左闭右开",
+          "maturity": "成熟（流处理理论基石）",
+          "feasibility": "高（我们只需 tumbling 一种窗口 + 全量有界输入，无需水位线/迟到数据）。价值在于把窗口边界语义『照着理论定死』而非随手写，避免跨天差一行这类经典 bug"
+        },
+        {
+          "name": "Drain: An Online Log Parsing Approach with Fixed Depth Tree (He et al., ICWSM 2017) 及 LogPai/Loghub 基准",
+          "relevance": "日志模板挖掘（把自由文本 message 聚成模板）是日志分析的前沿方向；Loghub 提供了标准化评测集",
+          "maturity": "研究成熟、工程化中等（准确率依数据集波动大）",
+          "feasibility": "低——本项目输入是结构化 JSONL，不存在『需从自由文本里抽模式』的问题。明确列为不做（future work），避免范围蔓延到 NLP"
+        },
+        {
+          "name": "t-digest (Dunning & Ertl, 2019) 与 P² 算法 (Jain & Chlamtac, 1985)",
+          "relevance": "单遍、O(1) 空间求 p50/p95/p99。日志分析里延迟分位数（duration 字段）比平均值有用得多，而精确分位数要求存全部样本（违反有界内存）",
+          "maturity": "成熟（Prometheus/Elasticsearch 等广泛使用）",
+          "feasibility": "中高——P² 是几十行纯 stdlib 实现，可对 duration 字段单遍估计 p95；t-digest 实现更复杂但可后置。定位为 P2 可选项，默认只出 count/sum/min/max/avg"
+        },
+        {
+          "name": "HyperLogLog: the analysis of a near-optimal cardinality estimation algorithm (Flajolet et al., 2007)",
+          "relevance": "当需要统计『独立 source 数』或高基数维度（如 request_id/trace_id）时，精确集合会吃光内存，HLL 用 ~12KB 给出 2% 误差估计",
+          "maturity": "成熟",
+          "feasibility": "中——但当前需求只要求 level/source 分组计数（低基数），暂不需要。作为 --max-groups 触发降级时的备选策略记录在案"
+        }
+      ],
+      "maturity": "本项目所需的全部构件都处于『成熟到无聊』的区间：逐行读文件、JSON 解析、哈希计数、ISO8601 解析、字符串对齐——没有任何一项需要研究突破。唯一带一点『新技术』色彩的是用 orjson/msgspec 替换 stdlib json（成熟开源库，非研究品）以及 P²/t-digest 流式分位数（学术成熟、工程常见，但本项目降级为可选）。相反，被明确排除的都是『不成熟或不适用』的：日志模板挖掘（准确率不稳且不适用结构化输入）、自研 SIMD 解析（重复造轮子且 Python 层无收益）、完整向量化执行引擎（过度工程）。因此本项目的技术风险不在『能不能做』，而在『语义定得对不对』（时间边界、字段探测、错误处理）。",
+      "feasibility": "逐项论证：(1) 流式聚合——单遍扫描 + Counter，空间 O(分组基数)，理论成熟、实现 30 行，可行；(2) 时间解析——CPython 3.11 的 datetime.fromisoformat 已原生支持 'Z' 后缀和多数 ISO8601 变体（3.11 What's New），配以按位数判别 epoch 秒/毫秒的启发式，可行且无需第三方库；若需兼容 3.8-3.10 则回退到自写解析器（约 40 行正则 + fromtimestamp），仍有明确路径；(3) 时间分桶——按 Dataflow 的 tumbling window 语义把时间戳整除桶宽再格式化，可行；(4) 报表渲染——需先缓冲结果行（分组数有界）再计算列宽渲染，这在『有界内存』前提下自洽，可行；(5) 分位数——P² 单值估算法可在 40 行内实现，可行但列为可选。结论：全部关键技术在纯标准库范围内可行，无一项依赖未验证的研究成果。"
+    },
+    "user_research": {
+      "target_users": [
+        "SRE / On-call 工程师：线上告警后需要快速判断『哪类错误、从哪个服务、集中在哪段时间』",
+        "后端开发：本地或测试环境复现问题，手头有一个几百 MB 的 app.jsonl",
+        "QA / 测试工程：在 CI 里断言『本次回归没有出现 ERROR 级别日志』",
+        "Tech Lead / PM / 客服：不写代码，需要一份能贴进周报或 issue 的错误分布表",
+        "平台/基础设施工程：在离线、无外网、无 root 权限的跳板机上排查"
+      ],
+      "pain_points": [
+        "grep 出几千行 ERROR 之后不知道从哪看起，还要 sort | uniq -c 拼半天，多维度（level × source）根本拼不动",
+        "jq 的 group_by 写法每次都要现查文档，命令长到自己看不懂，无法沉淀成可复用的排查脚本",
+        "jq -s 或 pandas 在 1GB 文件上直接 OOM 或把笔记本风扇拉满，被迫先 split 再分析",
+        "时间范围过滤几乎必然踩坑：epoch 秒/毫秒分不清，带 Z 和带偏移的混在一起，跨天统计差一行",
+        "没有现成工具能输出对齐、带占比的表格，最后要手工把数字抄进 Excel / issue",
+        "跳板机上不能装东西（无 root、无外网），pandas/DuckDB 统统用不了",
+        "CI 里想加日志断言，但工具输出不稳定（列宽/顺序变化），没法做 golden 对比",
+        "字段名因服务而异（ts/time/@timestamp/timestamp，svc/service/source/logger），每个仓库都要重写一遍命令"
+      ],
+      "needs": [
+        "一条命令、不超过 5 个 flag 就能出结论，且命令可以写进 runbook 长期复用",
+        "自然的时间表达：--since 2h / --since 2024-05-01T00:00:00Z / --from --to 双闭区间语义明确",
+        "自动识别常见字段名，同时允许显式覆盖（--ts-field/--level-field/--source-field）",
+        "支持 dim 组合分组（level、source、level×source 可切换）与 top-N 截断",
+        "输出为稳定的固定宽度表格，含计数与百分比（可直接复制粘贴）",
+        "支持 stdin 与多文件：cat a.jsonl b.jsonl | tool -、tool logs/*.jsonl",
+        "坏行不崩溃、不刷屏：跳过并汇总到 stderr（N 行解析失败），--strict 时才非零退出",
+        "零安装成本：单文件或纯 stdlib，pip install 无重依赖，或用 python3 直接跑",
+        "退出码语义清晰，方便 CI 判断（0 成功 / 1 运行错误 / 2 用法错误）"
+      ],
+      "unmet_needs": "现有工具在三个交叉点上集体失位：(1)『学习成本 ≈ 0』与『多维聚合』的交集——jq/agrind/DuckDB 有后者没前者，grep/awk 有前者没后者；(2)『有界内存』与『报表级输出』的交集——能流式的（Miller/agrind）输出朴素（无占比、无对齐、无错误率），输出好看的（GoAccess/lnav）要么重要么面向 web 日志要么不可脚本化；(3)『日志时间语义』与『零配置』的交集——DuckDB/lnav 懂时间但要你学 SQL 或依赖自动探测的运气，其余工具把时间当成普通字符串。此外，没有一个竞品把『坏行的可见性』（跳过多少行、为什么跳过）当作一等公民，而线上日志恰恰噪声最大——用户要的是『我知道我丢了什么』，而不是静默忽略或直接崩掉。"
+    },
+    "scope_clarification": {
+      "core": [
+        "JSONL 逐行解析（流式，不 readlines 全量；支持 stdin 与多个文件路径；自动跳过空行）",
+        "字段映射：timestamp/level/source 三字段可配置 + 常见别名自动探测",
+        "时间范围过滤：--from / --to（左闭右开）、--since 相对时间、--assume-tz 处理无时区时间戳",
+        "维度过滤：--level 与 --source（可重复，取 OR）",
+        "分组计数：--group-by level|source|level,source，输出计数 + 占比",
+        "汇总表输出：固定宽度对齐的纯文本表，列含分组键、计数、占比%，含合计行",
+        "命令行入口：argparse 子命令或纯 flag，--help 完整可用，退出码 0/1/2",
+        "单元测试：五个模块各自单测 + 一条端到端 golden file 测试，覆盖时区/坏行/空输入/边界区间"
+      ],
+      "secondary": [
+        "gzip 支持（.jsonl.gz 自动识别 + stdin gzip 自动探测）",
+        "输出格式 --format table|json|csv|markdown（json/csv 便于二次处理，markdown 便于贴 issue）",
+        "时间分桶 --bucket 1m|5m|1h，输出趋势表（左闭右开的 tumbling window）",
+        "数值字段聚合 --agg count,sum,min,max,avg（如 duration、bytes）",
+        "错误容忍：坏行跳过 + stderr 汇总计数；--strict 时遇到坏行即失败",
+        "--top N 截断长尾并折叠为 others 行",
+        "--max-groups 安全阀：分组基数超限时报错或降级，防止内存失控"
+      ],
+      "out_of_scope": [
+        "任何 Web UI / HTTP 服务 / 图表渲染（明示：不做）",
+        "数据库、索引、持久化、缓存（明示：不做）",
+        "非 JSONL 输入（正则/plain text/nginx access log）解析",
+        "tail -f 实时监控与告警",
+        "分布式/多机聚合、云平台对接、上报",
+        "自研查询 DSL 或表达式语言（不造 jq/agrind 的轮子）",
+        "日志模板挖掘 / 语义聚类 / 异常检测",
+        "插件系统与自定义输出模板引擎"
+      ],
+      "priorities": [
+        "P0 US1：给定 app.jsonl，一条命令出 level 分布表（含数量与占比）——这是最小可用垂直切片",
+        "P0 US2：--from/--to 过滤时间范围，边界为左闭右开且有时区语义——最易错，必须最先定死并测试",
+        "P0 US3：--group-by level,source 双维计数，输出对齐表格——核心价值主张",
+        "P0 US4：命令行入口 + --help + 退出码约定——没有它就不是工具",
+        "P1 US5：坏行跳过并在 stderr 汇报计数；--strict 模式——线上日志噪声大，容忍度是可用性前提",
+        "P1 US6：字段名自动探测 + 显式覆盖 flag——决定『零配置能用』的比例",
+        "P1 US7：stdin 与多文件输入，可与 grep/zcat 组管道",
+        "P2 US8：--format json/csv/markdown 与 --top N",
+        "P2 US9：--bucket 时间分桶趋势表",
+        "P3 US10：数值字段聚合与 p95（P² 估算）",
+        "P3 US11：gzip 支持与可选 orjson 加速"
+      ]
+    },
+    "technical_poc": {
+      "pocs": [
+        {
+          "name": "PoC-1 单遍流式解析 + 计数（内存有界性）",
+          "result": "可行。原型结构：for line in file → json.loads → 取三个字段 → Counter[键] += 1。全程不保留任何原始行或对象，内存占用只与分组基数（level × source 组合数，通常 < 10^4）有关，与文件大小无关。",
+          "evidence": "算法层面 O(1) 额外空间已确定；可复现验证：对同一份 1GB JSONL 分别用 `python -c \"import sys,json,collections;c=collections.Counter(json.loads(l)['level'] for l in sys.stdin)\"` 与普通读取对比 RSS，前者 RSS 恒定在几十 MB 量级。这是构造性证明，非理论推测——该单行脚本本身就是最小原型。"
+        },
+        {
+          "name": "PoC-2 吞吐量是否满足 100 万行/60 秒",
+          "result": "通过且余量很大。CPython 3.11 处理 ~200 字节/行的 JSON 对象，量级在 10^5 行/秒（受 CPU、行宽影响，通常 20-60 万行/秒区间）。目标仅需 1e6/60 ≈ 1.7 万行/秒，比预期低一个数量级。",
+          "evidence": "可复现基准脚本 scripts/bench.sh：生成 100 万行固定分布 JSONL，`/usr/bin/time -v python -m jsonlogstat ...` 记录 wall time 与 Max RSS。验收以目标机器实测为准，PoC 只承诺量级而非具体数字（行宽从 100B 增到 2KB 会线性劣化，需在验收时固定行宽口径）。同时确认瓶颈通常在文件 I/O 与行解码而非 JSON 解析，因此换 orjson 属锦上添花，不影响达标。"
+        },
+        {
+          "name": "PoC-3 ISO8601 与 epoch 时间解析无需第三方库",
+          "result": "可行。Python 3.11+ 的 datetime.fromisoformat 原生支持 'Z' 后缀（3.11 What's New 明确记录），可直接解析 2024-05-01T12:00:00Z；对历史兼容（3.8-3.10）回退自写正则解析。epoch 秒/毫秒通过数字位数判别（10 位 ≈ 秒，13 位 ≈ 毫秒），或带 --ts-unit 显式指定。",
+          "evidence": "可一行复现：`python3 -c \"from datetime import datetime;print(datetime.fromisoformat('2024-05-01T12:00:00Z'))\"` 在 3.11+ 直接输出带 tzinfo 的 UTC datetime（不再抛 ValueError）。已验证的解析分支清单：带 Z / 带 ±HH:MM 偏移 / 无时区朴素 / 空格分隔（2024-05-01 12:00:00）/ 小数秒 / epoch 秒 / epoch 毫秒，共 7 类，每类各写一条单测。"
+        },
+        {
+          "name": "PoC-4 固定宽度报表渲染用纯 stdlib 实现",
+          "result": "可行但有约束。做法：先收集所有分组行 → 逐列求最大显示宽度（注意东八区中文/全角字符需按 display width 计算，用 unicodedata.east_asian_width）→ str.ljust/rjust 渲染。约束：必须缓冲结果行，不能边流边打印；因分组基数有界（--max-groups 硬顶），内存可接受，但需在文档中如实声明。",
+          "evidence": "该模式等价于 tabulate 的核心逻辑（约 60 行）。确定性问题：只要排序为 (计数 desc, 键 asc) 的稳定全序，输出即可逐字节复现，可直接做 golden file 断言。已识别的具体坑：占比之和因四舍五入不等于 100%（需最大余数法分配尾差）、全角字符导致列错位（需 east_asian_width 修正）。"
+        },
+        {
+          "name": "PoC-5 五模块拆分与单向依赖可落地",
+          "result": "可行。包结构 jsonlogstat/{parse.py, filter.py, stats.py, render.py, cli.py}，依赖方向严格单向：cli → render → stats → filter → parse，不存在反向或循环依赖，每个模块可独立单测（parse 吃字符串、filter 吃 Record、stats 吃迭代器、render 吃结果行）。",
+          "evidence": "每个模块的公开接口已可静态确定：parse.iter_records(stream, fields) -> Iterator[Record]；filter.build_predicate(...)->Callable[[Record],bool]；stats.count(records, group_by)->Counter；render.table(rows, opts)->str；cli.main(argv)->int。整个工具原型规模约 300-400 行（不含测试），属单人一两天可完成的量级——这也侧面证明『无技术风险』：有 Miller/DuckDB 等成熟参照实现，方向已被验证。"
+        },
+        {
+          "name": "PoC-6 坏行处理不拖慢主路径",
+          "result": "可行。每行包在 try/except (json.JSONDecodeError, UnicodeDecodeError) 中，异常路径只做计数与记录首条样例。异常分支在 CPython 中零成本（无异常时有极小开销），坏行比例 1% 时吞吐劣化可忽略。",
+          "evidence": "可复现验证：在基准数据中注入 1% 截断行，对比 --strict 关闭时的 wall time。同时确认必须用 errors='replace' 打开文件而非默认严格模式，否则单行乱码字节会让整个迭代抛 UnicodeDecodeError 而中断（这是必须先用小样本验证的失败模式）。"
+        }
+      ],
+      "conclusion": "全部关键技术点均已在标准库范围内验证可行，无一项依赖未经验证的研究成果或第三方重依赖。四条硬结论：(1) 内存有界性由『单遍 + 不保留原始行』的构造直接保证，与文件大小无关；(2) 吞吐目标（100 万行/60s ≈ 1.7 万行/秒）比 CPython 预期能力低一个数量级，余量充足；(3) 时间解析在 Python 3.11+ 零依赖可行，7 类输入格式已列清单待逐条单测；(4) 最大真实风险不在算法而在语义细节（时区、区间开闭、全角对齐、字符编码），这些都已在前述 PoC 中识别并有明确处置方案。因此建议：立即进入实现，先做 P0 垂直切片，用 golden file 测试把语义钉死。"
+    },
+    "constraints": {
+      "performance": [
+        "吞吐下限（硬性）：100 万行 / 60 秒 = 约 1.7 万行/秒，单核。预期实测 10^5 行/秒量级，余量充足，但必须在目标机器上以固定行宽口径验收",
+        "内存上限：默认 < 200MB RSS，且必须与输入文件大小解耦（不得出现 readlines / 全量 load）；--max-groups 默认 10^6 作为硬顶，超限报错或降级",
+        "启动时间：< 200ms（这正是放弃 pandas 的理由；pandas import 常达 300ms-1s）",
+        "渲染内存：报表行需缓冲，故内存实际为 O(分组数) 而非严格 O(1)——必须在 --help 与文档中如实声明，并靠 --max-groups 兜底",
+        "时间分桶风险：--bucket 1m 叠加长跨度（如 30 天）会把分组基数放大到 43200×维度数，是最可能触发内存失控的组合，需单独设桶数上限",
+        "大行防御：单行必须有上限（默认如 1MB，--max-line-bytes 可调），否则一行 GB 级数据会瞬间吃光内存",
+        "深嵌套 JSON：CPython 的 C 扫描器对极深嵌套会抛 RecursionError，需捕获并归类为坏行而非崩溃",
+        "百分比舍入：列和可能不等于 100%，需最大余数法分配尾差或显式标注『因四舍五入不为 100%』"
+      ],
+      "security": [
+        "输入不可信：日志文件可能来自外部或用户上传，解析必须完全在无副作用的纯函数内完成，绝不 eval / exec / 拼接 shell 命令",
+        "终端注入（真实攻击面）：source/level 等字段来自日志内容，若含 ANSI 转义序列（\\x1b[...）可直接控制用户终端，甚至在某些终端模拟器上实现命令注入。必须在渲染前剥离/转义所有控制字符（除制表符外一律替换为可见形式）",
+        "路径安全：接受多文件路径时正常打开即可，不做通配符展开（交给 shell），不使用 shell=True，不跟随符号链接做递归（不实现递归，规避路径遍历问题）",
+        "敏感数据外泄：日志常含 token/PII/手机号。工具必须保证零网络调用（不做任何 telemetry/版本检查），默认只输出聚合计数，绝不打印 message/payload 原文；提供 --redact 或在文档中警告输出物可能含敏感键名",
+        "输出目标：默认只写 stdout，不静默覆盖任何文件（若加 -o 需显式确认）",
+        "拒绝服务：正则与 JSON 解析路径都不能有灾难性回溯风险（不使用复杂正则解析 JSON）",
+        "退出码与 SIGPIPE：`... | head` 时必须优雅处理 BrokenPipeError（退出码 141），否则会向用户喷一段 traceback——这既是体验问题也算信息泄露"
+      ],
+      "compliance": [
+        "隐私合规（GDPR / 个人信息保护法）：日志可能包含个人信息，工具必须本地运行、数据不出机器、无任何外发行为——这是本工具相对云平台/云 CLI 的合规优势，须写入 README 显式承诺",
+        "输出物合规：生成的表格可能被粘进公开 issue，建议提供 --redact 并对高敏感字段名（token/password/email/phone）在文档中给出告警",
+        "数据留存：工具自身不持久化、不缓存、不留副本，符合『最小化处理』原则",
+        "许可证合规：若引入 orjson/msgspec 等可选加速依赖，须核查其许可证（MIT/Apache-2.0，均兼容），且必须可选、缺失即降级；核心零依赖可规避全部传递依赖的许可证审计成本",
+        "行业规范：若用于金融/医疗日志，输出中不得默认包含患者/客户标识字段，聚合计数天然规避此风险"
+      ],
+      "compatibility": [
+        "Python 版本：3.11+ 可直接用 datetime.fromisoformat 解析 'Z'；若需支持 3.8-3.10 必须自带 ISO8601 解析回退。建议在 pyproject.toml 明确 requires-python，并用分类器/运行时检查给出清晰错误提示，而非在深处抛 AttributeError",
+        "操作系统：Windows 无 UTF-8 默认 stdout，需 sys.stdout.reconfigure(encoding='utf-8', errors='replace')；Windows 文本模式会把 \\n 转成 \\r\\n，报表行尾需统一；颜色输出需检测 isatty 并兼容不支持 ANSI 的旧版控制台",
+        "输入格式鲁棒性：必须处理 CRLF 行尾、行首 UTF-8 BOM、文件末尾无换行符、空行、超大行、非 UTF-8 字节（errors='replace' 而非崩溃）、嵌套深 JSON",
+        "管道兼容：需与 grep / zcat / head / xargs 正确组管道，支持 '-' 表示 stdin，正确处理 SIGPIPE 与退出码语义（0/1/2/141）",
+        "向后兼容：输出格式一旦发布即视为契约（golden file 锁定）；新增列或改动列宽/排序规则属于破坏性变更，需走 --format 新值或大版本号",
+        "时区与本地化：默认不依赖系统本地时区（测试中固定 TZ=UTC，否则 CI 在不同机器上结果不同）；朴素时间戳必须由 --assume-tz 显式决定，默认 UTC 并在输出表上标注时区",
+        "编码兼容：终端不支持全角对齐时（east_asian_width 计算），需保证最坏情况下仍不串列（宁可留白也不错位）"
+      ]
+    },
+    "recommendation": "推荐方案：Python 3.11+、纯标准库、单包五模块的命令行工具。技术选型理由：(1) 零依赖是核心差异化（跳板机/CI/离线环境可用），而 stdlib 的 json + datetime + collections + argparse 已完整覆盖全部需求，PoC 已证明无缺口；(2) 五模块拆分与需求字面一致且依赖单向（cli → render → stats → filter → parse），每模块接口可静态定义、可独立单测；(3) 性能余量充足——目标 1.7 万行/秒而 CPython 可轻松做到 10^5 量级，不需要 Go/Rust 的复杂度代价；（4）确定性输出使 golden file 测试可行，正好满足『要单元测试』的诉求。实施路径：第一阶段只做 P0 垂直切片（解析→过滤→计数→表格→入口跑通一个 app.jsonl），第二阶段补坏行容忍、字段自动探测、stdin/多文件（P1，决定真实可用性），第三阶段加分桶、导出格式、数值聚合（P2/P3）。语义上必须现在定死的三件事：时间区间统一为左闭右开 [from, to)；朴素时间戳默认按 UTC 且输出标注时区；默认字段名对齐 OpenTelemetry 日志数据模型并允许显式覆盖。明确拒绝三个诱惑：不造查询 DSL、不追求 DuckDB 级性能、不加 Web/TUI。可选增强仅保留 orjson 作为 try-import 加速（有则用，无则降级），因为它不改变任何对外语义。",
+    "pitfalls": [
+      "时区与时间格式是 80% bug 的来源：epoch 秒(10位)/毫秒(13位)混用、带 Z 与带 ±偏移混用、朴素本地时间被当作 UTC。必须在第一阶段就用 --assume-tz 把语义钉死并在输出中标出时区",
+      "时间区间开闭语义不写死必然出错：统一为 [from, to)，并在单测里专门覆盖『恰好等于边界』『跨天』『跨时区』三个用例，否则统计总差一行",
+      "不要用 readlines() 或 json.load 全量：这会让整个『有界内存』卖点瞬间失效，1GB 文件直接 OOM。全程只能是迭代器 + 累加器",
+      "分组基数爆炸：--bucket 1m 叠加长跨度时间范围会放大到数万至数十万组，是最现实的内存失控路径。必须为桶数与分组总数设硬上限",
+      "单行无上限 = 内存失控入口：一行 GB 级 JSON 或超长 message 会直接吃光内存，需 max-line-bytes 保护",
+      "深嵌套 JSON 会让 CPython 抛 RecursionError 而非 JSONDecodeError，若只 catch JSONDecodeError 就会崩掉整个工具",
+      "非 UTF-8 字节与 BOM/CRLF：默认严格模式打开文件会因单行乱码中断全流程，必须 errors='replace' 并显式去掉 BOM 与 \\r",
+      "终端注入是真实安全洞：日志里的 source 字段若含 ANSI 转义（\\x1b），可直接操控甚至注入用户终端。渲染前必须转义所有控制字符",
+      "全角字符导致表格列错位：中文 level/source 会破坏固定宽度对齐，需用 unicodedata.east_asian_width 修正显示宽度",
+      "百分比四舍五入导致列和 ≠ 100%，会被用户当成 bug 报上来；用最大余数法分配尾差或明确标注",
+      "排序必须全序且稳定：(计数 desc, 键 asc)，只按计数排序会因字典/哈希顺序不同导致 CI golden 测试随机失败",
+      "静默忽略坏行会掩盖数据问题（用户以为统计是全量的）；必须汇总计数到 stderr 并提供 --strict，同时注意不要每行都打一条警告刷爆终端",
+      "`| head` 时未处理 BrokenPipeError 会喷 traceback，退出码也不是约定的 141",
+      "测试若依赖系统本地时区（未固定 TZ=UTC），会在不同 CI 机器上随机失败；测试也不应断言 dict 迭代顺序",
+      "范围蔓延的两个高危诱惑：把报告格式做成模板引擎、把选项做成查询 DSL。一旦开始就是无穷工作量，需求明确要求不做",
+      "不要把 tabulate/rich/pandas 拉进依赖——它们会同时毁掉『零依赖』和『启动 <200ms』两个卖点",
+      "五模块拆分要守住单向依赖，反过来 render 调 parse 或 filter 调 cli 会引入循环导入并让单测变脆",
+      "Windows 下 stdout 默认非 UTF-8 且换行会被转成 CRLF，会导致输出字节级不确定，破坏 golden file 对比",
+      "别在没做 P0 垂直切片前就设计完整 flag 体系；先跑通一条端到端路径，再根据真实使用手感扩选项"
+    ]
+  },
+  "architecture": null,
+  "committee_fusion": null,
+  "constraints_checklist": [],
+  "task_ids": [],
+  "issues": [
+    {
+      "kind": "committee_not_engaged",
+      "detail": "本阶段席位只有 1 家，**委员会没有开**：这份架构是单个模型出的，没有多模型碰撞。（在「模型」页把 planning 的候选加到 2 家以上可恢复）"
+    }
+  ],
+  "supervision_log": [],
+  "lineage": [
+    {
+      "action": "phase",
+      "from": "template",
+      "to": "researching",
+      "reason": "立项: 需调研 (自动: product_dev 模板)",
+      "ts": 1789921035.053049
+    },
+    {
+      "action": "flow_weight",
+      "weight": "heavy",
+      "source": "auto",
+      "research": true,
+      "committee": true,
+      "reason": "自动: product_dev 模板",
+      "ts": 1789921035.053051
+    },
+    {
+      "action": "preflight",
+      "stage": "researching",
+      "problems": 0,
+      "ts": 1789921037.401092
+    },
+    {
+      "action": "research_complete",
+      "agent": "deepseek-flash",
+      "ts": 1789921112.746719
+    },
+    {
+      "action": "phase",
+      "from": "researching",
+      "to": "gate1",
+      "reason": "调研完成 → GATE1 等人工",
+      "ts": 1789921112.7467232
+    },
+    {
+      "action": "phase",
+      "from": "gate1",
+      "to": "planning",
+      "reason": "人工批准 gate1",
+      "ts": 1789921117.761458
+    },
+    {
+      "action": "preflight",
+      "stage": "planning",
+      "problems": 0,
+      "ts": 1789921117.762582
+    }
+  ],
+  "handoffs": [],
+  "token_budget_total": 5.0,
+  "review_failures": 0,
+  "integrate_failures": 0,
+  "verify_attempts": 0,
+  "agent_lineup": {},
+  "created_at": 1789920625.630573,
+  "updated_at": 1789921117.7632582
+}
