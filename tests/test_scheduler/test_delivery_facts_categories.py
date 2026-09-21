@@ -14,18 +14,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import delivery_facts as df  # noqa: E402
 
 
+# ⚠️ **正文一律照抄真机的长相**，别自己编。第一版这几条我喂的是
+# 「创建 jsonstat/filter.py 与 tests/test_filter.py」——那里面的 `tests/` 是 **ASCII**，
+# 而分类器看的是中文「测试」二字 ⇒ **变异（改回判正文）没有红**，判据是空转的。
+# 真机上歪掉的是这段**约束行**（每个实现任务的正文里都有）：
+#   `约束[maintainability]: 每个业务模块必须有对应的单元测试文件且全部通过：pytest`
+_CONSTRAINT = "\n相关上下文:\n约束[maintainability]: 每个业务模块必须有对应的单元测试文件且全部通过"
+
+
 @pytest.mark.parametrize("desc, want", [
-    # ⚠️ 正文里带 tests/ 的**实现任务** —— 这是第一版判歪的地方，钉死它
-    ("[T2] 实现 filter 模块：时间范围过滤: 创建 jsonstat/filter.py 与 tests/test_filter.py",
-     "实现模块"),
-    ("[T3] 实现 stats 模块：单遍分组聚合: 创建 jsonstat/stats.py 与 tests/test_stats.py",
-     "实现模块"),
-    ("[T5] 实现 cli 入口与管道接线: 创建 jsonstat/cli.py、jsonstat/__main__.py 与 tests/",
-     "接线/集成"),
-    ("[T6] 端到端集成测试与分层/依赖边界检查: 创建 tests/fixtures/",
-     "写测试"),
-    ("[T7] [只读] 独立验收：干净检出跑测试并逐条核对需求: 不改动任何文件",
-     "验收"),
+    # 实现任务：标题说实现，正文里的「单元测试」是**约束**、不是它的活
+    ("[T2] 实现 filter 模块：时间范围过滤: 创建 jsonstat/filter.py" + _CONSTRAINT, "实现模块"),
+    ("[T3] 实现 stats 模块：单遍分组聚合: 创建 jsonstat/stats.py" + _CONSTRAINT, "实现模块"),
+    ("[T5] 实现 cli 入口与管道接线: 创建 jsonstat/cli.py、jsonstat/__main__.py", "接线/集成"),
+    ("[T6] 端到端集成测试与分层/依赖边界检查: 创建 tests/fixtures/", "写测试"),
+    # 只读验收：正文里也有「跑全量测试」，但它是**验收**不是「写测试」
+    ("[T7] [只读] 独立验收：干净检出跑测试并逐条核对需求: 不改动任何文件"
+     + _CONSTRAINT, "验收"),
     # 没写 [Tn] 前缀 —— 别炸，也别落进空桶
     ("随手写的一条任务", "实现模块"),
 ])
