@@ -1108,7 +1108,9 @@ def _auto_rework_allowed(project: ProjectState, fix_route: str) -> tuple[bool, s
     """
     if os.environ.get("QIDIAN_AUTO_REWORK", "0") != "1":
         return False, ("开关没开（自动返工默认关，要开得显式设 QIDIAN_AUTO_REWORK=1）"
-                       "—— 回炉一次 = 一次完整执行层，而重跑的输入跟第一次一字不差")
+                       "—— 回炉一次 = 一次完整执行层，而被重置的这批任务，"
+                       "输入跟第一次一字不差（⚠️ 只指**项目级回炉**：任务级 cascade 重试"
+                       "经 `_dispatch_exec` 把 feedback 拼进提示词，那是带信息的，别混）")
     if fix_route != "impl":
         return False, f"路由是 {fix_route or '(空)'}，只自动回实现层"
     if not any(i.get("type") == "verification_ran" for i in project.issues):
