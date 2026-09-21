@@ -1932,6 +1932,64 @@ class TestStreamTotalBudget:
         # 假流**不设上限时**要跑 ~3s（300 行 × 10ms），断得掉就该 ~1s（_cap）
         assert elapsed < 2.5, f"流跑了 {elapsed:.1f}s 还没断 —— 总时长上限没生效"
 
+    def test_单次调用只封在剩余预算内_不再有240硬顶(self, monkeypatch):
+        """🔴 判据：剩余预算 800s ⇒ 单次调用的总超时就是 **800 上下**，不是 240。
+
+        来历（2026-09-21 用户拍板）：240 那把尺量的是**总时长**，**不区分「一直在思考」
+        和「一直在吐字节但出不来」**，而按本文件的定义，思考（`reasoning_content`）
+        **就是进展**（`_last_progress` 认它）。真机代价已量：T5 预算 810s 只用掉 441s，
+        最后一轮 240s 全用来想（思考 3 万字、正文 0）⇒ 被掐 ⇒ 任务判失败、活全丢。
+
+        ⚠️ 钉的是**真传进去的 timeout**，不是"函数没抛" —— 后者在 `_cap=240` 下照样绿。
+        变异：把 `min(240.0, …)` 加回去 ⇒ 本条红（那正是它要钉的那一行）。
+        """
+        import time
+        from singularity.scheduler.executors import openai_agent as oa
+
+        seen = []
+
+        class _Resp:
+            status_code = 200
+            text = ""
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): pass
+            def iter_text(self):
+                yield 'data: {"choices":[{"delta":{"reasoning_content":"想"}}]}\n'
+
+        class _C:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def stream(self, *a, **k):
+                seen.append(k.get("timeout"))
+                return _Resp()
+
+        monkeypatch.setattr(oa, "_get_http_client", lambda: _C())
+        # `httpx.Timeout(默认值, connect=…, read=…)` 里**没被覆盖的那两栏**（write/pool）
+        # 就是那个位置参数 ⇒ 从这里读回 `_cap`。这也是它唯一外显的地方。
+        _cap_of = lambda t: t.as_dict()["write"]
+
+        ex = self._executor()
+        ex._deadline_at = time.time() + 800
+        ex._stream_call({"model": "m", "messages": []})
+        assert len(seen) == 1, f"没抓到那次调用的 timeout：{seen}"
+        assert _cap_of(seen[0]) > 600, \
+            f"单次调用被 240 硬顶掐着（cap={_cap_of(seen[0])}）—— 思考是用不完 240 秒的"
+
+        # 边界一：剩余预算比 240 小 ⇒ 照旧**只给剩余那么多**（别冲过任务死线）
+        seen.clear()
+        ex._deadline_at = time.time() + 30
+        ex._stream_call({"model": "m", "messages": []})
+        assert 1.0 <= _cap_of(seen[0]) <= 30.0, \
+            f"剩余 30s 却给了 {_cap_of(seen[0])}s —— 会冲过任务死线"
+
+        # 边界二：压根没有任务级死线（`_deadline_at` 没设）⇒ 退回 240 兜底，别变成无限
+        seen.clear()
+        ex._deadline_at = 0.0
+        ex._stream_call({"model": "m", "messages": []})
+        assert _cap_of(seen[0]) == 240.0, \
+            f"没死线时 cap={_cap_of(seen[0])} —— 兜底值变了，这条得有意识地改"
+
     def test_主动断开要出声(self, monkeypatch):
         """⚠️ **必须出声**：不说的话下游只看到"这轮输出特别短"，会去怀疑模型。"""
         import time

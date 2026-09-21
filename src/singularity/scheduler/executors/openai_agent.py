@@ -192,7 +192,9 @@ def _parse_xml_tool_calls(content: str) -> list[dict] | None:
                              "arguments": json.dumps(args, ensure_ascii=False)},
             })
     return out
-# 整轮预算（schedule-to-close）：重试总耗时上限，防止 3×240s 撞穿 orchestrator 的 900s deadline
+# 整轮预算（schedule-to-close）：重试总耗时上限，防止**多次重试**撞穿 orchestrator 的 900s deadline
+# ⚠️ 2026-09-21 起"单次尝试恒 240s"这个前提没了（见 `_stream_call` 的 `_cap`）——
+# 单次现在可以一直跑到任务剩余预算；这条管的是**重试那部分**的耗时。
 _RETRY_TOTAL_BUDGET = float(os.environ.get("QIDIAN_RETRY_TOTAL_BUDGET", "600"))
 
 
@@ -844,8 +846,9 @@ class OpenAIAgentExecutor(BaseExecutor):
                 #   ① 剩下的"产出"只有**半截思考** —— 拿它当正文就是 2026-09-18 那条链的起点
                 #      （真机 15 个失败任务**没一个败在"做错"，全败在"没产出"**，
                 #       而 QA 是扫着模型**自己的思考**判它「偷懒」的）；
-                #   ② 原样重试 = 同一个模型 + 同一个上限 ⇒ **再烧一个 240 秒**，
-                #      正是 `TestStreamOverBudgetNoOutput` 那条 F1 死法（三轮烧穿 810s）。
+                #   ② 原样重试**没东西可烧** —— 2026-09-21 起单次上限就是任务剩余预算
+                #      （`_cap`），能被掐说明预算已经见底 ⇒ 再转一圈只是把同一个死法
+                #      重演一遍（改之前是"再烧一个 240 秒"，正是 F1 那条三轮烧穿 810s）。
                 # `error_kind="deadline"`（我方上限）是**刻意的**：`_dispatch_exec.py:236`
                 # 已经认这一档是"我方造成、别赖模型" —— 落进 `exec` 会被记成
                 # "这个模型空输出"并 `record_failure`，三次就把好模型熔断 300 秒。
@@ -1162,8 +1165,9 @@ class OpenAIAgentExecutor(BaseExecutor):
     def _api_call(self, body: dict) -> dict:
         """带分层重试的 API 调用（Temporal 五字段语义）。
 
-        - 单次尝试上限 240s（start-to-close，见 _get_http_client 的 httpx.Timeout）
-        - 整轮预算 600s（schedule-to-close）：超预算不再重试，避免 3×240s 撞穿 900s deadline
+        - 单次尝试上限 = **任务剩余预算**（≤ `_EXEC_BUDGET`，见 `_stream_call` 的 `_cap`）——
+          2026-09-21 起**不再**另叠一个 240s 硬顶，理由写在 `_cap` 那段。
+        - 整轮预算 600s（schedule-to-close）：超预算不再重试，避免重试撞穿 900s deadline
         - 重试间隔 = initial × coeff^(n-1)，封顶 maximum_interval
         - 只重试**瞬时**错误（网络中断 / 超时 / 5xx）；4xx 不重试 —— 重试也不会好
         - 429 交给外层循环（它按对话轮次退避），这里不吞
@@ -1184,6 +1188,9 @@ class OpenAIAgentExecutor(BaseExecutor):
         默认走流式（QIDIAN_STREAM=0 关）：只有流式才能做**停滞检测** ——
         read timeout 就是"多久没有新 token"的上限，超时即断开连接，生成真的停。
         非流式只能干等 240s 整体超时，而且线程 join 不掉（见 _dispatch_exec 顶部注释）。
+        ⚠️ 那个 240 是**共享 client 的默认值**（`_get_http_client`），而流式那条会按剩余
+        预算逐次覆盖它 ⇒ **两条路的上限从 2026-09-21 起不一样了**。非流式默认关着
+        （`QIDIAN_STREAM=0` 才走）；真要用它，先把这条对齐，否则会静默退回旧行为。
         """
         if _STREAM:
             return self._stream_call(body)
@@ -1252,7 +1259,16 @@ class OpenAIAgentExecutor(BaseExecutor):
         # 单次调用也要封在**剩余预算**内：只在轮间看表是不够的 —— 一轮本身可能跑
         # 几分钟，看完表再开一轮照样冲过 900s，又变成被无声收割。
         _left = getattr(self, "_deadline_at", 0.0)
-        _cap = min(240.0, max(1.0, _left - time.time())) if _left else 240.0
+        # 🔴 **不再叠一个 240s 硬顶**（2026-09-21 用户拍板）：那把尺量的是**总时长**，
+        # **不区分「一直在思考」和「一直在吐字节但出不来」** —— 而按本文件的定义，
+        # 思考（`reasoning_content`）**就是进展**（下面 stall 那把尺认它）。
+        # 真机代价：T5 预算 810s 只用掉 441s，最后一轮 240s 全用来想（思考 3 万字、正文 0）
+        # ⇒ 被掐 ⇒ 任务判失败、前几轮写好的活全丢。
+        # **敢去掉它**：240 是 2026-09-15「一次调用跑了 27 分钟不结束」之后加的，而那个形状
+        # （一直吐字节、拿不到可用 token）**2026-09-16 起由 stall 那把尺兜住了** ——
+        # `_last_progress` 只在 content/reasoning/tool_calls **变长**时归零 ⇒ 原理由不成立。
+        # ⚠️ **总预算一分没多**：`_cap ≤ _deadline_at − now ≤ _EXEC_BUDGET`（仍远小于 900s 收割线）。
+        _cap = max(1.0, _left - time.time()) if _left else 240.0
         # ⚠️ **总时长**另算一把尺（2026-09-15 真机坐实）：
         # `httpx.Timeout(read=)` 封的是**两次读之间**的时间，**不是总时长** ——
         # 服务端只要持续吐 token，一次调用就能跑任意久。
