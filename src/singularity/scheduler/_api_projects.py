@@ -574,6 +574,53 @@ def project_start(project_id: str, push_event=None) -> tuple[dict, int]:
     return {"ok": True, "started": True}, 200
 
 
+def project_stop(project_id: str) -> tuple[dict, int]:
+    """POST /api/projects/<id>/stop —— **停这个项目**：给所有非终态任务发取消。
+
+    🔴 为什么需要它（2026-09-21 真机，用户拍板）：那天想把一整轮停下来，
+    发现**没有这个开关**。当时用的是 `POST /api/loop/stop`，而它**停不住** ——
+    观察者建/路由任务那句末尾写着「确保调度循环在跑」（`if not running: start_loop(concurrent=2)`），
+    实测 19:15 停的循环、19:17 就被拉回来并派了新活。最后只能**杀进程**。
+
+    🔵 **关键事实（决定了这个实现有多小）**：一个任务**一旦进了 `_exec.run()` 的回合循环，
+    就不再经过调度循环了** —— 它自己一轮一轮地调 `dispatch()`，直到预算用完。
+    ⇒ **"停调度循环"只拦得住"还没派下去的"，拦不住正在跑的**；
+    而 `_check_cancelled` 是**每一轮开头**读 `CANCEL_DIR` 的 ⇒ **只有取消标记拦得住正在跑的**。
+
+    ⇒ 所以这里**不发明任何新机制**，就是**把已有的单任务取消按项目跑一遍**：
+      · 正在飞 / 已派发 / 暂停中 → 写取消标记，下一轮开头退出（最多再烧完当前那一次调用）
+      · 其余非终态（PENDING / BLOCKED / ROUTED）→ 直接转 FAILED（`task_cancel` 本来就这么做）
+      · 终态 → 跳过
+
+    ⚠️ **调度循环照常跑也无害**：这个项目没活了，循环自己空转 ⇒
+      **观察者那句自动拉循环就不用去动它了**（本来打算去改，核完发现没必要）。
+
+    ⚠️ **语义是"停"，不是"暂停"**（用户 09-21 选的就是这个）：取消标记按「人工取消」处理
+      ⇒ 以后返工重置时这批任务**不会被重新拉起**（`held_back_user_cancelled`）。
+      要接着跑得单独清标记。**"暂停到一半续上"那套没做**（没有证据说要它）。
+    """
+    from . import project as proj_mod
+    from ._api_tasks import task_cancel
+    proj = proj_mod.load(project_id)
+    if proj is None:
+        return {"error": "项目不存在"}, 404
+    stopped: list[str] = []
+    terminal: list[str] = []
+    for tid in list(getattr(proj, "task_ids", []) or []):
+        # ⚠️ **逐条走已有的单任务取消，连"哪些算终态"都不自己判**。
+        # 第一版我在这儿又抄了一份终态清单（DONE/FAILED/ROLLED_BACK/DECOMPOSED）——
+        # 而 `task_cancel` 里本来就有一份，**两份清单迟早会漂**
+        # （我在同一个函数的注释里刚警告过这件事，转头自己犯了一次）。
+        # 它自己会判：终态 / 不存在 ⇒ 400，这里归到 `terminal`。
+        _res, code = task_cancel(tid)
+        (stopped if code == 200 else terminal).append(tid)
+    witness.warn("project", f"project_stop:{project_id}:停止 {len(stopped)} 个"
+                            f"（终态跳过 {len(terminal)}）"[:200], key="project_stopped")
+    return {"ok": True, "stopped": len(stopped), "terminal": len(terminal),
+            "task_ids": stopped,
+            "message": f"已发送 {len(stopped)} 个取消信号（终态 {len(terminal)} 个跳过）"}, 200
+
+
 def project_cost(project_id: str) -> tuple[dict, int]:
     """GET /api/projects/<id>/cost — 该项目**今日**的真实花费。
 

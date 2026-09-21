@@ -1327,6 +1327,13 @@ def api_project_start(project_id):
     data, code = _api_handler.project_start(project_id, _push_event)
     return jsonify(data), code
 
+@app.route("/api/projects/<project_id>/stop", methods=["POST"])
+def api_project_stop(project_id):
+    """停这个项目：给所有非终态任务发取消。**不杀进程、也不停全局循环**
+    （循环起来也无害 —— 这项目没活了它自己空转）。来历见 `_api_projects.project_stop`。"""
+    data, code = _api_handler.project_stop(project_id)
+    return jsonify(data), code
+
 def _project_repo_root(project_id: str):
     """项目文件面板要看的仓库根。
 
