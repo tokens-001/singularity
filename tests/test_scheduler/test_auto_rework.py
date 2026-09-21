@@ -11,7 +11,9 @@
   ① 验收没真跑 ⇒ 不自动（回执行层修不了「架构没产出约束」那件事，纯空转）
   ② 路由不是 impl ⇒ 不自动（design 要重跑委员会 621 秒，且"理由进提示词 ≠ 模型照做"已证伪）
   ③ 已经自动返过一次 ⇒ 不自动（防无限循环；"第二次会成"没有证据）
-  ④ `QIDIAN_AUTO_REWORK=0` ⇒ 不自动（出事一句话关掉）
+  ④ 🔴 **开关默认关**（2026-09-21 起）—— 要开得显式设 `QIDIAN_AUTO_REWORK=1`。
+     原来这里是"出事一句话关掉"，但**它自己就是那个"事"**：回炉一次 = 一次完整执行层
+     （上一轮 1.2M token 量级），换来的只是"再摇一次骰子"。
   ⑤ 🔴 **调度循环没在跑 ⇒ 不自动**（护栏，2026-09-20 用户拍板加的）
 """
 import pytest
@@ -35,9 +37,14 @@ def _ran():
 
 @pytest.fixture(autouse=True)
 def _循环在跑(monkeypatch):
-    """默认把调度循环设成"在跑" —— ⑤ 单独测，别让它在别的用例里挡道。"""
+    """把调度循环设成"在跑"、并且**显式把开关打开** —— ④⑤ 各自单独测，
+    别让它们在其他用例里挡道。
+
+    ⚠️ 开关这里必须**显式设成 1**：2026-09-21 起默认是**关**的（见
+    `test_默认是关的`），本文件其余用例讲的是"其余四条判据"，得先把这道闸门让开。
+    """
     monkeypatch.setattr(_hooks, "loop_status", lambda: {"running": True, "concurrent": 2})
-    monkeypatch.delenv("QIDIAN_AUTO_REWORK", raising=False)
+    monkeypatch.setenv("QIDIAN_AUTO_REWORK", "1")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -93,11 +100,31 @@ def test_人工打回不算进自动的次数():
     assert ok is True, why
 
 
-def test_开关关着就不自动(monkeypatch):
-    """出事时**一句话关掉**，不用改代码、不用发版。"""
+def test_默认是关的(monkeypatch):
+    """🔴 **2026-09-21 起默认不自动** —— 用户原话「这合理吗，白烧 token」。
+
+    回炉一次 = 一次完整执行层（上一轮 1.2M token 量级），而换来的只是
+    **"再摇一次骰子"**（重跑的输入跟第一次一字不差，见 `_build_effective_task`）。
+    ⇒ 默认关；要开得**显式**设 `QIDIAN_AUTO_REWORK=1`。
+    """
+    monkeypatch.delenv("QIDIAN_AUTO_REWORK", raising=False)
+    ok, why = W._auto_rework_allowed(_Proj(issues=_ran()), "impl")
+    assert ok is False, "默认必须是关的 —— 开着就是每轮白烧一次执行层"
+    assert "默认关" in why, why
+
+
+def test_显式设成0也不自动(monkeypatch):
+    """**对照**：显式写 0 当然也不自动（旧写法继续有效，别把老配置弄坏）。"""
     monkeypatch.setenv("QIDIAN_AUTO_REWORK", "0")
     ok, why = W._auto_rework_allowed(_Proj(issues=_ran()), "impl")
     assert ok is False and "开关" in why
+
+
+def test_显式设成1才恢复自动(monkeypatch):
+    """**对照**：这条路没被堵死 —— 显式开就能回到旧行为（测试夹具走的就是这条）。"""
+    monkeypatch.setenv("QIDIAN_AUTO_REWORK", "1")
+    ok, why = W._auto_rework_allowed(_Proj(issues=_ran()), "impl")
+    assert ok is True, why
 
 
 # ═══════════════════════════════════════════════════════════════

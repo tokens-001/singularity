@@ -1094,7 +1094,11 @@ def _auto_rework_allowed(project: ProjectState, fix_route: str) -> tuple[bool, s
     ③ **没自动返工过** —— 防无限循环。⚠️ 读的是 lineage 里 `auto: True` 的条数，
        **是"这个项目累计"，不是"本轮"**（方案原文就这么定的，为的是**不新增状态字段**）。
        N=1 的依据：上面那次实测说明「同一件事第二次会成」**没有证据支持**。
-    ④ **开关开着** —— `QIDIAN_AUTO_REWORK=0` 一句话关掉；出事时不用改代码。
+    ④ **开关开着** —— 🔴 **2026-09-21 起默认是关的**（`QIDIAN_AUTO_REWORK=1` 才开）。
+       原话是"出事一句话关掉"，但**它自己就是那个"事"**：真机实测回炉一次 = 一次完整
+       执行层（上一轮 1.2M token 量级），而**换来的只是"再摇一次骰子"** ——
+       见下面那条：重跑不带信息。用户在 09-21 明确问「这合理吗，白烧 token」。
+       ⇒ **默认关，要开得显式开**：等哪天"上次为什么失败"真进了提示词，再考虑翻回来。
     ⑤ 🔴 **调度循环在跑** —— **护栏，2026-09-20 用户拍板加的，本方案最大的一条风险**。
        回 EXECUTING 只是改了个 phase，**真正派活得靠调度循环**。
        循环没开 ⇒ 自动返工 = 把项目扔在一个**不动的地方**，
@@ -1102,8 +1106,9 @@ def _auto_rework_allowed(project: ProjectState, fix_route: str) -> tuple[bool, s
        ⚠️ **"查不到循环在不在跑"按"没在跑"处理**（保守一侧）—— 无头/CLI 跑时
        `_hooks` 没注册，`loop_status()` 回的就是 `running: False`，而那条路本来就没人派活。
     """
-    if os.environ.get("QIDIAN_AUTO_REWORK", "1") == "0":
-        return False, "开关关着（QIDIAN_AUTO_REWORK=0）"
+    if os.environ.get("QIDIAN_AUTO_REWORK", "0") != "1":
+        return False, ("开关没开（自动返工默认关，要开得显式设 QIDIAN_AUTO_REWORK=1）"
+                       "—— 回炉一次 = 一次完整执行层，而重跑的输入跟第一次一字不差")
     if fix_route != "impl":
         return False, f"路由是 {fix_route or '(空)'}，只自动回实现层"
     if not any(i.get("type") == "verification_ran" for i in project.issues):
