@@ -474,6 +474,52 @@ def _defense_checklist(context: str) -> str:
         return ""
 
 
+def _record_review_tokens(result) -> None:
+    """把**一次审查调用**花的 token 记进账。
+
+    🔴 为什么要有这个（2026-09-21 补）：`dispatch()` **自己不记账**，记账的一直是调用方
+    —— 执行层是 `_task_runner`、规划层是 `workflow._record_phase_usage`，
+    而**审查这几路一个都没记** ⇒ 审查花的钱**从来没进过 token 账**。
+    这不只是"归不到任务上"，是**压根没记**：`.qidian` 的总花费是低估，
+    而"审查在注定被丢的代码上花了多少"这个问题**连数据来源都没有**。
+
+    ⚠️ **边界**：只记 `level="review"` + 真实模型名，**不带 project_id/task_id**
+    （这几个函数签名里没有，为了记账把它们和所有调用方全改一遍不划算）
+    ⇒ 能答"**审查一共花了多少**"，还答不了"**哪一轮/哪个任务的审查浪费了**"。
+    """
+    try:
+        tk = int(getattr(getattr(result, "executor_result", None), "token_count", 0) or 0)
+        if tk <= 0:
+            return
+        model = (getattr(result, "agent_cfg", None) or {}).get("model", "") or "unknown"
+        from ._token_budget import record_system_tokens
+        record_system_tokens(model=model, level="review", tokens=tk)
+    except Exception as e:
+        # 记账失败**不能**杀掉审查（审查失败=门失效，代价大得多）。
+        # 但也**不能静默** —— 同族：`_task_runner` 那次记账异常是记了 warn 的。
+        try:
+            from . import witness
+            witness.warn("review", f"record_review_tokens:{type(e).__name__}:{e}"[:120])
+        except Exception as e2:
+            # 连 `witness` 都写不进去（盘满/权限）—— 最后的出口走 logging。
+            # ⚠️ **这一层不许写 `pass`**：静默 except 守卫（`test_no_silent_except`）
+            #    会当场逮住，而它是**对的** —— 那正是本函数想避免的形状。
+            logging.getLogger(__name__).warning(
+                "review 记账失败，且告警也写不进去: %s / %s", e, e2)
+
+
+def _review_dispatch(prompt, level, tag, model_cfgs, **kw):
+    """审查专用的 `dispatch` —— 和它一模一样，只是顺手把这次的 token 记进账。
+
+    四处审查调用（crossover / 多模型审查 / QA 约束验收 / 安全审计）都走这里，
+    这样"记账"只有一份实现，不会出现"改了三处漏一处"。
+    """
+    from . import dispatcher as _disp
+    result = _disp.dispatch(prompt, level, tag, model_cfgs, **kw)
+    _record_review_tokens(result)
+    return result
+
+
 def crossover_review(task_desc, raw_output, changed_files, writer_level, writer_model="", cwd=None,
                      base_ref=""):
     """Use a DIFFERENT model to review agent output. Returns {issues,verdict,summary}.
@@ -540,8 +586,8 @@ JSON:"""
                      "source":"review_harness",
                      "detail":f"no reviewer at {review_level}"}],
                     "verdict":"retry","summary":f"no reviewer at {review_level}"}
-        result = _disp.dispatch(prompt, review_level, f"review_{writer_model or '?'}",
-                               {review_level:[chain[0]]}, cwd=cwd or "", no_tools=True)
+        result = _review_dispatch(prompt, review_level, f"review_{writer_model or '?'}",
+                                  {review_level:[chain[0]]}, cwd=cwd or "", no_tools=True)
         raw = result.executor_result.raw_output if result and result.executor_result else ""
     except Exception as e:
         return {"issues":[{"severity":"critical","line":0,
@@ -668,8 +714,8 @@ Output ONLY JSON: {{"issues":[{{"severity":"critical|warning|info","line":approx
 No issues? {{"issues":[],"verdict":"pass","summary":"no issues"}}
 JSON:"""
 
-            result = _disp.dispatch(chunk_prompt, review_level, f"mmr_{model_name[:8]}",
-                                   {review_level:[cfg]}, cwd=root, no_tools=True)
+            result = _review_dispatch(chunk_prompt, review_level, f"mmr_{model_name[:8]}",
+                                      {review_level:[cfg]}, cwd=root, no_tools=True)
             raw = result.executor_result.raw_output if result and result.executor_result else ""
 
             d = _extract_json_obj(raw)
@@ -918,7 +964,7 @@ def qa_acceptance_review(constraints, diff_text, cwd, requirements=""):
         return {"verdict": "needs_fix", "verifications": [], "summary": "无可用 QA 模型 (未验收)"}
 
     try:
-        result = _disp.dispatch(prompt, "any", "qa_acceptance", {"any": model_cfgs}, cwd=cwd,
+        result = _review_dispatch(prompt, "any", "qa_acceptance", {"any": model_cfgs}, cwd=cwd,
                                 no_tools=True)
         raw = result.executor_result.raw_output if result and result.executor_result else ""
     except Exception as e:
@@ -981,7 +1027,7 @@ severity 判定标准 —— **只有 critical/high 会拦下合并**，别把�
         ], "summary": "无可用模型"}
 
     try:
-        result = _disp.dispatch(prompt, "any", "security_audit", {"any": model_cfgs}, cwd=cwd,
+        result = _review_dispatch(prompt, "any", "security_audit", {"any": model_cfgs}, cwd=cwd,
                                 no_tools=True)
         raw = result.executor_result.raw_output if result and result.executor_result else ""
     except Exception as e:
