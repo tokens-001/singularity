@@ -27,10 +27,14 @@
 **没人停的时候，守卫必须照旧拉**。
 
 变异验证（删哪一行会红）：
-  · 去掉守卫里的 `and not _hooks.human_stopped()` → 第 1 条红；
-  · 把守卫整个删掉（恒不拉） → **第 2 条红**；
-  · `api_loop_stop` 去掉 `note_human_stop()` → 第 1 条红（经 HTTP 那条路不生效）；
-  · `api_loop_start` 去掉 `note_human_start()` → 第 3 条红。
+  · 去掉守卫里的 `and not _hooks.human_stopped()` → `test_人停过之后_…` 红；
+  · 把守卫整个删掉（恒不拉） → **`test_没人停_循环意外死了照旧拉起来` 红**（对照那两条）；
+  · `api_loop_stop` 去掉 `note_human_stop()` → `test_经HTTP停也算人停` 红；
+  · `api_loop_start` 去掉 `note_human_start()` → `test_经HTTP开也算显式开` 红。
+
+⚠️ **最后一条是补的，而且是被变异逼出来的**：原来只测了直接调 `_hooks`，
+所以把 `api_loop_start` 那句删掉**测试照样绿** —— 而我在这个 docstring 里
+**已经写了"删它会红"**。**写下没验过的变异结论，本身就是一种假绿。**
 """
 import pytest
 
@@ -118,6 +122,25 @@ def test_显式开过之后_自动拉起重新生效(monkeypatch, 拉起来记�
     _让观察者建一个任务(monkeypatch, 循环在跑=False)
 
     assert 拉起来记录 == [2], "显式开过之后，自动拉起必须重新生效"
+
+
+def test_经HTTP开也算显式开(monkeypatch):
+    """**接线**：和"经 HTTP 停"那条对称。
+
+    ⚠️ 这条是**补出来的**：原来只测了直接调 `_hooks.note_human_start()`，
+    于是把 `api_loop_start` 里的 `note_human_start()` 删掉**测试照样绿** ——
+    我在文件头还写了一句"删它会红"，**那句话当时是空话**（变异 ④ 没红才发现）。
+    """
+    from singularity.web import app as web_app
+    monkeypatch.setattr(web_app, "start_loop", lambda concurrent=1: True)
+    _hooks.note_human_stop()                      # 先造成"停过"的状态
+
+    with web_app.app.test_client() as c:
+        r = c.post("/api/loop/start", json={"concurrent": 1})
+
+    assert r.status_code == 200
+    assert _hooks.human_stopped() is False, (
+        "HTTP 显式开完没把标记清掉 ⇒ 这个守卫就永久失效了（停过一次就再也拉不起来）")
 
 
 def test_观察者自己的stop也算人停(monkeypatch):
