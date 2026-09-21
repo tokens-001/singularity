@@ -739,7 +739,7 @@ def _sse_broadcast(kind: str, msg: str, ts: float = None, extra: dict = None):
             pass
 
 
-def start_loop(concurrent: int = 1):
+def start_loop(concurrent: int = sched_config.DEFAULT_CONCURRENT):
     global _loop_thread, _loop_stop, _loop_concurrent, _loop_running, _sse_pump_thread
     with _loop_lock:
         if _loop_running:
@@ -905,7 +905,8 @@ def spa(path=""):
 @app.route("/api/loop/start", methods=["POST"])
 def api_loop_start():
     data = request.get_json(silent=True) or {}
-    concurrent = min(max(int(data.get("concurrent", 1)), 1), _MAX_CONCURRENT)
+    concurrent = min(max(int(data.get("concurrent", sched_config.DEFAULT_CONCURRENT)), 1),
+                     _MAX_CONCURRENT)
     ok = start_loop(concurrent)
     _hooks_mod.note_human_start()   # 显式开 ⇒ 自动拉起重新生效
     return jsonify({"ok": ok, "running": _loop_running, "concurrent": _loop_concurrent})
@@ -2505,8 +2506,9 @@ if __name__ == "__main__":
         _startup_log.warning("Observer WebSocket 启动失败: %s", e)
     # 自动启动调度循环
     try:
-        start_loop(concurrent=2)
-        _startup_log.info("调度循环已自动启动 (concurrent=2)")
+        start_loop(concurrent=sched_config.DEFAULT_CONCURRENT)
+        _startup_log.info("调度循环已自动启动 (concurrent=%s)",
+                          sched_config.DEFAULT_CONCURRENT)
     except Exception as e:
         _startup_log.warning("调度循环启动失败: %s", e)
     # 自动启动观察者智能体

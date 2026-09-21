@@ -38,7 +38,7 @@
 """
 import pytest
 
-from singularity.scheduler import _hooks
+from singularity.scheduler import _hooks, config
 from singularity.scheduler import _observer_tools as ot
 
 
@@ -101,7 +101,7 @@ def test_没人停_循环意外死了照旧拉起来(monkeypatch, 拉起来记�
     """
     _让观察者建一个任务(monkeypatch, 循环在跑=False)
 
-    assert 拉起来记录 == [2], (
+    assert 拉起来记录 == [config.DEFAULT_CONCURRENT], (
         "没人按过停 ⇒ 循环死了必须照旧拉起来 —— 别用一个 return 把守卫整个废掉")
 
 
@@ -121,7 +121,7 @@ def test_显式开过之后_自动拉起重新生效(monkeypatch, 拉起来记�
 
     _让观察者建一个任务(monkeypatch, 循环在跑=False)
 
-    assert 拉起来记录 == [2], "显式开过之后，自动拉起必须重新生效"
+    assert 拉起来记录 == [config.DEFAULT_CONCURRENT], "显式开过之后，自动拉起必须重新生效"
 
 
 def test_经HTTP开也算显式开(monkeypatch):
@@ -152,3 +152,38 @@ def test_观察者自己的stop也算人停(monkeypatch):
     ot._tool_control_loop("stop")
 
     assert _hooks.human_stopped() is True
+
+
+# ═══════════════ ④ 并发只有**一个**来源（2026-09-21：2 → 4）═══════════════
+
+def test_HTTP不带body时用默认并发(monkeypatch):
+    """🔴 **接线**：`/api/loop/start` 不带 `concurrent` 时，用的必须是那个**单一来源**。
+
+    改之前这里写死 `data.get("concurrent", 1)`，而启动那次和观察者那两处写死 `2`
+    ⇒ **同一个数有三套值**，改一处不改另一处就是"改了没生效"，
+    而 `/api/loop/status` 只会报一个 `concurrent`，看不出来源。
+
+    变异：把那行的 `config.DEFAULT_CONCURRENT` 换回裸 `1` ⇒ 本条红。
+    """
+    from singularity.web import app as web_app
+    got = []
+    monkeypatch.setattr(web_app, "start_loop", lambda concurrent: got.append(concurrent) or True)
+
+    with web_app.app.test_client() as c:
+        r = c.post("/api/loop/start")          # **不带 body**
+
+    assert r.status_code == 200
+    assert got == [config.DEFAULT_CONCURRENT], (
+        f"不带 body 时开的是 {got} —— HTTP 那条路又和默认值分家了")
+
+
+def test_显式传并发仍然听调用方的(monkeypatch):
+    """**对照**：显式传了就照传的来 —— 别为了统一来源把入参也覆盖掉。"""
+    from singularity.web import app as web_app
+    got = []
+    monkeypatch.setattr(web_app, "start_loop", lambda concurrent: got.append(concurrent) or True)
+
+    with web_app.app.test_client() as c:
+        c.post("/api/loop/start", json={"concurrent": 3})
+
+    assert got == [3]

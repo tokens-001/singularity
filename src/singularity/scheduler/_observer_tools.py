@@ -165,7 +165,7 @@ def _tool_create_task(description: str, level: str = "any") -> dict:
         from singularity.scheduler import _hooks
         if (not _hooks.loop_status().get("running")
                 and not _hooks.human_stopped()):
-            _hooks.start_loop(concurrent=2)
+            _hooks.start_loop(concurrent=config.DEFAULT_CONCURRENT)
         return {"ok": True, "task_id": task.id, "type": route_type,
                 # 把"没判出来"摆到返回值里 —— 建任务的那一方（观察者）当场看得见，
                 # 不用等以后翻盘才发现当时就没判。
@@ -211,7 +211,7 @@ def _tool_control_loop(action: str) -> dict:
     from singularity.scheduler import _hooks
     action = action.lower().strip()
     if action == "start":
-        ok = _hooks.start_loop(concurrent=2)
+        ok = _hooks.start_loop(concurrent=config.DEFAULT_CONCURRENT)
         _hooks.note_human_start()   # 显式开 ⇒ 自动拉起重新生效
         return {"ok": ok, "running": True, "message": "调度循环已启动"}
     elif action == "stop":
