@@ -2055,11 +2055,17 @@ def _phase_models_warning() -> str:
     cfg = phase_models.load()
     planning = cfg.get("planning") or []
     extract = cfg.get("extract") or []
+    # ⚠️ **收集全部，不要 `return` 掉第一条**（2026-09-21）——
+    # 原来一条一条 `return`，于是**同时踩两处时只看得到第一处**。
+    # 真机现场：`extract[0]` 在委员会里（那时 glm 刚被我加进 planning）+ `executing` 只配一家，
+    # 结果**新加的那条兜底告警压根显示不出来** —— 在正需要它的配置里隐身。
+    # 单数键 `warning` 保留（前端 `useRun` 读的就是它），只是把多条拼起来。
+    warns = []
     if extract and extract[0] in planning:
-        return (f"提取员 {extract[0]} 也在架构委员里 → 融合时会自动换成兜底模型"
-                f"（选手不能给自己出题）")
+        warns.append(f"提取员 {extract[0]} 也在架构委员里 → 融合时会自动换成兜底模型"
+                     f"（选手不能给自己出题）")
     if len(planning) == 1:
-        return f"架构只配了 1 个模型（{planning[0]}）→ 委员会关闭，退化为单模型出方案"
+        warns.append(f"架构只配了 1 个模型（{planning[0]}）→ 委员会关闭，退化为单模型出方案")
     # 2026-09-21 加：**同一形状的第三处**（前两处正是上面那两条）。
     # `executing` 只配一家 ⇒ `_exec.py` 里那句「**容灾: 切换下一个 agent**」对实现任务
     # 是**死代码**（`fallback_chain` 过滤掉唯一一家之后就是空的），而**没有任何地方说过**。
@@ -2067,9 +2073,9 @@ def _phase_models_warning() -> str:
     # —— 不是"换了都不成"，是"一次都没换过"，因为链里没有第二个人。
     thin = [p for p in _FALLBACK_PHASES if len(cfg.get(p) or []) == 1]
     if thin:
-        return ("；".join(f"{p} 只配了 1 个模型（{(cfg.get(p) or [''])[0]}）" for p in thin)
-                + " → **失败时没有兜底可切**（容灾链是空的，那个阶段换不了模型）")
-    return ""
+        warns.append("；".join(f"{p} 只配了 1 个模型（{(cfg.get(p) or [''])[0]}）" for p in thin)
+                     + " → **失败时没有兜底可切**（容灾链是空的，那个阶段换不了模型）")
+    return "；".join(warns)
 
 
 @app.route("/api/phase-models", methods=["GET"])

@@ -116,6 +116,22 @@ class TestWarnings:
                        json={"map": {"planning": ["a", "b"], "researching": ["only"]}}).get_json()
         assert "researching" in d.get("warning", "")
 
+    def test_two_problems_report_both_not_just_the_first(self, client):
+        """🔴 2026-09-21 真机：同时踩两处时**只看得到第一处** —— 新加的那条兜底告警
+        在我正需要它的配置里（extract 在委员会里 + executing 只配一家）**隐身**。
+
+        `warning` 是单数键（前端 `useRun` 读它），所以修法是**把多条拼起来**，
+        不是加第二个键 —— 加键等于前端照样只看一条。
+        """
+        d = client.put("/api/phase-models",
+                       json={"map": {"planning": ["a", "b"], "extract": ["a"],
+                                     "executing": ["only"]}}).get_json()
+        assert "提取员" in d["warning"], d["warning"]
+        # ⚠️ 判据**只许用第二条独有的字串**：第一版我写的是 `"兜底" in warning`，
+        # 而**第一条自己的文案里也有"兜底"**（"换成兜底模型"）⇒ 变不变异都绿（假绿）。
+        assert "失败时没有兜底可切" in d["warning"], \
+            f"第二条被第一条吃掉了：{d['warning']}"
+
     def test_unconfigured_phase_is_not_a_warning(self, client):
         """**没配 ≠ 配了一家**：没配是"回退全池"（候选最多），配一家才是"没有兜底"。"""
         d = client.put("/api/phase-models", json={"map": {"planning": ["a", "b"]}}).get_json()
