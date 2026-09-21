@@ -91,3 +91,32 @@ class TestWarnings:
         d = client.put("/api/phase-models",
                        json={"map": {"planning": ["only"], "extract": ["only"]}}).get_json()
         assert "提取员" in d["warning"]
+
+    # ── 「配了一家 ⇒ 某个能力静默失效」的**第三处**（2026-09-21）────────────
+    # `executing` 只配一家 ⇒ `_exec.py` 那句「容灾: 切换下一个 agent」对实现任务是
+    # **死代码**（链过滤掉唯一一家后就是空的），而此前**没有任何地方说过这件事**。
+    # 真机实测：28 个任务里换过模型的 **0 个** —— 不是"换了都不成"，是"一次都没换过"。
+
+    def test_executing_with_one_model_warns_no_fallback(self, client):
+        d = client.put("/api/phase-models",
+                       json={"map": {"planning": ["a", "b"], "executing": ["only"]}}).get_json()
+        assert d["ok"] is True
+        assert "warning" in d, "配一家 = 容灾链是空的，这件事必须出声"
+        assert "兜底" in d["warning"] and "executing" in d["warning"]
+
+    def test_executing_with_two_models_is_the_normal_case(self, client):
+        """反例：配了两家就该闭嘴 —— 别把它修成常亮红。"""
+        d = client.put("/api/phase-models",
+                       json={"map": {"planning": ["a", "b"], "executing": ["x", "y"]}}).get_json()
+        assert "warning" not in d
+
+    def test_researching_has_the_same_rule(self, client):
+        """`researching` 的语义也是「第 1 个 = 主力，其余兜底」—— 同一个洞，同一张表。"""
+        d = client.put("/api/phase-models",
+                       json={"map": {"planning": ["a", "b"], "researching": ["only"]}}).get_json()
+        assert "researching" in d.get("warning", "")
+
+    def test_unconfigured_phase_is_not_a_warning(self, client):
+        """**没配 ≠ 配了一家**：没配是"回退全池"（候选最多），配一家才是"没有兜底"。"""
+        d = client.put("/api/phase-models", json={"map": {"planning": ["a", "b"]}}).get_json()
+        assert "warning" not in d

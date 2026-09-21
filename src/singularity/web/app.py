@@ -2039,8 +2039,14 @@ def api_phase_roles_update():
 _PHASE_MODEL_LABELS = _PHASE_LABELS + [("extract", "融合提取")]
 
 
+#: 语义是「第 1 个 = 主力，**其余兜底**」的阶段 —— 只配一家 = 兜底链是空的。
+#: 判据是**这张表**，不是去匹配 `PHASE_HINTS` 的文案（改个措辞就静默失效）。
+#: ⚠️ `reviewing`（全部 = 审查员）和 `extract`（第 1 个 = 融合提取员）语义不同，不在此表。
+_FALLBACK_PHASES = ("researching", "executing")
+
+
 def _phase_models_warning() -> str:
-    """配完给一句提醒 —— 这两种情况功能不坏，但达不到字面意思。
+    """配完给一句提醒 —— 这些情况功能不坏，但达不到字面意思。
 
     用**单数键 `warning`**：前端 `useRun`（lib/toast.ts）读的就是 `r.warning`。
     不返回 400：planning 和 extract 是两次独立编辑，硬挡会让另一次无关保存突然失败。
@@ -2054,6 +2060,15 @@ def _phase_models_warning() -> str:
                 f"（选手不能给自己出题）")
     if len(planning) == 1:
         return f"架构只配了 1 个模型（{planning[0]}）→ 委员会关闭，退化为单模型出方案"
+    # 2026-09-21 加：**同一形状的第三处**（前两处正是上面那两条）。
+    # `executing` 只配一家 ⇒ `_exec.py` 里那句「**容灾: 切换下一个 agent**」对实现任务
+    # 是**死代码**（`fallback_chain` 过滤掉唯一一家之后就是空的），而**没有任何地方说过**。
+    # 真机实测（09-21 凌晨）：账上 28 个任务，按 task_id 排出来的模型序列**换过的 0 个**
+    # —— 不是"换了都不成"，是"一次都没换过"，因为链里没有第二个人。
+    thin = [p for p in _FALLBACK_PHASES if len(cfg.get(p) or []) == 1]
+    if thin:
+        return ("；".join(f"{p} 只配了 1 个模型（{(cfg.get(p) or [''])[0]}）" for p in thin)
+                + " → **失败时没有兜底可切**（容灾链是空的，那个阶段换不了模型）")
     return ""
 
 
