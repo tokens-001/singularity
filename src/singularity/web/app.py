@@ -907,17 +907,24 @@ def api_loop_start():
     data = request.get_json(silent=True) or {}
     concurrent = min(max(int(data.get("concurrent", 1)), 1), _MAX_CONCURRENT)
     ok = start_loop(concurrent)
+    _hooks_mod.note_human_start()   # 显式开 ⇒ 自动拉起重新生效
     return jsonify({"ok": ok, "running": _loop_running, "concurrent": _loop_concurrent})
 
 @app.route("/api/loop/stop", methods=["POST"])
 def api_loop_stop():
     ok = stop_loop()
-    return jsonify({"ok": ok, "running": _loop_running})
+    # 🔴 **记一笔"是人停的"**（2026-09-21）：观察者建/路由任务那句末尾有个
+    # 「确保调度循环在跑」，它原来分不清"意外死了"和"人停的" ⇒ 这里停完，
+    # 那边下一句就拉回来（实测 19:15 停、19:17 被拉起），真停只能 kill -9。
+    _hooks_mod.note_human_stop()
+    return jsonify({"ok": ok, "running": _loop_running, "stopped_by_human": True})
 
 @app.route("/api/loop/status")
 def api_loop_status():
     events = list(_loop_events)[:20]
     return jsonify({"running": _loop_running, "concurrent": _loop_concurrent,
+                    # 让"它为什么没自己起来"当场可查 —— 否则那状态和"循环活着但没活干"一样
+                    "stopped_by_human": _hooks_mod.human_stopped(),
                     "events": [{"kind": e["kind"], "msg": e["msg"], "ts": e["ts"]} for e in events]})
 
 # ═══════════════════════════════════════════════════════════

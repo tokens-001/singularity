@@ -16,6 +16,34 @@ _loop_stop: Callable[[], bool] | None = None
 _loop_status: Callable[[], dict] | None = None
 _event_sink: Callable[..., None] | None = None
 
+# ── 「调度循环被人按了停」（2026-09-21）─────────────────────────────
+#
+# 观察者建/路由任务那句末尾写着「确保调度循环在跑」：
+#     if not loop_status().get("running"): start_loop(concurrent=2)
+# 而它**分不清"循环意外死了"和"人明确按了停"** ⇒ 人一按停，它下一句就拉回来。
+# 实测：19:15 停、**19:17 又被拉起来派活** —— 真停只能 `kill -9`（没有停观察者的接口）。
+#
+# ⇒ 这里只记一笔"**是人停的**"，让那句守卫问一句再决定。
+# ⚠️ **进程退出那条路（`_graceful_shutdown`）不要调它** —— 那不是"人停的"。
+_stopped_by_human: bool = False
+
+
+def note_human_stop() -> None:
+    """人来按的停：界面的 `/api/loop/stop`、观察者的 `control_loop("stop")`。"""
+    global _stopped_by_human
+    _stopped_by_human = True
+
+
+def note_human_start() -> None:
+    """人显式把循环开起来 ⇒ 回到正常，自动拉起重新生效。"""
+    global _stopped_by_human
+    _stopped_by_human = False
+
+
+def human_stopped() -> bool:
+    """循环当前是不是「人按停的」。**只在"要不要自动拉起"这一个判据上用。**"""
+    return _stopped_by_human
+
 
 def register_loop(start: Callable[[int], bool], stop: Callable[[], bool],
                   status: Callable[[], dict]) -> None:

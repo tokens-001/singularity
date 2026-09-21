@@ -158,8 +158,13 @@ def _tool_create_task(description: str, level: str = "any") -> dict:
                           route_gate_unknown=gate_unknown,
                           execution_mode=mode)
         # 确保调度循环在跑（走 _hooks，不 import web —— 见 _hooks 模块说明）
+        # 🔴 **但"人明确按了停"就不拉**（2026-09-21）。这句原来只问"在不在跑"，
+        #    分不清「循环意外死了」和「人停的」⇒ 人一按停它下一句就拉回来
+        #    （实测 19:15 停、19:17 又被拉起来派活），真停只能 kill -9。
+        #    ⚠️ **意外死了照旧拉** —— 这里加的是"谁停的"这份信息，不是关掉这个守卫。
         from singularity.scheduler import _hooks
-        if not _hooks.loop_status().get("running"):
+        if (not _hooks.loop_status().get("running")
+                and not _hooks.human_stopped()):
             _hooks.start_loop(concurrent=2)
         return {"ok": True, "task_id": task.id, "type": route_type,
                 # 把"没判出来"摆到返回值里 —— 建任务的那一方（观察者）当场看得见，
@@ -207,10 +212,13 @@ def _tool_control_loop(action: str) -> dict:
     action = action.lower().strip()
     if action == "start":
         ok = _hooks.start_loop(concurrent=2)
+        _hooks.note_human_start()   # 显式开 ⇒ 自动拉起重新生效
         return {"ok": ok, "running": True, "message": "调度循环已启动"}
     elif action == "stop":
         ok = _hooks.stop_loop()
-        return {"ok": ok, "running": _hooks.loop_status().get("running", False), "message": "调度循环已停止"}
+        _hooks.note_human_stop()    # 🔴 显式停 ⇒ 别再被"确保循环在跑"那句拉回来
+        return {"ok": ok, "running": _hooks.loop_status().get("running", False),
+                "message": "调度循环已停止（不会再被自动拉起）"}
     return {"ok": True, **_hooks.loop_status()}
 
 def _tool_list_projects() -> list[dict]:
