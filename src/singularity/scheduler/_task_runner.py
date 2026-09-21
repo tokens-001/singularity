@@ -20,6 +20,7 @@ from singularity.scheduler._exec import (
     _run_with_retry,
     _save_trace,
     decompose,
+    read_partial_started_at,
 )
 from singularity.scheduler._planner import (
     _materialize_in_main,
@@ -54,6 +55,58 @@ from singularity.scheduler.tracker import TaskStatus
 # ═══════════════════════════════════════════════════════════════
 # 任务收尾的三件事（两条路径共用）
 # ═══════════════════════════════════════════════════════════════
+
+def requeue_if_never_dispatched(task) -> bool:
+    """**一次都没派发过** ⇒ 回 PENDING 重排（带次数上限）。改了终态返回 True。
+
+    🔴 来历（2026-09-21 `round-20260921c` 真机，用户拍板）：
+    并发只有 2、任务又互相依赖（都得等脚手架），**排在后面的任务，900 秒有效期
+    在排队时就被等没了** —— 那一轮 11 个任务里 8 个失败，其中 **3 个一次模型调用
+    都没发起过**（T5/T8/T11），却被判到终态；T5 的判词甚至是 QA 的
+    「无文件改动；检测到 1 个偷懒信号」——**读起来像它偷懒，其实它没轮到**。
+    实测时刻：T8 死在 18:47:08，而 T6 最后一次派发是 18:47:07 —— 它是**在别人
+    让出位子后 1 秒被砍的**（同形的还有 T5@18:33:36、T10/T11@19:00:39）。
+
+    判据用现成的 `read_partial_started_at`（它就是为"压根没发起过"造的，
+    见 `_exec._mark_dispatch_started`）—— **不新加字段**。
+
+    ⚠️ **探不出来就不改判定**（返回 False，照旧判终态）：判据本身失效时
+    默认行为必须是最保守的那一边，不能因为探测失败就把任务放回队列转圈。
+    ⚠️ 次数用现成的 `retry_count` / `max_retries` —— 它在这个文件里的语义
+    本来就是"这个任务被重排了几次"（见下面 QA 中间态那段）。
+    """
+    try:
+        if read_partial_started_at(task.id) is not None:
+            return False                      # 派发过 ⇒ 那是"做过但没成"，照旧判终态
+    except Exception as e:
+        # 判据本身坏了 ⇒ 不改判定（返回 False，照旧判终态）。**但要出声** ——
+        # 哑了的话"这条规则从没生效"和"这轮没任务落进来"长得一模一样。
+        witness.warn("orch", f"requeue_probe_failed:{task.id}:"
+                             f"{type(e).__name__}:{e}"[:180],
+                     key="requeue_probe_failed")
+        return False
+    rc = int(getattr(task, "retry_count", 0) or 0)
+    cap = int(getattr(task, "max_retries", 3) or 3)
+    if rc >= cap:
+        return False                          # 重排到上限 —— 不再无限转
+    try:
+        tracker.transition(
+            task.id, TaskStatus.PENDING,
+            error=f"未轮到：排队把 {config.TASK_DEADLINE_S:.0f}s 死线等没了、"
+                  f"一次都没派发 → 重新入队（第 {rc + 1}/{cap} 次）",
+            retry_count=rc + 1)
+    except Exception as e:
+        witness.warn("orch", f"requeue_transition_failed:{task.id}:"
+                             f"{type(e).__name__}:{e}"[:180],
+                     key="requeue_transition_failed")
+        return False
+    # ⚠️ 这两句**不包 try**：`witness.warn` 自己保证不上抛（见 `witness.warn` 的 S5 修复），
+    # 包一层 `except: pass` 反而会被 `test_no_new_silent_except` 判成新的静默 except。
+    witness.warn("orch", f"requeue_never_dispatched:{task.id}:"
+                         f"第{rc + 1}/{cap}次"[:180],
+                 key="requeue_never_dispatched")
+    return True
+
 
 def _archive_task_outcome(task, route, disp_result, failure_mode: str = "") -> None:
     """任务结束后归档：经验 / 用量 / 路由学习。三件都写盘。
@@ -326,8 +379,15 @@ class TaskRunner:
                 witness.warn('orch', f'{e}')
         if qa_verdict == "fail":
             qa_blocked = qa_fail = True
-            tracker.transition(task.id, TaskStatus.FAILED,
-                             error="QA:fail: " + "; ".join(qa_issues[:2]))
+            # 🔴 「一次都没派发过」不是 QA 判词能描述的事 —— 它压根没轮到。
+            # 放在**终态判定这一处**（而不是某一条来路上）是有意的：不管它是从
+            # QA 判死、还是从收割超时过来的，这个判据都兜得住（"兜底要穷举它绕过了什么"）。
+            if requeue_if_never_dispatched(task):
+                qa_fail = False          # 没进终态：它还活着，别把它当失败推进
+                reason += "; 未轮到→PENDING"
+            else:
+                tracker.transition(task.id, TaskStatus.FAILED,
+                                 error="QA:fail: " + "; ".join(qa_issues[:2]))
         elif qa_verdict and qa_verdict != "pass":
             qa_blocked = True
             # 修复 reap bug 根因#2: QA 中间态(retry/escalate/block)转 PENDING 重新入队,

@@ -21,7 +21,11 @@ from singularity.scheduler import router as router_mod
 from singularity.scheduler import snapshot as snap_mod
 from singularity.scheduler._exec import _save_trace
 from singularity.scheduler._planner import _maybe_complete_parents
-from singularity.scheduler._task_runner import TaskRunner, _archive_task_outcome
+from singularity.scheduler._task_runner import (
+    TaskRunner,
+    _archive_task_outcome,
+    requeue_if_never_dispatched,
+)
 
 # ── 队列调度所需 (精简后) ──────────────────────────────────
 from singularity.scheduler._types import _pending_sse_events
@@ -583,6 +587,15 @@ def _reap_futures(running_futures: dict, pending_batches: dict,
         t, route, snap, pre, submitted_at = running_futures.get(fut, (None,)*5)
         if t is not None and now - submitted_at > deadline:
             running_futures.pop(fut)
+            # 🔴 **「没轮到」不是「没做出来」**（2026-09-21 `round-20260921c`，用户拍板）。
+            # 并发只有 2 时，排在后面的 future 会**一直没被 worker 取走**，
+            # 死线一到就被这一刀砍成 FAILED —— 而它一次模型调用都没发起过。
+            # ⚠️ **必须挡在下面那三件事之前**：写"停"标记（`by:timeout`）本意是让
+            # **活着的执行线程**提前收手，而这个任务压根没起来；给它留一个超时标记，
+            # 下一轮重排上来会被 `_check_cancelled` 读成"被取消了"，直接白跑一次。
+            if requeue_if_never_dispatched(t):
+                results.append((t.id, "requeue_never_dispatched", None))
+                continue
             # ⚠️ **走到这儿 = 执行器没能自己收尾** —— 必须出声。
             # 执行器自带提前量（`TASK_DEADLINE_S − TASK_WRAPUP_MARGIN_S`，见 config），
             # 设计上它**该在外层这刀之前**带着"已知事实"回来（`error_kind="deadline"`，

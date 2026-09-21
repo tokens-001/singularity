@@ -20,6 +20,17 @@ def _git(cwd, *args):
     subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True)
 
 
+def _pretend_dispatched(monkeypatch):
+    """让假任务看起来"进过 dispatch"（生产里是 `_exec._mark_dispatch_started`）。
+
+    🔴 2026-09-21 起**必需**：从没派发过的任务在收割时**回 PENDING 重排**、
+    不再走超时分支；而本文件的用例测的**全是超时分支**（标记来历 / 抢救 / 进记忆），
+    它们的假任务没有 sidecar ⇒ 会被判成"没轮到"。**这是夹具跟不上新语义。**
+    """
+    import singularity.scheduler._task_runner as tr
+    monkeypatch.setattr(tr, "read_partial_started_at", lambda _tid: 1.0)
+
+
 def _mk_worktree(tmp_path, task_id):
     """造一个"跑了半截"的 worktree：有未提交的新文件。"""
     repo = tmp_path / "proj"
@@ -220,6 +231,7 @@ class TestTimeoutAlsoIndexesIntoMemory:
         # `_reap_futures` 开头会"等第一个 future 完成，最多 10s"——假 future 永远
         # 不完成，桩掉它，否则每个用例白等 10 秒（纯测试开销，不是产品行为）。
         monkeypatch.setattr(orch, "wait", lambda *a, **k: None)
+        _pretend_dispatched(monkeypatch)   # 见本文件顶部：这是"跑过再超时"的用例
 
         seen = {}
         monkeypatch.setattr(mem, "index_task", lambda **kw: seen.update(kw))
@@ -252,6 +264,7 @@ class TestTimeoutAlsoIndexesIntoMemory:
         # `_reap_futures` 开头会"等第一个 future 完成，最多 10s"——假 future 永远
         # 不完成，桩掉它，否则每个用例白等 10 秒（纯测试开销，不是产品行为）。
         monkeypatch.setattr(orch, "wait", lambda *a, **k: None)
+        _pretend_dispatched(monkeypatch)   # 见本文件顶部：这是"跑过再超时"的用例
 
         def boom(**kw):
             raise RuntimeError("记忆挂了")
@@ -283,6 +296,7 @@ class TestTimeoutMarkerTellsItsOrigin:
     def _drive_timeout(self, monkeypatch, tmp_path) -> object:
         """跑一遍 `_reap_futures` 的超时分支，返回它落下的那个标记文件。"""
         monkeypatch.setattr(orch, "wait", lambda *a, **k: None)      # 别白等 10s
+        _pretend_dispatched(monkeypatch)   # 见本文件顶部：这是"跑过再超时"的用例
         monkeypatch.setattr(orch.config, "CANCEL_DIR", tmp_path)
         monkeypatch.setattr(orch.config, "ensure_dirs", lambda: None)
         monkeypatch.setattr(orch.tracker, "transition", lambda *a, **k: None)
@@ -309,6 +323,7 @@ class TestTimeoutMarkerTellsItsOrigin:
         """同一个文件、同一个消费者 —— 唯一能区分的就只有 body。"""
         t = type("T", (), {"id": "t-user", "route_type": "default"})()
         monkeypatch.setattr(orch, "wait", lambda *a, **k: None)
+        _pretend_dispatched(monkeypatch)   # 见本文件顶部：这是"跑过再超时"的用例
         monkeypatch.setattr(orch.config, "CANCEL_DIR", tmp_path)
         monkeypatch.setattr(orch.config, "ensure_dirs", lambda: None)
         monkeypatch.setattr(orch.tracker, "transition", lambda *a, **k: None)

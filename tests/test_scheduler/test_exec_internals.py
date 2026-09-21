@@ -447,6 +447,12 @@ class TestFinalizeResult:
             "chan_mod.save_report": lambda r: None,
             "snap_mod.rollback": lambda s, **kw: None,
             "tracker.transition": lambda tid, status, **kw: None,
+            # 🔴 2026-09-21 起必需：`finalize` 里多了一道「**从没派发过 ⇒ 回 PENDING 重排**」
+            # （`requeue_if_never_dispatched`，来历见 `_task_runner` 里那个函数）。
+            # 这里的假任务 id 是编的、盘上没有 sidecar ⇒ 会被判成"没轮到"，
+            # 于是 QA 判 fail 反而**不落 FAILED** —— 那是夹具不真实，不是产品行为变了：
+            # 本文件的用例讲的都是"任务跑过了"（没跑过的话，QA 那条判词本身就没有意义）。
+            "read_partial_started_at": lambda _tid: 1.0,
             "tracker.create": lambda desc, **kw: type("NT", (), {"id": "fix00001"})(),
             "tracker.TaskStatus": TaskStatus,
             "time.time": lambda: 1782000000.0,
