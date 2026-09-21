@@ -20,6 +20,7 @@
 只读。不写任何文件、不碰状态机。
 """
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -239,6 +240,51 @@ def facts(pid: str) -> None:
     print("\n（以上都是事实，判不判「成了」由你定。→ 来源路径都印在上面的括号里）")
 
 
+_CATEGORIES = ("实现模块", "接线/集成", "写测试", "验收")
+
+
+def _task_title(desc: str) -> str:
+    """任务描述的第一行标题（`[T3] 实现 stats 模块：…` ⇒ `实现 stats 模块`）。"""
+    m = re.match(r"\s*\[T\d+\]\s*([^:：]*)", desc or "")
+    return (m.group(1) if m else (desc or "")[:40]).strip()
+
+
+def _category_of(desc: str) -> str:
+    """按**标题**分类 —— **不判正文**。
+
+    🔴 判正文会歪，而且歪得很自然：实现任务的描述里几乎全都带
+    「与 tests/test_filter.py」这句（它就是在交代"连测试一起写"）⇒ 按正文分会把
+    实现任务**整批**判成「写测试」，四轮下来一栏 6/6、另一栏 0/6（09-21 我第一版就是这个错）。
+    """
+    t = _task_title(desc)
+    if "只读" in t or "独立验收" in t:
+        return "验收"
+    if "测试" in t:
+        return "写测试"
+    if "端到端" in t or "集成" in t or "接线" in t or "cli" in t.lower() or "入口" in t:
+        return "接线/集成"
+    return "实现模块"
+
+
+def _category_line(ts: list) -> str:
+    """按任务类别分栏。
+
+    「过」用的是**任务状态 `done`**，不是上面那个"真进仓"。为什么不用进仓：
+    🔴 **只读验收任务按定义没有产物**（`changed_files=[]`），拿进仓当判据它**永远是 0**
+    —— 2026-09-21 实测：d 轮的 T7 状态是 done、交付事实也对，进仓那栏却是 0/1。
+    反过来，这也意味着**这一行和上面那行的"过"不是同一把尺**：两数只在
+    "没有只读任务"的轮次里恰好相等（c 轮相等，d 轮差 1）。**别把它俩相加或相减。**
+    """
+    agg = {c: [0, 0] for c in _CATEGORIES}
+    for t in ts:
+        c = _category_of(t.get("description", ""))
+        agg[c][0] += 1
+        if t.get("status") == "done":
+            agg[c][1] += 1
+    return "     按类（过=任务 done）：" + " · ".join(
+        f"{c} {agg[c][1]}/{agg[c][0]}" for c in _CATEGORIES if agg[c][0])
+
+
 def _round_lines(proj) -> list:
     """一轮 = 两行。第 1 行是身份，第 2 行是**固定顺序**的事实 —— 顺序固定是为了让几轮
     叠着看时同一件东西落在同一列上（"摆在一起"要的正是这个）。"""
@@ -272,13 +318,15 @@ def _round_lines(proj) -> list:
                 f"   |   没进仓 {len(nm['tasks'])} 任务 · +{nm['insertions']} 行"
                 f" · 两栏都在 {len(both)} 个"
                 + (f"（{', '.join(both)}）" if both else ""))
+        cats = _category_line(ts)
     except Exception as e:
         body = f"     ⚠️ 集成读不出来：{type(e).__name__}: {e}"
+        cats = ""
 
     rows = _ledger_rows(proj.id)
     tok = f"{sum(r.get('tokens', 0) or 0 for r in rows):,} tokens" if rows else "无账（下界）"
     body += f"   |   {tok}"
-    return [head, body]
+    return [head, body] + ([cats] if cats else [])
 
 
 def rounds_table(limit: int | None = None) -> None:
@@ -299,6 +347,11 @@ def rounds_table(limit: int | None = None) -> None:
     print(f"跨轮次对照（{len(pids)} 轮，按创建时刻，越靠下越新）")
     print("  `进仓` = 真躺在项目仓 HEAD 树上的产物 —— **不是**「提交在不在历史里」；"
           "行数一律连着文件名读。")
+    # 🔴 分栏那一行是**为了治一个假象**：总分会被最大、也最容易的那一栏稀释
+    # （四轮实测：实现模块 0/4→1/6→5/5→4/4 一路修好，而它每轮都是最大那栏
+    # ⇒ `57% / 58%` 这两个总数基本只是在说"实现模块过了没"）。**看分栏，别只看总数。**
+    print("  `按类` = 按任务**标题**分（实现模块 / 接线·集成 / 写测试 / 验收），"
+          "过 = **任务状态 done** —— ⚠️ 和上面`进仓`不是同一把尺（只读任务无产物，进仓恒 0），别相加。")
     print()
     for pid in pids:
         proj = proj_mod.load(pid)
