@@ -75,7 +75,10 @@ def record(project, extra: dict | None = None) -> dict:
             if _status_str(r) == "done":
                 done += 1
     except Exception:
-        done = 0
+        # S2：失败写 0 = **编造"一条都没成"**（缺值有人问，0 没人问）。
+        # 同类不同命：紧挨着的 `cost` 早就是 `None` 了。这一格会经 `digest()`
+        # 拼进架构 prompt 的"上一轮实际发生了什么" —— 编造的是**事实**。
+        done = None
     cost = None
     try:
         from singularity.scheduler._token_budget import _budget
@@ -140,10 +143,14 @@ def digest(limit: int = 5) -> str:
         return ""
     lines = []
     for r in rows:
-        fail = (r.get("tasks_total", 0) or 0) - (r.get("tasks_done", 0) or 0)
-        bits = [f"任务 {r.get('tasks_done', 0)}/{r.get('tasks_total', 0)} 成功"]
-        if fail > 0:
-            bits.append(f"失败 {fail}")
+        # ⚠️ `tasks_done` 可能是 `None`（那一轮数不出来，见上面 S2 那处）。
+        # **不能拿 `or 0` 折算** —— 那会把"不知道"重新写成"一条都没成"，
+        # 正是上面刚拆掉的那个编造，只是换了个地方编。未知就印 `?`、也不报"失败 N"。
+        _done = r.get("tasks_done")
+        _total = r.get("tasks_total", 0) or 0
+        bits = [f"任务 {_done if _done is not None else '?'}/{_total} 成功"]
+        if _done is not None and _total - _done > 0:
+            bits.append(f"失败 {_total - _done}")
         # ⚠️ 这里原来还有一句 `if r.get("fix_round"): "返工 N 轮"` —— **永不触发**
         #    （`project.fix_round` 全仓没有 `+= 1`，恒为 0）。2026-09-19 连同字段一起删了。
         #    真要回答"返工了几轮"，现成的是 `review_failures` / `integrate_failures`

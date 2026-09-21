@@ -84,10 +84,16 @@ class TestRecord:
         assert "拆不出任务" in row["detail"]
 
     def test_never_raises_on_bad_input(self, ledger, monkeypatch):
+        """不抛**不变**；但数不出来时写 `None`，不写 0。
+
+        ⚠️ 这条断言 2026-09-21 **反向改过**（原来是 `== 0`）：写 0 是把"不知道"
+        说成"**一条都没成**" —— 缺值有人问，0 没人问。而这一格会经 `digest()`
+        拼进架构 prompt 的"上一轮实际发生了什么"，编造的是**事实**。
+        """
         monkeypatch.setattr(tracker, "read_task",
                             lambda tid: (_ for _ in ()).throw(RuntimeError("磁盘挂了")))
         row = pl.record(_proj(task_ids=["a"]))          # 不抛
-        assert row["tasks_done"] == 0
+        assert row["tasks_done"] is None
 
 
 class TestDigest:

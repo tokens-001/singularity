@@ -254,8 +254,18 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                 quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.3)
                 validation.action = "retry"
                 validation.unverified.append(f"安全扫描: {len(_sec)} 处危险模式")
-        except Exception:
-            pass
+        except Exception as e:
+            # S4「假干净」：**"扫描没跑成" ≠ "扫描没发现问题"** —— 这里原来裸 `pass`，
+            # 于是扫描自己挂掉时，这份改动照写"没发现危险代码"。
+            # 它是零成本前置防线（不过模型、正则而已），本该是最不该静默的一道。
+            # 同函数下面的 LLM 安全审计那支早就把「没跑成」和「发现了漏洞」分开播报了
+            # （`安全审计**未完成**（不是发现了漏洞）`），这处漏了 —— 同一份报告里两种口径。
+            _scan_err = f"{type(e).__name__}: {e}"
+            quality["warnings"].append(
+                f"本地安全扫描未完成（不是没发现危险代码）: {_scan_err}")
+            validation.unverified.append(
+                f"本地安全扫描**未完成**（不是没发现危险代码）: {_scan_err}")
+            witness.warn("review", f"security_scan_failed: {_scan_err}")
 
     # 本次改动是否被判为"小改动"（单文件 + diff<50 行，且**必须**有基准可比）。
     # 基准可用时它是真判据；基准不可用时 `_is_trivial_change` 返回 False（fail-closed），

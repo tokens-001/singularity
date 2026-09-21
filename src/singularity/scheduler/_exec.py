@@ -171,8 +171,13 @@ def _persist_partial_usage(task_id: str, level: str, model: str, delta: int,
             except Exception:
                 pass
         p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    except Exception:
-        pass    # 落盘失败不该把任务带崩 —— 记不记成账是次要的
+    except Exception as e:
+        # S6：**这份侧车是超时任务唯一的账**（收尾记账走不到，见函数头）——
+        # 写失败 = 整笔账没了。原注释写"记不记成账是次要的"，那是**把两个后果当成一个**：
+        # 对这个任务而言确实次要（它照旧不该被带崩、不上抛），但代价落在**后面所有
+        # "这一轮烧了多少"的判断**上 —— 少一笔，而没人知道少了。
+        # 所以：不上抛不变，但必须出声。
+        witness.warn("exec", f"partial_usage_persist_failed: {task_id} {type(e).__name__}: {e}")
 
 
 def _dispatch_budget_s(ctx) -> float | None:

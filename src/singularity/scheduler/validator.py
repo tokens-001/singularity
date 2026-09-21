@@ -270,6 +270,7 @@ def run_project_tests(cwd=None):
         (["npm","test","--","--silent"],"npm"),
     ]
     ran_but_empty: list[str] = []   # 跑起来了、但**没找到测试**的 runner
+    broken_runners: list[str] = []  # 跑起来了、但**没跑完**（超时/权限…）的 runner
     for cmd, name in runners:
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=60, cwd=root)
@@ -318,14 +319,26 @@ def run_project_tests(cwd=None):
                 return result
         except FileNotFoundError:
             continue
-        except Exception:
+        except Exception as e:
+            # ⚠️ **两种"没跑成"不能混**（S4 归因错）：`FileNotFoundError` = runner 压根
+            # 不存在（环境没装，排查方向是环境）；而进得来这一支的
+            # `subprocess.TimeoutExpired` = **runner 起来了、但没跑完** ——
+            # 那是被测代码卡住/死循环，**是个真信号**，排查方向完全不同。
+            # 原来一律 `continue` 吞掉：最后一个 runner 也被吞 ⇒ 收尾只能说
+            # 「三个 runner 都启动不了」，把"测试挂住了"指成"环境没装"。
+            broken_runners.append(f"{name}({type(e).__name__})")
             continue
     # **"跑不起来"和"没找到测试"要分开说** —— 两者的排查方向完全不同：
     # 前者查环境，后者查"测试文件在不在"。2026-09-12 探路2 的 T4 实测：
     # 报的是"无可用 runner (pytest/unittest/npm 均不可用)"，而真相是
     # **它的 worktree 里压根没有测试文件**（T2 写好的测试因为超时没合并进来）。
     # 同一族见防御模式 §52：拦了/没跑，但说不清是什么。
+    # ⚠️ `broken_runners` **排在 `ran_but_empty` 前面**：runner 卡住（超时）比
+    # "另一个 runner 没找到测试"更该先说 —— 后者是常见的正常情况，前者是要人去看的。
     result["output"] = (
+        f"runner 启动了但**没能跑完**（{'、'.join(broken_runners)}）"
+        f"—— 不是「跑不起来」，它已经起来了，去看它为什么卡住/超时"
+        if broken_runners else
         f"runner 跑得起来（{'/'.join(ran_but_empty)}），但**没找到测试文件**"
         if ran_but_empty else
         "no test runner found (pytest/unittest/npm 都启动不了)")

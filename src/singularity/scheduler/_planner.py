@@ -10,7 +10,7 @@ import logging
 import time
 from collections import deque
 
-from singularity.scheduler import tracker
+from singularity.scheduler import tracker, witness
 from singularity.scheduler._exec import decompose
 from singularity.scheduler._types import _MAX_DEPTH, BatchOutput, _pending_sse_events
 from singularity.scheduler.tracker import TaskStatus
@@ -68,6 +68,13 @@ def materialize_plan(parent_id: str, subtasks: list[dict]) -> list[str]:
     """
     parent = tracker.read_task(parent_id)
     if parent is None:
+        # S3：**父任务读不到 ⇒ 分解出 0 个子任务**，不声不响 —— 调用方拿到空列表，
+        # 和"这个任务本来就不需要分解"长得**一模一样**。
+        # ⚠️ 这里**故意不用 `task_file_corrupt`**（09-13 那份清单是这么写的）：
+        # `tracker.read_task` 返回 None 现在有**两个来源** —— 文件不存在、或已隔离
+        # （隔离那条 `load_json_or_quarantine` 自己已经报过了）。冒用"corrupt"这个名字
+        # 会让读告警的人去查一个根本不存在的损坏。
+        witness.warn("decompose", f"parent_task_unreadable: {parent_id}")
         return []
 
     # depth 安全上限: 已达上限 → 拒绝自动分解，提示用户手工处理
