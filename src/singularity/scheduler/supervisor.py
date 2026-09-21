@@ -90,6 +90,7 @@ def supervise(
     # ── 3. 偷懒检测 ──
     verdict.checks["laziness"] = _check_laziness(
         agent_output, changed_files, checklist, task_description,
+        our_side_stop=our_side_stop,
     )
 
     # ── 4. 产物验证 (硬证据) ──
@@ -314,7 +315,7 @@ _TODO_MARKER = re.compile(r"(?:#|//|/\*+|<!--|;)\s*todo\b(?![._])", re.IGNORECAS
 
 def _check_laziness(
     agent_output: str, changed_files: list[str], checklist: list[str],
-    task_description: str = "",
+    task_description: str = "", our_side_stop: str = "",
 ) -> CheckResult:
     """偷懒检测: 机械清单。
 
@@ -327,13 +328,19 @@ def _check_laziness(
     `changed_files` 当尺子的** —— 对"本就不该改文件"的任务，`改动文件(0)远少于checklist`
     和 `要求验证但无测试文件改动` **必然同时亮**（真机上就是这么亮了 2 个），
     然后判 escalate ⇒ 转 PENDING **重新入队**，白烧一轮。
-    ⚠️ 但**硬信号（TODO / 模糊措辞）照常生效** —— 只读任务也可能糊弄。
+    ⚠️ **被我们自己掐断的任务（`our_side_stop` 非空）同理**（2026-09-21 真机）：
+    掐断 ⇒ 最后一次调用零产出 ⇒ 必然 0 文件 ⇒ 同样那两条必然亮。而同一份判词里
+    `_check_completeness` 刚写完「**这次是被我方掐断的**，不是空手回来的偷懒」
+    —— **两句话自相矛盾**，读的人只会信后一句。
+    ⚠️ 但**硬信号（TODO / 模糊措辞）照常生效** —— 只读任务、被掐断的任务也可能糊弄。
     """
     hard_signals, soft_signals = [], []
     readonly = config.is_readonly_task(task_description)
+    # 两条软信号的尺子都是 `changed_files` ⇒ 这两类任务上「必然亮」，不是信号。
+    soft_applicable = not readonly and not our_side_stop
 
     # 1. 输出远少于 checklist 预期 (软)
-    if not readonly and checklist and len(changed_files) < max(1, len(checklist) // 3):
+    if soft_applicable and checklist and len(changed_files) < max(1, len(checklist) // 3):
         soft_signals.append(f"改动文件({len(changed_files)})远少于checklist({len(checklist)})预期")
 
     # 2. 用注释代替实现 (硬) —— 见 _TODO_MARKER：认注释标记，不认裸子串
@@ -354,7 +361,7 @@ def _check_laziness(
     )
     # 注意别用"验证"——"验证码"这类词会误命中
     wants_test = any(("测试" in c or "test" in c.lower()) for c in checklist)
-    if not readonly and not has_test and wants_test:
+    if soft_applicable and not has_test and wants_test:
         soft_signals.append("checklist 要求验证但无测试文件改动")
 
     signals = hard_signals + soft_signals
