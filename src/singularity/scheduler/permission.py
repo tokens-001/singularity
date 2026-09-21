@@ -282,8 +282,13 @@ def list_pending_approvals(now: float = None) -> list[dict]:
     for p in sorted(d.glob("*.json")):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            continue                      # 坏文件跳过，别让整个列表挂掉
+        except Exception as e:
+            # S3：**跳过必须出声**。这是待审列表 —— 一个坏文件被 `continue` 掉，
+            # 界面上那条审批**凭空消失**，而等它的那一边会一直等到超时（"什么都没发生"）。
+            # 坏文件本身照旧跳过（"别让整个列表挂掉"这条不变）。
+            witness.warn("permission",
+                         f"approval_file_corrupt:{p.name}:{type(e).__name__}:{e}"[:160])
+            continue
         if data.get("decision"):
             continue                      # 已答，等待方马上取走
         req_at = data.get("requested_at") or 0
@@ -311,7 +316,13 @@ def decide_approval(task_id: str, decision: str) -> bool:
         return False
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as e:
+        # ⚠️ **"读不出来"不是"已经不在了"**（S1/S4）：返回值照旧 False（fail-safe，
+        # 绝不谎报"我拦下了"），但上面那句 docstring 说明界面会据此告诉用户
+        # "这条已经不在了" —— 文件**明明在盘上、只是坏了**，那句话就是错的。
+        # 出声，让人有地方查。
+        witness.warn("permission",
+                     f"approval_unreadable:{task_id}:{type(e).__name__}:{e}"[:160])
         return False
     if data.get("decision"):
         return False                      # 已经答过了

@@ -128,8 +128,15 @@ def record(project, extra: dict | None = None) -> dict:
         # （2026-09-14 外派⑦ 点名这条；`_dispatch_crud`/`model_registry` 早换了）。
         from singularity.scheduler._io import atomic_write_json
         atomic_write_json(_path(), rows, indent=1)   # 人读的账本，一直用 1 空格缩进
-    except Exception:
-        pass      # 记账失败不能把交付带崩
+    except Exception as e:
+        # S6：账 / 证据落盘失败**不能无痕**。"不能把交付带崩"（不上抛）这条不变，
+        # 但这一格是 `digest()` 的唯一来源，而 `digest()` 会被拼进**架构 prompt**
+        # 的"上一轮实际发生了什么" —— 丢了这一轮，下一轮看到的"上一轮"是**残的**，
+        # 而没有任何人知道它残。
+        from singularity.scheduler import witness
+        witness.warn("process_ledger",
+                     f"record_write_failed:{type(e).__name__}:{e}"[:160],
+                     key="ledger_write_failed")
     return row
 
 

@@ -1,16 +1,28 @@
-"""静默 except 剩下的 5 处真形状（2026-09-21 按 `docs/静默except待修清单-20260913.md` §六 收尾）。
+"""静默 except 剩下的真形状（2026-09-21 按 `docs/静默except待修清单-20260913.md` §六 收尾）。
 
-形状词表在文档里（S1~S6），**按形状修、不逐条办**。这批是 §六 复核后判"仍开着"的五处：
+形状词表在文档里（S1~S6），**按形状修、不逐条办**。§六 复核后判"仍开着"的全部落在这里，
+**两批**（`ffafcbb9` + 本文件所在的那批）：
 
-  ① `_review.run_post_exec_checks` 本地安全扫描 `except: pass` —— **S4 假干净**（本批最重）
+**第一批 —— 文档点名的五处**
+  ① `_review.run_post_exec_checks` 本地安全扫描 `except: pass` —— **S4 假干净**（最重）
   ② `validator.run_project_tests` 跑测试的循环 `except: continue` —— **S4 归因错**
   ③ `_exec._persist_partial_usage` 落盘 `except: pass` —— **S6 账无痕**
   ④ `_process_ledger.record` 的 `done = 0` —— **S2 编造数字**（连同 `digest()` 的渲染）
   ⑤ `_planner.materialize_plan` 的 `parent is None → return []` —— **S3 静默跳过**
 
-⚠️ **五处的一字共同点**：改的**全是"说法/证据"**，`passed` / `action` / 门的强度
+**第二批 —— §六 里同样标了"没核"、但没逐条列出的**
+  ⑥ `permission.list_pending_approvals` 坏审批文件 `continue` —— **S3 静默跳过**
+     ＋ `permission.decide_approval` 读不出来 `return False` —— **S1/S4**：
+       返回值照旧 fail-safe，但界面上那句"这条已经不在了"是**错的**（文件在盘上，只是坏了）
+  ⑦ `_process_ledger.record` **落盘**失败 `except: pass` —— **S6 账无痕**（S2 那处的邻居）
+  ⑧ `_api_tasks` 清残留的 `repo_root` 兜底 —— **§49 族"错仓库"**：任务读不到时拿
+     **奇点自己的仓**去 glob `{task_id}_*`，那个任务留在项目仓的 worktree 永远找不到。
+     两个调用点（`task_delete` / `task_retry`）原来各抄了一遍 ⇒ 收成一个助手。
+
+⚠️ **八处的一字共同点**：改的**全是"说法/证据"**，`passed` / `action` / 门的强度
 **一处没动**（这也是那份清单一贯的处置方式）。所以下面的断言都盯"有没有出声/有没有写进
-evidence"，不盯判定。
+evidence"，不盯判定。**每处都配了一条对照**（"正常时一个字不变"）——
+没有对照的判据只会证明"我让它出声了"，证明不了"只在该出声的时候出声"。
 
 变异验证（删哪一行会红）：
   · ① 把 `except Exception as e:` 收回 `except Exception: pass` → 第 1 条红；
@@ -224,3 +236,90 @@ def test_父任务读不到时出声(monkeypatch, alerts):
     # （文件不存在 / 已隔离且已报过），冒用会让读告警的人去查不存在的损坏。
     assert "parent_task_unreadable" in msg, msg
     assert "t-parent" in msg, f"要指认是哪个父任务：{msg}"
+
+
+# ══════════════════════ ⑥ permission：待审列表 / 决策 ══════════════════════
+
+def test_待审文件坏了要出声(tmp_path, monkeypatch, alerts):
+    """S3：跳过**必须出声**。这是待审列表 —— 坏文件被 `continue` 掉，
+    界面上那条审批**凭空消失**，而等它的那一边会一直等到超时（"什么都没发生"）。"""
+    from singularity.scheduler import permission as perm
+    monkeypatch.setattr(config, "HOLD_DIR", tmp_path)
+    (tmp_path / "t1.json").write_text("{坏掉的 json", encoding="utf-8")
+    (tmp_path / "t2.json").write_text('{"task_id": "t2", "requested_at": 1e18}',
+                                      encoding="utf-8")
+
+    out = perm.list_pending_approvals(now=1e18)
+
+    assert [o["task_id"] for o in out] == ["t2"], f"坏文件照旧跳过：{out}"
+    assert any("approval_file_corrupt" in m for _, m, _ in alerts), alerts
+
+
+def test_待审文件都好的时候不出声(tmp_path, monkeypatch, alerts):
+    """**对照**：正常列表不该有告警（否则这条会变成常亮的假红）。"""
+    from singularity.scheduler import permission as perm
+    monkeypatch.setattr(config, "HOLD_DIR", tmp_path)
+    (tmp_path / "t1.json").write_text('{"task_id": "t1", "requested_at": 1e18}',
+                                      encoding="utf-8")
+
+    out = perm.list_pending_approvals(now=1e18)
+
+    assert [o["task_id"] for o in out] == ["t1"]
+    assert not alerts, alerts
+
+
+def test_审批文件读不出来_不能说成已经不在了(tmp_path, monkeypatch, alerts):
+    """返回值照旧 `False`（**fail-safe 不变**：绝不谎报"我拦下了"）；
+    但界面上那句话是"这条已经不在了" —— 文件明明在盘上、只是坏了，那句话是错的。"""
+    from singularity.scheduler import permission as perm
+    monkeypatch.setattr(config, "HOLD_DIR", tmp_path)
+    (tmp_path / "t9.json").write_text("{坏掉的 json", encoding="utf-8")
+
+    assert perm.decide_approval("t9", perm._APPROVE) is False
+    assert any("approval_unreadable" in m for _, m, _ in alerts), alerts
+
+
+# ══════════════════════ ⑦ _process_ledger：账落盘失败 ══════════════════════
+
+def test_账本落盘失败要出声(monkeypatch, alerts):
+    """S6：这一格是 `digest()` 的唯一来源，而 `digest()` 会被拼进**架构 prompt**
+    的"上一轮实际发生了什么" —— 丢了这一轮，下一轮看到的"上一轮"是**残的**。"""
+    from singularity.scheduler import _process_ledger as _pl
+    from singularity.scheduler import project as pm
+    monkeypatch.setattr(tracker, "read_task", lambda tid: None)
+    monkeypatch.setattr(_pl, "_path", lambda: __import__("pathlib").Path("/不存在/x.json"))
+    monkeypatch.setattr("singularity.scheduler._io.atomic_write_json",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("磁盘满")))
+
+    proj = pm.ProjectState(
+        id="p1", name="演示", raw_constraints=[], owner_confirm={},
+        constraints_checklist=[], task_ids=[], issues=[], supervision_log=[],
+        lineage=[], handoffs=[], agent_lineup={})
+    _pl.record(proj)                       # 不抛
+
+    assert any("record_write_failed" in m for _, m, _ in alerts), alerts
+
+
+# ══════════════════════ ⑧ _api_tasks：清残留的 repo_root ══════════════════════
+
+def test_任务读不到时_不拿奇点仓顶上且出声(alerts):
+    """`cleanup_task_artifacts` 里只有 worktree 那段依赖 repo_root；拿奇点仓去
+    glob `{task_id}_*`，那个任务留在**项目仓**的 worktree 永远找不到 ⇒ 残留留着了。"""
+    from singularity.scheduler import _api_tasks as api
+
+    got = api._repo_root_for_cleanup(None, "t-404")
+
+    assert got == config.PROJECT_ROOT, "行为不改：照旧兜底"
+    assert any("cleanup_repo_unknown" in m for _, m, _ in alerts), alerts
+
+
+def test_任务读得到时_按项目仓且不出声(monkeypatch, alerts):
+    """**对照**：能读到任务时，走 `repo_root_for`、一个字不说。"""
+    from singularity.scheduler import _api_tasks as api
+    from singularity.scheduler import project as pm
+    monkeypatch.setattr(pm, "repo_root_for", lambda t: __import__("pathlib").Path("/项目仓"))
+
+    got = api._repo_root_for_cleanup(object(), "t-1")
+
+    assert str(got) == "/项目仓"
+    assert not alerts, alerts

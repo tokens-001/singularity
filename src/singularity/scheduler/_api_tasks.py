@@ -29,6 +29,32 @@ from singularity.scheduler.tracker import TaskStatus
 
 # ═══════════════════════════════════════════════════════════════
 
+def _repo_root_for_cleanup(task, task_id: str):
+    """清残留用的 repo_root —— **读不到任务时不拿奇点仓顶上、且必须出声**。
+
+    `cleanup_task_artifacts` 里**只有 worktree 那一段**依赖这个 root
+    （其余按 `.qidian/` 下的 task_id 定位，跟哪个仓无关）。而 `config.PROJECT_ROOT`
+    是**奇点自己的仓** —— 拿它去 glob `{task_id}_*`，那个任务留在**项目仓**兄弟目录里的
+    worktree **永远找不到** ⇒ 残留悄悄留着，没有任何人被告知（§49 族的"错仓库"）。
+
+    ⚠️ **不会误删奇点仓的东西**（task_id 是毫秒时间戳，跨仓撞名实质不可能）
+    ⇒ 这里**只出声、不改行为** —— 沿用本仓一贯的处置（只标归因，门的强度不动）。
+
+    收成一个助手是因为**两个调用点原来各抄了一遍**（`task_delete` / `task_retry`），
+    那种"两份一样的逻辑迟早会漂"正是上一轮 `stop` 接口刚踩过的。
+    """
+    if task is None:
+        witness.warn("_api", f"cleanup_repo_unknown:{task_id}"
+                             f"（任务读不到 ⇒ 用奇点仓清，worktree 残留这次清不掉）"[:200])
+        return config.PROJECT_ROOT
+    try:
+        from singularity.scheduler.project import repo_root_for
+        return repo_root_for(task)
+    except Exception as e:
+        witness.warn("_api", f"repo_root_fail:{task_id}:{type(e).__name__}:{e}"[:200])
+        return config.PROJECT_ROOT
+
+
 def _scan_refs(namespace: str) -> dict[str, str]:
     """扫 `refs/qidian/<namespace>/`，收出 `{task_id: commit_sha}`。
 
@@ -497,11 +523,7 @@ def task_delete(task_id: str) -> tuple[dict, int]:
     """
     config.ensure_dirs()
     task = tracker.read_task(task_id)  # 先读: worktree/ref 清理需要 repo_root
-    try:
-        from singularity.scheduler.project import repo_root_for
-        repo_root = repo_root_for(task) if task else config.PROJECT_ROOT
-    except Exception:
-        repo_root = config.PROJECT_ROOT
+    repo_root = _repo_root_for_cleanup(task, task_id)
 
     deleted = _cleanup_task_artifacts(task_id, repo_root)
 
@@ -619,12 +641,7 @@ def task_retry(task_id: str) -> tuple[dict, int]:
     if task.status not in (TaskStatus.FAILED, TaskStatus.ROLLED_BACK):
         return {"error": f"当前状态 {task.status.value} 不支持重试"}, 400
     # 重跑前清衍生残留 (worktree/pending ref/snapshot)，避免 anchor_ref 冲突 + 脏 worktree
-    try:
-        from singularity.scheduler.project import repo_root_for
-        repo_root = repo_root_for(task) if task else config.PROJECT_ROOT
-    except Exception:
-        repo_root = config.PROJECT_ROOT
-    _cleanup_task_artifacts(task_id, repo_root)
+    _cleanup_task_artifacts(task_id, _repo_root_for_cleanup(task, task_id))
     # 🔵 **锚定 ref 在这里「不」松手**（2026-09-19 反过来；这里原来是显式 `_release_ref`）。
     #
     # 释放的语义只有一种读法（`_worktree.cleanup_task_artifacts` 的 docstring 写明）：
