@@ -217,6 +217,18 @@ def _slow_calls_path() -> Path:
 # 非流式只能干等整体 240s 超时，且线程 join 不掉 —— 见 _dispatch_exec 顶部注释。
 _STREAM = os.environ.get("QIDIAN_STREAM", "1") != "0"
 _STALL_TIMEOUT = float(os.environ.get("QIDIAN_STALL_TIMEOUT", "90"))
+# ── 「只想不写」那把尺（2026-09-22 用户拍板：480 秒 + 先劝一轮）────────────────
+# 量的是**多久没吐出正文或工具调用** —— **思考不算进展**。
+# 为什么要有第二把尺：`_STALL_TIMEOUT` 认 `reasoning_content` 是进展（那是对的，
+# "正在想"不是"卡住"），代价是"想了几万字、正文一个字没有"那种调用它**永远掐不到**。
+# 阈值 480s 的来历（`docs/轮次成绩单-20260922.md` §三，单轮 33 条分诊账）：
+#   · **未被掐**的 25 条 `elapsed` 落在 **20~222.8 秒**
+#   · **打转被掐**的 8 条落在 **904~945 秒**
+#   ⇒ 两组**完全不相交**，中间空着一条 4~8 倍的带；480 是 222.8 的 **2.15 倍**余量。
+# ⚠️ **圈数 `loops` 不能当判据**（实测两组重叠：正常 269~7451 vs 打转 448~3734）。
+# ⚠️ **代价要对称说**：阈值定低了会误杀"想很久、然后一次吐完"的调用 ——
+#   本轮 25 条里一条都没有，但**只有一轮数据**。撞上了就调大 `QIDIAN_OUTPUT_IDLE_LIMIT`。
+_OUTPUT_IDLE_LIMIT = float(os.environ.get("QIDIAN_OUTPUT_IDLE_LIMIT", "480"))
 # 执行器自查的总预算 = orchestrator 的收割上限 − 收尾余量（单一来源在 config）。
 # **为什么执行器要自己看表**：以前它只转 max_turns 轮、一圈表都不看，唯一的上限
 # 就是 orchestrator 到 900s 的**无声收割** —— 被杀就什么都留不下（token/文件/轮次全丢，
@@ -535,6 +547,10 @@ class OpenAIAgentExecutor(BaseExecutor):
         _budget = _EXEC_BUDGET if self.budget_s is None else min(_EXEC_BUDGET, self.budget_s)
         self._deadline_at = start + _budget
         _wrapped = False
+        # 「只想不写」**只劝一次**（2026-09-22 拍板）。第二次再撞就直接判失败 ——
+        # 劝两轮 = 多烧两个 480 秒，买到的是同一个陷在思考里的模型。
+        # ⚠️ 用**局部变量**，不用实例字段：执行器每轮重建，实例字段等于没记（2026-09-20 的教训）。
+        _no_output_urged = False
 
         for turn in range(1, self._max_turns + 1):
             # 轮间看表：到点不再开新轮，直接收尾（否则下一轮一跑就是几分钟，
@@ -637,6 +653,25 @@ class OpenAIAgentExecutor(BaseExecutor):
                     # 认不出来的 400 —— **先把现场留下再失败**，否则又是无头案（见该方法 docstring）
                     self._dump_unknown_400(body, str(e))
                     return self._fail_result(str(e), start, exc=e)
+            except _NoOutputError as e:
+                # ── 「只想不写」⇒ **先劝一轮再判死**（2026-09-22 用户拍板）──
+                # 为什么不是直接判失败：这一发确实白扔了，但模型多半是**能写**的，
+                # 只是陷在思考里 —— 一句命令比再烧一个 480 秒划算。
+                # ⚠️ **必须排在 `except _NetworkError` 前面**（它是子类，否则被吃掉）。
+                # ⚠️ **不能撤工具**：这条要它**写文件**，撤了它就只能把代码贴在正文里，
+                #   而正文里的代码**永远不会被交付**（同文件「已达最大工具调用轮次」那段
+                #   2026-09-15 的真机教训）。所以这里与那两处 `tools = []` 刻意不同。
+                witness.warn("oa_exec", f"no_output_urge:{str(e)[:140]}"[:200],
+                             key="no_output_urge")
+                if _no_output_urged:
+                    return self._fail_result(str(e), start, exc=e)
+                _no_output_urged = True
+                messages.append({
+                    "role": "system",
+                    "content": "[系统] 你已经长时间只思考、没有任何产出。立即停止思考，"
+                               "现在就用工具把文件写出来。",
+                })
+                continue
             except _NetworkError as e:
                 # 预算已到 → 这多半是上面封顶超时导致的断流，**不是**该换模型重来的
                 # 瞬时网络故障。报成网络错会被上层 failover 掉，白烧剩下的时间。
@@ -1176,6 +1211,12 @@ class OpenAIAgentExecutor(BaseExecutor):
         for attempt in range(1, _RETRY_MAX_ATTEMPTS + 1):
             try:
                 return self._api_call_once(body)
+            except _NoOutputError:
+                # 🔴 **不能重试**（2026-09-22）：它不是瞬时故障 —— 原样重试 = 同一个模型
+                # 拿同一个 prompt 再打转一个 `_OUTPUT_IDLE_LIMIT`（480s）。
+                # ⚠️ 这条必须排在下面那条前面（子类关系）；漏了它，"只想不写"会被
+                # 静默重试掉，turn 循环里那支"先劝一轮"**永远轮不到**（接线断在中间一层）。
+                raise
             except (_NetworkError, _TransientError):
                 if attempt >= _RETRY_MAX_ATTEMPTS or time.time() >= deadline:
                     raise
@@ -1313,6 +1354,9 @@ class OpenAIAgentExecutor(BaseExecutor):
                 # （failover 拿到了活），但要知道这是拿 90 秒换的。
                 # 反过来（保持原样）的代价已经量过了：810s 预算烧光、任务判死、产物丢。
                 _last_progress = time.time()
+                # 「只想不写」那把尺的计时起点 —— 与 `_last_progress` 的差别只有一个：
+                # **`reasoning_content` 变长不算它**（见 `_OUTPUT_IDLE_LIMIT` 那段）。
+                _last_output = time.time()
                 # 循环体转了几圈 —— 2026-09-17 加，专门为了分清那个**解释不通的 900 秒**：
                 # 告警打出 `stream_over_budget:913s:cap=125s`，而判据就挂在循环体里、
                 # 125 秒时**必然**该触发 ⇒ 那段时间循环体多半**根本没进过**。
@@ -1357,6 +1401,17 @@ class OpenAIAgentExecutor(BaseExecutor):
                             raise _StalledError(
                                 f"流停滞 {_idle:.0f}s 无新 token"
                                 f"（一直在收数据，但 content/reasoning/tool_calls 一样都没有）")
+                        # 🔴 **第二把尺：只想不写**（2026-09-22 拍板，见 `_OUTPUT_IDLE_LIMIT`）。
+                        # 上面那把 **认思考是进展** ⇒ 它对"想了几万字、正文一个字没有"永远不响。
+                        # 实测那种调用会烧到**剩余预算见底**（809~945 秒），比原来那个
+                        # 240 秒定值贵 3.4~3.8 倍。
+                        _out_idle = time.time() - _last_output
+                        if _out_idle > _OUTPUT_IDLE_LIMIT:
+                            # **抛**，不是返回空 —— 返回空会被上层当成"这次调用成功了、
+                            # 只是模型没说话"，同一个陷在思考里的模型继续被派下一轮。
+                            raise _NoOutputError(
+                                f"只想不写 {_out_idle:.0f}s：一直没有正文/工具调用"
+                                f"（转 {_loops} 圈）")
                         buf += text
                         while "\n" in buf:
                             ln, buf = buf.split("\n", 1)
@@ -1377,6 +1432,8 @@ class OpenAIAgentExecutor(BaseExecutor):
                         break
                     # 这一行的**处理前后**比一比长度，才判得出它有没有带来可用进展
                     _n_before = (len(content), len(reasoning), len(tool_calls))
+                    # 同上，但**不含 reasoning** —— 「只想不写」那把尺的判据（见 `_OUTPUT_IDLE_LIMIT`）
+                    _out_before = (len(content), len(tool_calls))
                     if not line.startswith("data:"):
                         continue
                     chunk_str = line[5:].strip()     # 容忍 "data:{...}" 无空格
@@ -1429,6 +1486,9 @@ class OpenAIAgentExecutor(BaseExecutor):
                     # 不算进展，那正是今晚烧光预算的那种。
                     if (len(content), len(reasoning), len(tool_calls)) != _n_before:
                         _last_progress = time.time()
+                        # 「只想不写」那把尺**不认思考** —— 只有正文或工具调用变长才归零
+                        if (len(content), len(tool_calls)) != _out_before:
+                            _last_output = time.time()
         except httpx.TimeoutException:
             # read timeout = 流停滞（不是整体超时）—— 报清楚，方便区分
             raise _StalledError(f"流停滞 {_STALL_TIMEOUT:.0f}s 无新 token")
@@ -1485,11 +1545,16 @@ class OpenAIAgentExecutor(BaseExecutor):
             #   · 和上面 F1 那条**不重**：F1 还要求 **reasoning 也空**（那种直接抛出去），
             #     所以"想了几万字、正文一个字没有"**落在这儿** —— 真账里这个形状有
             #     **30 条**（reasoning 从 9 千到 5.3 万字符，`elapsed` 21~947 秒）。
-            # ⚠️ **不带时间阈值**：被掐的 32 条里 7 条是最快的 `deepseek-flash`，
-            #    且有 4 条 **21~62 秒**就被掐（被**剩余预算**掐的，不是 cap）
-            #    ⇒ "加时间"和"按时长判"两条路都被数据否掉（`防御模式.md` §87）。
-            # ⚠️ **只出声、不打断**：真掐会误杀"想了很久然后一次吐完"的调用 ——
-            #    那正是"打断要先定阈值"里始终没定的那个阈值。
+            # 🔵 **这条告警现在和 `_OUTPUT_IDLE_LIMIT` 那把尺配套**（2026-09-22）：
+            #    告警仍然**只出声**（它挂的是 `_over_budget` 那一格），真打断由上面
+            #    `_lines()` 里那把尺负责 —— 两者判据不同，别以为谁替了谁。
+            # 🔴 **这里原来那句结论是错的，已更正**：原文写着「"加时间"和"按时长判"
+            #    两条路**都被数据否掉**（§87）」—— 它拿**被掐的样本**当分母，而那里面
+            #    混着 4 条 **21~62 秒就被剩余预算掐**的调用（**那根本不是打转**）。
+            #    加上**未被掐的对照组**之后（`round-20260922`，单轮 25 条），"时长"是三个
+            #    候选信号里**唯一有判别力的**：正常 **20~222.8 秒** vs 打转 **904~945 秒**，
+            #    完全不相交；而 `loops` 两组重叠（269~7451 vs 448~3734）、正文产出也重叠。
+            #    ⇒ 详见 `docs/防御模式.md` §87.7。
             if _content_chars == 0 and not tool_calls:
                 witness.warn('oa_exec',
                              f'llm_spin_no_output:{int(time.time() - _call_started)}s'
@@ -1751,6 +1816,19 @@ class _StalledError(_NetworkError):
     **长得一样**（都是 `exec`），只能靠 error 文本区分 —— 又是"只活在文本里"。
     ⚠️ **别把它算进"我方掐断"**（`supervisor.our_side_stop_of` 只认 `deadline`）：
     停滞是服务端/网络的事，不是我们的刀。
+    """
+    pass
+
+
+class _NoOutputError(_NetworkError):
+    """只想不写（`_OUTPUT_IDLE_LIMIT` 秒没吐出正文/工具调用 —— **思考不算**）。
+
+    和 `_StalledError` 的分工：那个量"**什么都没来**"（含思考），这个量"没来**可用的东西**"。
+    ⚠️ 同样是 `_NetworkError` 的子类，理由同 `_StalledError`（走 failover 的判定不变）。
+    ⚠️ **它是我方掐断**（我们的尺子主动断的），但 `error_kind` 落到 `exec` 而不是 `deadline`
+    —— `supervisor.our_side_stop_of` 只认 `deadline`，所以这一发会被记成"执行器报错"。
+    **这是已知的归因缺口**（同「判据错位审计」那一族），改它要动 `error_kind` 的枚举，
+    **没在这轮做**；先在这儿写明，免得下次有人拿 `our_side` 读不懂。
     """
     pass
 class _TransientError(Exception):
