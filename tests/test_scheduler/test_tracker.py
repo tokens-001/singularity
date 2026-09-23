@@ -118,6 +118,28 @@ class TestBrokenTaskFileLeavesATrace:
         assert (qdir / "tasks" / "broken.json.corrupt").exists(), \
             "没有留原始字节的备份 —— 出了事连现场都没了"
 
+    def test_真JSON但不是任务_也要留备份(self, qdir, warns):
+        """🔴 **这条是 2026-09-24 变异验出来的空白** —— 和上面那条是**两条不同的路**。
+
+        上面那条喂的是 `"{not json"`（**根本不是 JSON**）⇒ 由 `load_json_or_quarantine` 接住。
+        这一条喂的是**合法 JSON、但 `Task.from_dict` 拒绝**（缺必填 / 状态值不认识）
+        ⇒ 由 `_read_task_file` 自己接住、自己去隔离。
+
+        ⚠️ **判据：把 `_read_task_file` 里那句 `_quarantine_corrupt` 删掉 ⇒ 这条红。**
+        删掉之前，**全仓 52 条测试一条都不红** —— 也就是这条接线从来没被钉过
+        （同族：`test-wiring-not-just-functions` 那句"函数对 ≠ 接线通"）。
+
+        真机形状很平常：**回滚到旧版本** ⇒ 盘上躺着新版本才有的状态值。
+        那时如果只读成 None 不留原始字节，出了事连现场都没了。
+        """
+        body = json.dumps({"id": "weird", "description": "x",
+                           "status": "某个未来版本才有的状态"}, ensure_ascii=False)
+        self._seed(qdir, "weird", body)
+        assert tracker.read_task("weird") is None
+        assert (qdir / "tasks" / "weird.json.corrupt").exists(), \
+            "真 JSON 但不是任务 —— 同样要留原始字节，否则现场没了"
+        assert any("weird" in str(w) for w in warns), f"拒绝了一个任务却一声不吭: {warns}"
+
     def test_坏文件不刷屏(self, qdir, warns):
         """**命门**：`ready_tasks` 每 2 秒把全部任务文件扫一遍。
 
