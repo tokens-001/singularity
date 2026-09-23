@@ -113,6 +113,28 @@ class TestRequirementCoverage:
         r = mc.requirement_coverage(cs, self.REQS)
         assert r["covered"] == 1, "越界索引不许算命中"
 
+    def test_unmatched_keeps_what_was_dropped(self):
+        """认不出的 token 不许**悄悄**消失 —— 它是"伪造覆盖率"最省事的那条路。
+
+        真机形状：b 轮 core 6 条，covers 里出现 6/7/8/9 ⇒ 越界的被丢掉、剩下的
+        恰好把每栏点亮 ⇒ 报表上「覆盖率 100%」。
+        """
+        cs = [{"rule": "a", "check": "散文", "covers": [0, 99, "对不上的话"]},
+              {"rule": "b", "check": "散文", "covers": [1]}]
+        r = mc.requirement_coverage(cs, self.REQS)
+        assert r["covered"] == 2 and r["unmatched"] == [99, "对不上的话"], r
+
+    def test_unmatched_empty_when_everything_lands(self):
+        """反例：全都对得上时不许乱报，否则它就是个常亮的假红。"""
+        r = mc.requirement_coverage([{"rule": "a", "check": "散文", "covers": [0, "0"]}],
+                                    self.REQS)
+        assert r["unmatched"] == []
+
+    def test_no_requirements_means_every_token_unmatched(self):
+        """没清单 ⇒ 每个 covers 都无处可对，这一栏别报成 0（那会被读成"没问题"）。"""
+        r = mc.requirement_coverage([{"rule": "a", "check": "散文", "covers": [0]}], [])
+        assert r["total"] == 0 and r["unmatched"] == [0]
+
     def test_bool_is_not_an_index(self):
         """`True` 是 int 的子类 —— 不挡掉的话会被当成索引 1。"""
         cs = [{"rule": "a", "check": "散文", "covers": [True]}]

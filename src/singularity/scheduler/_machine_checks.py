@@ -130,16 +130,24 @@ def requirement_coverage(constraints, requirements) -> dict:
     `constraints[].covers` 由架构师给：需求条目的**索引**（0 起算，int）或**原文**
     （str）。两种都认 —— 索引省 token，原文不怕重排。
 
-    返回 {"total","covered","uncovered","no_covers","hard_covered"}：
+    返回 {"total","covered","uncovered","no_covers","hard_covered","unmatched"}：
       · covered      —— 被**至少一条**约束声明的需求条数
       · hard_covered —— 其中被**可机器跑**的约束覆盖的（才算"机器在盯"）
       · uncovered    —— 一条约束都没声明的需求（**最该看的一栏**）
+      · unmatched    —— **认不出**的 covers token（越界索引 / 对不上的原文）
+
+    ⚠️ `unmatched` 是**为"出声"留的**（2026-09-23 补）：认不出的 token 本来就被丢掉
+    （不算命中，这是对的 —— 越界不乱算），但**丢掉这件事本身没人知道**。实测 b 轮
+    core 6 条而 covers 里出现 6/7/8/9、另一轮出现到 12 ⇒ 架构师填了一堆不存在的索引，
+    报表上却只看到"覆盖率挺高"。**"声明了但根本没对上号"必须能被看见**，
+    否则它就是伪造覆盖率最省事的那条路。
     """
     reqs = list(requirements or [])
     total = len(reqs)
     hit: set[int] = set()
     hard: set[int] = set()
     no_covers = 0
+    unmatched: list = []
 
     def _idx(token) -> int | None:
         if isinstance(token, bool):          # bool 是 int 的子类，先挡掉
@@ -172,12 +180,15 @@ def requirement_coverage(constraints, requirements) -> dict:
                 hit.add(i)
                 if runnable:
                     hard.add(i)
+            else:
+                unmatched.append(token)
 
     return {"total": total,
             "covered": len(hit),
             "hard_covered": len(hard),
             "uncovered": sorted(set(range(total)) - hit),
-            "no_covers": no_covers}
+            "no_covers": no_covers,
+            "unmatched": unmatched}
 
 
 ACCEPTANCE_TEXT_ONLY = "text_only_reason"

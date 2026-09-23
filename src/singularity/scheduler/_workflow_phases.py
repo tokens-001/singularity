@@ -433,6 +433,17 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     else:
         research_context = "无调研报告"
 
+    # ── 需求清单必须**看得见**，才谈得上"照它填 covers"（2026-09-23 修）──
+    # 架构师被要求给 `scope_clarification.core` 的**索引**，而这份清单只活在调研报告里：
+    # research.md 上面那句截到 5000 字符，实测 5 轮里 4 轮那份清单正好落在窗口外
+    # ⇒ 它从没见过自己要照填的东西（09-22 那轮只好填用户原话 ⇒ 覆盖率报 0/10 的假红）。
+    # 带编号单独拼进去，不靠截断碰运气。委员会席位走的是同一份 prompt，改这一处全盖住。
+    _core_reqs = (((project.research_report or {}).get("scope_clarification") or {})
+                  .get("core") or [])
+    if _core_reqs:
+        _numbered = "\n".join(f"[{i}] {r}" for i, r in enumerate(_core_reqs))
+        research_context += f"\n\n【需求清单（covers 请填这里的编号）】\n{_numbered}"
+
     # 角色定位/设计原则/边界在 roles.toml [architect]（页面上可改）；
     # 这里只填动态上下文 + 输出 Schema（代码要按它解析）
     from singularity.scheduler.roles import get_role
@@ -625,21 +636,43 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
         # 分母取调研报告的 scope_clarification.core（**用户侧**条目），不是架构师
         # 自己列的约束。拿约束当分母的话，他少列一条分母就跟着缩、比例纹丝不动
         # —— 那是"自洽率"。拿需求当分母，**漏掉的需求才会以低分暴露**。
-        _reqs = (((project.research_report or {}).get("scope_clarification") or {})
-                 .get("core") or [])
+        _reqs = _core_reqs
         _rc = mchk.requirement_coverage(arch.get("constraints") or [], _reqs)
+        _unmatched = _rc["unmatched"]
         project.add_lineage({"action": "requirement_coverage",
                              "total": _rc["total"], "covered": _rc["covered"],
                              "hard_covered": _rc["hard_covered"],
+                             "unmatched": len(_unmatched),
                              "uncovered": _rc["uncovered"][:_MAX_UNCOVERED_LISTED]})
-        project.issues = [i for i in project.issues if i.get("type") != "requirement_uncovered"]
-        if _rc["total"] and _rc["uncovered"]:
-            _shown = _rc["uncovered"][:_MAX_UNCOVERED_LISTED]
+        project.issues = [i for i in project.issues
+                          if i.get("type") not in ("requirement_uncovered",
+                                                   "requirement_list_missing",
+                                                   "requirement_covers_unmatched")]
+        # 「没量」不许显示成「量出来是零」（2026-09-23）：拿不到需求清单时 total=0，
+        # 原来的 `if _rc["total"] and ...` 直接跳过 ⇒ 一条 issue 都不报，界面看着"没问题"。
+        if not _rc["total"]:
             project.issues.append({
-                "type": "requirement_uncovered",
-                "detail": (f"**{len(_rc['uncovered'])}/{_rc['total']} 条需求没有任何约束覆盖**"
-                           f"（索引 {_shown}）→ 这几条没人验。"
-                           f"其中被可机器跑的约束覆盖的只有 {_rc['hard_covered']} 条")})
+                "type": "requirement_list_missing",
+                "detail": ("调研报告里**没有** `scope_clarification.core` ⇒ 需求覆盖率这一栏"
+                           "这轮是**空的**（不是 0 条缺口，是压根没量）。"
+                           "架构师也就无法照它填 covers —— 这几条约束声明覆盖了谁，无从核对")})
+        else:
+            if _rc["uncovered"]:
+                _shown = _rc["uncovered"][:_MAX_UNCOVERED_LISTED]
+                project.issues.append({
+                    "type": "requirement_uncovered",
+                    "detail": (f"**{len(_rc['uncovered'])}/{_rc['total']} 条需求没有任何约束覆盖**"
+                               f"（索引 {_shown}）→ 这几条没人验。"
+                               f"其中被可机器跑的约束覆盖的只有 {_rc['hard_covered']} 条")})
+            # 这一支才是"伪造覆盖率"最省事的那条路：填一堆不存在的索引，越界的被静默丢掉，
+            # 剩下的恰好把每一栏都点亮 ⇒ 报表上「覆盖率 100%」。b 轮就是这形状（core 6 条，
+            # covers 里出现 6/7/8/9）。**只在 uncovered 非空时报警是抓不到它的**。
+            if _unmatched:
+                project.issues.append({
+                    "type": "requirement_covers_unmatched",
+                    "detail": (f"有 **{len(_unmatched)} 处** `covers` 没对上号（填了不存在的索引"
+                               f"或对不上的原文），例如 {_unmatched[:3]} → 这几处**等于没声明**，"
+                               f"但原来被静默丢掉了（覆盖率那栏看不出来）")})
     except Exception as e:
         from singularity.scheduler import witness
         witness.warn("planning", f"check_coverage:{type(e).__name__}:{e}"[:120])
