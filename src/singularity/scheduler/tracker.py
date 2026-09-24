@@ -35,7 +35,13 @@ class TaskStatus(Enum):
 
 
 # PAUSED: 不进 _INFLIGHT (不是崩了要重跑), 不进 _TERMINAL (能流转回 RUNNING)
-# 进 _SCHEDULABLE: resume 后调度循环能重新捡起
+# 🔴 **也不进 _SCHEDULABLE**（2026-09-25 挪走，Qoder 外派审出、我逐跳核过）。
+#    原来它在这儿，注释写的是"resume 后调度循环能重新捡起"—— **那句话从来没兑现过**：
+#    唯一能把它派下去的 CAS 是 PENDING/BLOCKED→ROUTED 和 ROUTED→DISPATCHED，两条都不认
+#    PAUSED（`cas` 比对当前状态），所以它只会**永远留在 ready 表里**。
+#    而 `_run_queue_v3` 的出口正是 `if not remaining: break` ⇒ **整个调度循环不再回头**
+#    （停止位、心跳、对账一起停）。留在表里只有一个后果，没有半点好处。
+#    "捡起暂停任务"这件事现在由 `recover()` 在启动时做（PAUSED→PENDING，见那里）。
 _INFLIGHT = {TaskStatus.ROUTED, TaskStatus.DISPATCHED, TaskStatus.RUNNING, TaskStatus.VALIDATING}
 _TERMINAL = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.ROLLED_BACK}
 
@@ -54,7 +60,7 @@ def is_terminal(status: str | TaskStatus) -> bool:
     return s in {t.value for t in _TERMINAL}
 
 # ready_tasks 扫描的状态: 等待调度的入口态
-_SCHEDULABLE = {TaskStatus.PENDING, TaskStatus.ROUTED, TaskStatus.BLOCKED, TaskStatus.PAUSED}
+_SCHEDULABLE = {TaskStatus.PENDING, TaskStatus.ROUTED, TaskStatus.BLOCKED}
 
 # 终态任务的合法出口白名单 (其余改判一律拒绝, 见 transition)
 #   DONE: 已完成并 merge → 空集。改判会造出"代码已合入却显示失败", 或转 PENDING
@@ -622,6 +628,27 @@ def recover() -> int:
             # 它就要靠这个循环被捞回去。读成 None = 它永远是个 RUNNING 幽灵。
             task = _read_task_file(p)
             if task is None:
+                continue
+            if task.status == TaskStatus.PAUSED:
+                # ── 🔴 **重启后的 PAUSED 是孤儿，不捞它就是个死状态**（2026-09-25）──
+                # 这个进程刚起来 ⇒ **定义上没有任何 worker 在跑它**。而 PAUSED 唯一的出口
+                # 就是"执行它的那个 worker 自己写回 RUNNING"（`_exec._check_paused` 的
+                # while 循环出来那一句）—— 没有 worker，那个出口就不存在。
+                # 原来这个状态**两头都不占**：`_INFLIGHT` 不收它（不当崩溃重跑），
+                # `_SCHEDULABLE` 收它（`ready_tasks` 一直把它算成就绪，而 `_dispatch_ready`
+                # 的两个 CAS 都不认 PAUSED）⇒ 派不下去、又不退出 ⇒ `_run_queue_v3` 的
+                # `if not remaining: break` 永远到不了（已经挪出 `_SCHEDULABLE`，见那里）。
+                # ⇒ **必须把它送回 PENDING**，否则它永远停在暂停里，界面上点恢复也白点
+                #   （`task_resume` 只删标记、不改状态 ⇒ 状态还是 PAUSED ⇒ 还是没人能派它）。
+                # ⚠️ **不许动 `retry_count`** —— 它**不是失败**，别跟下面 `_INFLIGHT` 那一支
+                #   混（那一支涨的是"进程重启回收在飞任务"的次数）。
+                # 🔵 **暂停标记一个字不动**：人暂停的意图原样带过去。重派之后
+                #   `_check_paused` 在 turn 循环**最开头**（任何模型调用之前）就看到它、
+                #   原地再暂停一次 ⇒ "人没点恢复"这件事没有变，也不会白烧 token。
+                task.status = TaskStatus.PENDING
+                task.updated_at = time.time()
+                _write(task)
+                count += 1
                 continue
             if task.status in _INFLIGHT:
                 # ── 🔴 **取消标记优先于"回收重派"**（2026-09-19 夜实测的洞）──

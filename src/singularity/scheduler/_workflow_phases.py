@@ -540,7 +540,7 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
     #
     # 清了之后，调度循环那条 guard 才会触发重建（`_decompose_and_create_tasks`）。
     # ⚠️ **旧任务文件不删**：它们是审计痕迹，而且 **F3 的 pending ref 挂在上面**（可打捞）。
-    #    调度只认 `_SCHEDULABLE`（PENDING/ROUTED/BLOCKED/PAUSED），旧的 done/failed 不会被捡起来。
+    #    调度只认 `_SCHEDULABLE`（PENDING/ROUTED/BLOCKED），旧的 done/failed 不会被捡起来。
     project.task_ids = []
 
     # ⚠️ 守卫放在**这里**（架构定稿、两条建任务的路的上游）是有意的：
