@@ -1027,14 +1027,17 @@ class OpenAIAgentExecutor(BaseExecutor):
         return "\n".join(results) if results else "未读取到任何文件"
 
     def _tool_write(self, path: str, content: str) -> str:
-        blocked, reason = self._is_blocked_path(path)
-        if blocked:
-            return f"写入被拒绝: {reason}"
-        p = self._safe_path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
-        self._changed_files.append(str(p.relative_to(self._cwd)))
-        return f"已写入 {path} ({len(content)} 字符)"
+        """**派给模块级 `_write_file_core`**（2026-09-25）—— 同 `_tool_run` 的理由：
+        **同一个工具名不许有两套实现**。
+
+        来历（Qoder 外派审查 #2，我核过）：空内容闸门只加在了模块级那份上，而那一份
+        **只有 anthropic 用** —— 本部署三个 agent 全是 `openai-agent` ⇒
+        **那条闸门一次都没走过** ⇒「311 行测试文件被自己清空」的病换了个入口又回来了。
+        """
+        p, msg = _write_file_core(path, content, self._cwd)
+        if p is not None:
+            self._changed_files.append(str(p.relative_to(self._cwd)))
+        return msg
 
     def _tool_run(self, command: str) -> str:
         """**派给模块级 `_run_command`**（2026-09-14）—— 这个工具的语义只留一份。
@@ -1710,15 +1713,25 @@ def _read_files(args: dict, cwd) -> str:
             results.append(f"### {path}\n错误: {e}\n")
     return "\n".join(results) if results else "未读取到任何文件"
 
-def _write_file(args: dict, cwd, blocked_patterns) -> str:
-    """模块级写文件。"""
-    path = args.get("path", "")
-    content = args.get("content", "")
+def _write_file_core(path: str, content: str, cwd) -> tuple:
+    """写文件的**唯一实现** —— 闸门和落盘都只留这一份。
+
+    🔴 为什么必须只有一份（2026-09-25，Qoder 外派审查 #2 报的，我核过）：
+    `write_file` 这个工具名**原来有两套实现**（类方法 `_tool_write` 和下面那个
+    `_write_file`），而**空内容闸门只加在了这一份上**。而这一份**只有 anthropic 用** ——
+    本部署三个 agent 全是 `openai-agent` ⇒ **闸门一次都没走过**，
+    "311 行测试文件被自己清空"那个病**换了个入口又回来了**。
+    同一个形状本仓栽过：`run_command` 也是两套实现、行为不一样，那次的结论就是
+    「同一个工具名不许有两套实现」—— 这次照办（类方法那份现在派到这儿）。
+
+    返回 `(写成的路径 | None, 一句话)`：路径给调用方记 `changed_files`，话给模型看。
+    ⚠️ **不许靠嗅探那句话来判断成没成** —— 那是本仓反复吃亏的"只活在文本里"。
+    """
     if not path:
-        return "请指定 path"
+        return None, "请指定 path"
     blocked, reason = _is_blocked_path_at(path)
     if blocked:
-        return f"写入被拒绝: {reason}"
+        return None, f"写入被拒绝: {reason}"
     p = _safe_path_at(cwd, path)
     # ⚠️ **空内容不许覆盖一个非空文件**（2026-09-15 真机坐实）：
     # 原来这里无条件 `p.write_text(content)`，而 `content` 缺省是 `""` ——
@@ -1728,12 +1741,22 @@ def _write_file(args: dict, cwd, blocked_patterns) -> str:
     # ⇒ 「零改动 = 没产出」那条判据被绕过去了 ⇒ 一路判 `通过` 到 `done`。
     # 新建空文件（`__init__.py` 之类）仍然放行 —— 拦的只是"把已有内容抹掉"这一种。
     if content == "" and p.is_file() and p.stat().st_size > 0:
-        return (f"写入被拒绝：content 为空，而 {path} 已有 {p.stat().st_size} 字节内容，"
-                "这会把它清空。请把**完整内容**放进 content 再调一次；"
-                "确实要清空的话，用 run_command 显式做。")
+        return None, (f"写入被拒绝：content 为空，而 {path} 已有 {p.stat().st_size} 字节内容，"
+                      "这会把它清空。请把**完整内容**放进 content 再调一次；"
+                      "确实要清空的话，用 run_command 显式做。")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
-    return f"已写入 {path} ({len(content)} 字符)"
+    return p, f"已写入 {path} ({len(content)} 字符)"
+
+
+def _write_file(args: dict, cwd) -> str:
+    """模块级写文件（anthropic 的执行器在调）。
+
+    ⚠️ 原来的第三个形参 `blocked_patterns` **删掉了**（2026-09-25）：它**从来没被用过**
+    （blocklist 走的是模块级 `is_blocked_path`）—— 留着一个看着能让调用方定行为的参数，
+    正是本仓最忌讳的"声明和实际对不上"。
+    """
+    return _write_file_core(args.get("path", ""), args.get("content", ""), cwd)[1]
 
 def _run_command(args: dict, cwd, extra_env: dict | None = None) -> str:
     """命令执行的**唯一实现** —— 类方法 `_tool_run` 现在也派到这儿。

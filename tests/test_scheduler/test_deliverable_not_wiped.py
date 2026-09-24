@@ -23,7 +23,7 @@ def test_空内容不许覆盖非空文件(tmp_path):
     f.write_text("def test_a():\n    assert 1\n" * 20, encoding="utf-8")
     before = f.stat().st_size
 
-    out = _write_file({"path": "test_x.py", "content": ""}, tmp_path, None)
+    out = _write_file({"path": "test_x.py", "content": ""}, tmp_path)
 
     assert "拒绝" in out, f"空内容覆盖必须被拒，实际返回：{out}"
     assert f.stat().st_size == before, "文件被清空了"
@@ -32,15 +32,57 @@ def test_空内容不许覆盖非空文件(tmp_path):
 
 def test_空内容仍然可以新建空文件(tmp_path):
     """拦的只是"把已有内容抹掉"，不是"不许建空文件"（`__init__.py` 那种）。"""
-    out = _write_file({"path": "pkg/__init__.py", "content": ""}, tmp_path, None)
+    out = _write_file({"path": "pkg/__init__.py", "content": ""}, tmp_path)
     assert "已写入" in out
     assert (tmp_path / "pkg" / "__init__.py").exists()
 
 
 def test_正常写入不受影响(tmp_path):
-    out = _write_file({"path": "a.py", "content": "x = 1\n"}, tmp_path, None)
+    out = _write_file({"path": "a.py", "content": "x = 1\n"}, tmp_path)
     assert "已写入 a.py (6 字符)" == out
     assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x = 1\n"
+
+
+# ── 第一层（续）：闸门必须挂在**实盘真的会走**的那条路上（2026-09-25）───────
+# 🔴 Qoder 外派审查 #2（`docs/Qoder-审查-20260924.md`）报的，我核过：
+# 上面三条测的是 `_write_file`，而它**只有 anthropic 的执行器在用** ——
+# 本部署三个 agent 全是 `openai-agent`（`.qidian/agents_custom.json` 实读）
+# ⇒ **上面测的那条路，实盘一次都不走**。
+# 这正是本仓反复栽的「测了函数，没测走的是不是它」：闸门装在一个没人的房间里。
+
+def _openai_executor(tmp_path):
+    from singularity.scheduler.executors.openai_agent import OpenAIAgentExecutor
+    return OpenAIAgentExecutor({"model": "m", "api_key_env": "K"}, "写文件", "tid_w",
+                               cwd=str(tmp_path), skill_tools=[], mcp_tools=[])
+
+
+def test_接线_装出来的执行器写空内容必须被拒(tmp_path):
+    """**这条钉"实盘走的那条路"**：同一个工具名两套实现，闸门只加在没用的那套上。
+
+    判据走**真的分发入口**（`_execute_tool`）而不是直接调 `_tool_write` ——
+    `_execute_tool` 里那一跳（`name == "write_file"` 派给谁）正是会断的地方。
+    变异：让 `_tool_write` 自己 `p.write_text(content)`（不派给共享实现）⇒ 这条红。
+    """
+    f = tmp_path / "test_x.py"
+    f.write_text("def test_a():\n    assert 1\n" * 20, encoding="utf-8")
+    before = f.stat().st_size
+
+    out = _openai_executor(tmp_path)._execute_tool(
+        "write_file", {"path": "test_x.py", "content": ""})
+
+    assert "拒绝" in out, f"走 openai 这条路的写文件没有闸门，实际返回：{out}"
+    assert f.stat().st_size == before, \
+        "311 行 → 0 字节那个病，在 openai 这条路上还在（闸门装在了没人走的那个执行器上）"
+
+
+def test_接线_正常写入照旧记进changed_files(tmp_path):
+    """**这条是对照**：别为了挡空内容把正常写入一起挡了，而且 `changed_files` 照旧要记。"""
+    ex = _openai_executor(tmp_path)
+    out = ex._execute_tool("write_file", {"path": "a.py", "content": "x = 1\n"})
+
+    assert "已写入" in out, out
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x = 1\n"
+    assert ex._changed_files == ["a.py"], ex._changed_files
 
 
 # ── 第三层：验收把"全是空文件"等同于"空手回来" ──────────────

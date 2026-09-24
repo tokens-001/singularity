@@ -242,7 +242,6 @@ class AnthropicApiExecutor(BaseExecutor):
 
     def _execute_tool(self, name: str, args: dict) -> str:
         """Execute a tool call and return result text."""
-        from singularity.scheduler.executors.base import _BLOCKED_PATTERNS
         from singularity.scheduler.executors.openai_agent import (
             _read_file,
             _read_files,
@@ -265,7 +264,7 @@ class AnthropicApiExecutor(BaseExecutor):
                     return _read_files(args, self.cwd)
                 return _read_file(args, self.cwd)
             elif name == "write_file":
-                return _write_file(args, self.cwd, _BLOCKED_PATTERNS)
+                return _write_file(args, self.cwd)
             elif name == "run_command":
                 # ⚠️ 带上 `_agent_env`（agent 配的 PATH/代理/endpoint）—— 不带的话，
                 # 同一个工具的同一份配置在两个执行器上**效果不同**（2026-09-14 收敛）。
