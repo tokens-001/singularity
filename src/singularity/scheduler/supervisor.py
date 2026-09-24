@@ -126,11 +126,39 @@ def supervise(
     return verdict
 
 
+def task_def_matches(tdef: dict, description: str) -> bool:
+    """这条架构任务定义**是不是这个任务的**（按描述里的标记认领）。
+
+    判据两条，**缺一不可地都能单独为假**：
+      · 描述里带 `[<id>]` **方括号标记** —— 这是唯一凭据（写入点见
+        `_workflow_phases._run_execution` / `orchestrator._decompose_and_create_tasks`，
+        两处写的都是 `f"[{local_id}] …"`）；
+      · 或者 title 非空且逐字出现在描述里（架构师给的是散文标题，没法加标记）。
+
+    🔴 **为什么 id 必须连方括号一起认**（2026-09-25，Qoder 外派审查 #7，我核过）：
+    原来判的是裸子串 `tdef["id"] in description`，于是 `"T1" in "[T11] …"` **为真**
+    —— 12 个任务的项目里（c 轮 12、09-17 那轮 11，是常态），**T11 会认领到 T1 的验收标准**，
+    而 `_exec._declared_files_for` 那边是"取第一个匹配就返回" ⇒ **拿到的是 T1 的文件清单**。
+    下游一个喂 `_check_laziness` 的 checklist 长度、一个喂 `_model_discipline.record_scope`
+    —— 两把尺子量的都是别人的东西。
+    🔴 **`"" in description` 恒真**：任一 tdef 缺 id 或 title，它就会认领**每一条**任务。
+    上面两个 `and` 的前半句（非空判断）就是堵这个。
+
+    ⚠️ 判据只留一份：`_exec._declared_files_for` 那边的注释本来就写着"匹配方式跟
+    `supervisor.qa_context` 一致"—— **两份手抄的一致迟早会漂**，所以都调这里。
+    """
+    tid = str(tdef.get("id", "") or "")
+    if tid and f"[{tid}]" in description:
+        return True
+    title = str(tdef.get("title", "") or "")
+    return bool(title) and title in description
+
+
 def qa_context(task) -> tuple[list, list]:
     """取该任务的 QA 上下文: (constraints, checklist)。
 
     constraints: Gate2 确认的约束清单 (project.constraints_checklist)
-    checklist:   架构分解里该任务的验收标准 (按 title/id 匹配 task.description)
+    checklist:   架构分解里该任务的验收标准 (认领规则见 `task_def_matches`)
     非项目任务 → 双空。
     """
     constraints: list = []
@@ -146,7 +174,7 @@ def qa_context(task) -> tuple[list, list]:
             constraints = _pm.effective_constraints(proj)   # 带兜底，见 §60
             if proj.architecture:
                 for tdef in proj.architecture.get("tasks", []):
-                    if tdef.get("title", "") in task.description or tdef.get("id", "") in task.description:
+                    if task_def_matches(tdef, task.description or ""):
                         from singularity.scheduler import _machine_checks as _mc3
                         acc = _mc3.acceptance_text(tdef.get("acceptance", ""))
                         if acc:

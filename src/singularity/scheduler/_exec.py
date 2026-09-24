@@ -1154,7 +1154,11 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
 def _declared_files_for(task) -> list[str]:
     """任务在架构里声明的 `estimated_files`；取不到返回 []（= **没有尺子**）。
 
-    匹配方式跟 `supervisor.qa_context` 一致：按 title / id 出现在任务描述里认领。
+    认领规则**调 `supervisor.task_def_matches`** —— 原来这里手抄了一份"和 `qa_context`
+    一致"的匹配（`if str(tdef.get("title","")) in desc or str(tdef.get("id","")) in desc`），
+    而**手抄的一致迟早会漂**：裸子串判 id 让 `T1` 命中 `[T11]`，这条又是"取第一个匹配就
+    返回" ⇒ **拿到的是 T1 的文件清单**（2026-09-25，Qoder 外派审查 #7）。理由写在那边。
+
     实测探路2 的架构任务**全都没给这个字段** → 这条路的覆盖率取决于架构师给不给，
     所以"为什么没记"要能查得到，而不是默默记成 0 违例。
     """
@@ -1163,12 +1167,13 @@ def _declared_files_for(task) -> list[str]:
         return []
     try:
         from . import project as proj_mod
+        from .supervisor import task_def_matches  # 认领规则只留一份，别手抄
         proj = proj_mod.load(pid)
         desc = getattr(task, "description", "") or ""
         for tdef in ((getattr(proj, "architecture", None) or {}).get("tasks") or []):
             if not isinstance(tdef, dict):
                 continue
-            if (str(tdef.get("title", "")) in desc or str(tdef.get("id", "")) in desc):
+            if task_def_matches(tdef, desc):
                 f = tdef.get("estimated_files")
                 return [str(x) for x in f] if isinstance(f, list) else []
     except Exception:
