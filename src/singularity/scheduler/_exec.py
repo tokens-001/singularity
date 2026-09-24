@@ -1027,6 +1027,16 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
 
         retry += 1
         if retry > task.max_retries:
+            # 🔴 **重试用尽 = "不再试了"，不是"交回最后那一份"**（2026-09-25）。
+            # 紧邻上面 deadline 那一支在 2026-09-20 已改成"手里那份更硬就交手里那份"，
+            # **这一支漏了** —— 同一个形状在这里原样重演：前几轮真写出文件、建好
+            # `merge_request`，**最后一轮模型只想不写**（真机上这是常态，
+            # `~/OPEN.md` 记着"15 个失败任务全败在没产出"）⇒ 交回空壳
+            # ⇒ `finalize` 读成「无文件改动」⇒ `orchestrator` 那句
+            # `if batch.merge_request: mq.submit(...)` 永远见不到产物。
+            # 判据用**同一把尺**（`_batch_evidence`），别在这儿另发明一个。
+            if prev_batch is not None and _batch_evidence(prev_batch) > _batch_evidence(batch):
+                return prev_batch
             return batch
 
         # 重试 (v2: 主仓库可能有 merge 残留; v3: worktree 已在 run() 内部清理)

@@ -196,3 +196,37 @@ def test_撞预算时手里没有更硬的_照旧交收尾那一份(monkeypatch)
     wrapup = _batch(tokens=4920, deadline_wrapup=True)
     got = _drive(monkeypatch, [first, wrapup], exhausted=[False])
     assert got is wrapup
+
+
+# ═══════════════════════════════════════════════════════════════
+# ④ **重试用尽**那一支漏了同一刀（2026-09-25，Qoder 外派审查 #1）
+#
+# 上面 deadline 那一支 09-20 修好了，而"重试次数用完"那一支还是**无条件交 `batch`**
+# —— 同一个函数里同样的形状，修了一半。真机上这条更常见：`max_retries=3` ⇒ 最多跑 4 轮，
+# 而"最后一轮只想不写"是常态（`~/OPEN.md`：「15 个失败任务全败在没产出」）。
+# ═══════════════════════════════════════════════════════════════
+
+def test_重试用尽时交回手里更硬的那份(monkeypatch):
+    """**正题**：前几轮有产物，最后一轮零产出 ⇒ 交回的必须是那份有产物的。
+
+    `max_retries=2` ⇒ 跑满 3 轮才走到 `retry > task.max_retries`。
+    变异：把这一支改回无条件 `return batch` ⇒ 交回的是那个只烧钱的空壳 ⇒ 红。
+    """
+    real = _batch(merge_request=NS(), tokens=100)   # 第 1 轮真干完了
+    burn1 = _batch(tokens=1000)                      # 第 2 轮只烧钱
+    burn2 = _batch(tokens=4000)                      # 第 3 轮也只烧钱
+    got = _drive(monkeypatch, [real, burn1, burn2], exhausted=[False, False])
+
+    assert got is real, (
+        "重试用尽交回的是最后那个空壳 —— 前几轮的产物还在 pending ref 上，"
+        "而 `orchestrator` 只看 `batch.merge_request`，None ⇒ 产物进不了合并队列")
+    assert got.merge_request is not None
+
+
+def test_边界_重试用尽时最后一轮更硬就交它_别锁死第一份(monkeypatch):
+    """**对照**：别把这一支修成"永远交第一份" —— 最后那轮更硬时它才是最新的磁盘事实。"""
+    first = _batch(files=["a.py"], tokens=100)        # 档 2
+    last = _batch(merge_request=NS(), tokens=100)     # 档 3
+    got = _drive(monkeypatch, [first, _batch(tokens=5), last], exhausted=[False, False])
+
+    assert got is last
