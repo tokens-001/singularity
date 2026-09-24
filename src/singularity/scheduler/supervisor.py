@@ -191,9 +191,13 @@ def _all_empty(changed_files: list[str], root) -> list[str]:
 def our_side_stop_of(executor_result) -> str:
     """这次产出**是不是被我们自己停掉的** —— 是的话返回哪一种，否则空串。
 
-    判据只有两档算"我方"（2026-09-19 复核审计 A4 时定的）：
+    判据只有三档算"我方"（前两档 2026-09-19 复核审计 A4 时定的，第三档 2026-09-24 补）：
       · `error_kind == "deadline"` —— 撞预算 / 单次 240s 硬顶，被我们掐断；
-      · `truncated_by` 非空 —— 工具轮次用尽（有新产出但没终答）。
+      · `truncated_by` 非空 —— 工具轮次用尽（有新产出但没终答）；
+      · `error_kind == "no_output"` —— 「只想不写」那把 480 秒的尺主动断的。
+        ⚠️ **它和 `stalled` 必须分开**：那个量"什么都没来"（**服务端/网络的锅**，
+        断它的是对端的静默）；这个量"字节一直在来、但没来正文/工具调用"
+        —— 断它的是**我们自己那把尺**。
     ⚠️ `error_kind == "exec"` **不算** —— 那是模型/调用真的失败了，赖不到我们头上。
       （把它算进来就会变成"什么都赖系统"，那就从一个归因错换到另一个。）
     """
@@ -202,8 +206,9 @@ def our_side_stop_of(executor_result) -> str:
         return ""
     if getattr(er, "truncated_by", ""):
         return str(er.truncated_by)
-    if getattr(er, "error_kind", "") == "deadline":
-        return "deadline"
+    _kind = getattr(er, "error_kind", "")
+    if _kind in ("deadline", "no_output"):
+        return _kind
     return ""
 
 

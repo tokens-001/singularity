@@ -1137,18 +1137,24 @@ class OpenAIAgentExecutor(BaseExecutor):
         `_track()` 在这里是**幂等追加**（`_track_changed_files` 只 `append`，不覆盖），
         所以先前轮次记下的文件不会丢。
 
-        ⚠️ `error_kind` 仍然是 `"exec"`（调用真的失败了）—— **不改成 `deadline`**：
-        那档是给"我方上限主动收尾"的，改了会让 `_dispatch_exec` 不再换模型重试，
-        而这里的失败（网络/格式）本来就该换。
+        ⚠️ `error_kind` **一律不是 `"deadline"`**：那档是给"我方上限主动收尾"的，
+        改了会让 `_dispatch_exec` 不再换模型重试，而这里的失败（网络/格式/打转）
+        本来就该换一个模型再试。
+        🔴 **`"no_output"` 是 2026-09-24 补的第三种**（`_NoOutputError`）。它和 `stalled`
+        **走的是同一条下游路**（只特判 `deadline` / `timeout`，见 `_dispatch_exec`），
+        差别在**归因**：那两档是我方/服务端的尺断的，而 `no_output` 原来被写成 `exec`
+        ⇒ `supervisor.our_side_stop_of` 不认它 ⇒ 判词说"执行器报错"，还顺带把
+        两条拿 `changed_files` 当尺的软信号点亮（**同一份判词里自相矛盾**）。
         """
         self._track()
         return ExecutorResult(
             success=False, error=error,
-            # `exc` 只用来**给种类起个名**，不改任何判定：`stalled` 和 `exec` 在
+            # `exc` 只用来**给种类起个名**，不改任何判定：这三种在
             # 下游走**完全同一条路**（换模型重试 + 记 breaker，见 `_dispatch_exec`）——
             # 全仓**没有任何分支认 `exec`**（2026-09-19 核过）。差别只在日志/终态/
-            # `unverified` 里写的是 `stalled 未产出` 还是 `exec 未产出`。
-            error_kind=("stalled" if isinstance(exc, _StalledError) else "exec"),
+            # `unverified` 里写的是哪一种名，以及 `supervisor` 认不认它是我方掐断。
+            error_kind=("no_output" if isinstance(exc, _NoOutputError)
+                        else "stalled" if isinstance(exc, _StalledError) else "exec"),
             changed_files=list(self._changed_files),
             elapsed=time.time() - started, tool_events=list(self._tool_events))
 
@@ -1825,10 +1831,11 @@ class _NoOutputError(_NetworkError):
 
     和 `_StalledError` 的分工：那个量"**什么都没来**"（含思考），这个量"没来**可用的东西**"。
     ⚠️ 同样是 `_NetworkError` 的子类，理由同 `_StalledError`（走 failover 的判定不变）。
-    ⚠️ **它是我方掐断**（我们的尺子主动断的），但 `error_kind` 落到 `exec` 而不是 `deadline`
-    —— `supervisor.our_side_stop_of` 只认 `deadline`，所以这一发会被记成"执行器报错"。
-    **这是已知的归因缺口**（同「判据错位审计」那一族），改它要动 `error_kind` 的枚举，
-    **没在这轮做**；先在这儿写明，免得下次有人拿 `our_side` 读不懂。
+    ⚠️ **它是我方掐断**（我们的尺子主动断的）⇒ `error_kind="no_output"`，且
+    `supervisor.our_side_stop_of` **认它**（2026-09-24 补的那一档；此前它落 `exec`
+    ⇒ 被判词读成"执行器报错"，两条软信号还照亮 —— 那是已修的归因缺口）。
+    ⚠️ **别图省事并进 `"deadline"`**：那一档在 `_dispatch_exec` 里是"**别再换模型了**"，
+    而这里换一个模型再试一次是合理的（它只是陷在思考里，不是被预算掐死）。
     """
     pass
 class _TransientError(Exception):

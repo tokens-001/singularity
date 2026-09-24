@@ -94,3 +94,57 @@ def test_只认我方那两档_模型自己失败不算():
     assert sup.our_side_stop_of(
         ExecutorResult(success=False, error_kind="exec")) == ""
     assert sup.our_side_stop_of(None) == ""
+
+
+def test_只想不写那把尺也算我方掐断_但跟停滞分开():
+    """2026-09-24 补的第三档（清单里那条「已知归因缺口」）。
+
+    断它的**是我们那把 480 秒的尺**（量"字节一直在来、但没来正文/工具调用"）
+    ⇒ 算我方；而 `stalled` 量的是"什么都没来"（**服务端/网络的锅**）⇒ **不算**。
+    这一条同时钉住这两边 —— 别为了补前者把后者一起认进来。
+    """
+    assert sup.our_side_stop_of(
+        ExecutorResult(success=False, error_kind="no_output")) == "no_output"
+    assert sup.our_side_stop_of(
+        ExecutorResult(success=False, error_kind="stalled")) == "", \
+        "停滞是服务端静默断的，不是我方的刀 —— 认它就变成'什么都赖系统'"
+
+
+def test_接线_打转被掐断这一路真的走到判词里(monkeypatch, tmp_path):
+    """**跨两个文件的接线测试**：`_fail_result` 命名 → `our_side_stop_of` 认它。
+
+    判据链三跳，**缺哪一跳这条都红**：
+      ① `_stream_call` 抛 `_NoOutputError`（已有用例覆盖，这里直接喂第二跳）
+      ② `_fail_result` 把它命名成 `no_output` —— 原来写死 `exec`；
+      ③ `supervisor.our_side_stop_of` 认这一档。
+
+    🔵 为什么必须有这条：②③ 各自都有单元用例，但它们之间**隔着一条实参链**
+    （`_exec.run()` → `our_side_stop_of(exec_result)`）—— 本仓栽过多次的
+    「函数对 ≠ 接线通」。只测 `our_side_stop_of` 的函数体，把它改回 `exec` 照样绿。
+
+    变异：`_fail_result` 里那个 `"no_output"` 换回 `"exec"` ⇒ 这条红。
+    """
+    from singularity.scheduler.executors import openai_agent as oa
+    monkeypatch.setenv("K", "k")
+    monkeypatch.setattr(oa.witness, "warn", lambda *a, **k: None)
+    ex = oa.OpenAIAgentExecutor({"model": "m", "api_key_env": "K", "entry": "http://x",
+                                 "max_turns": 3},
+                                "写 X 模块", "tid_attr", cwd=str(tmp_path),
+                                skill_tools=[], mcp_tools=[])
+    ex._api_key = "k"
+    ex._url = "http://x"
+    monkeypatch.setattr(ex, "_api_call",
+                        lambda b: (_ for _ in ()).throw(
+                            oa._NoOutputError("只想不写 480s：一直没有正文/工具调用")))
+
+    r = ex.run()
+
+    assert r.success is False
+    assert r.error_kind == "no_output", (
+        f"打转被掐断却记成 {r.error_kind!r} —— 归因缺口原样回来了"
+        "（原来落 'exec' ⇒ 判词说'执行器报错'，还顺带点亮两条软信号）")
+    assert sup.our_side_stop_of(r) == "no_output", "②到③那跳断了：`our_side_stop` 还是空的"
+    # ③ 的效果：那两条拿 `changed_files` 当尺的软信号不再亮，判词不再自相矛盾
+    lz = sup._check_laziness("", [], ["实现 X 模块", "写测试"], "写 X 模块",
+                             our_side_stop=sup.our_side_stop_of(r))
+    assert lz.passed is True, lz.reason
