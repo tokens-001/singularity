@@ -200,15 +200,13 @@ def _dispatch_ready(dispatched: set, pool, agents, runner: TaskRunner,
                        route_level=t.route_level, route_gate=route.gate_required,
                        route_type=route.task_type):
             from singularity.scheduler.project import repo_root_for
-            snap = snap_mod.take(t.id, repo_root=repo_root_for(t))
-            tracker.transition(t.id, TaskStatus.RUNNING, snapshot_id=snap.id)
-            # ⚠️ **从这一行往下，任务已经是 RUNNING 了。** 后面任何一步抛，都会留下一个
-            # **没人管的 RUNNING 任务**：没有 future ⇒ 循环看不见它 ⇒
-            # `ready_tasks()` 也不返回它（它是 RUNNING 不是 PENDING）⇒
-            # **900s 收割永远够不着**，它就那么挂着。
-            # 2026-09-13 真机实测就是这么凭空少了一个任务（py-spy 栈：池子里没有工作线程、
-            # 循环空转到 `time.sleep(3)`）。所以这一段必须兜住 ——
-            # **抛了要把它转成 FAILED，不许留在 RUNNING**。
+            # 🔴 **`cas` 到 `submit` 之间这两步也必须有兜底**（2026-09-25，Qoder 外审
+            # 第二轮 #5）。它们原来在下面那个 `try` **之外** ⇒ `snap_mod.take` 一抛
+            # （快照目录不在、盘满、权限）任务就留在 `DISPATCHED`：
+            # `∈ _INFLIGHT` 但 `∉ _SCHEDULABLE` ⇒ `ready_tasks` 不返回、没有 future
+            # ⇒ **900s 收割够不着**，而 `_warn_orphan_running` 当时只认 RUNNING ⇒ 一声不出。
+            # 走共用的 `_strand_guard`（它现在也认 DISPATCHED，见那里）。
+            # ⚠️ `where` 仍用 `"dispatch"`：同属"派发阶段失败"，告警 key 别再劈一条。
             # ⚠️ **死线必须在 submit 之前定**（2026-09-14 核外派「改动审阅」）。
             # `runner.execute` 原本是在 worker 线程**开头**才起表 —— 而池子满时
             # 任务会在队列里等，于是两把尺差了一个**排队时间**。并发默认 1、单个任务
@@ -216,8 +214,22 @@ def _dispatch_ready(dispatched: set, pool, agents, runner: TaskRunner,
             # "该收尾了"**晚于**外面那把 900s 的刀 ⇒ 自收尾照样赶不上收割
             # （就是 §67 那个病，换了个更常见的触发条件）。
             # 从 submit 起算，排队时间会被 `_dispatch_budget_s` 每次 dispatch 自动扣掉。
-            deadline_at = time.time() + config.TASK_DEADLINE_S
+            #
+            # ⚠️ **从 `cas` 成功那一行往下，任务就已经"离开调度视野"了**：快照、切 RUNNING、
+            # 提交，任何一步抛都会留下一个**没人管的任务**（没有 future ⇒ 循环看不见它 ⇒
+            # `ready_tasks()` 也不返回它 ⇒ **900s 收割永远够不着**）。2026-09-13 真机实测
+            # 就是这么凭空少了一个任务（py-spy 栈：池子里没有工作线程、循环空转到
+            # `time.sleep(3)`）⇒ **整段必须兜住，抛了要把它转成 FAILED**。
+            # 🔴 **2026-09-25 补**（Qoder 外审第二轮 #5）：原来 `try` 只从 `pool.submit`
+            # 那一行开始，**`snap_mod.take` / `transition(RUNNING)` 在它外面** ——
+            # 那两步抛了任务就卡在 `DISPATCHED`（`∈ _INFLIGHT` 但 `∉ _SCHEDULABLE`），
+            # 而当时的孤儿探测器只认 `RUNNING` ⇒ 一声不出，只能等进程重启。
+            # 现在整段并进这一个 `try`（不另开一个：同一件事一个出口，
+            # 也免得往静默 except 棘轮上再加一处）。
             try:
+                snap = snap_mod.take(t.id, repo_root=repo_root_for(t))
+                tracker.transition(t.id, TaskStatus.RUNNING, snapshot_id=snap.id)
+                deadline_at = time.time() + config.TASK_DEADLINE_S
                 fut = pool.submit(runner.execute, t, agents, mq, deadline_at)
             except Exception as _e:
                 # 走共用的兜底（§65）。**这里原来是自己手写一段**，跟 `_strand_guard`
@@ -229,7 +241,8 @@ def _dispatch_ready(dispatched: set, pool, agents, runner: TaskRunner,
                 # "本文里同一形状有 5 处…这个是共用的兜底"，**而真机抓到的那一处恰恰没走它** ——
                 # 声称跑在行为前面。`where="dispatch"` 让告警 key 仍是 `dispatch_failed`
                 # （不劈开已有的常驻分组），`detail` 保住原来那句人话。
-                _strand_guard(t, _e, "dispatch", detail="派发失败：future 没登记上")
+                _strand_guard(t, _e, "dispatch",
+                              detail="派发失败（快照/状态切换/提交）")
                 continue
             running_futures[fut] = (t, route, snap, pre, time.time())
             dispatched.add(t.id)
@@ -470,8 +483,15 @@ def _strand_guard(t, exc: BaseException, where: str, detail: str = "") -> None:
     （没有 future ⇒ 循环看不见它 ⇒ `ready_tasks()` 也不返回它 ⇒ 900s 收割够不着）。
     本文里同一形状有 5 处（派发那次是 2026-09-13 真机抓到的），这个是共用的兜底。
 
-    **只在它还停在 RUNNING 时才改** —— `finalize` 可能已经把它推到 DONE/FAILED 了，
+    **只在它还停在 RUNNING / DISPATCHED 时才改** —— `finalize` 可能已经把它推到 DONE/FAILED 了，
     那种情况不能覆盖（会丢掉真实终态）。
+    ⚠️ **`DISPATCHED` 是 2026-09-25 补进来的**（Qoder 外审第二轮 #5）：`_dispatch_ready`
+    里 `cas(ROUTED→DISPATCHED)` 成功之后、`pool.submit(...)` 之前还有两步
+    （`snap_mod.take` / `transition(RUNNING)`），那两步原来**在 `try` 之外** ⇒ 一抛就把
+    任务留在 `DISPATCHED`：它 `∈ _INFLIGHT` 但 `∉ _SCHEDULABLE` ⇒ `ready_tasks` 不返回、
+    又没有 future ⇒ **收割也够不着**，只能等进程重启。
+    `DISPATCHED` 本来就是个只停一瞬的过路态（同一个函数里紧接着就转 RUNNING）——
+    所以"还停在这儿"必然是没人管，改了不会覆盖真实终态。
     ⚠️ 为什么这里"自动改状态"是对的，而 `reconcile_projects` 那条规矩说自动纠正危险：
     那条说的是**猜**（"状态和磁盘对不上，谁对？"）；这里不猜 —— **没有 future 就是
     没在跑**，是确定的。留着 RUNNING 才是谎报。
@@ -488,7 +508,7 @@ def _strand_guard(t, exc: BaseException, where: str, detail: str = "") -> None:
     """
     try:
         fresh = tracker.read_task(t.id)
-        if fresh is not None and fresh.status == TaskStatus.RUNNING:
+        if fresh is not None and fresh.status in (TaskStatus.RUNNING, TaskStatus.DISPATCHED):
             tracker.transition(t.id, TaskStatus.FAILED,
                                error=f"{detail or where + ' 失败'}（任务没在跑）: "
                                      f"{type(exc).__name__}: {exc}"[:200])
@@ -864,6 +884,13 @@ _LOOP_NO_PROGRESS_SLEEP_S = 0.5
 _STUCK_ROUNDS_BEFORE_WARN = 3
 
 
+# 「**没人管就永远不会有人管**」的状态 = `_INFLIGHT` **减去** `_SCHEDULABLE`。
+# ⚠️ 从两个集合现算，不手抄一份 —— 手抄的清单迟早会漂（本仓栽过多次）。
+# ⚠️ `ROUTED` 必须留在外面：它同时进 `_SCHEDULABLE`，是"等着被派"的正常停留态，
+#    下一轮 `_dispatch_ready` 就会捡走 —— 把它算孤儿会天天误报。
+_ORPHAN_STATUS_VALUES = {s.value for s in (tracker._INFLIGHT - tracker._SCHEDULABLE)}
+
+
 def _warn_orphan_running(running_futures: dict = None, pending_batches: dict = None) -> None:
     """**只报不改**：tracker 里挂着 RUNNING、却**不在任何活任务表里**的任务 = 孤儿。
 
@@ -884,6 +911,10 @@ def _warn_orphan_running(running_futures: dict = None, pending_batches: dict = N
         暂停统统误伤）；
       · **退出前**：不传那两个表（此刻循环确实什么都不管，等价于原来的语义）。
 
+    🔴 **2026-09-25 扩了状态面**（Qoder 外审第二轮 #5）：原来判据写死 `== RUNNING`，
+    而上面那段推理对 `DISPATCHED` / `VALIDATING` **同样成立** —— 它们也是"没有 future、
+    `ready_tasks` 不返回、收割够不着"。现在就认整组，见 `_ORPHAN_STATUS_VALUES`。
+
     ⚠️ **只报警、不改状态** —— 自动"纠正"会把真问题抹平成假的一致
     （同 `reconcile_projects` 的规矩）。
     ⚠️ **每个任务只报一次**：这个检查每轮都会走到，不去重会刷屏。
@@ -901,7 +932,7 @@ def _warn_orphan_running(running_futures: dict = None, pending_batches: dict = N
             except Exception:
                 continue
             tid = d.get("id") or p.stem
-            if d.get("status") != TaskStatus.RUNNING.value or tid in _orphans_warned:
+            if d.get("status") not in _ORPHAN_STATUS_VALUES or tid in _orphans_warned:
                 continue
             if tid in live:
                 continue               # 有人管 —— 正常在跑的任务，不是孤儿
