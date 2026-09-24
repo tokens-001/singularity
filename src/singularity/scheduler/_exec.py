@@ -816,6 +816,9 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                         # （supervisor 与 implementer 同模型）时返回 "block"，注释写明是"硬锁"。
                         # 但消费端原来只认 "fail" / ("escalate","retry") —— "block" 两条都不中，
                         # 直接穿过去、**合并照走**，那个硬锁从来没生效过。
+                        # 🔴 **修完消费端它照样没生效**（2026-09-25 核）：`supervise()` 的两个
+                        # 模型名形参全仓三处调用点**一个都没传** ⇒ 生产端恒不发 "block"
+                        # ⇒ **这一支至今是死代码**。详情写在 `supervisor.py` 文件头。
                         if sv.verdict in ("fail", "block"):
                             pending_merge_req = None
                             quality.setdefault("warnings", []).append(

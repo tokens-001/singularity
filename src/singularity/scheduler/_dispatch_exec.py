@@ -23,13 +23,25 @@ from singularity.scheduler.executors.base import BaseExecutor
 from singularity.scheduler.log import timed
 
 # ── 委员会收集初稿的时间预算 ──
-# 单次模型调用本身有上限（claude-cli 300s / openai-agent 240s），所以一波的耗时
-# 取决于最慢的那个模型。把波超时调小只会让慢模型白跑——输出被丢弃、token 照花。
 # 它决定"何时去读已完成的结果"。**2026-09-11 修正**：原文说"调小它救不了总耗时，
 # 因为调用点用 with ThreadPoolExecutor(...) 退出时 shutdown(wait=True) 会 join"——
 # 现在调用点已改成显式 shutdown(wait=False)（见下方 _dispatch_committee），
 # 所以这个 timeout 现在**真的是时限**了：到点就带着已完成的那部分返回，
 # 没跑完的线程留在后台（不 join），不再拖住整条架构阶段。
+#
+# 🔴 **它和单次调用上限的关系已经反了**（2026-09-25，Qoder 外派审查 #5，我核过）：
+#    上面原来那句前提是「单次模型调用本身有上限（claude-cli 300s / openai-agent **240s**）」
+#    —— **那个 240 已被 `60a81e16` 拿掉**（2026-09-21）：现在 `_run_no_tools` →
+#    `_run_executor(...)` **不传 `budget_s`** ⇒ `_budget = _EXEC_BUDGET` ⇒ 单次调用可以
+#    跑到 **810 秒**。而收集用的是 `concurrent.futures.wait(..., timeout=_WAVE_TIMEOUT)`
+#    之后 `for fut in done` 取**快照** ⇒ **300 秒后才回来的那一席，结果被丢、`member_usage`
+#    里也没有它 ⇒ 这笔钱不进账**（委员会是全场最贵的一段）。
+#    ⚠️ 所以 `_COMMITTEE_MAX_SEATS` 那段说的"`_WAVE_TIMEOUT` 随之退回纯等待上界、
+#    不再是结果截断"**现在不成立**。
+#    🔵 这一条还给 09-22 那个标着"原因未定"的观测提供了一个不依赖"这题难不难"的解释：
+#    那一轮 `committee_partial: 2/3 缺`。
+#    ⏳ **动哪个数是要拍板的**（抬 `_WAVE_TIMEOUT`？还是让席位单次也封在 300 内，
+#    把"席位表 == 实际会跑的表"这个不变量补全？）—— **先别拍脑袋改**，见 `~/OPEN.md`。
 _WAVE_TIMEOUT = float(os.environ.get("QIDIAN_DEBATE_TIMEOUT", "300"))
 
 # 委员会最多几家。**必须和 `_dispatch_committee` 里的线程池大小一致** ——

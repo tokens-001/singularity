@@ -3,7 +3,15 @@
 Opus二审核心设计: PASS必须落在非LLM硬证据上。
   - 硬证据(可自动判定): 测试过、lint过、禁改文件diff机械比对
   - 软证据(需人工): 主观判断 → 升级Owner,不自动PASS
-  - 模型隔离: Supervisor model ≠ Implementer model (硬锁)
+
+🔴 **"模型隔离（硬锁）"这条设计**——**从来没生效过，现在仍然没有**（2026-09-25 核）。
+  判据是 `if supervisor_model and implementer_model and supervisor_model == implementer_model:`
+  两个形参默认 `""`，而**全仓三处调用点（`_exec.run` / `_task_runner.finalize` /
+  `_api_tasks.task_supervise`）没有一处传它们** ⇒ 条件恒假、`verdict` 永不为 `"block"`。
+  连带 `_exec.py` 里 `if sv.verdict in ("fail","block")` 那一支**是死代码**
+  —— 2026-09-19 那次"修 block 没生效"修的正是这条死分支（当时以为接上了，其实没有）。
+  ⚠️ **别再把它当一条现存的防线读**；要么把两个模型名接上、要么连分支一起删
+  —— **那是决定，见 `~/OPEN.md`**。写在这儿是因为"文件头写着有、实际没有"比没有更坏。
 """
 
 from __future__ import annotations
