@@ -1,12 +1,18 @@
 __all__ = ['_run_execution', '_run_planning', '_run_research', '_validate_architecture',
-           'classify_arch_issues', 'split_arch_issues', 'lineup_seats', 'ACCEPTANCE_UNSTATED']
+           'classify_arch_issues', 'split_arch_issues', 'lineup_seats', 'ACCEPTANCE_UNSTATED',
+           'ARCH_SELF_CONTRADICTION', 'ARCH_NEEDS_CLARIFICATION']
 
 # 验收"没表态"的标记串。`_validate_architecture` 产它、致命判据认它 ——
 # ⚠️ 两处共用同一个常量，是因为 `arch_issues` 现在只有 `list[str]`、没有严重度。
 # 想彻底干净就把 issues 改成带 severity 的结构；在那之前，**至少别写两份字面量**。
 ACCEPTANCE_UNSTATED = "acceptance 没表态"
 
+# 架构**内部**自相矛盾的标记串（2026-09-27 加，来历见 `_arch_language_conflict`）。
+# 同上：产它和认它的地方共用这一个常量。
+ARCH_SELF_CONTRADICTION = "架构自相矛盾"
+
 import json
+import re
 
 from singularity.scheduler import tracker
 from singularity.scheduler._io import try_parse_json
@@ -734,14 +740,194 @@ def classify_arch_issues(blockers: list[str]) -> tuple[list[str], list[str]]:
             某条 acceptance 没表态 ⇒ 那条验收**永远不会被判**
             （2026-09-20 §88 的真根因：T1 的验收写着要 `CONTRACTS.md`，那文件全历史不存在，
               任务照样判 done —— 因为那条验收从没进过机器检查）
-      只记：`data_model` / `tech_stack` 等 —— 一个单文件 CLI 本来就没有 data_model，
+            **架构自相矛盾** ⇒ 干活的人没法同时满足（2026-09-27 `round-20260926`：
+              tech_stack 说 Go、16 条判据全是 `python3 -m pytest` ⇒ 唯一入口那个任务
+              打转 811 秒 / 275,806 token / 零文件 ⇒ 整轮全灭）
+      只记：`data_model` / `tech_stack` 等**缺项** —— 一个单文件 CLI 本来就没有 data_model，
             按"六字段齐全"拦会把好活挡在门外
+            ⚠️ 注意分界：**缺不缺**只记，**打架不打架**要拦 —— 这俩不是一回事
 
     ⚠️ 抽成独立函数是为了**能单独测** —— 它原来是内联在 `_run_planning` 里的一行字符串匹配，
     而字符串匹配正是这个仓栽过的地方（改措辞就静默失效，且没人会注意到）。
     """
-    fatal = [i for i in blockers if "tasks" in i or ACCEPTANCE_UNSTATED in i]
+    fatal = [i for i in blockers
+             if "tasks" in i or ACCEPTANCE_UNSTATED in i or ARCH_SELF_CONTRADICTION in i]
     return fatal, [i for i in blockers if i not in fatal]
+
+
+#: 从**人话**里认语言用的关键词表。认不出 → `""`（**不表态，别猜**）——
+#: 误判会把一个正常的架构挡在门外，代价比漏报大。
+_LANG_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("python", ("python", "pytest", "pip", "poetry", "pyproject")),
+    ("go", ("go", "golang")),
+    ("node", ("typescript", "node", "npm", "npx")),
+    ("rust", ("rust", "cargo", "rustc")),
+)
+
+#: `check.argv[0]`（可执行文件名）→ 语言。**比人话可靠**：argv 是机器真要跑的东西。
+_ARGV_LANG = {
+    "python": "python", "python3": "python", "pytest": "python",
+    "go": "go", "cargo": "rust", "rustc": "rust",
+    "node": "node", "npm": "node", "npx": "node",
+}
+
+
+def _lang_of_text(text: str) -> str:
+    """从一段自由文本里认语言；认不出返回 `""`。
+
+    ⚠️ 用词边界匹配，不用裸 `in` —— `"go"` 撞上 `goal` / `good` 就误判了。
+    """
+    low = str(text or "").lower()
+    for lang, kws in _LANG_KEYWORDS:
+        for kw in kws:
+            if re.search(rf"(?<![a-z0-9]){re.escape(kw)}(?![a-z0-9])", low):
+                return lang
+    return ""
+
+
+def _arch_language_conflict(arch: dict) -> str:
+    """架构**内部**的语言自相矛盾。返回人话（`""` = 没矛盾，或认不出来）。
+
+    🔴 **为什么加这个（2026-09-27，`round-20260926` 真机）**：那一轮的架构
+    `tech_stack.language` 白纸黑字写着「**Go 1.22+**」，而 **16 条约束的 `check.argv`
+    16/16 全是 `python3 -m pytest`**，测试任务也全是 `tests/*.py`（`T11` 甚至是
+    「用 `test_module_boundaries.py` 解析 Go import 图」）——
+    **模型没法同时满足**：写 Go 则 pytest 测不了，写 .py 则违背 `tech_stack`。
+    ⇒ 它在那两套互斥指令之间来回，**811 秒 / 275,806 token / 6 个工具轮 / 0 个文件改动**，
+    而**这是全图唯一入口那个任务**（13 个任务依赖它）⇒ 整轮全灭。
+
+    ⚠️ **原来的校验为什么没拦住**：`classify_arch_issues` 的注释写着它拦的是
+    「`tasks` 段坏 ⇒ 拆不出任务」这一档，而 `tech_stack` / `constraints` 归"只记"。
+    **那个分档是对的**（缺 `data_model` 确实不该拦），
+    **但它查的是"字段缺不缺"，没查"字段之间打不打架"** —— 这两个字段都在、都非空，
+    只是**说的不是一种语言**。
+
+    ⚠️ **判据只取两个"最硬"的信号**（声明的语言 vs 判据真跑的解释器），
+    不够就再加（`tasks[].estimated_files` 的后缀是下一个候选）——
+    宁可漏报也别误报：**误报 = 把一个好架构挡在门外**。
+    """
+    ts = arch.get("tech_stack")
+    declared = _lang_of_text(ts.get("language", "") if isinstance(ts, dict) else ts)
+    if not declared:
+        return ""
+    runners: set[str] = set()
+    # ⚠️ **两处都要扫**：`constraints[].check`（约束的判据）**和**
+    # `acceptance[].check`（任务的验收）。2026-09-27 第一版只扫了前者 ——
+    # 而那一轮 T0 的 `acceptance` 里**也**写着 `python3 -m pytest`，
+    # 也就是说同一个任务对象**自己就前后打架**，漏扫一半等于漏一半。
+    for c in arch.get("constraints") or []:
+        argv = ((c or {}).get("check") or {}).get("argv") or []
+        if argv:
+            base = str(argv[0]).split("/")[-1].lower()
+            if base in _ARGV_LANG:
+                runners.add(_ARGV_LANG[base])
+    for t in arch.get("tasks") or []:
+        acc = t.get("acceptance") if isinstance(t, dict) else None
+        for a in (acc if isinstance(acc, list) else []):
+            argv = ((a or {}).get("check") or {}).get("argv") or []
+            if argv:
+                base = str(argv[0]).split("/")[-1].lower()
+                if base in _ARGV_LANG:
+                    runners.add(_ARGV_LANG[base])
+    if not runners or declared in runners:
+        return ""
+    return (f"{ARCH_SELF_CONTRADICTION}：tech_stack 声明的是 {declared}，"
+            f"但 constraints 的 check 用的是 {sorted(runners)}"
+            f" —— 干活的人没法同时满足，必然原地打转、零产出")
+
+
+#: 模型"拿不准"时该标的标记（提示词 `workflow._ARCHITECT_CONTEXT` 里那条规则写的）。
+ARCH_NEEDS_CLARIFICATION = "NEEDS CLARIFICATION"
+
+
+def _arch_open_questions(arch: dict) -> list[str]:
+    """架构里**模型自己说"拿不准"**的地方 → 一条提醒（空 = 没有）。
+
+    🔴 **来历（2026-09-27）**：那一轮题面**没规定实现语言**，而模型**没有任何办法
+    说"我不知道"** ⇒ 它编了一个自相矛盾的东西（`tech_stack` 写 Go、
+    16 条判据全写 `python3 -m pytest`）⇒ 唯一入口那个任务打转 811 秒 ⇒ 整轮全灭。
+    提示词里加了 `NEEDS CLARIFICATION` 这个出口，这条负责让它**在界面上看得见**。
+
+    ⚠️ **为什么归"只记"、不归致命** —— 想清楚了再改：
+    奇点**没有"编辑架构"的接口**（`project.py` 里那句注释写着「全仓也没有"编辑项目需求"
+    的接口」）。拦成致命的唯一后果是**人也没法改，只能打回重出** ——
+    而它本来就要在 GATE2 被人看一遍。**加一道必须打回才能过的门 = 白加一道门**，
+    还会撞上 `防御模式.md` §77.1 那族的"永久锁死"。
+    ⇒ 让它出现在 GATE2 人审页上，**由人决定**（打回 + 写理由，模型下一版看得到）。
+    """
+    hits: list[str] = []
+
+    def walk(node, path: str) -> None:
+        if isinstance(node, str):
+            if ARCH_NEEDS_CLARIFICATION in node.upper():
+                hits.append(f"{path}: {node[:70]}")
+        elif isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, f"{path}.{k}")
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f"{path}[{i}]")
+
+    walk(arch, "架构")
+    if not hits:
+        return []
+    return [f"架构有 {len(hits)} 处**未澄清**（模型自己标的，等人回答）："
+            + "；".join(hits[:3])
+            + ("…" if len(hits) > 3 else "")]
+
+
+def _arch_dep_problems(arch: dict) -> list[str]:
+    """任务依赖图坏 —— **两样都会让任务永远动不了**（空 = 没问题）。
+
+    · **依赖一个不存在的 id** ⇒ 那个任务永远 `blocked`（`tracker.ready_tasks` 在等一个
+      永远不会来的前置；`_deps_satisfied` 只看得到盘上有的任务）。
+    · **成环** ⇒ 环上每个任务都在等对方，谁也起不来。
+
+    🔴 两样都归**致命档** —— 判据跟 `classify_arch_issues` 那条一致：
+    「**下一步还能不能干**」。这两样不是"字段不全"，是**必然卡死**：
+    任务拆出来也跑不动，而外面看起来只是"项目不动了"。
+    （这跟 `防御模式.md` §77.1「依赖失败 ⇒ 调度永久锁死」是同一族 —— 那条修的是
+    **运行时**的依赖判定；这条把同一件事**提前到架构校验**这里拦。）
+    """
+    tasks = arch.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        return []
+    ids = {t.get("id") for t in tasks if isinstance(t, dict)}
+    problems: list[str] = []
+    for t in tasks:
+        if not isinstance(t, dict):
+            continue
+        tid = t.get("id")
+        for dep in (t.get("depends_on") or []):
+            if dep not in ids:
+                problems.append(f"{ARCH_SELF_CONTRADICTION}：任务 {tid} 依赖不存在的 id {dep}"
+                                f"（那个任务会永远卡在 blocked）")
+    # 成环：DFS 三色法。只报一次（每个环报环上的一个任务即可，别刷屏）
+    deps = {t.get("id"): [d for d in (t.get("depends_on") or []) if d in ids]
+            for t in tasks if isinstance(t, dict)}
+    white, grey, black = 0, 1, 2        # 三色法：白=没看过 · 灰=在栈上 · 黑=走完了
+    color = dict.fromkeys(deps, white)
+
+    def visit(n: str, path: list[str]) -> str:
+        color[n] = grey
+        for m in deps.get(n, []):
+            if color.get(m) == grey:        # 撞到栈上的 ⇒ 这段就是环
+                return " → ".join(path + [n, m])
+            if color.get(m) == white:
+                got = visit(m, path + [n])
+                if got:
+                    return got
+        color[n] = black
+        return ""
+
+    for tid in deps:
+        if color[tid] == white:
+            cyc = visit(tid, [])
+            if cyc:
+                problems.append(f"{ARCH_SELF_CONTRADICTION}：任务依赖成环 {cyc}"
+                                f"（环上每个都在等对方，谁也起不来）")
+                break
+    return problems
 
 
 def _validate_architecture(arch: dict) -> list[str]:
@@ -792,6 +978,11 @@ def _validate_architecture(arch: dict) -> list[str]:
         for i, m in enumerate(modules):
             if isinstance(m, dict) and not m.get("name"):
                 issues.append(f"模块 {i}: 缺少 name")
+    conflict = _arch_language_conflict(arch)
+    if conflict:
+        issues.append(conflict)
+    issues.extend(_arch_dep_problems(arch))
+    issues.extend(_arch_open_questions(arch))
     return issues
 
 

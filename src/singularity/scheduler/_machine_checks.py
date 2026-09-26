@@ -62,6 +62,24 @@ def missing_inputs(stdout: str, stderr: str) -> list[str]:
 ALLOWED_ARGV0 = {
     "python3", "python", "pytest", "npm", "node", "git",
     "ls", "cat", "wc", "test", "grep", "head", "tail",
+    # 构建/测试驱动（2026-09-27 加）：白名单原来只有 Python / Node 生态，
+    # 而架构提示词里 `tech_stack.language` 那栏**毫无限制**（只写"选型及理由"）
+    # ⇒ 模型选了 Go 之后**白名单里一个能用的都没有**，于是被迫把 16 条判据
+    # 全写成 `python3 -m pytest` ⇒ `round-20260926` 架构自相矛盾，
+    # 全图唯一入口那个任务打转 811 秒 / 275,806 token / 零产出 ⇒ 整轮全灭。
+    # ⚠️ **提示词里那份白名单必须跟着改**（`workflow._ARCHITECT_CONTEXT`）——
+    #    两处不一致正是这次出事的原因，别只修一边。
+    "go", "cargo", "rustc",
+}
+
+#: 这几个驱动**只允许跑安全的子命令** —— 跟 `_INTERPRETER_OK_PREFIX` 同一个思路：
+#: **在参数层判，不是只判程序名**（模块头第 2 条）。
+#: 挡的是**拉外部代码 / 改本机配置**（`go install` / `go get` / `go env -w` /
+#: `cargo install`）—— **不是"阻止执行代码"**，那件事本来就没打算挡：
+#: `node` / `npm run` 跑的就是模型自己写的码（见模块头"仍然残留的风险"）。
+_TOOL_OK_SUBCOMMAND = {
+    "go": {"test", "build", "vet"},
+    "cargo": {"test", "build", "check", "clippy"},
 }
 
 # 解释器后面**只允许**跟这几个 token —— 见模块头第 2 条
@@ -100,6 +118,10 @@ def validate_check(check) -> tuple[bool, str]:
         return False, f"argv[0] 不在白名单: {prog}"
     if prog in _INTERPRETERS and argv[1:3] != _INTERPRETER_OK_PREFIX:
         return False, f"解释器只允许 `-m pytest`，实际: {' '.join(argv[1:3]) or '(无参数)'}"
+    ok_sub = _TOOL_OK_SUBCOMMAND.get(prog)
+    if ok_sub is not None and (len(argv) < 2 or argv[1] not in ok_sub):
+        return False, (f"{prog} 只允许 {'/'.join(sorted(ok_sub))}，"
+                       f"实际: {argv[1] if len(argv) > 1 else '(无参数)'}")
     return True, ""
 
 

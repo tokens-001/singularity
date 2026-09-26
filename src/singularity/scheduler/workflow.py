@@ -139,6 +139,16 @@ _ARCHITECT_CONTEXT = """项目需求: {description}
 }}
 
 Schema 规则:
+- 🔴 **拿不准就标注，别自己发明。** 题面没说的、你定不了的，**如实标出来**：
+  那一栏写 `"NEEDS CLARIFICATION: <你缺什么信息>"`。**宁可缺，也别编一个填满它。**
+  典型：**题面没说用什么实现语言** ⇒ `tech_stack.language` 就写
+  `"NEEDS CLARIFICATION: 题面未指定实现语言"` —— **不许**自己挑一个，
+  然后又让 `constraints` 里的判据跟它打架。
+  （2026-09-27 `round-20260926` 整轮全灭就是这么来的：题面没规定语言，架构在
+  `tech_stack` 写了 Go、却在 16 条 `check` 里全写 `python3 -m pytest` ——
+  **当时它没有"我不知道"这个选项，于是编了一个自相矛盾的东西出来**。）
+  ⚠️ 标注**不会**让项目卡死，反而更省事：它会作为一条提醒出现在 GATE2 人审页上，
+  人在那儿告诉你要什么，你再重出一版。**编一个错的，代价是一整轮白跑。**
 - 字段顺序就是输出顺序: tasks/risks 是下游拆任务唯一的依据, 先写它们 ——
   长输出万一被截断, 丢的必须是长尾而不是命根子
 - tasks 至少 1 个, 最多 20 个
@@ -154,8 +164,14 @@ Schema 规则:
 - constraints 每条必须可机器检查 (type+rule+check)。`check` 两种写法，二选一：
   · **能机器跑**的 → `{{"argv": ["解释器或程序", "参数", ...], "expect_exit": 0}}`
     必须是**数组**（平台按数组直接 exec，**不过 shell**）。argv[0] 只允许:
-    python3 / python / pytest / npm / node / git / ls / cat / wc / test。
-    `python3` 只允许紧跟 `-m pytest`（不许 `-c`：那等于任意代码执行）。
+    python3 / python / pytest / npm / node / git / ls / cat / wc / test /
+    go / cargo / rustc。
+    `python3` 只允许紧跟 `-m pytest`（不许 `-c`：那等于任意代码执行）；
+    `go` 只允许 `test` / `build` / `vet`；`cargo` 只允许 `test` / `build` /
+    `check` / `clippy`（挡的是**拉外部代码、改本机配置**，不是禁止执行代码）。
+    🔴 **你选的语言必须能落到这些命令上** —— `tech_stack.language` 写了什么，
+    `check.argv` 就得是那个语言能跑的命令。**写了 Go 却填 `python3 -m pytest`，
+    干活的人没法同时满足，只会原地打转**（2026-09-27 `round-20260926` 就是这么整轮全灭的）。
   · **机器验不了**的（界面美观、命名风格之类）→ **如实写一段散文说明为什么验不了**。
     ⚠️ **不许编一条反正跑不通的命令来凑格式** —— 那比写散文更坏：
     平台会当真去跑，然后拿一个假的失败（或假的通过）当验收结论。

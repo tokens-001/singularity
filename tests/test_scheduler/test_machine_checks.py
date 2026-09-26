@@ -57,6 +57,59 @@ class TestWhitelist:
         assert mc.validate_check(
             {"argv": ["python3", "-m", "pytest", "-q"], "expect_exit": 0})[0]
 
+    # ── 构建/测试驱动（2026-09-27 加）──────────────────────────────────
+    #
+    # 来历：白名单原来只有 Python / Node 生态，而提示词里 `tech_stack.language`
+    # **毫无限制** ⇒ 模型选了 Go 就一个能用的命令都没有，被迫把 16 条判据全写成
+    # `python3 -m pytest` ⇒ `round-20260926` 架构自相矛盾、整轮全灭。
+
+    @pytest.mark.parametrize("argv", [
+        ["go", "test", "./..."],
+        ["go", "build", "./..."],
+        ["go", "vet", "./..."],
+        ["cargo", "test"],
+        ["cargo", "check"],
+        ["rustc", "src/main.rs"],
+    ])
+    def test_构建驱动放行(self, argv):
+        assert mc.validate_check({"argv": argv, "expect_exit": 0})[0], argv
+
+    @pytest.mark.parametrize("argv", [
+        ["go", "install", "./..."],                  # 拉外部代码
+        ["go", "get", "github.com/x/y"],             # 拉外部代码
+        ["go", "env", "-w", "GOFLAGS=-mod=mod"],     # 改本机配置
+        ["go"],                                      # 没子命令
+        ["cargo", "install", "cargo-edit"],
+        ["cargo", "publish"],
+    ])
+    def test_构建驱动_危险子命令必须拒绝(self, argv):
+        """🔴 **负面用例比正面用例重要** —— 加这几个驱动是为了**能跑测试**，
+        不是为了**能拉外部代码 / 改本机配置**。跟 `-m pytest` 那条同一个思路：
+        **在参数层判，不是只判程序名**。
+
+        判据：把 `_machine_checks` 里 `_TOOL_OK_SUBCOMMAND` 那段判断删掉 ⇒ 这条红。
+        """
+        ok, why = mc.validate_check({"argv": argv, "expect_exit": 0})
+        assert not ok, f"必须拒绝: {argv}"
+
+    def test_白名单和提示词是同一份_防漂移(self):
+        """🔴 **两处不一致正是这次出事的原因** —— 提示词让模型填的，代码必须认。
+
+        只钉一个方向：**提示词列出的 ⊆ 代码认的**。反方向（代码多认几个）是安全的
+        —— 提示词白名单**窄于**代码是有意的。
+        另外钉住：新加的几个驱动**必须出现在提示词里**，否则模型根本不知道能用。
+        """
+        from singularity.scheduler.workflow import _ARCHITECT_CONTEXT
+        # 名单会**跨行**（加一个词就可能换行）⇒ 用 `re.S` 抓到第一个句号为止
+        m = re.search(r"argv\[0\] 只允许:(.*?)。", _ARCHITECT_CONTEXT, re.S)
+        assert m, "没在提示词里找到那份白名单 —— 措辞改了，这条测试要跟着改（**别删**）"
+        listed = {x.strip() for x in re.split(r"[/\s]+", m.group(1)) if x.strip()}
+        assert listed, m.group(1)
+        missing = listed - mc.ALLOWED_ARGV0
+        assert not missing, f"提示词让模型用这些，代码却不认: {missing}"
+        for prog in ("go", "cargo", "rustc"):
+            assert prog in listed, f"{prog} 在白名单里，但提示词没告诉模型 ⇒ 它不会用"
+
     def test_string_check_is_not_runnable(self):
         ok, why = mc.validate_check("跑一下测试看看")
         assert not ok and "argv" in why
