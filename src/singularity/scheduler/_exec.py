@@ -1,6 +1,10 @@
 """内部模块 — 核心执行引擎。
 
 纯执行: dispatch + validate + trace。worker 线程安全，不写 tracker。
+
+⚠️ **一处例外，写明白别当它不存在**：`_check_paused` 会写 tracker（`PAUSED` ⇄ `RUNNING`）
+—— 暂停天然是 worker 侧阻塞出来的事，"标记出现时谁来写状态"没有主线程的答案
+（见那个函数的 docstring）。去掉这个例外 = 给调度循环加一个轮询者 = 改状态机，**没做**。
 """
 
 from __future__ import annotations
@@ -344,6 +348,20 @@ def _check_paused(task) -> bool:
 
     confirm_changes 模式下, 每 turn 自动写暂停信号 (用户每步确认)。
     返回 True 表示已恢复继续; False 表示任务已终止。
+
+    🔴 **两次 `transition` 的返回值都得看**（2026-09-26，Qoder 第二轮 #4）。
+    原来两句都丢掉返回值，而 `tracker.transition` **被拒时返回 `None`** ——
+    拒的理由恰恰是"这任务已经在终态了"。于是最刺眼的一支：worker 阻塞等恢复的这段时间里，
+    收割者（`orchestrator._reap_futures`）到点 → 先写 `cancels/<id>.json`（`by:timeout`）
+    → 再 `transition(FAILED)`；而 `_TERMINAL_EXIT[FAILED]` **只放行 →PENDING**
+    ⇒ 等用户点恢复、worker 走到最后那句 `transition(RUNNING)` 时，**被拒、没人看**
+    ⇒ 函数照样报"已恢复"，调用方照样往下走 ⇒ **在一个已经被判死的任务上再发起一次
+    完整模型调用**，而这次没人收（future 已被收割 pop 掉）。一次调用就是一次钱。
+
+    ⚠️ **契约例外，写明白**：`orchestrator` 文件头写着"worker 不调任何
+    `tracker.transition/cas/create`"，这一支是**已知的例外** —— 暂停天然是 worker 侧
+    阻塞出来的事。要去掉这个例外得把 PAUSED/RUNNING 挪到主线程（谁在标记出现时写状态？
+    得给调度循环加一个轮询者），那是**改状态机 + 改调度循环**，不是修 bug，**没做**。
     """
     from singularity.scheduler import tracker as tracker_mod
 
@@ -359,7 +377,11 @@ def _check_paused(task) -> bool:
         return True  # 无暂停信号, 继续执行
 
     # 切到 PAUSED 状态
-    tracker_mod.transition(task.id, tracker_mod.TaskStatus.PAUSED)
+    if tracker_mod.transition(task.id, tracker_mod.TaskStatus.PAUSED) is None:
+        # 被拒 ⇒ 状态机说这个任务**已经不归我们管了**（已是终态：收割按超时判死 /
+        # 人工取消 / 任务被删）。**别阻塞**去等一个永远不会来的"恢复" —— 那既占着
+        # 一个 worker 位子，又让"已死"看起来像"在跑"。
+        return False
 
     # 阻塞等待: 轮询检测 pause 文件被删除=恢复信号
     import time as _time
@@ -370,9 +392,11 @@ def _check_paused(task) -> bool:
         if cancel_path.exists():
             return False
 
-    # 恢复: 切回 RUNNING
-    tracker_mod.transition(task.id, tracker_mod.TaskStatus.RUNNING)
-    return True
+    # 恢复: 切回 RUNNING。
+    # 🔴 **拒了就是没恢复**（见 docstring 那支）—— `transition` 拒绝时回 `None`。
+    # 这里**不能**报 True：报 True 就等于"在任务已经被判死之后，再替它发一次模型调用"。
+    # 回 False 之后调用方会去读取消标记 ⇒ 得到正确的判词（`cancelled_by_timeout`）。
+    return tracker_mod.transition(task.id, tracker_mod.TaskStatus.RUNNING) is not None
 
 
 def _process_planner_or_merge(task, ctx, turn, level, is_planner, wt,
