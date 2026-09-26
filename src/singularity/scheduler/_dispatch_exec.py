@@ -20,6 +20,9 @@ from singularity.scheduler.dispatcher import (
 # 局部注解**运行时不求值**，所以少这个 import 不会炸 —— 但 F821 会一直报，
 # 把"真有未定义名"的信号淹没掉。补上，让这条检查能当守卫用。
 from singularity.scheduler.executors.base import BaseExecutor
+
+# 席位单次调用的上限 —— 委员会那个收集窗口**同源于它**（见 `_WAVE_TIMEOUT`）。
+from singularity.scheduler.executors.openai_agent import _EXEC_BUDGET
 from singularity.scheduler.log import timed
 
 # ── 委员会收集初稿的时间预算 ──
@@ -29,7 +32,7 @@ from singularity.scheduler.log import timed
 # 所以这个 timeout 现在**真的是时限**了：到点就带着已完成的那部分返回，
 # 没跑完的线程留在后台（不 join），不再拖住整条架构阶段。
 #
-# 🔴 **它和单次调用上限的关系已经反了**（2026-09-25，Qoder 外派审查 #5，我核过）：
+# 🔴 **它和单次调用上限的关系已经反了**（2026-09-25，Qoder 外派审查**第一轮** #5，我核过）：
 #    上面原来那句前提是「单次模型调用本身有上限（claude-cli 300s / openai-agent **240s**）」
 #    —— **那个 240 已被 `60a81e16` 拿掉**（2026-09-21）：现在 `_run_no_tools` →
 #    `_run_executor(...)` **不传 `budget_s`** ⇒ `_budget = _EXEC_BUDGET` ⇒ 单次调用可以
@@ -40,9 +43,19 @@ from singularity.scheduler.log import timed
 #    不再是结果截断"**现在不成立**。
 #    🔵 这一条还给 09-22 那个标着"原因未定"的观测提供了一个不依赖"这题难不难"的解释：
 #    那一轮 `committee_partial: 2/3 缺`。
-#    ⏳ **动哪个数是要拍板的**（抬 `_WAVE_TIMEOUT`？还是让席位单次也封在 300 内，
-#    把"席位表 == 实际会跑的表"这个不变量补全？）—— **先别拍脑袋改**，见 `~/OPEN.md`。
-_WAVE_TIMEOUT = float(os.environ.get("QIDIAN_DEBATE_TIMEOUT", "300"))
+#
+# ✅ **2026-09-26 拍板：抬阈值**。做法**不是**把 300 换成一个更大的字面量，而是让它
+#    **同源于席位自己的预算** —— 席位单次能跑到 `_EXEC_BUDGET`（默认 810），收集窗口就得
+#    ≥ 它，否则"窗口比被等的东西短"：慢的那一席结果被丢、账上也漏。同源是为了防漂
+#    （本文件刚为"两个写字面量迟早会漂开"栽过一次，见下面 `_COMMITTEE_MAX_SEATS` 那段）。
+#    ⚠️ **为什么不选另一个候选"让席位单次也封在 300 内"**：那等于把 `60a81e16` 刚拆掉的
+#    "想太久就被掐"原样装回去 —— 委员会实测 glm 35.7s/思考 136 字 vs v4-pro 181s/思考 4 万字,
+#    被掐的根因是"想太久"、不是"吐得慢" ⇒ 封 300 只会再造一批零产出席位。
+#    🔵 **代价如实说**：抬它**不额外花钱**（那席的 token 本来就已经在烧，抬窗口只是把
+#    买过的东西收回来），**代价在墙钟** —— 最坏这一波 300s → ~810s。正常席位 20~222s
+#    就回来了，只有打转的会拖到底，而打转的另有 `_OUTPUT_IDLE_LIMIT`（480s，思考不算）在管。
+_WAVE_TIMEOUT = float(os.environ.get(
+    "QIDIAN_DEBATE_TIMEOUT", str(_EXEC_BUDGET + 30.0)))  # +30：给到点的席位走完收尾
 
 # 委员会最多几家。**必须和 `_dispatch_committee` 里的线程池大小一致** ——
 # 席位比 worker 多的话，多出来的那几家要么没开始、要么在 `done` 收集完之后才跑完：
@@ -509,7 +522,8 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
                                f"{task_id}_{a.get('model','?')[:8]}",
                                level, baseline_ref, cwd)] = a
         # 等待最多 _WAVE_TIMEOUT 收集任意数量的完成结果
-        done, _ = concurrent.futures.wait(futures, timeout=_WAVE_TIMEOUT, return_when='ALL_COMPLETED')
+        done, not_done = concurrent.futures.wait(futures, timeout=_WAVE_TIMEOUT,
+                                                 return_when='ALL_COMPLETED')
         for fut in done:
             agent_cfg = futures[fut]
             try:
@@ -524,8 +538,23 @@ def _dispatch_committee(task: str, level: str, task_id: str, agents: dict,
                         "tokens": int(_tk or 0),
                         "elapsed": float(_el or 0.0),
                     })
-            except Exception:
-                pass  # 单个模型失败不阻断委员会
+            except Exception as e:
+                # 🔴 **这一席的产出和那笔 token 一起没了，不能一个字不说**（2026-09-26）。
+                # 原来这里裸 `pass`；而委员会是全场最贵的一段（初稿 88k token 那次），
+                # 一席挂了 = 三家碰撞变两家，外面看到的只有"委员会好像没开"。
+                witness.warn("dispatcher", f"committee_seat_failed:{task_id}:"
+                                           f"{agent_cfg.get('model','?')}:"
+                                           f"{type(e).__name__}"[:160],
+                             key="committee_seat_failed")
+        # 🔴 **被丢的那几席也必须出声**（2026-09-26）。它们结果不进 `outputs`、
+        # token 不进 `member_usage`（那笔钱花掉了、账上没有），而这里原来**一个字都没有** ——
+        # 从外面看和"委员会本来就只配了几席"长得一模一样。
+        if not_done:
+            witness.warn("dispatcher",
+                         f"committee_dropped:{task_id}:" +
+                         ",".join(str(futures[f].get("model", "?")) for f in not_done) +
+                         f"(等满 {_WAVE_TIMEOUT:.0f}s 仍未回)"[:160],
+                         key="committee_dropped")
     finally:
         _ex.shutdown(wait=False)   # 不 join：挂死的调用不能拖住整条流水线
 

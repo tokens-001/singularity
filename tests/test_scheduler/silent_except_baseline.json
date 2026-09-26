@@ -35,7 +35,7 @@
  "scheduler/_defense_patterns.py::load_patterns": 1,
  "scheduler/_dispatch_crud.py::_in_model_library": 1,
  "scheduler/_dispatch_crud.py::_notify_agent_change": 1,
- "scheduler/_dispatch_exec.py::_dispatch_committee": 2,
+ "scheduler/_dispatch_exec.py::_dispatch_committee": 1,
  "scheduler/_dispatch_exec.py::_impl_role_veto": 1,
  "scheduler/_dispatch_exec.py::dispatch": 1,
  "scheduler/_dispatch_skills.py::_ntilc_filter": 1,
