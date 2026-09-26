@@ -72,19 +72,30 @@ def validate(candidate, gate_required, task_type, changed_files, snap, turn, max
     # 门的行为**一个字不改**（仍然靠下面 `_gate_check_by_files` 兜住核心引擎文件那一类；
     # 兜底成 True 会造出假失败，见 `router.RouteResult` 的 docstring），
     # 但**"这个决定是在不知道的情况下做的"必须留痕** —— 否则它和真判过的一模一样。
-    _gate_ran = bool(gate_required or _gate_check_by_files(changed_files))
-    if gate_unknown and not _gate_ran:
+    # `_gate_wanted` = 门**该不该**跑（原来叫 `_gate_ran`，那名字现在是错的：
+    # 有了第三态之后，"想跑"和"真跑了"是两件事，见 `_run_gate` 的 docstring）。
+    _gate_wanted = bool(gate_required or _gate_check_by_files(changed_files))
+    if gate_unknown and not _gate_wanted:
         report.unverified.append(
             "路由未判定：分类没判出来，门只按文件级兜底判过（没命中 ⇒ 这次没跑门）")
-    if _gate_ran:
+    if _gate_wanted:
         g = _run_gate()
-        report.gate_passed = g.get("passed")
         report.gate_message = g.get("message","")
-        if not g.get("passed"):
-            report.verdict = "gate失败"
-            report.action = "rollback" if turn >= max_turns else "retry"
-            report.unverified.append(f"gate failed: {report.gate_message}")
-            return report
+        # `ran` 缺省按 True：老式桩（没这个键）走原来的 fail-closed 支，
+        # 不让"没表态"变成静默放行。
+        if not g.get("ran", True):
+            # 门**压根没装** ⇒ 既不是通过、也不是失败。如实披露，然后**继续往下**
+            # （后面还有 LLM 验收 / 硬规则 / 人审模式三道，一样都不少）——
+            # 把它翻成"gate失败"就是造一个**保证会死**的假失败，那是本仓最忌讳的形状。
+            report.unverified.append(
+                f"回归门未执行: {report.gate_message} —— 不是通过，也不是失败")
+        else:
+            report.gate_passed = g.get("passed")
+            if not g.get("passed"):
+                report.verdict = "gate失败"
+                report.action = "rollback" if turn >= max_turns else "retry"
+                report.unverified.append(f"gate failed: {report.gate_message}")
+                return report
     for pat in _HUMAN_REVIEW_PATTERNS:
         if pat.search(candidate):
             report.human_review_required = True
@@ -146,18 +157,32 @@ def _run_validate(candidate):
         return {"verdict":"未知","verdict_reason":"parse error"}
 
 def _run_gate():
-    # 保守化: eval.py 不存在 = gate 未执行, 不是 gate 通过; 缺 passed 字段也默认不通过
+    """跑项目回归门。返回 `{"ran": bool, "passed": bool, "message": str}`。
+
+    🔴 **`ran` 是专门为"没这门"准备的第三态**（2026-09-26）。原来"脚本不存在"被折成
+    `passed=False`，而调用方那句 `if not g.get("passed"):` 把它读成「**gate失败**」
+    ⇒ 对一个**从来没有 `eval.py`** 的仓（本仓就是 —— `data/knowledge/scripts/` 下只有
+    `validate.py`，全历史没有过），任何碰到核心文件名（`config.py`/`core.py`/…）的任务
+    **必定 retry → rollback**，理由还是一句和任务无关的"eval.py 不存在"。
+    ⇒ 那是**保证会发生的假失败** —— 正是 `router.RouteResult` docstring 里点名的那个形状
+    （"假失败，比放行更坏"），它有防住了 `gate_required` 那扇门，没防住 `_gate_check_by_files` 这扇。
+
+    ⚠️ **`ran=False` 只有一种来源：脚本不存在**（= 这门压根没装）。超时 / 崩了 / 解析不出来
+    仍算 `ran=True, passed=False` —— 那种是**事故**（脚本在、跑砸了），保守判失败是对的，
+    和 `_run_validate` 那边"未知 ⇒ 不默认通过"同一个口径。**别把这两件事混成一个。**
+    """
+    # 保守化: 缺 passed 字段也默认不通过
     if not config.EVAL_SCRIPT.exists():
-        return {"passed":False,"message":"eval.py 不存在 (gate 未执行)"}
+        return {"ran":False,"passed":False,"message":"eval.py 不存在 (gate 未执行)"}
     try:
         p = subprocess.run(["python3",str(config.EVAL_SCRIPT),"--gate","--json"], capture_output=True,text=True,timeout=config.GATE_TIMEOUT)
         d = json.loads(p.stdout) if p.stdout else {}
         g = d.get("gate",{})
-        return {"passed":g.get("passed",False),"message":g.get("message",f"exit={p.returncode}")}
+        return {"ran":True,"passed":g.get("passed",False),"message":g.get("message",f"exit={p.returncode}")}
     except subprocess.TimeoutExpired:
-        return {"passed":False,"message":"gate timeout"}
+        return {"ran":True,"passed":False,"message":"gate timeout"}
     except Exception as e:
-        return {"passed":False,"message":f"gate error:{e}"}
+        return {"ran":True,"passed":False,"message":f"gate error:{e}"}
 
 def _gate_check_by_files(changed_files):
     if not changed_files:
