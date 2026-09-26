@@ -38,6 +38,10 @@
 
 > 这张表**能重新生成，别手抄**：`.venv/bin/python scripts/alert_map.py`。
 > 条数是 09-26 那次扫盘快照，**只用来判"长亮还是新事"**，别当现在的数读。
+> ⚠️ **09-27 有两个 key 改了名**（表里还是旧名 —— 它是**扫盘快照**，
+> 新 key 要等真机跑出告警才会出现）：`project_all_tasks_failed` →
+> **`project_stalled`**（两种"停"共用：`user_stop` 人工叫停 / `task_failed` 前置失败停滞）
+> + 新增 `project_no_deliverable`。**别再照旧名 grep**。
 
 | 条数 | key | 先看 | 它说的是什么 |
 |---|---|---|---|
