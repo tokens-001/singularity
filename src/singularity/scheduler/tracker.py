@@ -465,7 +465,18 @@ def _deps_satisfied(task: Task) -> bool:
     return True
 
 
-_DEAD_END = {TaskStatus.FAILED, TaskStatus.ROLLED_BACK, TaskStatus.CONFLICT_HELD}
+# 「死路依赖」—— 上游**不会再产出**，下游只能降级起跑。
+# 🔴 **`CONFLICT_HELD` 不在这张表里**（2026-09-26，Qoder 第二轮 #7，逐跳核过）。
+# 它原来在，而 `is_terminal()` 的 docstring 明写它「**在这份表里从来就不是终态**
+# …等人解决 merge 冲突，之后都要继续走」—— 两条判据直接矛盾。
+# 而它确实是活的：`_cli_tasks` 的 `resolve(manual)` 把它推到 **DONE**
+# （`abort` 那支推 FAILED），`merge._mark_merged` 也会推。⇒ 上游是**卡住**，不是**死了**。
+#
+# 放在表里的后果不只是"早跑一步"：`_any_dead_dep` 的分支会把
+# 「上游依赖 X **已失败**」这句**假话落盘**，人审页上照着它读
+# （09-19 专门修过"这句话必须落盘"，见 `ready_tasks` 里那段）。
+# ⇒ 上游卡着等人解冲突，下游却以为它已经死了、并立刻起跑 —— 造在没合进来的产物上。
+_DEAD_END = {TaskStatus.FAILED, TaskStatus.ROLLED_BACK}
 
 
 def _any_dead_dep(task: Task) -> str:
