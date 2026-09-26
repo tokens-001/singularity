@@ -363,6 +363,7 @@ class ProjectState:
         self.halted_at = time.time()
         self.add_lineage({"action": "halt", "reason": HALT_USER_STOP,
                           "phase": self.phase.value, "detail": str(reason)[:120]})
+        self._kick_halt_cache()
 
     def clear_user_stop(self, reason: str = "") -> None:
         """解除人工叫停。**只解禁令**：不重派任务、不点火任何阶段。
@@ -375,6 +376,22 @@ class ProjectState:
         self.halted_reason, self.halted_at = "", 0.0
         self.add_lineage({"action": "resume", "phase": self.phase.value,
                           "detail": str(reason)[:120]})
+        self._kick_halt_cache()
+
+    @staticmethod
+    def _kick_halt_cache() -> None:
+        """让"停 / 恢复"**当场生效** —— 踢掉 `tracker.ready_tasks` 那个 2 秒 TTL 缓存。
+
+        不踢也能自愈，只是慢 2 秒；但"按了停之后还派一个任务下去"是**看得见**的，别让它发生。
+        懒导入 + 出声不吞：这里失败不许连累"落标记"那件正事。
+        """
+        try:
+            from singularity.scheduler import tracker as _t
+            _t.invalidate_halt_cache()
+        except Exception as e:      # noqa: BLE001 —— 出声，不吞
+            from singularity.scheduler import witness as _w
+            _w.warn("project", f"halt_cache_kick:{type(e).__name__}:{e}"[:120],
+                    key="halt_cache_kick_failed")
 
     def effective_constraints(self) -> list:
         """验收/审查该用哪份约束清单 —— 带兜底的读法。

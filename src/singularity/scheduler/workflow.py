@@ -356,6 +356,25 @@ def run_phase(project: ProjectState, agents: dict) -> str:
     """执行当前 phase。auto_mode 循环推进直到等待 Owner 或完成。"""
     msgs = []
     while True:
+        # 🔴 **每轮都要重读"停没停"**（2026-09-27）—— 这是"整份覆盖写抹掉停"的**唯一守卫**。
+        #    本函数跑在 `_start_background` 的后台线程里（分钟级），而人是**中途**按的停
+        #    ⇒ 手里这份 `project` 是**进线程那一刻的快照**，光看它永远看不到"刚落的停"。
+        # ⚠️ **同时把盘上那份的 `halted_reason` / `halted_at` 搬回手里这份**：
+        #    下面各阶段会 `save(project)`，而 `save` 是**整份覆盖写**
+        #    ⇒ 不搬的话，这一存就把人刚落的停**抹掉**（同族：观察者那 20 秒窗口）。
+        # ⚠️ 判据用 `halt_state`（含**派生**的 `task_failed`）而不只是 `halted_reason`：
+        #    人在"前置失败停滞"的项目上点一下下一步，会走 EXECUTING 分支 →
+        #    `_run_execution` → **整批重建任务**，把要重试的那批丢掉。
+        from singularity.scheduler import project as _pm
+        _disk = _pm.load(project.id)
+        if _disk is not None and getattr(_disk, "halted_reason", "") \
+                and not getattr(project, "halted_reason", ""):
+            project.halted_reason = _disk.halted_reason
+            project.halted_at = _disk.halted_at
+        _halt = _pm.halt_state(project)
+        if _halt["halted"]:
+            msgs.append(f"项目已停（{_halt['detail']}）→ 不再推进，等人处理")
+            break
         phase = project.phase
 
         if phase == Phase.TEMPLATE:
@@ -1359,6 +1378,22 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "",
     project.add_lineage({"action": "gate3_rejected", "feedback": feedback[:500],
                          **({"auto": True} if auto else {})})
 
+    # 🔴 **被"人工叫停"的项目不许返工**（2026-09-27）。这条挡的是**已经在飞的后台线程**：
+    #    `_advance_project` 那条早退只管"发起"，而这个函数可能正跑在一个 20 分钟前
+    #    就启动了的线程里（人是在这中间按的停）。
+    #    它做的事很重 —— `impl` 那一支会把 **DONE + FAILED 一起重置回 PENDING**
+    #    ⇒ 对一个"人已经喊停"的项目，那是替他把停掉的那批任务又拉起来。
+    #
+    # 🔴🔴 **这里只认 `user_stop`，故意不认派生的 `task_failed`**（第一版认了，6 条测试红）。
+    #    `impl` 那一支的**本职工作就是"把 FAILED 重置回 PENDING"**
+    #    （`_clear_cancel_marker_for_rewind` + `FAILED→PENDING`，2026-09-20 A 档）——
+    #    而"有 FAILED"恰恰是 `task_failed` 的判据 ⇒ **按全量 `halt_state` 拦，
+    #    等于把这个函数唯一要做的事禁掉了**。停滞要停的是"自动推进"，
+    #    不是"人要求重做"（那正是二选一里的①）。
+    from singularity.scheduler import project as _pm2
+    if getattr(project, "halted_reason", "") == _pm2.HALT_USER_STOP:
+        return "项目已被人工叫停 → 不返工，等人处理"
+
     # 读 QA 报告的 fix_route 决定路由
     # ⚠️ **空串 = "还没有依据"，不预置 design**（2026-09-19）。原来初值是 `"design"`、
     #    注释写着「有报告但没标路由 → 保守回架构」—— 可 **"保守"在这里指的是对代码保守，
@@ -1445,6 +1480,14 @@ def handle_gate3_reject(project: ProjectState, agents: dict, feedback: str = "",
 
 def start_project_workflow(project: ProjectState, agents: dict) -> str:
     """项目工作流入口。"""
+    # 🔴 停着的项目在**这里**就得拦住（2026-09-27）：本函数不是"直接进 run_phase"，
+    #    它中间会 `set_phase + save`（下面那两句）—— 光靠 `run_phase` 每轮开头那道守卫
+    #    挡不住这两句会先落一个 `template → researching/planning` 的流转。
+    #    （HTTP 那条路 `project_start` 已经 409 了，这里兜的是 CLI / 直调。）
+    from singularity.scheduler import project as _pm3
+    _halt3 = _pm3.halt_state(project)
+    if _halt3["halted"]:
+        return f"项目已停（{_halt3['detail']}）→ 不启动，等人处理"
     if project.phase != Phase.TEMPLATE:
         return run_phase(project, agents)
 

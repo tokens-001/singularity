@@ -1337,9 +1337,17 @@ def api_project_start(project_id):
 
 @app.route("/api/projects/<project_id>/stop", methods=["POST"])
 def api_project_stop(project_id):
-    """停这个项目：给所有非终态任务发取消。**不杀进程、也不停全局循环**
-    （循环起来也无害 —— 这项目没活了它自己空转）。来历见 `_api_projects.project_stop`。"""
+    """停这个项目：**先落"停"标记（冻住阶段推进），再给所有非终态任务发取消**。
+    ⚠️ 原来只有后半句 —— `round-20260926` 实测"02:17 按的停、02:21:40 它自己走到
+    integrating"。来历见 `_api_projects.project_stop`。"""
     data, code = _api_handler.project_stop(project_id)
+    return jsonify(data), code
+
+@app.route("/api/projects/<project_id>/resume", methods=["POST"])
+def api_project_resume(project_id):
+    """解除人工叫停。**停不是暂停**：只解禁令、不重派任务 ——
+    要哪个任务回来用 `POST /api/tasks/<id>/retry`。来历见 `_api_projects.project_resume`。"""
+    data, code = _api_handler.project_resume(project_id)
     return jsonify(data), code
 
 def _project_repo_root(project_id: str):

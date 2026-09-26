@@ -200,6 +200,10 @@ def project_detail(project_id: str) -> tuple[dict, int]:
         return {"error": "项目不存在"}, 404
     d = proj.to_dict() if hasattr(proj, 'to_dict') else {"ok": True}
     d["repo_dir"] = str(proj_mod.repo_dir(project_id))  # 成品保存路径
+    # 「停没停」——**服务端算完给前端**（同下面 flow_decision 那条：判据只许有一个出处）。
+    # ⚠️ **界面别自己从 `phase` 推**：停住的 phase 和"正常走在那一档"长得一模一样，
+    #    在 TS 里重推就是第二份判据（§5 过线同理）。
+    d["halt"] = proj_mod.halt_state(proj)
     # 「集成」的账（2026-09-20）：进仓几个任务 / **没进仓几个**。
     # 挂在详情上而不是新开接口 —— 前端展开项目时本来就在调这个，省一次请求和一份加载态。
     try:
@@ -385,6 +389,14 @@ def project_gate_confirm(project_id: str, gate: str = "", decision: str = "",
     proj = proj_mod.load(project_id)
     if proj is None:
         return {"error": "项目不存在"}, 404
+    # 🔴 **停着的项目连 GATE 都不许批**（2026-09-27）。批准和打回**都拦**：
+    #    · 批准 → `confirm_gate` 会 `set_phase` 往前推；
+    #    · 打回 → `handle_gate3_reject` 会**重置任务**（DONE+FAILED 一起回 PENDING）
+    #      —— 对一个"人已经喊停"的项目，那是替他把停掉的那批任务又拉起来。
+    # ⚠️ 这条路**同时是观察者聊天"通过"的入口**（`_observer_answer` 三条路都转调它）
+    #    ⇒ 拦在这儿，观察者那条也一并堵住了。
+    if proj_mod.halt_state(proj)["halted"]:
+        return _halted_409(proj, "批 GATE（先 `/resume` 解除停）")
 
     if gate:
         # Phase(gate) 对垃圾值直接抛 ValueError → 未捕获 → 500 + HTML。
@@ -477,6 +489,11 @@ def project_run_phase(project_id: str, phase_name: str = "",
         return {"error": "项目不存在"}, 404
     if not hasattr(proj, 'phase') or proj.phase is None:
         return {"error": "项目未设定阶段"}, 400
+    # 🔴 停着的项目不许点火（2026-09-27）。拦在**HTTP 这一层**是为了给一句可读的 409；
+    #    真正兜底的是 `workflow.run_phase` 每轮开头那道守卫（CLI / 已在飞的后台线程
+    #    都绕过 HTTP，只有函数内部的守卫盖得住）。
+    if proj_mod.halt_state(proj)["halted"]:
+        return _halted_409(proj, f"跑 {phase_name or proj.phase.value} 阶段")
     phase = phase_name or proj.phase.value
 
     # run_phase 对这几档只会"等人"就 break（`workflow.run_phase` 的 TEMPLATE / GATE 分支），
@@ -556,6 +573,20 @@ def _start_background(project_id: str, label: str, fn, agents: dict) -> bool:
     return True
 
 
+def _halted_409(proj, what: str) -> tuple[dict, int]:
+    """停了就不让推 —— 四处入口共用**同一句话**（别各写各的）。
+
+    来历：`round-20260926` 的 02:17 按停 / 02:21:40 自己走到 integrating。
+    拦在入口而不是只在调度循环那一层，是因为**推进路径不止一条**
+    （人点 `run-phase` / 点 GATE / 观察者聊天"通过" / CLI），漏掉任何一条就是同一个洞。
+    """
+    from . import project as proj_mod
+    halt = proj_mod.halt_state(proj)
+    return {"error": f"项目已停（{halt['reason']}），不能{what}",
+            "halted": True, "halt_reason": halt["reason"],
+            "detail": halt.get("detail", "")}, 409
+
+
 def project_start(project_id: str, push_event=None) -> tuple[dict, int]:
     """POST /api/projects/<id>/start"""
     from . import dispatcher as disp_mod
@@ -564,6 +595,12 @@ def project_start(project_id: str, push_event=None) -> tuple[dict, int]:
     proj = proj_mod.load(project_id)
     if proj is None:
         return {"error": "项目不存在"}, 404
+    # 🔴 **停着的项目不许 `/start`**（2026-09-27）。不只是"停了别推"：
+    #    `/start` → `run_phase` → `_run_execution` **第一件事就是
+    #    `project.task_ids = []` 整批重建任务** ⇒ 对 EXECUTING 的项目调它，
+    #    会把人正要重试的那批失败任务**整批丢掉**。恢复走 `/resume`。
+    if proj_mod.halt_state(proj)["halted"]:
+        return _halted_409(proj, "启动/重跑流程（要接着跑请先用 `/resume` 解除停）")
     agents = disp_mod.load_agents()
     if not _start_background(project_id, "start_workflow",
                              wf_mod.start_project_workflow, agents):
@@ -592,18 +629,30 @@ def project_stop(project_id: str) -> tuple[dict, int]:
       · 其余非终态（PENDING / BLOCKED / ROUTED）→ 直接转 FAILED（`task_cancel` 本来就这么做）
       · 终态 → 跳过
 
-    ⚠️ **调度循环照常跑也无害**：这个项目没活了，循环自己空转 ⇒
-      **观察者那句自动拉循环就不用去动它了**（本来打算去改，核完发现没必要）。
+    ⚠️ **"调度循环照常跑也无害"这句已更正**（2026-09-27）：它只对**任务层**成立
+      —— 对**阶段层不成立**。`orchestrator._advance_project` 的推进判据只看任务状态，
+      所以只要还有 DONE，它照样把项目推进 INTEGRATING 一路到 DONE。
+      🔴 **`round-20260926` 真机实测**：02:17 按的停，**02:21:40 项目自己走到 integrating**，
+      lineage 写着「任务全部到终态(失败 13)→集成合并」—— 用户看到的是"按了停、它自己交付了"。
+      ⇒ 所以下面**必须先落一个项目级"停"标记**（`proj.mark_user_stop`），
+      阶段推进那边才拦得住（见 `project.halt_state`）。
 
     ⚠️ **语义是"停"，不是"暂停"**（用户 09-21 选的就是这个）：取消标记按「人工取消」处理
       ⇒ 以后返工重置时这批任务**不会被重新拉起**（`held_back_user_cancelled`）。
-      要接着跑得单独清标记。**"暂停到一半续上"那套没做**（没有证据说要它）。
+      ⇒ 要接着跑得**显式恢复**：`POST /api/projects/<id>/resume` 只解禁令，
+      那批任务要回来得逐个 `POST /api/tasks/<id>/retry`。**"暂停到一半续上"那套没做**。
     """
     from . import project as proj_mod
     from ._api_tasks import task_cancel
     proj = proj_mod.load(project_id)
     if proj is None:
         return {"error": "项目不存在"}, 404
+    # ── ① 先落"停"，**再**动任务 ──
+    # ⚠️ **顺序是有意的**：先落标记 ⇒ 就算下面某个 `task_cancel` 抛了，项目也已经是"停"的了。
+    #    反过来（先停任务后落标记）会留下一个缝隙：任务都停了，但 phase 照旧往前推 ——
+    #    而那正是这次要堵的洞。
+    proj.mark_user_stop(reason=f"POST /api/projects/{project_id}/stop")
+    proj_mod.save(proj)
     stopped: list[str] = []
     terminal: list[str] = []
     for tid in list(getattr(proj, "task_ids", []) or []):
@@ -616,9 +665,59 @@ def project_stop(project_id: str) -> tuple[dict, int]:
         (stopped if code == 200 else terminal).append(tid)
     witness.warn("project", f"project_stop:{project_id}:停止 {len(stopped)} 个"
                             f"（终态跳过 {len(terminal)}）"[:200], key="project_stopped")
+    # ── ② 落一条 issue，让人在项目页/对话页都看得见"为什么不动了" ──
+    # 形状与 `orchestrator._record_halt_issue` **同一份**（同一个 kind、同一套去重）——
+    # 两处各写一套的话，界面上就会出现两种长得不一样的"已停"。
+    if not any(i.get("kind") == "project_stalled" for i in proj.issues):
+        proj.issues.append({
+            "kind": "project_stalled",
+            "reason": proj_mod.HALT_USER_STOP,
+            "failed": len(proj_mod.failed_task_ids(proj)),
+            "message": "人工叫停整个项目（**停不是暂停**：要接着跑得先 "
+                       f"`POST /api/projects/{project_id}/resume`）",
+            "ts": time.time(),
+        })
+        proj_mod.save(proj)
     return {"ok": True, "stopped": len(stopped), "terminal": len(terminal),
             "task_ids": stopped,
-            "message": f"已发送 {len(stopped)} 个取消信号（终态 {len(terminal)} 个跳过）"}, 200
+            "halted": True, "halt_reason": proj_mod.HALT_USER_STOP,
+            "message": f"已发送 {len(stopped)} 个取消信号（终态 {len(terminal)} 个跳过）；"
+                       f"项目已停，阶段推进冻结"}, 200
+
+
+def project_resume(project_id: str) -> tuple[dict, int]:
+    """POST /api/projects/<id>/resume —— **解除人工叫停**。
+
+    🔴 **只解禁令，不重派任何任务、不点火任何阶段**。理由两条：
+
+    ① **语义**：09-21 拍板的是"停"，不是"暂停"。那批任务带着**人工取消**标记
+       （`task_cancel` 写的），要它们回来得逐个 `POST /api/tasks/<id>/retry` ——
+       这正是当初选"停"时接受的行为（`held_back_user_cancelled`）。
+    ② 🔴 **不能复用 `POST /api/projects/<id>/start`**：那条路会走到 `run_phase` 的
+       EXECUTING 分支，而 `_run_execution` **第一件事就是 `project.task_ids = []`
+       然后整批重建任务** ⇒ "恢复"会把人想重试的那批失败任务**整批丢掉**。
+       （今天对一个停在 EXECUTING 的项目调 `/start` 就会踩这个 —— 所以 `project_start`
+       在停了的时候直接 409，顺带把这个地雷也堵上。）
+
+    没停过 ⇒ 409（**不假装成功**）：返回 200 会让人以为"我按了恢复，项目在动了"。
+    """
+    from . import project as proj_mod
+    proj = proj_mod.load(project_id)
+    if proj is None:
+        return {"error": "项目不存在"}, 404
+    if getattr(proj, "halted_reason", "") != proj_mod.HALT_USER_STOP:
+        return {"error": "该项目没有被人叫停，无需恢复"}, 409
+    proj.clear_user_stop(reason=f"POST /api/projects/{project_id}/resume")
+    # 撤票：停的是人工那种，`_advance_project` 里的撤票只管调度循环那一 tick，
+    # 而人在更早的阶段（template/gate2…）恢复时**调度循环根本走不到那个项目**。
+    if any(i.get("kind") == "project_stalled" for i in proj.issues):
+        proj.issues = [i for i in proj.issues if i.get("kind") != "project_stalled"]
+    proj_mod.save(proj)
+    halted_now = proj_mod.halt_state(proj)
+    return {"ok": True, "resumed": True, "halted": halted_now["halted"],
+            "halt_reason": halted_now["reason"],
+            "message": "已解除人工叫停。任务不会自己回来 —— 要哪个回来用 "
+                       "`POST /api/tasks/<id>/retry`"}, 200
 
 
 def project_cost(project_id: str) -> tuple[dict, int]:

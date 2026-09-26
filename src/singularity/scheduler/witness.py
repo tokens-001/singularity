@@ -55,7 +55,11 @@ _CRITICAL_ALERT_KEYS = frozenset({
     "observer_stalled_task",     # 观察者判「这个任务停滞了」—— 得有人看一眼
     "task_killed_no_wrapup",     # 被外层砍掉、没来得及收尾
     "merge_queue_stuck",         # 合并队列卡住 ⇒ 整个项目不动
-    "project_all_tasks_failed",  # 一整轮全失败 ⇒ 等人拍板
+    # 项目停滞 ⇒ **等人二选一**（2026-09-27 改名 + 扩义）：原来是 `project_all_tasks_failed`
+    # （只在"一整轮全失败"时响）。现在两种停都走它 —— `user_stop`（人按的停）/
+    # `task_failed`（前置失败、等人决定重试还是叫停）。判据仍是"罕见 ∧ 人现在就得动手"。
+    "project_stalled",
+    "project_no_deliverable",    # 拆出来全是 DECOMPOSED、一个都没成功 ⇒ 没东西可交付
     "stale_write",               # 有人拿旧快照覆盖了新状态（"批准被抹掉"那一族）
     "no_permission_checker",     # 权限闸门没装 —— 安全项
 })

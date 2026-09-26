@@ -3,6 +3,14 @@
 `FAILED` 和 `DONE` 在推进判据里**同属"终态"** —— 所以必须先分一次"有没有成功的"。
 不分的话，7 个任务全失败的项目会一路推到 DONE 并播报"交付完成!"，
 用户看到的和事实完全相反（2026-09-11 流水线探针实测）。
+
+🔴 **2026-09-27 语义反转（有意的，不是回归）**：
+`_advance_project` 开头多了一道**停滞早退**（`project.halt_state`）——
+**只要还有 FAILED/ROLLED_BACK 的任务，就不许进 INTEGRATING**。
+原行为"有部分失败照样交付"成立的前提是「返工循环会修复上游」
+（`tracker._any_dead_dep` 注释原话），而**项目级自动返工 09-21 起默认关**
+⇒ 上游永远不会被修，带着失败往前走 = 在没地基的情况下盖楼。
+用户 09-27 拍板：**前置失败 ⇒ 项目停滞，由人二选一**（重试失败任务 / 叫停整个项目）。
 """
 import json
 
@@ -51,7 +59,7 @@ def test_all_tasks_failed_does_not_advance(tmp_path, monkeypatch):
                [tracker.TaskStatus.FAILED] * 3)
     orch._auto_trigger_test_fix({}, [])
     assert p.phase is proj_mod.Phase.EXECUTING, "全失败还推进 = 会谎报交付完成"
-    assert any(i.get("kind") == "all_tasks_failed" for i in p.issues)
+    assert any(i.get("kind") == "project_stalled" for i in p.issues)
 
 
 def test_issue_recorded_only_once(tmp_path, monkeypatch):
@@ -59,15 +67,36 @@ def test_issue_recorded_only_once(tmp_path, monkeypatch):
     p = _setup(tmp_path, monkeypatch, [tracker.TaskStatus.FAILED] * 2)
     for _ in range(5):
         orch._auto_trigger_test_fix({}, [])
-    assert len([i for i in p.issues if i.get("kind") == "all_tasks_failed"]) == 1
+    assert len([i for i in p.issues if i.get("kind") == "project_stalled"]) == 1
 
 
-def test_partial_success_still_advances(tmp_path, monkeypatch):
-    """有任务成功就该交付 —— 失败的不能连累整个项目卡死。"""
+def test_有失败就停在executing(tmp_path, monkeypatch):
+    """🔴 **这条钉的是 2026-09-27 那次语义反转**（旧名 `test_partial_success_still_advances`）。
+
+    旧判据：「有任务成功就该交付 —— 失败的不能连累整个项目卡死」。
+    它现在**不成立了**，理由见文件头：那个"不能连累"靠的是返工循环兜底，而返工已默认关。
+
+    ⇒ 现在：**DONE + FAILED 也停在 executing**，等人二选一。
+    变异：删掉 `_advance_project` 开头那句 `if halt["halted"]: return` ⇒ 本条红（相位变 INTEGRATING）。
+    """
     p = _setup(tmp_path, monkeypatch,
                [tracker.TaskStatus.DONE, tracker.TaskStatus.FAILED])
     orch._auto_trigger_test_fix({}, [])
-    assert p.phase is proj_mod.Phase.INTEGRATING
+    assert p.phase is proj_mod.Phase.EXECUTING, "有失败还交付 = 在没地基的情况下盖楼"
+    stalled = [i for i in p.issues if i.get("kind") == "project_stalled"]
+    assert len(stalled) == 1 and stalled[0]["reason"] == "task_failed", stalled
+
+
+def test_全是DECOMPOSED也算没东西可交付(tmp_path, monkeypatch):
+    """停滞早退接走"有失败"之后，老的 `no_deliverable_tasks` 那一支只剩这个边角。
+
+    它守的是**另一件事**（零可交付还报交付完成），不是第二套停滞语义 ——
+    所以 kind 跟着事实改名了（没有任务失败，是没产物）。
+    """
+    p = _setup(tmp_path, monkeypatch, [tracker.TaskStatus.DECOMPOSED] * 2)
+    orch._auto_trigger_test_fix({}, [])
+    assert p.phase is proj_mod.Phase.EXECUTING
+    assert any(i.get("kind") == "no_deliverable_tasks" for i in p.issues), p.issues
 
 
 def test_all_done_advances(tmp_path, monkeypatch):

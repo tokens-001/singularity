@@ -640,6 +640,21 @@ def task_retry(task_id: str) -> tuple[dict, int]:
         return {"error": "任务不存在"}, 404
     if task.status not in (TaskStatus.FAILED, TaskStatus.ROLLED_BACK):
         return {"error": f"当前状态 {task.status.value} 不支持重试"}, 400
+    # ── 项目级：**人工叫停的拒，前置失败停滞的放**（2026-09-27 用户拍板的两条相反路）──
+    #
+    # 用户定的"二选一"是：**① 重新尝试失败任务 / ② 叫停整个项目**。
+    # ⇒ 这两条**必须分开判**，不能一句 `halted` 全拦：
+    #   · `user_stop`   ⇒ 人已经说了"停这个项目"。这时还去重试单个任务是**背着他动手**
+    #                     —— 任务一回 PENDING，调度循环下一 tick 就派下去烧钱。
+    #                     要重试得先 `POST /api/projects/<id>/resume`。
+    #   · `task_failed` ⇒ **这就是①**。而且重试会把任务推回 PENDING，
+    #                     `halt_state` 的派生分支当场翻转 ⇒ 停滞**自己就解除**。
+    #                     拦它等于把用户两个选项里唯一能点的那一个也拿掉了。
+    from singularity.scheduler import project as proj_mod
+    proj = proj_mod.load(task.project_id) if getattr(task, "project_id", "") else None
+    if proj is not None and getattr(proj, "halted_reason", "") == proj_mod.HALT_USER_STOP:
+        return {"error": f"项目已被人工叫停（停不是暂停）。先 "
+                         f"`POST /api/projects/{proj.id}/resume` 解除，再重试这个任务"}, 409
     # 重跑前清衍生残留 (worktree/pending ref/snapshot)，避免 anchor_ref 冲突 + 脏 worktree
     _cleanup_task_artifacts(task_id, _repo_root_for_cleanup(task, task_id))
     # 🔵 **锚定 ref 在这里「不」松手**（2026-09-19 反过来；这里原来是显式 `_release_ref`）。

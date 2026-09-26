@@ -1043,6 +1043,32 @@ def _auto_trigger_test_fix(agents: dict, results: list[tuple]) -> None:
                                  f'{type(e).__name__}:{e}'[:200])
 
 
+def _record_halt_issue(proj, halt: dict) -> None:
+    """把"项目停了"落成一条**人看得见**的 issue（+ 一条关键告警）。
+
+    幂等：**已记过就不再记** —— 调度循环每 tick 都走到这里，不去重就是刷屏
+    （抄的是原来 `all_tasks_failed` 那段同样的判据）。
+
+    🔴 **kind 只有 `project_stalled` 一个**（不是给"全失败"再留一个名字）：
+    一个 kind 只在一半情况下为真，就是界面上的一句假话。两种停由 `reason` 区分：
+    `user_stop`（人按的）/ `task_failed`（前置失败、等人二选一）。
+    """
+    if any(i.get("kind") == "project_stalled" for i in proj.issues):
+        return
+    proj.issues.append({
+        "kind": "project_stalled",
+        "reason": halt["reason"],
+        "failed": len(halt["failed_tasks"]),
+        "message": halt["detail"],
+        "ts": time.time(),
+    })
+    from singularity.scheduler import project as proj_mod
+    proj_mod.save(proj)
+    witness.warn("orch", f"project_stalled:{tracker.short_id(proj.id)}:"
+                         f"{halt['reason']}:{len(halt['failed_tasks'])}"[:120],
+                 key="project_stalled")
+
+
 def _advance_project(proj, agents: dict) -> None:
     """单个项目的阶段推进 —— 抽成函数**只为让异常按项目隔离**（见上面那条注释）。
 
@@ -1050,6 +1076,35 @@ def _advance_project(proj, agents: dict) -> None:
     （TEMPLATE/RESEARCHING/PLANNING/GATE*）归 `run_phase`，见 `project.py` 顶部的归属表。
     """
     from singularity.scheduler import project as proj_mod
+
+    # ── 「停了就一步都不许推」（2026-09-27 用户拍板，`proj_mod.halt_state`）──
+    #
+    # 🔴 **必须放在函数最前面**，也就是 `if not proj.task_ids: _decompose_and_create_tasks`
+    #    **之前**：停了的项目**也不许再拆任务** —— 那个函数第一件事就是
+    #    `project.task_ids = []` 然后整批重建，放它后面等于"停了个寂寞"。
+    #
+    # 🔴 **为什么需要这一层**（`round-20260926` 真机）：02:17 按了 `project_stop`
+    #    （任务全取消），**02:21:40 项目自己从 `executing` 走到 `integrating`**。
+    #    因为 `project_stop` 只作用于**任务**，而本函数的推进判据**只看任务状态** ——
+    #    "任务都到终态了 ⇒ 去集成"这条在"人喊停"面前毫无防备。
+    #    ⇒ 加这个早退之后，`set_phase(INTEGRATING)` 那一支在"有失败/被叫停"时**不可达**。
+    #
+    # ⚠️ **这是一次有意的语义反转**（不是回归）：**有任务失败 ⇒ 不进集成/不交付**。
+    #    原行为是"带着失败往前走"，它成立的前提写在 `tracker._any_dead_dep` 的注释里 ——
+    #    「返工循环会修复」—— 而**项目级自动返工 09-21 起默认关**
+    #    （`workflow._auto_rework_allowed` 第一道闸门）⇒ **上游永远不会被修**，
+    #    带着失败往前走就是明知没地基还盖楼。
+    halt = proj_mod.halt_state(proj)
+    if halt["halted"]:
+        _record_halt_issue(proj, halt)
+        return
+    # 停解除了 ⇒ **把那条 issue 撤掉**，否则界面永远在说"已停"。
+    # （派生那一半（`task_failed`）人一重试就没了，所以这里**必须**有撤票，
+    #  不然 `project_stalled` 会赖在 issues 里不走 —— 那正是"僵尸标记"换了个地方长。）
+    if any(i.get("kind") == "project_stalled" for i in proj.issues):
+        proj.issues = [i for i in proj.issues if i.get("kind") != "project_stalled"]
+        proj_mod.save(proj)
+
     if proj.phase.value == "executing":
         # P2: 首次进入 → 拆解架构为任务
         if not proj.task_ids:
@@ -1083,20 +1138,26 @@ def _advance_project(proj, agents: dict) -> None:
             # 就没有可交付的东西**。以前不看这个 —— 7 个任务全失败的项目照样
             # 一路推到 DONE 并播报"交付完成!"，用户看到的和事实完全相反
             # （2026-09-11 探针实测：7 任务全 failed，项目 phase=done）。
+            #
+            # ⚠️ **这一支现在很窄了**（2026-09-27）：函数开头的停滞早退已经把
+            # "有 FAILED/ROLLED_BACK"的情况全部接走 ⇒ 走到这儿只剩**全是 DECOMPOSED**
+            # （父任务被拆掉、子任务不在 `task_ids` 里）这种边角。
+            # ⇒ kind 从 `all_tasks_failed` 改成 `no_deliverable_tasks`
+            #   —— 原来那个名字在这一支里**已经是假话**（没有任务失败，是没产物）。
             done_ids = [tid for tid in proj.task_ids
                         if (t := tracker.read_task(tid))
                         and t.status == tracker.TaskStatus.DONE]
             if not done_ids:
                 # 记一条 issue 并**停在这里等人处理**，不再往交付推。
                 # 已记过就不再重复（调度循环每 tick 都会走到这里，否则刷屏）。
-                if not any(i.get("kind") == "all_tasks_failed" for i in proj.issues):
+                if not any(i.get("kind") == "no_deliverable_tasks" for i in proj.issues):
                     proj.issues.append({
-                        "kind": "all_tasks_failed",
-                        "message": f"{len(proj.task_ids)} 个任务全部失败，无可交付内容",
+                        "kind": "no_deliverable_tasks",
+                        "message": f"{len(proj.task_ids)} 个任务一个都没成功，无可交付内容",
                         "ts": time.time(),
                     })
                     proj_mod.save(proj)
-                    witness.warn("orch", f"project_all_tasks_failed:"
+                    witness.warn("orch", f"project_no_deliverable:"
                                          f"{tracker.short_id(proj.id)}:{len(proj.task_ids)}"[:80])
             else:
                 # D2: 推进到集成合并阶段, 异步跑 (不阻塞调度循环)

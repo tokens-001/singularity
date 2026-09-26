@@ -524,6 +524,65 @@ def _invalidate_scan_cache():
     _TASK_SCAN_CACHE["ts"] = 0
 
 
+# ── 停了的项目：它的任务**一个都不许派**（2026-09-27 用户拍板）──
+#
+# 🔴🔴 **过滤器必须放在 `ready_tasks` 里，绝不能放 `_dispatch_ready`。**
+#
+# `orchestrator._run_queue_v3` 的**出口判据就是本函数的返回值**
+# （`remaining = tracker.ready_tasks(...)` ⇒ `if not remaining: break`）。
+# 在派发口过滤而这里照旧返回 ⇒ **"表里有东西"而"一圈没进展"** ⇒ 出口恒不满足
+# ⇒ 循环 `time.sleep(0.5); continue` 全速空转。**那正是 `防御模式.md` §77.1 的形状**
+# （当时是合并请求被依赖永久 defer，实测 **1731 条 `drain_dep_blocked` / 2 分钟**、
+#  进程吃 44 分钟 CPU）。当时那句教训就是：**"等成功"和"等不到"必须用同一句话。**
+# 这里同理：**"没活干"和"派不下去"必须用同一句话。**
+#
+# ⚠️ **过滤条件只许看 `halt_state`**（人工叫停 / 有任务失败）。
+#    往里加第二层判断（比如"依赖失败就永久跳过"）就是把"停"变成"等不到"，
+#    §77.1 原样复现 —— `test_停了之后循环会退出而不是空转` 是钉这个的机器判据。
+_HALTED_PROJECTS_CACHE: dict = {"ts": 0.0, "ids": frozenset()}
+_HALTED_TTL_S = 2.0
+_halted_reader = None      # 测试注入点：生产走 `project.halt_state`
+
+
+def _halted_project_ids() -> frozenset:
+    """当前**停着**的项目 id。只读 + 带 TTL（同上面那个扫描缓存）。
+
+    ⚠️ 判据不在这里重写：问 `project.halt_state`（那里是「停没停」的**唯一**出处）。
+    本函数的唯一职责是"别每个任务都去 load 一次项目 JSON"。
+    """
+    now = time.time()
+    if now - _HALTED_PROJECTS_CACHE["ts"] < _HALTED_TTL_S:
+        return _HALTED_PROJECTS_CACHE["ids"]
+    ids: set[str] = set()
+    from singularity.scheduler import witness  # 懒导入：本模块顶部只依赖 config / _io
+    try:
+        from singularity.scheduler import project as proj_mod
+        reader = _halted_reader or proj_mod.halt_state
+        for p in proj_mod.list_all():
+            try:
+                if reader(p)["halted"]:
+                    ids.add(p.id)
+            except Exception as e:      # noqa: BLE001 —— 不吞：读不出停没停必须出声
+                witness.warn("tracker", f"halt_state_read:{type(e).__name__}:{e}"[:120],
+                             key="halt_state_read_failed")
+    except Exception as e:              # noqa: BLE001 —— 同上，不许静默当成"没停"
+        witness.warn("tracker", f"halted_projects_scan:{type(e).__name__}:{e}"[:120],
+                     key="halted_projects_scan_failed")
+        return _HALTED_PROJECTS_CACHE["ids"]      # 退回上一次的结果，不是"全都不停"
+    _HALTED_PROJECTS_CACHE["ts"] = now
+    _HALTED_PROJECTS_CACHE["ids"] = frozenset(ids)
+    return _HALTED_PROJECTS_CACHE["ids"]
+
+
+def invalidate_halt_cache() -> None:
+    """人按停 / 点恢复之后**立刻**生效，不等那 2 秒 TTL。
+
+    （`project.mark_user_stop` / `clear_user_stop` 各调一次。不调也能自愈，
+     只是慢 2 秒 —— 但"按了停之后还会派一个任务下去"是能看见的，别让它发生。）
+    """
+    _HALTED_PROJECTS_CACHE["ts"] = 0.0
+
+
 def ready_tasks(exclude: set[str] = None) -> list[Task]:
     """DAG 就绪判定: 扫 PENDING + ROUTED + BLOCKED, 返回可调度的。
 
@@ -549,12 +608,19 @@ def ready_tasks(exclude: set[str] = None) -> list[Task]:
             _TASK_SCAN_CACHE["ts"] = now
             _TASK_SCAN_CACHE["tasks"] = all_tasks
         ready = []
+        _halted = _halted_project_ids()      # 停了的项目：一个都不派（理由见上面那段长注释）
         for task in all_tasks:
             if task.status not in _SCHEDULABLE:
                 continue
             if task.id in exclude:
                 continue
             if task.held:  # 人工扣留 → 跳过调度
+                continue
+            if getattr(task, "project_id", "") and task.project_id in _halted:
+                # **不返回、不改状态、直接跳过** —— 与 `held` 同一个形状。
+                # ⚠️ 不在这里写 `error`/`BLOCKED`：那是**状态变更**，会把"停"烙进任务里，
+                #    恢复之后还得再清一遍；而 `halt` 是**派生**的，不落任何任务字段
+                #    ⇒ 停解除的下一 tick，这些任务原样回到可调度表里（这正是要的）。
                 continue
             dead_dep = _any_dead_dep(task)
             if dead_dep:
