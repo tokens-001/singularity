@@ -76,6 +76,20 @@ PHASE_OWNER: dict[Phase, str] = {
 }
 
 
+# ── 「停」：**人工叫停**的唯一取值（2026-09-27）──
+#
+# 🔴 「停」**不是 `Phase` 的一档，是有意为之**。`Phase` 回答的是"流水线上走到哪了"，
+#    而"停"与它**正交** —— `researching` / `gate2` / `executing` 任何一处都可能是被停住的地方。
+#    把 STOPPED 塞进 `Phase` 会同时丢掉位置信息（恢复时还得补一个影子字段存原阶段），
+#    并连撞三条结构棘轮（`test_每一档都声明了归属` / `test_run_phase_为每个_Phase_都写了分支` /
+#    `test_every_phase_value_is_covered`）+ 前端四个手写枚举表。
+#
+# 🔴 **「前置失败 ⇒ 停滞」不落这个字段**（见 `halt_state`）：它是**派生**的。
+#    落盘的只有"人按的停" —— 因为派生那一半人一重试**自己就没了**，
+#    没有"清标记"的代码可写错，也就不可能出现"原因早没了、标记还挂着"的僵尸。
+HALT_USER_STOP = "user_stop"
+
+
 # Gate 拒绝 → 回退到哪里
 #
 # ⚠️ **回退目标必须是「有人会推它」的那一档**（2026-09-17）。
@@ -145,6 +159,16 @@ class ProjectState:
     # 与上面两个不同：**进 REVIEWING 时清零**（那一支在 orchestrator 里）—— 它量的是
     # "验收自己跑不跑得完"，不是"这个项目失败过几次"，棘轮语义在这里是错的。
     verify_attempts: int = 0
+
+    # ── 「停」（2026-09-27）──
+    # 🔴 **这里只记"人按的停"**。`halted_reason == "user_stop"` ⇒ 阶段推进一律不许动，
+    #    只能由人显式 `POST /api/projects/<id>/resume` 解除（语义是**停**不是**暂停**，
+    #    09-21 用户拍板：要接着跑得单独恢复，那批任务带着"人工取消"标记不会自己回来）。
+    # ⚠️ **「前置失败 ⇒ 停滞」不写这里** —— 它是 `halt_state()` 现算的（派生）。
+    #    写进来就会变成僵尸：人把失败任务重试了，这个字段还挂着，而没有任何东西会去清它。
+    # ⚠️ 为什么落盘：它是**人做的一个决定**，进程重启后仍然成立；派生那一半重启后自己会重算。
+    halted_reason: str = ""          # "" = 没停；"user_stop" = 人叫停
+    halted_at: float = 0.0
 
     # Agent 编组: {"any": ["model_a","model_b"]} — 两档后统一全池, 不设则用全局配置
     agent_lineup: dict[str, list[str]] = field(default_factory=dict)
@@ -222,6 +246,8 @@ class ProjectState:
         d.setdefault("review_failures", 0)
         d.setdefault("integrate_failures", 0)
         d.setdefault("verify_attempts", 0)
+        d.setdefault("halted_reason", "")
+        d.setdefault("halted_at", 0.0)
         d.setdefault("agent_lineup", {})
         d.setdefault("created_at", 0.0)
         d.setdefault("updated_at", 0.0)
@@ -324,6 +350,31 @@ class ProjectState:
         self.add_lineage({"action": "phase", "from": self.phase.value,
                           "to": phase.value, "reason": str(reason)[:120]})
         self.phase = phase
+
+    # ── 「停」的两个写点（`halted_reason` 的**唯一**来源）──
+
+    def mark_user_stop(self, reason: str = "") -> None:
+        """人叫停整个项目。**`phase` 一律不动** —— "停在哪个阶段"正是恢复时要用的信息。
+
+        ⚠️ 落盘由调用方做（与 `set_phase` 同款：本函数只改内存 + 记 lineage），
+        但**顺序上必须先落盘再动任务**，理由见 `_api_projects.project_stop` 的注释。
+        """
+        self.halted_reason = HALT_USER_STOP
+        self.halted_at = time.time()
+        self.add_lineage({"action": "halt", "reason": HALT_USER_STOP,
+                          "phase": self.phase.value, "detail": str(reason)[:120]})
+
+    def clear_user_stop(self, reason: str = "") -> None:
+        """解除人工叫停。**只解禁令**：不重派任务、不点火任何阶段。
+
+        停下来的那批任务带着"人工取消"标记（`task_cancel` 写的），要它们回来得逐个
+        `POST /api/tasks/<id>/retry` —— 这正是"停不是暂停"那条语义（09-21 用户拍板）。
+        """
+        if self.halted_reason != HALT_USER_STOP:
+            return
+        self.halted_reason, self.halted_at = "", 0.0
+        self.add_lineage({"action": "resume", "phase": self.phase.value,
+                          "detail": str(reason)[:120]})
 
     def effective_constraints(self) -> list:
         """验收/审查该用哪份约束清单 —— 带兜底的读法。
@@ -702,6 +753,57 @@ def _push_project_event(proj: ProjectState) -> None:
         _hooks.emit("project", payload)
     except Exception:
         pass
+
+
+def failed_task_ids(proj) -> list[str]:
+    """本项目里**不会再有产出**的任务（FAILED / ROLLED_BACK）。
+
+    ⚠️ 判据与 `tracker._DEAD_END` **同一份**，不在这里抄第三份 —— 那份注释讲的就是
+    "两处各写一遍迟早漂"（`CONFLICT_HELD` 就从那张表里被拿走过一次）。
+    ⚠️ **从盘上读**（`tracker.read_task`），不是读内存里的对象：`cas`/`transition`
+    都是"重读盘上那份再覆盖写"，内存里那份的 status 随时可能是旧的。
+    """
+    from singularity.scheduler import tracker  # 懒导入：本模块的惯例，也避开环形依赖
+    out: list[str] = []
+    for tid in (getattr(proj, "task_ids", None) or []):
+        t = tracker.read_task(tid)
+        if t is not None and t.status in tracker._DEAD_END:
+            out.append(tid)
+    return out
+
+
+def halt_state(proj) -> dict:
+    """**「这个项目停没停」的唯一判据** —— 阶段推进 / HTTP 详情 / 界面都读它。
+
+    两种停，来源不同、解除方式也不同，所以一个函数两个分支：
+
+      · `user_stop`   —— **人**按的停。**落盘**，只能由人显式恢复
+                        （`POST /api/projects/<id>/resume` / `clear_user_stop`）。
+      · `task_failed` —— **前置失败 ⇒ 停滞**（2026-09-27 用户拍板）。
+                        **派生，不落盘**：判据就是"还有 FAILED/ROLLED_BACK 的任务"。
+                        ⇒ 人一按①重试（`/api/tasks/<id>/retry`），或返工重置把它推回
+                        PENDING，**下一个 tick 它自己就没了** —— 没有"清标记"的代码
+                        可写错，也就不可能出现"原因早没了、标记还挂着"的僵尸。
+
+    🔴 **为什么"停"不能只看 `phase`**：`phase` 停在 `executing` 是**结果**，
+    不是判据 —— 判据必须能随任务状态**自动翻转**（人重试完，项目就该接着走）。
+    🔴 **为什么停止判据不依赖 `depends_on`**：那张图被压平过一次（`_decompose_and_create_tasks`
+    的注释写着"依赖完全没有"）。拿一张可能不完整的图当判据，漏判是**静默**的 ——
+    项目照样带着窟窿往下走，而没有任何东西会提醒。⇒ 判据取最简的那条：**有任务失败就停**。
+    """
+    if getattr(proj, "halted_reason", "") == HALT_USER_STOP:
+        return {"halted": True, "reason": HALT_USER_STOP,
+                "at": getattr(proj, "halted_at", 0.0),
+                "failed_tasks": failed_task_ids(proj),
+                "detail": "人工叫停整个项目（**停不是暂停**：要接着跑得先恢复）"}
+    failed = failed_task_ids(proj)
+    if failed:
+        return {"halted": True, "reason": "task_failed", "at": 0.0,
+                "failed_tasks": failed,
+                "detail": (f"{len(failed)} 个任务失败 ⇒ 前置没有地基，项目停滞。"
+                           f"由人二选一：① 重试失败任务（`POST /api/tasks/<id>/retry`）"
+                           f" ② 叫停整个项目（`POST /api/projects/<id>/stop`）")}
+    return {"halted": False, "reason": "", "at": 0.0, "failed_tasks": []}
 
 
 def effective_constraints(proj) -> list:
