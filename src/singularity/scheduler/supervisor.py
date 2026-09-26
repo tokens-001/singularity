@@ -424,46 +424,65 @@ def _check_artifact(changed_files: list[str], root: Path, tests_result: dict = N
     if not py_files:
         return CheckResult(passed=True, reason="无 Python 文件改动")
 
+    # 改动的 py 文件里**真在 root 下的**有哪些 —— py_compile 和 ruff 用的是同一个判据
+    # （`(root / f).exists()`），算一次；它同时是"这一格到底查没查"的开关（下面那条）。
+    under_root = [f for f in py_files if (root / f).exists()]
+    if not under_root:
+        # 🔴 **"一个都没查"不是"通过"**（2026-09-26，Qoder 第二轮 #6，逐行核过）。
+        # 走到这儿 = 改动的 py 文件**一个都不在 root 下** ⇒ 下面那个 `py_compile` 循环
+        # 跑 **0 次**、ruff 也没得扫，`errors` 恒空；而 `evidence` 起手就是
+        # `{"hard": True}` ⇒ 最后照样报「**质量门禁通过 (N 文件)**」——
+        # **最硬的那一格，是零次检查换来的。**
+        # 常见成因是 `root` 传错（项目任务的改动在项目独立 repo 下，见 `run_qa` 开头那段）：
+        # 那时连"测试跑的其实是奇点自己的"也一起发生，而外面看到的是一片绿。
+        #
+        # ⇒ 归到本仓对"没做"的**一贯处置**：`hard=False`（不冒充硬证据）+ `passed=False`
+        # （进 issues）。supervisor 汇总时命中 `soft_escalation` ⇒ **`escalate`，交人审**。
+        # **既不放行、也不判失败** —— 判失败会造出一个和任务无关的假红，
+        # 那是另一侧的病（刚在 `validator._run_gate` 那边栽过同一个形状）。
+        return CheckResult(
+            passed=False,
+            reason=(f"质量门禁**未执行**: 改动的 {len(py_files)} 个 py 文件一个都不在 "
+                    f"root 下 (root={root}) —— 不是通过"),
+            evidence={"hard": False,
+                      "not_run": {"changed_py_files": list(py_files), "root": str(root)}},
+        )
+
     evidence = {"hard": True}
     errors = []
 
     # 1. 语法检查 (python -m py_compile)
-    for f in py_files:
+    for f in under_root:
         fp = root / f
-        if fp.exists():
-            try:
-                proc = subprocess.run(
-                    ["python3", "-m", "py_compile", str(fp)],
-                    capture_output=True, text=True, timeout=10,
-                )
-                if proc.returncode != 0:
-                    errors.append(f"{f}: syntax error")
-            except Exception:
-                errors.append(f"{f}: compile timeout")
-
-    # 2. Lint (ruff check)
-    # 目标文件全不在 root 下时必须**跳过**，不能把空路径列表交给 ruff：
-    # 不带路径的 `ruff check` 是"扫当前目录"，cwd 又是 root，等于扫整个仓库并
-    # 按别人代码的 E/F 违规把这个任务判成硬失败（reason=质量门禁失败）。
-    # 注：ruff 未在本项目 venv 安装（pyproject 里是 dev 可选依赖），空参数行为
-    # 没有实测过 —— 这里只是不再依赖那个未验证的行为。
-    lint_targets = [str(root / f) for f in py_files if (root / f).exists()]
-    if not lint_targets:
-        evidence["lint"] = "no changed py file under root, skipped"
-    else:
         try:
             proc = subprocess.run(
-                ["ruff", "check", "--select=E,F", *lint_targets],
-                capture_output=True, text=True, timeout=30, cwd=str(root),  # cwd=root: 否则 ruff 按进程 cwd 找配置/文件
+                ["python3", "-m", "py_compile", str(fp)],
+                capture_output=True, text=True, timeout=10,
             )
             if proc.returncode != 0:
-                errors.append(f"ruff: {proc.stdout.strip()[:200]}")
-            else:
-                evidence["lint"] = "ruff passed"
-        except FileNotFoundError:
-            evidence["lint"] = "ruff not installed, skipped"
+                errors.append(f"{f}: syntax error")
         except Exception:
-            pass  # ruff 挂了不阻塞
+            errors.append(f"{f}: compile timeout")
+
+    # 2. Lint (ruff check)
+    # ⚠️ 只把**真在 root 下**的文件交给 ruff：不带路径的 `ruff check` 是"扫当前目录"，
+    # cwd 又是 root，等于扫整个仓库并按别人代码的 E/F 违规把这个任务判成硬失败。
+    # （原来这里还有个 `if not lint_targets` 的空表分支 —— 上面那条提前返回已经把它
+    #  全覆盖了，`under_root` 为空就在这里返回，留着是死代码。）
+    lint_targets = [str(root / f) for f in under_root]
+    try:
+        proc = subprocess.run(
+            ["ruff", "check", "--select=E,F", *lint_targets],
+            capture_output=True, text=True, timeout=30, cwd=str(root),  # cwd=root: 否则 ruff 按进程 cwd 找配置/文件
+        )
+        if proc.returncode != 0:
+            errors.append(f"ruff: {proc.stdout.strip()[:200]}")
+        else:
+            evidence["lint"] = "ruff passed"
+    except FileNotFoundError:
+        evidence["lint"] = "ruff not installed, skipped"
+    except Exception:
+        pass  # ruff 挂了不阻塞
 
     # 3. 测试 (pytest → unittest → npm)
     if tests_result is not None:
@@ -490,7 +509,9 @@ def _check_artifact(changed_files: list[str], root: Path, tests_result: dict = N
             evidence=evidence,
         )
     return CheckResult(
-        passed=True, reason=f"质量门禁通过 ({len(py_files)} 文件)",
+        # 数的是**真查过的**那几个：写 `len(py_files)` 会在"一部分文件不在 root 下"
+        # 时报一个没查过的数（同一个谎的小号版本）。
+        passed=True, reason=f"质量门禁通过 ({len(under_root)} 文件)",
         evidence=evidence,
     )
 

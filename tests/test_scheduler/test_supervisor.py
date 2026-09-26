@@ -237,6 +237,13 @@ class TestArtifactLintSkip:
     以前会把**空的**路径列表交给 `ruff check --select=E,F`，而 cwd=root ——
     不带路径的 ruff 是"扫当前目录"，等于拿整个仓库别人的 E/F 违规把这个任务
     判成硬失败（reason=质量门禁失败）。代码注释本意就是"跳过"。
+
+    ⚠️ **2026-09-26 反了一处**（Qoder 第二轮 #6）：原来这里还断言 `r.passed`，
+    而那个断言**恰好钉住了本条的谎** —— 跳过 lint 只是半个症状，真正的病是
+    整格零次检查（`py_compile` 也跑 0 次）却报「质量门禁通过 (N 文件)」+ `hard: True`。
+    「不该判**失败**」这个顾虑仍然成立，处置改成了本仓对"没做"的一贯做法：
+    `passed=False` + **`hard=False`** ⇒ 汇总成 `escalate` **交人审**（既不放行也不判失败）。
+    底下新增的那条 `test_零检查时走escalate而不是fail` 钉的就是"别变成假红"。
     """
 
     def test_skips_when_no_changed_file_under_root(self, tmp_path, monkeypatch):
@@ -259,7 +266,29 @@ class TestArtifactLintSkip:
         r = sv._check_artifact(["pkg/other.py"], tmp_path, tests_result={"passed": True})
         assert [c for c in calls if c and c[0] == "ruff"] == [], \
             f"无目标文件时不该调 ruff（空路径 = 扫整个仓库）: {calls}"
-        assert r.passed, f"不该因为没 lint 目标就判失败: {r.reason}"
+        assert [c for c in calls if c and "py_compile" in c] == [], \
+            f"文件不在 root 下时也不该去 compile: {calls}"
+        assert not r.passed, "一个文件都没查过，却报'通过' —— 零次检查换来一个硬通过"
+        assert "未执行" in r.reason, r.reason
+        assert r.evidence.get("hard") is False, \
+            "零检查还挂着 hard=True ⇒ 汇总会判成硬失败（假红），处置应该是交人审"
+
+    def test_零检查时走escalate而不是fail(self, tmp_path):
+        """**接线判据**：`hard=False` 让汇总落到 `escalate`（人审），不是 `fail`。
+
+        变异：把那条提前返回里的 `"hard": False` 改成 `True` ⇒ 本条红
+        （verdict 从 escalate 变 fail = 造出一个和任务无关的假红）。
+        """
+        from singularity.scheduler import supervisor as sv
+        v = sv.supervise(
+            task_description="改一个模块", changed_files=["pkg/other.py"],
+            constraints=[], checklist=[], agent_output="改完了",
+            repo_root=str(tmp_path), tests_result={"passed": True},
+        )
+        assert v.verdict == "escalate", \
+            f"零检查该交人审（既不放行也不判失败），实际 {v.verdict}：{v.issues}"
+        assert any("未执行" in i for i in v.issues), \
+            f"没进 issues ⇒ 人审页上看不见：{v.issues}"
 
     def test_still_checks_existing_files(self, tmp_path, monkeypatch):
         """文件真在 root 下时照常走 lint（别把正常路径也跳过了）。"""
