@@ -169,6 +169,25 @@ describe('常驻状态条 + 文件侧滑面板', () => {
     done()
   })
 
+  it('**等前置的不许算进「执行中」** —— 顶栏要给成两个数', async () => {
+    // 真机现场（2026-09-27，用户看到）：14 个任务里 2 个在跑、12 个 `blocked`（等前置），
+    // 顶栏写的是「14 个执行中」。合并成一个数 = **把"在等"报成"在跑"**。
+    // 删掉 `waiting` 那一分档、把 `else w++` 改回 `else r++`，这条会红。
+    ;(api.tasks as any).mockResolvedValue([
+      TASK('t1', 'a', 'running'),
+      TASK('t2', 'b', 'blocked'),
+      TASK('t3', 'c', 'blocked'),
+      TASK('t4', 'd', 'done'),
+    ])
+    const { el, done } = await mount()
+    const text = (el.textContent || '').replace(/\s+/g, ' ')
+    expect(text, '把"1 个在跑 + 2 个在等"并成了「3 个执行中」').not.toContain('3 个执行中')
+    expect(text).toContain('1 个执行中')
+    expect(text, '等前置的数量没报出来 —— 那就是没修').toContain('2 个等待')
+    expect(text).toContain('1/4')
+    done()
+  })
+
   it('任务卡**默认不在正文里**（要点「📁 材料」才出来）', async () => {
     ;(api.tasks as any).mockResolvedValue([TASK('t1', '实现解析器')])
     const { el, done } = await mount()

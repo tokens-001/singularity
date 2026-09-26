@@ -236,8 +236,8 @@ export default function Chat() {
     catch (e) { toast(errText(e, '操作失败'), 'error') }
   }
 
-  const { completed, failed, active } = useMemo(() => {
-    let c = 0, f = 0, a = 0
+  const { completed, failed, running, waiting } = useMemo(() => {
+    let c = 0, f = 0, r = 0, w = 0
     for (const t of tasks) {
       // ⚠️ **判据只有一份**（`TaskCard.tsx` 的 `taskStateKind`）。
       // 原来这里自己写了一遍 `failed || cancelled` —— 而后端**根本没有 `cancelled`**
@@ -246,9 +246,14 @@ export default function Chat() {
       const k = taskStateKind(t.status)
       if (k === 'done') c++
       else if (k === 'failed') f++
-      else a++      // running / waiting 都还没结束
+      else if (k === 'running') r++
+      // ⚠️ **`waiting` 不许并进"执行中"**（2026-09-27 用户真机看到）：
+      // 这一档是**等前置任务**（`blocked`）/ 暂停 / 冲突 parked —— **它没在跑**。
+      // 并进去的话，14 个任务里 12 个在队列里等，顶栏显示「14 个执行中」，
+      // 而真在跑的只有 2 个。**"在等"和"在跑"要报成两个数。**
+      else w++
     }
-    return { completed: c, failed: f, active: a }
+    return { completed: c, failed: f, running: r, waiting: w }
   }, [tasks])
 
   const info = activePid !== '_default' ? projects.find(p => p.id === activePid) : null
@@ -317,8 +322,12 @@ export default function Chat() {
                   <span className="fs-11 text-muted">
                     · {failed > 0 && <span style={{ color: '#dc2626' }}>⚠ </span>}
                     {/* ⚠️ 带上 `已完成/总数` —— 只说"1 个执行中"看不出还剩几个，
-                        而这条摘要就是人在顶栏能看到的全部进度。 */}
-                    {active > 0 ? `${active} 个执行中 · ${completed}/${tasks.length}`
+                        而这条摘要就是人在顶栏能看到的全部进度。
+                        ⚠️ **执行中和等待必须分开报**（2026-09-27，用户真机看到顶栏写着
+                        「14 个执行中」而真正在跑的只有 2 个 —— 另外 12 个是在等前置任务）。
+                        合并成一个数 = 把"在等"报成"在跑"，比不报还坏。 */}
+                    {running + waiting > 0
+                      ? `${running} 个执行中${waiting > 0 ? ` · ${waiting} 个等待（等前置/暂停）` : ''} · ${completed}/${tasks.length}`
                       : completed === tasks.length ? '全部完成' : `进度 ${completed}/${tasks.length}`}
                     {failed > 0 && <span style={{ color: '#dc2626' }}> {failed} 失败</span>}
                   </span>
