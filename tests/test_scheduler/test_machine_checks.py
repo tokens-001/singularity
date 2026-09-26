@@ -92,23 +92,53 @@ class TestWhitelist:
         ok, why = mc.validate_check({"argv": argv, "expect_exit": 0})
         assert not ok, f"必须拒绝: {argv}"
 
-    def test_白名单和提示词是同一份_防漂移(self):
-        """🔴 **两处不一致正是这次出事的原因** —— 提示词让模型填的，代码必须认。
+    def test_白名单文本从代码现算(self):
+        """`argv0_whitelist_text()` 是**唯一**的名单描述 —— 加一个程序，
+        文本里就得出现，**不需要改任何提示词**。"""
+        t = mc.argv0_whitelist_text()
+        for prog in mc.ALLOWED_ARGV0:
+            assert prog in t, f"{prog} 在白名单里，但描述文本里没有"
+        for prog, subs in mc._TOOL_OK_SUBCOMMAND.items():
+            for sub in subs:
+                assert sub in t, f"{prog} 的子命令 {sub} 没进描述"
 
-        只钉一个方向：**提示词列出的 ⊆ 代码认的**。反方向（代码多认几个）是安全的
-        —— 提示词白名单**窄于**代码是有意的。
-        另外钉住：新加的几个驱动**必须出现在提示词里**，否则模型根本不知道能用。
+    def test_白名单只有一处定义_全部提示词都是现算的(self):
+        """🔴 **两份拷贝必然漂** —— 这是同一个洞的第二次（`防御模式.md` §61 记的）。
+
+        手写的那份当时散在**三处**（架构师 / 定稿提示词 / 定稿 schema），
+        我 09-27 只改了一处 ⇒ 又漂了。而漂的方向是**最坏的那一个**：
+        代码加了 `go`、提示词没加 ⇒ **模型根本不知道能用它** ⇒ 只能写 pytest ⇒
+        「说 Go 但判据是 pytest」的自相矛盾架构 ⇒ `round-20260926` 整轮全灭。
+
+        §61 原话：「**同一份契约只能有一个定义点。两份拷贝必然漂**，
+        而且漂的是其中一份 —— 出问题时你盯着 prompt 找原因，根因在另一个文件里。」
+
+        判据：把任意一份里烤进去的文本换回手写名单 ⇒ 这条红。
         """
+        from singularity.scheduler import execution_judge as ej
         from singularity.scheduler.workflow import _ARCHITECT_CONTEXT
-        # 名单会**跨行**（加一个词就可能换行）⇒ 用 `re.S` 抓到第一个句号为止
-        m = re.search(r"argv\[0\] 只允许:(.*?)。", _ARCHITECT_CONTEXT, re.S)
-        assert m, "没在提示词里找到那份白名单 —— 措辞改了，这条测试要跟着改（**别删**）"
-        listed = {x.strip() for x in re.split(r"[/\s]+", m.group(1)) if x.strip()}
-        assert listed, m.group(1)
-        missing = listed - mc.ALLOWED_ARGV0
-        assert not missing, f"提示词让模型用这些，代码却不认: {missing}"
-        for prog in ("go", "cargo", "rustc"):
-            assert prog in listed, f"{prog} 在白名单里，但提示词没告诉模型 ⇒ 它不会用"
+        want = mc.argv0_whitelist_text()
+        for name, text in (("_ARCHITECT_CONTEXT", _ARCHITECT_CONTEXT),
+                           ("_V2_FINALIZE", ej._V2_FINALIZE)):
+            assert want in text, f"{name} 里的白名单不是现算的那份 ⇒ 它已经漂了"
+            assert "__ARGV0_WHITELIST__" not in text, f"{name} 的占位符没被替换"
+
+    def test_架构契约不许写死语言的示范(self):
+        """🔴 **示范写死 Python 是这一轮的直接病因** —— 模型是照着示范抄的。
+
+        三处样板都要查（架构师 / 定稿提示词 / 定稿 schema）。注意只能查
+        **argv 例子**里的语言：散文里说「别写 `python3 -m pytest`」是**对的**，不该误伤。
+
+        判据：把任意一处改回 `"argv": ["python3","-m","pytest", ...]` ⇒ 这条红。
+        """
+        from singularity.scheduler import execution_judge as ej
+        from singularity.scheduler.workflow import _ARCHITECT_CONTEXT
+        bad = re.compile(r'"argv"\s*:\s*\[\s*"(python3|python|pytest)"')
+        for name, text in (("_ARCHITECT_CONTEXT", _ARCHITECT_CONTEXT),
+                           ("_V2_FINALIZE", ej._V2_FINALIZE),
+                           ("_ARCH_SCHEMA", ej._ARCH_SCHEMA)):
+            m = bad.search(text)
+            assert not m, f"{name} 里又有写死语言的 argv 示范: {m.group(0)}"
 
     def test_string_check_is_not_runnable(self):
         ok, why = mc.validate_check("跑一下测试看看")

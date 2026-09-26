@@ -89,6 +89,28 @@ _INTERPRETER_OK_PREFIX = ["-m", "pytest"]
 DEFAULT_TIMEOUT = 60.0
 
 
+def argv0_whitelist_text() -> str:
+    """白名单的**人话描述** —— 从 `ALLOWED_ARGV0` / `_TOOL_OK_SUBCOMMAND` **现算**。
+
+    🔴 **提示词里不许手写这份名单**（2026-09-27）。手写就一定会漂，而且漂的方向
+    是**最坏的那一个**：代码里加了 `go`、提示词没加 ⇒ **模型根本不知道能用它** ⇒
+    它只能从旧名单里挑，于是写出「说 Go 但判据是 pytest」那种自相矛盾的架构
+    （`round-20260926` 整轮全灭就是这么来的）。
+
+    同一段文字当时散在**三处**（`workflow._ARCHITECT_CONTEXT` 架构师、
+    `execution_judge._V2_FINALIZE` 定稿提示词、以及定稿的 `_ARCH_SCHEMA`）——
+    正是 `docs/防御模式.md` §61 那句「**同一份契约只能有一个定义点。两份拷贝必然漂**」。
+    09-12 修过一次（补 `covers`），但"两份拷贝"这个结构没动，所以又漂了。
+
+    ⇒ 现在**只有这一个定义点**：名单从代码现算，提示词用 `{argv0_whitelist}` 插值。
+    """
+    progs = " / ".join(sorted(ALLOWED_ARGV0))
+    subs = "；".join(f"`{p}` 只允许 {' / '.join(sorted(ok))}"
+                     for p, ok in sorted(_TOOL_OK_SUBCOMMAND.items()))
+    return (f"{progs}。其中 `python3` 只允许紧跟 `-m pytest`（不许 `-c`：那等于任意代码执行）；"
+            f"{subs}（挡的是**拉外部代码、改本机配置**，不是禁止执行代码）。")
+
+
 def parse_check(check) -> dict | None:
     """`check` 字段 → `{"argv": [...], "expect_exit": int}`；散文 / 非法 → None。
 

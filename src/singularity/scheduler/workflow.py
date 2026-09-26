@@ -76,7 +76,7 @@ _ARCHITECT_CONTEXT = """项目需求: {description}
       "complexity": "low|medium|high (必填)",
       "layer": "frontend/backend/data/devops (必填)",
       "depends_on": ["T0"],
-      "acceptance": [{{"text": "这一条验收标准 (必填)", "check": {{"argv": ["python3","-m","pytest","-q","tests/test_x.py"], "expect_exit": 0}}}}],
+      "acceptance": [{{"text": "这一条验收标准 (必填)", "check": {{"argv": ["<按 tech_stack.language 填的测试命令>"], "expect_exit": 0}}}}],
       "estimated_files": ["涉及文件路径"]
     }}
   ],
@@ -132,7 +132,7 @@ _ARCHITECT_CONTEXT = """项目需求: {description}
     {{
       "type": "security/performance/reliability/maintainability (必填)",
       "rule": "具体约束 (必填)",
-      "check": {{"argv": ["python3", "-m", "pytest", "-q"], "expect_exit": 0}},
+      "check": {{"argv": ["<按 tech_stack.language 填的测试命令>"], "expect_exit": 0}},
       "covers": [0, 2]
     }}
   ]
@@ -164,11 +164,7 @@ Schema 规则:
 - constraints 每条必须可机器检查 (type+rule+check)。`check` 两种写法，二选一：
   · **能机器跑**的 → `{{"argv": ["解释器或程序", "参数", ...], "expect_exit": 0}}`
     必须是**数组**（平台按数组直接 exec，**不过 shell**）。argv[0] 只允许:
-    python3 / python / pytest / npm / node / git / ls / cat / wc / test /
-    go / cargo / rustc。
-    `python3` 只允许紧跟 `-m pytest`（不许 `-c`：那等于任意代码执行）；
-    `go` 只允许 `test` / `build` / `vet`；`cargo` 只允许 `test` / `build` /
-    `check` / `clippy`（挡的是**拉外部代码、改本机配置**，不是禁止执行代码）。
+    __ARGV0_WHITELIST__
     🔴 **你选的语言必须能落到这些命令上** —— `tech_stack.language` 写了什么，
     `check.argv` 就得是那个语言能跑的命令。**写了 Go 却填 `python3 -m pytest`，
     干活的人没法同时满足，只会原地打转**（2026-09-27 `round-20260926` 就是这么整轮全灭的）。
@@ -177,6 +173,17 @@ Schema 规则:
     平台会当真去跑，然后拿一个假的失败（或假的通过）当验收结论。
 
 输出时用 ```json ... ``` 包裹。"""
+
+# 🔴 **白名单在这里烤进去，不做成 `.format()` 的参数**（2026-09-27）。
+# 做成参数的话，**每个调用方**都得记得传 —— 而这个模板有三个调用点
+# （生产一处 + `test_exec_internals` + `tests/integration/ab_fusion.py`）。
+# 少传就 `KeyError`（响的），**但传了个旧的/空的就静默少一段** —— 那正是这次出错的方向。
+# 烤进去 ⇒ **一个定义点，零调用方负担**。
+from singularity.scheduler import _machine_checks as _mck  # noqa: E402  （无内部依赖，安全）
+
+_ARCHITECT_WHITELIST_SLOT = "__ARGV0_WHITELIST__"
+_ARCHITECT_CONTEXT = _ARCHITECT_CONTEXT.replace(
+    _ARCHITECT_WHITELIST_SLOT, _mck.argv0_whitelist_text())
 
 # ponytail: AI内审已移除，人审在GATE1/GATE2/GATE3把关
 

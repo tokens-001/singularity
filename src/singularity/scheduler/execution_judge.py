@@ -14,6 +14,9 @@ import logging
 import os
 import time
 
+# `_machine_checks` **没有内部依赖**（只用 os/re/subprocess）⇒ 顶层导入安全。
+# 下面要把白名单文本烤进 `_V2_FINALIZE`（见那处的注释）。
+from singularity.scheduler import _machine_checks as _mck
 from singularity.scheduler import config, witness
 from singularity.scheduler._io import try_parse_json
 
@@ -315,12 +318,12 @@ _MACHINE_CHECK_HINT = (
 _ARCH_SCHEMA = """{
   "architecture": "综述 (<500字)",
   "modules": [{"name":"","responsibility":"","depends_on":[],"interfaces":[]}],
-  "tasks": [{"id":"","title":"","description":"","complexity":"","layer":"","depends_on":[],"acceptance":[{"text":"","check":{"argv":["python3","-m","pytest","-q","tests/test_x.py"],"expect_exit":0}}]}],
+  "tasks": [{"id":"","title":"","description":"","complexity":"","layer":"","depends_on":[],"acceptance":[{"text":"","check":{"argv":["<按 tech_stack.language 填的测试命令>"],"expect_exit":0}}]}],
   "risks": [{"risk":"","impact":"","mitigation":""}],
   "data_model": {"database":"","entities":[],"relationships":[]},
   "api_contracts": [{"method":"","path":"","description":"","input":{},"output":{},"errors":[]}],
   "tech_stack": {"language":"","framework":"","database":"","cache":"","mq":""},
-  "constraints": [{"type":"","rule":"","check":{"argv":["pytest","-q"],"expect_exit":0},"covers":[0]}],
+  "constraints": [{"type":"","rule":"","check":{"argv":["<按 tech_stack.language 填的测试命令>"],"expect_exit":0},"covers":[0]}],
   "test_cases": {
     "unit": [{"name":"","target_module":"","input":"","expected":""}],
     "integration": [{"name":"","interfaces_tested":[],"setup":"","expected":""}],
@@ -337,7 +340,8 @@ _ARCH_SCHEMA = """{
 }
 
 acceptance 的写法（**每一条都必须表态，`check` 不许省**）：
-  能给命令的 ⇒ {"text":"...","check":{"argv":["python3","-m","pytest","-q","tests/test_x.py"],"expect_exit":0}}
+  能给命令的 ⇒ {"text":"...","check":{"argv":["<按 tech_stack.language 填的测试命令>"],"expect_exit":0}}
+                ⚠️ **别照抄任何语言的例子** —— argv[0] 必须跟你写的 `tech_stack.language` 一致
   验不了的   ⇒ {"text":"...","check":{"text_only_reason":"为什么机器验不了（要具体）"}}
 ⚠️ 两种都行，**唯独不许两样都不给**。写了"验不了"是诚实，会照单放行；
    而"没表态"会被当成**架构不合格**挡下来 —— 那条验收永远不会有人去判。
@@ -518,8 +522,10 @@ _V2_FINALIZE = """你是架构定稿人「{writer}」。下面是委员会的最
    写测试的任务会照着这些名字落成函数，**名字对不上就等于没测**。
 6. constraints 每条**必须带 `covers`** —— 0 起算的索引数组，指向这条约束覆盖了原始需求的
    哪几条（成员原稿里都有这个字段，**照搬别丢**）。丢了 = 这几条需求变成"没人验的需求"，
-   会被算成缺口。`check` 能机器跑的写成 `{{"argv":["python3","-m","pytest","-q"],"expect_exit":0}}`
-   数组形（argv[0] 只允许 python3/pytest/npm/node/git/ls/cat/wc/test，python3 只允许跟 `-m pytest`）；
+   会被算成缺口。`check` 能机器跑的写成 `{{"argv":[...], "expect_exit":0}}` **数组形**
+   （**别手写死某个语言**：argv[0] 只允许 __ARGV0_WHITELIST__
+   🔴 **而且 argv[0] 必须跟 `tech_stack.language` 一致** —— 写了 Go 却填 pytest，
+   干活的人没法同时满足，只会原地打转，整轮白跑）；
    机器验不了的（界面美观、命名风格之类）**如实写一段散文说明为什么验不了** ——
    不许编一条反正跑不通的命令凑格式。
 
@@ -528,6 +534,14 @@ _V2_FINALIZE = """你是架构定稿人「{writer}」。下面是委员会的最
 {schema}
 
 只输出 JSON，用 ```json ... ``` 包裹。"""
+
+# 🔴 **白名单在这里烤进去，不做成 `.format()` 的参数**（2026-09-27）——
+# 跟 `workflow._ARCHITECT_CONTEXT` 同一个做法、同一个理由：
+# **手写的那份当时散在三处，一改就漂**，而漂的方向是最坏的（代码加了 `go`、
+# 提示词没加 ⇒ 模型不知道能用 ⇒ 写出「说 Go 但判据是 pytest」的架构）。
+# ⚠️ 这里尤其要命：定稿模型是**按这份 schema 重写整个架构**的 ——
+# 架构师那份写对了，也可能在这一步被喂回 Python 示范。
+_V2_FINALIZE = _V2_FINALIZE.replace("__ARGV0_WHITELIST__", _mck.argv0_whitelist_text())
 
 _V2_CONFIRM = """你是架构委员会成员「{checker}」。下面是「{writer}」根据委员会结论写出的定稿。
 
