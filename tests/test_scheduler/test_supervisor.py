@@ -367,3 +367,61 @@ class TestReadonlyTaskIsNotPunishedForNoChanges:
         ctx = W._ARCHITECT_CONTEXT
         assert "[只读]" in ctx, "架构 schema 没告诉架构师要打 [只读] 标记 —— 豁免永远走不到"
         assert "title" in ctx, "得说清标记打在哪（标题）—— 标题才会拼进 description"
+
+
+# ═══════════════════════════════════════════════════════════════
+# check_requirement_conformance —— "核验不了" ≠ "通过"
+# ═══════════════════════════════════════════════════════════════
+
+class TestConformanceNotRun:
+    """Qoder 第二轮「判据层」那条里**最实的一处**（2026-09-26，逐行核过）。
+
+    `check_requirement_conformance` 的 `except` 原来 `return passed=True,
+    "追溯表读取失败,跳过"` —— **读坏了判"通过"**，fail-open，和本仓
+    `_run_validate` 那句「未知 ⇒ 不默认通过」正好相反。
+    同族的判词 `web/app.py` 早写过："读坏了**不代表没跑过 QA**，先修好文件再看结论"。
+    """
+
+    def _with_table(self, tmp_path, monkeypatch, content):
+        from singularity.scheduler import project as proj_mod
+        monkeypatch.setattr(proj_mod, "_projects_dir", lambda: tmp_path)
+        if content is not None:
+            (tmp_path / "p1.traceability.json").write_text(content, encoding="utf-8")
+
+    def test_追溯表读不出来时不默认通过(self, tmp_path, monkeypatch):
+        """变异：把那个 `passed=False` 改回 `True` ⇒ 本条红。"""
+        from singularity.scheduler import supervisor as sv, witness
+        self._with_table(tmp_path, monkeypatch, "{ 这不是 JSON")
+        hits = []
+        monkeypatch.setattr(witness, "warn",
+                            lambda scope, msg, **kw: hits.append((scope, msg, kw)))
+
+        r = sv.check_requirement_conformance("p1", agent_output="x", changed_files=["a.py"])
+
+        assert not r.passed, "文件读不出来却判'通过' —— fail-open"
+        assert r.evidence.get("hard") is False, \
+            "这是**软**失败：文件坏了不该把任务拦下来（拦下来是另一种假红）"
+        assert "读取失败" in str(r.evidence.get("not_run", "")), r.evidence
+        assert any(kw.get("key") == "traceability_unreadable" for _s, _m, kw in hits), \
+            f"读了同一份文件、坏了却一声不出：{hits}"
+
+    def test_没有追溯表照旧通过(self, tmp_path, monkeypatch):
+        """**对照（防修过头）**：压根没有这张表 ⇒ 说"不适用"，照旧 passed=True。
+
+        变异：把这一支也改成 `passed=False` ⇒ 本条红。
+        编造一张表不是解法 —— 没有追溯表的项目（还没到架构阶段 / 非项目任务）
+        判它失败就是另一个方向的假红。
+        """
+        from singularity.scheduler import supervisor as sv
+        self._with_table(tmp_path, monkeypatch, None)
+        r = sv.check_requirement_conformance("p1", agent_output="x", changed_files=["a.py"])
+        assert r.passed, f"没有追溯表 ≠ 不通过：{r.reason}"
+        assert r.evidence.get("not_run") == "无追溯表", r.evidence
+        assert r.evidence.get("hard") is False
+
+    def test_追溯表为空也留下没查的痕(self, tmp_path, monkeypatch):
+        from singularity.scheduler import supervisor as sv
+        self._with_table(tmp_path, monkeypatch, "[]")
+        r = sv.check_requirement_conformance("p1", agent_output="x", changed_files=["a.py"])
+        assert r.passed
+        assert r.evidence.get("not_run") == "追溯表为空", r.evidence

@@ -253,6 +253,44 @@ def test_requirement_conformance_miss_is_soft(monkeypatch, tmp_path):
     assert any("3/5" in w for w in q["warnings"])
 
 
+def test_requirement_conformance_not_run_is_not_recorded_as_passed(monkeypatch, tmp_path):
+    """🔴 **"没查"不许在 QA 报告里写成 "passed"**（2026-09-26，Qoder「判据层」那条的后果面）。
+
+    变异：把 `_review.py` 里 `"status": "not_run" if ev.get("not_run") …` 那段换回
+    原来的 `quality["quality_signals"]["requirement_conformance"] = "passed"` ⇒ 本条红。
+
+    为什么值得一条命门：`passed=True` 里混着**三种完全不同**的处境 ——
+    真数了 N/M 全过 · **没有追溯表**（跳过）· **调用方没给产出**（核验不了）。
+    而 `requirement_conformance` 这个键**是有人读的**（进 `validation.quality_signals`
+    → QA 报告），前一种和后两种在报告里长得一模一样，排查方向却正好相反。
+    """
+    for ev, why in (
+        ({"hard": False, "not_run": "无追溯表"}, "没有追溯表"),
+        ({"hard": False, "not_run": "调用方没给产出"}, "调用方没给产出"),
+    ):
+        v, q = _run(monkeypatch, tmp_path, project_id="p1",
+                    conformance=SimpleNamespace(
+                        passed=True, reason=f"需求符合性: {why}，无法核验 —— 这不是通过",
+                        evidence=dict(ev)))
+        sig = q["quality_signals"]["requirement_conformance"]
+        assert sig["status"] == "not_run", \
+            f"{why} ⇒ 报告里却写成 {sig.get('status')!r} —— 和'真数过了'分不开"
+        assert sig["reason"], "得留下为什么没查"
+        assert v.action == "pass", "没查不等于失败：不硬拦（软信号）"
+        assert not any("需求符合性" in w for w in q["warnings"]), \
+            f"没查不该报'未通过'的警：{q['warnings']}"
+
+
+def test_requirement_conformance_pass_recorded_as_passed(monkeypatch, tmp_path):
+    """**对照（防修过头）**：真数过了 ⇒ 照旧记 `passed`。"""
+    v, q = _run(monkeypatch, tmp_path, project_id="p1",
+                conformance=SimpleNamespace(
+                    passed=True, reason="需求符合性: 5/5 全部通过",
+                    evidence={"hard": True, "total": 5, "passed": 5, "all_passed": True}))
+    assert q["quality_signals"]["requirement_conformance"]["status"] == "passed"
+    assert v.action == "pass"
+
+
 def test_qa_constraint_fail_retries(monkeypatch, tmp_path):
     """QA 约束验收是硬拦（补 multi_model_review 不查的约束维度）。"""
     v, q = _run(monkeypatch, tmp_path, project_id="p1",

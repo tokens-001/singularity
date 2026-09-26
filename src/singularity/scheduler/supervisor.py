@@ -586,13 +586,30 @@ def check_requirement_conformance(project_id: str, agent_output: str = "",
         from singularity.scheduler.project import _projects_dir
         p = _projects_dir() / f"{project_id}.traceability.json"
         if not p.exists():
-            return CheckResult(passed=True, reason="无追溯表,跳过需求符合性检查")
+            return CheckResult(passed=True, reason="无追溯表,跳过需求符合性检查",
+                               evidence={"hard": False, "not_run": "无追溯表"})
 
         trace = json.loads(p.read_text(encoding="utf-8"))
         if not trace:
-            return CheckResult(passed=True, reason="追溯表为空,跳过")
-    except Exception:
-        return CheckResult(passed=True, reason="追溯表读取失败,跳过")
+            return CheckResult(passed=True, reason="追溯表为空,跳过",
+                               evidence={"hard": False, "not_run": "追溯表为空"})
+    except Exception as e:
+        # 🔴 **读不出来 ≠ 没有这张表**（2026-09-26，Qoder 第二轮「判据层」那条里最实的一处）。
+        # 原来它 `return passed=True, "追溯表读取失败,跳过"` —— **读坏了判"通过"**：
+        # fail-open，和 `_run_validate` 那句「未知 ⇒ 不默认通过」正好相反。
+        # 同族的判词本仓早写过：`web/app.py` 那边读了同一份文件、坏掉时专门落一条
+        # `traceability_unreadable` 告警，注释写着"**不代表没跑过 QA**，先修好文件再看结论"。
+        # ⇒ 这里也不默认通过：判**不通过但软**（`hard: False`），调用方只会记一条 warning，
+        #   不会因为文件坏了就把任务拦下来。
+        from singularity.scheduler import witness
+        witness.warn("supervisor", f"traceability_unreadable:{project_id}:{type(e).__name__}"[:160],
+                     key="traceability_unreadable")
+        return CheckResult(
+            passed=False,
+            reason=f"需求符合性**核验不了**: 追溯表读取失败（{type(e).__name__}）"
+                   f"—— 读不出来 ≠ 没这张表，不默认通过",
+            evidence={"hard": False, "not_run": f"追溯表读取失败: {type(e).__name__}"},
+        )
 
     # LLM 逐条验收优先, 失败降级机械
     llm_result = _conformance_via_llm(trace, agent_output, changed_files)
@@ -607,7 +624,8 @@ def check_requirement_conformance(project_id: str, agent_output: str = "",
         return CheckResult(
             passed=True,
             reason=f"需求符合性: 未提供产出（{len(trace)} 条），无法核验 —— 这不是通过",
-            evidence={"hard": False, "unverifiable": True, "total": len(trace)},
+            evidence={"hard": False, "unverifiable": True, "not_run": "调用方没给产出",
+                      "total": len(trace)},
         )
 
     # 逐条检查

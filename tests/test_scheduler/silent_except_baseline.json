@@ -197,7 +197,6 @@
  "scheduler/snapshot.py::purge_old_snapshot_meta": 2,
  "scheduler/supervisor.py::_check_artifact": 4,
  "scheduler/supervisor.py::_conformance_via_llm": 1,
- "scheduler/supervisor.py::check_requirement_conformance": 1,
  "scheduler/tracker.py::_next_id": 1,
  "scheduler/tracker.py::_push_task_event": 2,
  "scheduler/tracker.py::_read_task_file": 1,

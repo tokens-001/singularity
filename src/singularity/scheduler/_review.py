@@ -629,14 +629,34 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             conf = check_requirement_conformance(
                 project_id, agent_output=getattr(exec_result, 'raw_output', '') or '',
                 changed_files=changed)
+            ev = getattr(conf, "evidence", None) or {}
+            # 🔴 **"没查"不许记成 "passed"**（2026-09-26）。原来 `passed=True` 一律写成
+            # 那个字面量字符串 —— 而 `passed=True` 里混着三种完全不同的处境：
+            #   · 真数了：N/M 全过         · **没有追溯表**（跳过）      · **调用方没给产出**（核验不了）
+            # 前一种和后两种在 QA 报告里**长得一模一样**，而排查方向完全相反。
+            # 这个值外面是会被人读的（进 `validation.quality_signals` → QA 报告 / trace），
+            # 不像 `supervise` 那几个机械检查的 evidence —— 那些全仓只有 supervisor 自己读，
+            # 往里加键等于写进没人去的旁路，所以**没往那儿加**。
+            quality["quality_signals"]["requirement_conformance"] = {
+                # `status` 是**唯一**判"这一格到底算什么"的字段（`**ev` 里那个 `passed`
+                # 是"过了几条"的**计数**，不是判决 —— 两个同名会撞，所以判决只留 status）。
+                "status": "not_run" if ev.get("not_run") else
+                          ("passed" if conf.passed else "failed"),
+                "reason": getattr(conf, "reason", ""),
+                **ev,
+            }
             if not conf.passed:
-                ev = getattr(conf, 'evidence', None) or {}
-                quality["warnings"].append(
-                    f"需求符合性 {ev.get('passed', 0)}/{ev.get('total', 0)} 通过: "
-                    + "; ".join(ev.get("failed_items", [])[:3]))
-                quality["quality_signals"]["requirement_conformance"] = ev
-            else:
-                quality["quality_signals"]["requirement_conformance"] = "passed"
+                # 说清是**哪一种**不通过：真有条款没过（有分母）/ 追溯表读不出来 / 压根没有表。
+                # 原来一律写成「0/0 通过」（`ev` 里没有 `passed`/`total` 时就是这句）——
+                # 那会把排查引到"需求没覆盖"上，而真因是"这文件读不出来"。
+                if "total" in ev:
+                    msg = f"需求符合性 {ev.get('passed', 0)}/{ev.get('total', 0)} 通过"
+                    detail = "; ".join(ev.get("failed_items", [])[:3])
+                    if detail:
+                        msg += f": {detail}"
+                else:
+                    msg = getattr(conf, "reason", "需求符合性未通过")
+                quality["warnings"].append(msg)
         except Exception as e:
             quality["warnings"].append(f"需求符合性对账 error: {e}")
     elif project_id and changed and not _trivial:
