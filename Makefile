@@ -47,6 +47,7 @@ build-frontend:
 audit-selftest:
 	$(PY) scripts/test_delivery_facts.py
 	$(PY) scripts/test_dispatch.py
+	$(PY) scripts/test_alert_map.py
 
 # ⚠️ **preflight 的自测单独一个靶子，因为它慢一个数量级**（实测 ~100s vs 其余 ~1s）：
 #    它的成绩单是拿 `git archive` 把 **5 个历史 rev** 各取一棵树出来整棵重扫
