@@ -580,6 +580,8 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
                 # 同族的坑：出参有测试（`test_rulings_out_param_records_the_debate`），
                 # 但**只验了函数出参、没验它活过这一跳**。
                 "rulings": fm.get("rulings") or {},
+                # 🔴 **别把这一行当"顺手加的一个键"**：重建容器时用白名单挑键 ⇒
+                # 以后 `fm` 再加什么都会静默丢在这里。形状与判据见 `防御模式.md` §93。
             }
             _save_phase_output(project.id, "fusion-models.md",
                 "\n\n---\n".join(f"## 模型: {fm['models'][i]}\n\n{fm['outputs'][i][:3000]}" for i in range(len(fm['models']))))
