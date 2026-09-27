@@ -573,6 +573,13 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
                 "count": fm.get("count", 0),
                 "fused": fm.get("fused", ""),
                 "outputs": [o[:3000] for o in fm.get("outputs", [])],
+                # 🔴 `rulings` 原来**根本没落盘**（2026-09-27）：这一步重建 dict 时
+                # 只挑了上面四个键，把它丢了 —— 而 `execution_judge` 的注释原话是
+                # 「落进 fusion_meta，GATE2 才查得到『凭什么长这样』」。
+                # 那句话是**假的**：它到这一跳就断了，盘上、接口里、界面上都没有。
+                # 同族的坑：出参有测试（`test_rulings_out_param_records_the_debate`），
+                # 但**只验了函数出参、没验它活过这一跳**。
+                "rulings": fm.get("rulings") or {},
             }
             _save_phase_output(project.id, "fusion-models.md",
                 "\n\n---\n".join(f"## 模型: {fm['models'][i]}\n\n{fm['outputs'][i][:3000]}" for i in range(len(fm['models']))))
@@ -583,6 +590,27 @@ def _run_planning(project: ProjectState, agents: dict) -> str:
             # 前端「融合」页空白、后续阶段看不到委员会的中间结果，且查不出为什么。
             from singularity.scheduler import witness
             witness.warn("workflow", f"save_committee_fusion:{type(e).__name__}:{e}"[:200])
+
+        # ── 未裁决的分歧要**有出口**（2026-09-27）──
+        # 为什么：委员会现在会把"僵持"的分歧判成 `winner=None`，而那个结论
+        # **只活在 `rulings` 里**（上面刚补上落盘）。但落盘 ≠ 看得见 ——
+        # 人在 GATE2 是翻开一个 JSON 看的吗？不是。
+        # ⇒ 把它写成 `project.issues` 的一条：`GatePanel` 的 `ProjectIssues`
+        # 已经在渲染 `info.issues`（读 `it.detail`），**不用动前端**。
+        # 用户 09-24 拍板"前端排最后"，所以这条刻意走现成通道。
+        _unres = list((fm.get("rulings") or {}).get("unresolved") or [])
+        project.issues = [i for i in project.issues
+                          if i.get("type") != "committee_unresolved"]
+        if _unres:
+            _stuck = sum(1 for d in _unres if d.get("basis") == "deadlock")
+            _pts = "；".join(str(d.get("point") or d.get("dimension") or d.get("id"))
+                             for d in _unres[:4])
+            project.issues.append({
+                "type": "committee_unresolved",
+                "detail": (f"架构委员会有 {len(_unres)} 条分歧没裁出来"
+                           f"（僵持 {_stuck} 条 · 缺票 {len(_unres) - _stuck} 条）"
+                           f"—— 定稿人按「未裁决」处理，主方案可能两方立场都不是："
+                           f"{_pts}" + ("…" if len(_unres) > 4 else ""))})
     traceability = arch.get("traceability", [])
     if traceability:
         _save_phase_output(project.id, "traceability.json",
