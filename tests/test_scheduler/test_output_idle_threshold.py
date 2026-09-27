@@ -208,3 +208,75 @@ def test_先劝一轮_第二次才判失败(monkeypatch):
     assert any("停止思考" in str(m.get("content")) for m in urge), \
         f"第二次请求里没有那句'别想了、现在写文件'：{[m.get('content') for m in urge]}"
     assert not res.success, "劝了两轮还不产出，应当判失败"
+
+
+# ══════════════════════════════════════════════════════════════
+# 五、阈值**不是常量 480** —— 预算快见底时它跟着剩余预算压下来
+# ══════════════════════════════════════════════════════════════
+#
+# 🔴 **2026-09-27 真机**（`round-20260927d` 的 T6）：它 5 次调用 `cap` 只有
+# **58~211 秒**，次次零产出被**预算**掐，而 480 秒那把尺**一秒都没等到**
+# ⇒ 上面第四节那支"先劝一轮"**全历史响过 0 次**（`no_output_urge` 在
+# `alerts.jsonl` 里 0 条），而同一形状的 `llm_spin_no_output` 响了 **19 次**。
+# ⇒ 老形状又一例：**闸门装在一个不发生的条件上**。
+# 修法：阈值取 `min(480, 剩余预算 − 收尾余量)` —— 预算够时**一个字不变**。
+
+class TestBudgetAwareLimit:
+    def test_阈值本身(self):
+        """`min(480, 剩余预算 − 收尾余量)`。
+
+        变异：把 `_output_idle_limit` 的 `min(...)` 去掉 ⇒ 下面几条红。
+        """
+        M = oa.config.TASK_WRAPUP_MARGIN_S
+        assert oa._output_idle_limit(480 + M) == 480.0, "正好够 ⇒ 必须还是 480"
+        assert oa._output_idle_limit(600.0) == 480.0, "富余 ⇒ 必须还是 480"
+        assert oa._output_idle_limit(480 + M - 1) == 480 - 1, "差一点 ⇒ 开始压"
+        assert oa._output_idle_limit(158.0) == 158.0 - M, "T6 那一发的 cap"
+        # 🔴 **这一格是回归判据**（第一版漏了它，被既有的 `test_吐了正文就不掐` 抓红）：
+        # 剩余预算连余量都不够 ⇒ **返回 480、行为一字不变**。
+        # 要是让它压到 0，阈值就是 0、`_out_idle > 0` 几乎立刻成立
+        # ⇒ **连正文一直在长的正常调用也照杀**。没有余量可劝时，那劝不动，
+        # 就该让预算那条路（`_over_budget`）按老样子收尾。
+        assert oa._output_idle_limit(M) == 480.0, "正好等于余量 ⇒ 不变"
+        assert oa._output_idle_limit(10.0) == 480.0, "不够余量 ⇒ 不变（有回归用例守着）"
+        assert oa._output_idle_limit(-5.0) == 480.0, "负数也一样"
+
+    def test_预算见底时提前掐断(self, monkeypatch):
+        """**接线那半边**：`_lines()` 里真的用了这个阈值。
+
+        变异：把那行的 `_output_idle_limit(_budget_left)` 换回 `_OUTPUT_IDLE_LIMIT`
+        ⇒ 本条红（会一直等到服务器收工，白等 8 秒）。
+        """
+        M = oa.config.TASK_WRAPUP_MARGIN_S
+        with _OnlyReasoningServer(feed_s=8.0) as srv:
+            ex = _executor()
+            ex._url = f"http://127.0.0.1:{srv.server_address[1]}/chat/completions"
+            ex._deadline_at = time.time() + M + 5.0     # 剩余预算只够"余量 + 5 秒"
+            monkeypatch.setattr(oa, "_STALL_TIMEOUT", 30.0)
+            monkeypatch.setattr(oa, "_OUTPUT_IDLE_LIMIT", 480.0)   # **那把尺本身没动**
+            monkeypatch.setattr(oa, "_get_http_client", lambda: httpx.Client())
+            t0 = time.time()
+            with pytest.raises(oa._NoOutputError):
+                ex._stream_call({"model": "m", "messages": []})
+            elapsed = time.time() - t0
+        assert elapsed < 6.0, f"{elapsed:.1f}s 才断 —— 阈值没跟着剩余预算压下来"
+
+    def test_对照_预算充裕时行为一个字不变(self, monkeypatch):
+        """**反例**：预算充裕 ⇒ 阈值还是 480 ⇒ 这段思考流**不该**被掐。
+
+        这条守的是本条改动里最该防的回归：**别把"预算感知"做成"动不动就掐"**
+        —— 那会把"想很久、然后一次吐完"的正常调用误杀，比原来的病更贵。
+        """
+        with _OnlyReasoningServer(feed_s=3.0) as srv:
+            ex = _executor()
+            ex._url = f"http://127.0.0.1:{srv.server_address[1]}/chat/completions"
+            ex._deadline_at = time.time() + 600.0       # 预算充裕
+            monkeypatch.setattr(oa, "_STALL_TIMEOUT", 30.0)
+            monkeypatch.setattr(oa, "_OUTPUT_IDLE_LIMIT", 480.0)
+            monkeypatch.setattr(oa, "_get_http_client", lambda: httpx.Client())
+            try:
+                ex._stream_call({"model": "m", "messages": []})
+            except oa._NoOutputError as e:            # pragma: no cover
+                pytest.fail(f"预算充裕时不该被「只想不写」掐：{e}")
+            except Exception:
+                pass                                   # 别的尺子/收尾异常与本条无关

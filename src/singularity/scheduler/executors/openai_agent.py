@@ -229,6 +229,35 @@ _STALL_TIMEOUT = float(os.environ.get("QIDIAN_STALL_TIMEOUT", "90"))
 # ⚠️ **代价要对称说**：阈值定低了会误杀"想很久、然后一次吐完"的调用 ——
 #   本轮 25 条里一条都没有，但**只有一轮数据**。撞上了就调大 `QIDIAN_OUTPUT_IDLE_LIMIT`。
 _OUTPUT_IDLE_LIMIT = float(os.environ.get("QIDIAN_OUTPUT_IDLE_LIMIT", "480"))
+
+
+def _output_idle_limit(budget_left: float) -> float:
+    """这把尺**这一次调用**真正用的阈值 = `min(480, 剩余预算 − 收尾余量)`。
+
+    🔴 **为什么不能只看 480**（2026-09-27 真机）：上面那个 480 是"**连续** 480 秒没产出"
+    才响，而真机上零产出的调用**根本活不到 480 秒** —— `round-20260927d` 的 T6
+    5 次调用 `cap` 只有 58~211 秒，次次零产出被**预算**掐，480 一秒都没等到。
+    ⇒ 这把尺**永远轮不到**，连带下游"掐了先劝一轮"（`except _NoOutputError` 那支）
+    **全历史响过 0 次**（`no_output_urge` 在 `alerts.jsonl` 里 0 条），
+    而同一形状的 `llm_spin_no_output` 响了 **19 次**。
+    ⇒ 老形状又一例：**闸门装在一个不发生的条件上**。
+
+    预算够（≥ 480 + 余量）时**行为一个字不变**（还是 480）；不够时**提前**打断，
+    好让"劝一轮"还有时间可劝 —— 不留余量的话掐完预算就没了，劝也劝不动
+    （下一发立刻又被掐）。
+
+    ⚠️ 余量**借的是 `TASK_WRAPUP_MARGIN_S`**（同一个含义：留一点给收尾），没新造数字。
+    ⚠️ **真机数据到了再调** —— 这个余量目前是借来的，不是量出来的。
+
+    🔴 **剩的预算连余量都不够时，**返回 480（行为一字不变）** —— 这一格是我第一版漏掉
+    的，被既有的 `test_吐了正文就不掐` 当场抓红：`budget_left - margin` 在那种情况下是
+    负数，取 `max(0)` 后阈值成了 **0** ⇒ `_out_idle > 0` 几乎立刻成立 ⇒ **连正文一直在长的
+    正常调用也照杀**。没有余量可劝时，劝不动，那把尺就该**照旧不管**，
+    让预算那条路（`_over_budget`）按老样子收尾。
+    """
+    if budget_left <= config.TASK_WRAPUP_MARGIN_S:
+        return _OUTPUT_IDLE_LIMIT
+    return min(_OUTPUT_IDLE_LIMIT, budget_left - config.TASK_WRAPUP_MARGIN_S)
 # 执行器自查的总预算 = orchestrator 的收割上限 − 收尾余量（单一来源在 config）。
 # **为什么执行器要自己看表**：以前它只转 max_turns 轮、一圈表都不看，唯一的上限
 # 就是 orchestrator 到 900s 的**无声收割** —— 被杀就什么都留不下（token/文件/轮次全丢，
@@ -1418,11 +1447,17 @@ class OpenAIAgentExecutor(BaseExecutor):
                         # 实测那种调用会烧到**剩余预算见底**（809~945 秒），比原来那个
                         # 240 秒定值贵 3.4~3.8 倍。
                         _out_idle = time.time() - _last_output
-                        if _out_idle > _OUTPUT_IDLE_LIMIT:
+                        # 🔴 阈值**不是常量 480** —— 它是 `min(480, 剩余预算 − 收尾余量)`，
+                        # 来历见 `_output_idle_limit()` 的 docstring（一句话：480 只在
+                        # "能活到 480 秒"的调用上响，而零产出的调用通常先被预算掐死）。
+                        _budget_left = _call_deadline - time.time()
+                        _idle_limit = _output_idle_limit(_budget_left)
+                        if _out_idle > _idle_limit:
                             # **抛**，不是返回空 —— 返回空会被上层当成"这次调用成功了、
                             # 只是模型没说话"，同一个陷在思考里的模型继续被派下一轮。
                             raise _NoOutputError(
-                                f"只想不写 {_out_idle:.0f}s：一直没有正文/工具调用"
+                                f"只想不写 {_out_idle:.0f}s（阈值 {_idle_limit:.0f}s，"
+                                f"剩余预算 {_budget_left:.0f}s）：一直没有正文/工具调用"
                                 f"（转 {_loops} 圈）")
                         buf += text
                         while "\n" in buf:
