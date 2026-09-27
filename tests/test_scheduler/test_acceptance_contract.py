@@ -300,8 +300,13 @@ def test_未澄清只记不致命_别把它做成死结():
     原因是除了这条提醒本身，没有别的 blocker 行会带 `NEEDS CLARIFICATION` ——
     所以这条差别**没有测试钉住**，别以为它被验过。
     """
+    # ⚠️ **从 `workflow` 导**（不是 `_workflow_phases`）：这条路径顺带钉住它进了 `__all__`
+    #    —— 我第一版漏加，测试全绿而 `from workflow import ...` 会 ImportError
+    #    （同族的另两个标记串都在 `__all__` 里）。
     from singularity.scheduler.workflow import (
-        _validate_architecture, split_arch_issues, classify_arch_issues)
+        _validate_architecture, split_arch_issues, classify_arch_issues,
+        ARCH_CLARIFICATION_PREFIX)
+    assert ARCH_CLARIFICATION_PREFIX, "常量没进 __all__ ⇒ 从 workflow 导不到"
 
     cases = {}
     # (a) 落在 tech_stack 上 —— 原来只验了这条

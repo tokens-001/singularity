@@ -1,6 +1,7 @@
 __all__ = ['_run_execution', '_run_planning', '_run_research', '_validate_architecture',
            'classify_arch_issues', 'split_arch_issues', 'lineup_seats', 'ACCEPTANCE_UNSTATED',
-           'ARCH_SELF_CONTRADICTION', 'ARCH_NEEDS_CLARIFICATION']
+           'ARCH_SELF_CONTRADICTION', 'ARCH_NEEDS_CLARIFICATION',
+           'ARCH_CLARIFICATION_PREFIX']
 
 # 验收"没表态"的标记串。`_validate_architecture` 产它、致命判据认它 ——
 # ⚠️ 两处共用同一个常量，是因为 `arch_issues` 现在只有 `list[str]`、没有严重度。
