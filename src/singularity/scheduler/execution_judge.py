@@ -1215,6 +1215,17 @@ def decompose_architecture(arch_json: dict) -> list[dict]:
             "depends_on_local_id": list(deps) if isinstance(deps, list) else ([deps] if deps else []),
             "context_snippet": "\n".join(ctx_parts) if ctx_parts else "",
             "acceptance": acceptance,
+            # 🔴 **架构声明的产出文件边界必须原样带出去**（2026-09-28）。
+            # 这是"**另一个入口没做全**"的又一例（§60 那个形状）：架构里
+            # `estimated_files` 声明得好好的，而这里**没转发** ⇒
+            # `orchestrator._decompose_and_create_tasks` 拿到的任务项里
+            # `.get("estimated_files")` **恒为空** ⇒ 那条路写出来的任务描述里
+            # 永远没有文件边界。而文件边界正是"两个并行任务改同一个文件 ⇒
+            # 合并冲突 ⇒ 项目静默卡死"的唯一预防（`round-20260928i` 真机）。
+            # ⚠️ **另一条入口**（`_workflow_phases._run_execution`）直接拿架构原文，
+            # 本来就有这个键 —— 两条路要一起看（`test_task_creation_alignment`）。
+            "estimated_files": (list(t.get("estimated_files"))
+                                if isinstance(t.get("estimated_files"), list) else []),
         })
     return result
 

@@ -1119,6 +1119,10 @@ def _run_execution(project: ProjectState, agents: dict) -> str:
                 f"[{tid}] {title}\n"
                 f"{desc}\n"
                 f"验收标准: {acceptance or '代码可运行，功能完整'}\n"
+                # 架构声明的产出文件边界 —— 与 `orchestrator._decompose_and_create_tasks`
+                # **逐字一致**（§60：同一个动作两个入口，漏一处就是"改了没生效"）。
+                # 见 `_machine_checks.declared_files_text` 的 docstring。
+                + _mc2.declared_files_text(tdef)
                 + (f"相关上下文:\n{ctx_snippet}\n" if ctx_snippet else "")
                 + f"角色: {role_key}\n"
                 f"项目背景: {project.description[:200]}\n"

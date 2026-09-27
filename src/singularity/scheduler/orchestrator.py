@@ -876,6 +876,14 @@ _orphans_warned: set[str] = set()
 
 _ORPHAN_SCAN_INTERVAL_S = 60.0
 
+# 「卡住可见性」扫描的节流（2026-09-28）。为什么要有它：这两个检查
+# （越界改文件 / 任务停在等人工解冲突）挂在 `_advance_project` 顶部 ——
+# 那是**每 tick** 都到的一跳，而每次扫描要读 N 份 trace + N 份项目 JSON。
+# 30 秒的检测延迟，对比真机那次的 **47 分钟**静默可以忽略。
+# ⚠️ **按 project id 分桶**，不共用一个时间戳 —— 多项目会互相把对方饿死。
+_STUCK_SCAN_INTERVAL_S = 30.0
+_last_stuck_scan: dict[str, float] = {}
+
 # 「毫无进展」的那一圈该让出多久。**别删成 0** —— 2026-09-17 真机实测：
 # 这个分支原来一句 sleep 都没有，静默死锁时全速空转 1731 条告警/2 分钟、44 分钟 CPU。
 _LOOP_NO_PROGRESS_SLEEP_S = 0.5
@@ -1069,6 +1077,57 @@ def _record_halt_issue(proj, halt: dict) -> None:
                  key="project_stalled")
 
 
+def _flag_conflict_held(proj) -> bool:
+    """有任务停在 `conflict_held`（等人解合并冲突）→ 落一条人看得见的 issue。返回变没变。
+
+    🔴 **为什么需要它**（`round-20260928i` 真机）：T4 合并冲突 ⇒ `conflict_held`，
+    下游 T6~T9 **永久 blocked**，调度循环**正常 break**（看着像"干完了"），
+    而盘上 `alerts.jsonl` 一条没有、`issues` 里也没有 —— **静默停了 47 分钟**，
+    最后是**人肉读盘**才发现的。
+
+    ⚠️ **它不触发 `halt_state`，这是有意的、也是这条 issue 存在的理由**：
+    `halt_state` 的判据只看 FAILED/ROLLED_BACK，而 `CONFLICT_HELD` **有意**不在
+    `_DEAD_END` 里（`94598cea`：它不是死路，是"**卡住等人**"）。
+    两头单看都对，合起来漏掉的就是这一格 —— 一个既不算死、也不前进的状态。
+
+    幂等 + 撤票：每个 tick 都可能被调（节流后 ~30s 一次），报过就不重复；
+    人 `resolve` 之后这里自动撤票，不留下一条赖着不走的旧结论。
+    返回 True = issues 变了（调用方负责 `save`）。
+    """
+    held = []
+    for tid in (proj.task_ids or []):
+        t = tracker.read_task(tid)
+        # ⚠️ **别用 `str(status)` 比**：它是枚举，`str(TaskStatus.CONFLICT_HELD)` 给的是
+        # `'TaskStatus.CONFLICT_HELD'`，比 `'conflict_held'` **恒为假** ⇒ 这条检查
+        # 一句话都不会说（第一版就是这么写的，被 `test_冲突进issues_幂等_且解除后撤票`
+        # 当场逮住）。取 `.value` 两种存法（枚举 / 反序列化回来的裸串）都认。
+        _st = getattr(t, "status", None)
+        if t is not None and getattr(_st, "value", _st) == "conflict_held":
+            held.append(tid)
+    has = any(i.get("type") == "conflict_held" for i in proj.issues)
+    if not held:
+        if not has:
+            return False
+        proj.issues = [i for i in proj.issues if i.get("type") != "conflict_held"]
+        return True
+    if has:
+        return False
+    short = "、".join(tracker.short_id(t) for t in held)
+    proj.issues.append({
+        "type": "conflict_held",
+        "task_ids": list(held),
+        "detail": (f"**{len(held)} 个任务停在 `conflict_held`（等人解合并冲突）**：{short}。"
+                   "它们**不是失败**，不会自动重试，也不会自己恢复 —— "
+                   "依赖它们的任务会**永久 blocked**，在人来处理之前这个项目一步都不会再动。"
+                   "处理方式：`POST /api/conflicts/<task_id>/resolve`"
+                   "（`manual` = 接受合并 / `abort` = 放弃该任务），"
+                   "或 CLI `merge resolve <id> --manual|--abort`。"),
+    })
+    witness.warn("orch", f"conflict_held:{tracker.short_id(proj.id)}:{len(held)}"[:120],
+                 key="conflict_held")
+    return True
+
+
 def _advance_project(proj, agents: dict) -> None:
     """单个项目的阶段推进 —— 抽成函数**只为让异常按项目隔离**（见上面那条注释）。
 
@@ -1076,6 +1135,29 @@ def _advance_project(proj, agents: dict) -> None:
     （TEMPLATE/RESEARCHING/PLANNING/GATE*）归 `run_phase`，见 `project.py` 顶部的归属表。
     """
     from singularity.scheduler import project as proj_mod
+
+    # ── 卡住可见性：越界改文件 / 任务停在等人工解冲突（2026-09-28）──────────
+    #
+    # 🔴 **必须放在 `halt` 早退之前**：项目一 halt 就从下面 return 了，放后面等于
+    #    "越卡越看不见"。而且这两种卡**恰恰不触发 halt**（见 `_flag_conflict_held`
+    #    的 docstring）—— 没有这一段，盘上真的一条信号都没有。
+    #    来历：`round-20260928i` 静默停了 47 分钟，我是靠人肉读盘才发现的。
+    if time.time() - _last_stuck_scan.get(proj.id, 0.0) >= _STUCK_SCAN_INTERVAL_S:
+        _last_stuck_scan[proj.id] = time.time()
+        try:
+            from singularity.scheduler import workflow as wf_mod
+            # ⚠️ 用**真值**判断，别写 `is not None` ——
+            # `test_fixes_batch3_20260914` 把它 monkeypatch 成 `lambda p: None`。
+            changed = wf_mod._flag_file_overlap(proj)
+            changed = _flag_conflict_held(proj) or changed
+            if changed:
+                proj_mod.save(proj)
+        except Exception as e:
+            # **不吞**（同 `_auto_trigger_test_fix` 那条）：这段挂了必须吭声，
+            # 否则"检查没发现问题"和"检查根本没跑"在盘上长得一模一样。
+            witness.warn('orch', f'stuck_visibility_failed:'
+                                 f'{type(e).__name__}:{e}'[:200],
+                         key='stuck_visibility_failed')
 
     # ── 「停了就一步都不许推」（2026-09-27 用户拍板，`proj_mod.halt_state`）──
     #
@@ -1295,6 +1377,10 @@ def _decompose_and_create_tasks(proj, agents: dict) -> None:
             task_desc = (
                 f"[{local_id}] {t['desc']}\n"
                 f"验收标准: {acceptance}\n"
+                # 架构声明的产出文件边界 —— 必须送到干活的人手里，见
+                # `_machine_checks.declared_files_text` 的 docstring（原来它只被
+                # 拿去事后给模型记纪律分，从没进过描述 ⇒ 真机静默卡死）
+                + _mc.declared_files_text(t)
                 + (f"相关上下文:\n{ctx_snippet}\n" if ctx_snippet else "")
                 + f"角色: {role_key}\n"
                 f"项目背景: {str(proj.description)[:200]}\n"

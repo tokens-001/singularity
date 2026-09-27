@@ -951,11 +951,22 @@ def _files_named_in(text: str) -> set[str]:
 
 
 def _changed_files_of(tid: str) -> set[str]:
-    """读这个任务的 trace，取它改过的文件（basename）。读不到就是空集。"""
+    """读这个任务的 trace，取它改过的文件（basename）。读不到就是空集。
+
+    ⚠️ **构建产物先滤掉、再归一化**（2026-09-28）—— 顺序不能反，归一化只留 basename，
+    `__pycache__` 那一段就丢了，滤不掉。
+    为什么必须滤：产物过滤只做在**源头一半** —— `openai_agent._track_changed_files`
+    滤了，而 `claude_cli` 走的是 `git diff --name-only` + `ls-files --others`，
+    **对 tracked 的 `*.pyc` 不过滤**（老仓在 `.gitignore` 之前进来的那些）。
+    真机踩过：T3/T5 双双 `conflict_held`，冲突文件正是 `logstat/__pycache__/*.pyc`
+    （见 `project.py` 里那段注释）。
+    """
     from . import neijinglu
     try:
         d = json.loads(neijinglu.config_trace_path(tid).read_text(encoding="utf-8"))
-        return {str(f).rsplit("/", 1)[-1] for f in (d.get("changed_files") or [])}
+        raw = [str(f) for f in (d.get("changed_files") or [])]
+        return {f.rsplit("/", 1)[-1] for f in raw
+                if f and "__pycache__" not in f and not f.endswith((".pyc", ".pyo"))}
     except Exception:
         return set()
 
@@ -978,22 +989,36 @@ def _task_of_file_map(project: ProjectState) -> dict[str, str]:
     return out
 
 
-def _flag_file_overlap(project: ProjectState) -> None:
-    """任务改了**只有兄弟任务点名、自己没点名**的文件 → 进 issues + 出声。
+def _flag_file_overlap(project: ProjectState) -> bool:
+    """任务改了**架构声明里属于别人的文件** → 进 issues + 出声。**返回 issues 变没变。**
 
     ⚠️ **为什么要有这条**（2026-09-13 轮 5 真机）：实现任务**顺手把测试也写了**
     （`changed_files = ['txtstat.py', 'test_txtstat.py']`），于是**写测试的那个任务空手**
     —— 零文件改动 → `QA:fail: [completeness] 无文件改动` → 项目 `all_tasks_failed`、卡在 GATE2。
     **门禁判得对，但人审页上看不出"它其实是被兄弟任务抢了活"。**
 
-    判据只认**确定的那一种**（低误报）：
-    - 这个文件**在兄弟任务的描述里被点名**（= 那本来是它的产出），**且**
-    - **在本任务自己的描述里没被点名**（= 不是它自己的活）。
-    两条都满足才算越界。**自己描述里点过的文件，改多少都不算** —— 那正是它的活。
+    🔴 **2026-09-28 判据换了来源（`round-20260928i` 真机）**：原来 `mine[tid]` 是
+    从**任务描述**里正则抓文件名（`_files_named_in`）。可描述里点了名的文件**同时**
+    表示"我的产出"和"我要用的契约" —— 那一轮 T2~T6 的描述里**都**点了 `models.py`，
+    于是 `stolen` 恒为空 ⇒ **检查器一声不响**，而 T2/T4 确实都改了（合并不下去、
+    项目静默卡死 47 分钟）。⇒ 改成**优先取架构声明的 `estimated_files`**（结构化真值），
+    只有它为空时才退回散文。认领规则复用 `_exec._declared_files_for`，不手抄第二份。
+
+    判据（两条都满足才算越界）：
+    - 这个文件**在**某个兄弟任务的产出清单里（= 那本来是它的交付物），**且**
+    - **不在**本任务自己的产出清单里（= 不是它自己的活）。
+    ⇒ **无人声明的文件（模型顺手建的 helper）不报** —— 那样 issue 文案里
+    「改了**本属 X** 的文件」就是假话。这是有意的精度取舍，别改成 `changed - mine[tid]`。
 
     ⚠️ **不改变行为**（不改状态、不拦合并），只让它在人审页上**看得见** ——
-    同 `_flag_degraded_tasks` 立的规矩。**提示词那条是"防"，这条是"报"** ——
-    防不住的（模型不听）至少报得出来。
+    同 `_flag_degraded_tasks` 立的规矩。**提示词那条是"防"，这条是"报"**。
+
+    ⚠️ **幂等 + 撤票**（2026-09-28）：本函数现在**每个 tick 都可能被调**（挂在
+    `orchestrator._advance_project` 顶部，为了让"卡住"也能被发现 —— 原来只挂在
+    验收末尾，而卡住恰恰发生在进不了验收的时候）。所以：已经报过就不重复 append、
+    不重复告警；越界解除了要**撤票**，别让它赖在 issues 里。
+    ⇒ **本函数自己不 `save()`**（调用方那份 `project` 可能是测试用的 `SimpleNamespace`，
+    没有 `to_dict`），改为**返回 bool**：True = issues 变了，调用方该存。
 
     ⚠️ **本函数里那几处 `except Exception` 有意静默**（读盘/读 trace/告警自己）：
     它们是"尽力而为"的，失败不该把**整段验收**带崩 —— 与兄弟 `_flag_degraded_tasks`
@@ -1001,8 +1026,11 @@ def _flag_file_overlap(project: ProjectState) -> None:
     """
     try:
         from singularity.scheduler import tracker, witness
+
+        # 认领规则只留一份（`_exec` 不 import 本模块，无环）
+        from singularity.scheduler._exec import _declared_files_for
     except Exception:
-        return
+        return False
     tasks = []
     for tid in (project.task_ids or []):
         try:
@@ -1011,7 +1039,15 @@ def _flag_file_overlap(project: ProjectState) -> None:
             continue
         if t is not None:
             tasks.append((tid, t))
-    mine = {tid: _files_named_in(getattr(t, "description", "")) for tid, t in tasks}
+
+    def _declared_of(t) -> set[str]:
+        """这个任务的产出清单：**优先架构声明**，为空才退回从描述里抓。"""
+        declared = _declared_files_for(t)
+        if declared:
+            return {str(p).rsplit("/", 1)[-1] for p in declared}
+        return _files_named_in(getattr(t, "description", ""))
+
+    mine = {tid: _declared_of(t) for tid, t in tasks}
     overlaps = []
     for tid, _t in tasks:
         changed = _changed_files_of(tid)
@@ -1023,8 +1059,16 @@ def _flag_file_overlap(project: ProjectState) -> None:
             stolen = (changed & mine[other_tid]) - mine[tid]
             if stolen:
                 overlaps.append((tid, other_tid, sorted(stolen)))
+
+    # 重算之后跟盘上那条对账 —— 幂等（不攒重复）＋ 撤票（解除后不许赖着）
+    has = any(i.get("type") == "task_file_overlap" for i in project.issues)
     if not overlaps:
-        return
+        if not has:
+            return False
+        project.issues = [i for i in project.issues if i.get("type") != "task_file_overlap"]
+        return True
+    if has:
+        return False
 
     try:
         witness.warn("workflow",
@@ -1041,6 +1085,7 @@ def _flag_file_overlap(project: ProjectState) -> None:
                    "被抢活的那个任务会因为『零文件改动』被判失败，"
                    "而本页的『通过』看不出这件事。"),
     })
+    return True
 
 
 def _flag_degraded_tasks(project: ProjectState) -> None:

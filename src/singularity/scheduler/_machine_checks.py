@@ -294,6 +294,35 @@ def acceptance_text(acceptance) -> str:
     return "；".join(it["text"] for it in items)
 
 
+def declared_files_text(tdef) -> str:
+    """任务声明的产出文件拍成任务描述里的一行。**两个入口都调它，别再各写一份**
+    （同 `acceptance_text` 那条规矩；两个入口见 `_workflow_phases._run_execution`
+    与 `orchestrator._decompose_and_create_tasks`）。
+
+    🔴 **为什么必须有这一行**（`round-20260928i` 真机）：架构把 `estimated_files`
+    声明得**又全、又互不相交**（`jsonlstat/models.py` **只属于 T1**），可**干活的人
+    从来没见过它** —— 这份声明唯一的消费者是 `_model_discipline.record_scope`
+    （拿去给模型**记纪律分**）。结果 T2 和 T4 **都改了自己清单外的 `models.py`**
+    ⇒ 合并冲突 ⇒ T4 卡在 `conflict_held` ⇒ 项目**静默停了 47 分钟**。
+    ⇒ **声明要送到干活的人手里**，不能只留在"事后算账"那一跳。
+
+    ⚠️ **架构没给就返回空串**（这一行整行不出），**不许硬塞一行假的** ——
+    同 `test_架构没给_context_时不许硬塞一行假的` 立下的规矩。
+
+    ⚠️ 末尾那句"出口"（契约不够用就在自己的产出文件里定义）**是有意的**：
+    T4 那次扩契约是**被迫**的（它的验收标准要 p50/p95，而契约里的 `GroupBucket`
+    只有计数）—— **没有出口，它就只能违反边界**。
+    """
+    files = tdef.get("estimated_files") if isinstance(tdef, dict) else None
+    if not isinstance(files, list):
+        return ""
+    names = "、".join(str(f) for f in files if str(f).strip())
+    if not names:
+        return ""
+    return (f"你的产出文件（架构声明，只许改这些）: {names}\n"
+            f"契约不够用时，在你自己的产出文件里定义你自己的类型，不要改别人的文件。\n")
+
+
 def acceptance_coverage(acceptance) -> tuple[int, int]:
     """(兑现条数, 总条数)。**分母是全部条目** —— 包含"诚实承认验不了"的那些。
 

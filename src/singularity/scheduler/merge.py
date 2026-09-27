@@ -298,6 +298,17 @@ class MergeQueue:
             req.task_id, TaskStatus.CONFLICT_HELD,
             error=f"merge 冲突 parking: {reason or conflicts}",
         )
+        # 🔴 **"进 conflict_held"这件事故本身要出声**（2026-09-28）。原来这里
+        # **正常落盘时一条告警都不发** —— 只有落盘**失败**才 `warn` ⇒ 成功进冲突是静默的。
+        # 后果（`round-20260928i` 真机）：T4 冲突 ⇒ 下游 T6~T9 永久 blocked ⇒
+        # 调度循环**正常 break**（看着像"干完了"）⇒ 整机停了 **47 分钟**，
+        # 而 `alerts.jsonl` 一条没有、`issues` 里也没有 —— 靠人肉读盘才发现。
+        # ⚠️ 选在这里是因为它是**事件时刻**：不依赖调度循环还在转（而它不转时更要发）。
+        # 文案必须说清"它在**等一个人**"，只报个状态名等于没报。
+        witness.warn("merge",
+                     f"merge_conflict_held:{req.task_id}:"
+                     f"{','.join(conflicts[:3]) or reason}"[:160],
+                     key="merge_conflict_held")
         return MergeResult(
             task_id=req.task_id, status="conflict", conflict_files=conflicts,
             reason=reason,

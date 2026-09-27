@@ -437,6 +437,270 @@ class TestFileOverlapIsVisible:
             "没接进验收 ⇒ 人审页上永远不会出现这条 issue"
 
 
+class TestFileOverlapUsesDeclaredScope:
+    """⑩ 越界判据必须用**架构声明的 `estimated_files`**，不是从描述散文里猜。
+
+    来历 `round-20260928i`（2026-09-28 真机）：架构把 `estimated_files` 声明得又全、
+    又**互不相交**（`jsonlstat/models.py` **只属于 T1**），而 T2 和 T4 **都改了自己
+    清单外的那个文件** ⇒ 合并冲突 ⇒ T4 `conflict_held` ⇒ 下游永久 blocked
+    ⇒ **整机静默停了 47 分钟**。
+
+    当时 `task_file_overlap` 报不出来：它的 `mine[tid]` 是从**描述**里正则抓的，
+    而描述里点了名的文件**同时**表示"我的产出"和"我要用的契约"
+    （T2~T6 的描述里**都**点了 `models.py`）⇒ `stolen` 恒为空。
+    """
+
+    def _env(self, tmp_path, monkeypatch):
+        from singularity.scheduler import config
+        q = tmp_path / "qidian"
+        q.mkdir(exist_ok=True)
+        monkeypatch.setattr(config, "QIDIAN_DIR", q)
+        monkeypatch.setattr(config, "TRACE_DIR", q / "traces")
+        config.ensure_dirs()
+        return q
+
+    def _task(self, desc, changed):
+        from singularity.scheduler import tracker, neijinglu
+        t = tracker.create(desc, project_id="p1")
+        p = neijinglu.config_trace_path(t.id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"changed_files": changed}), encoding="utf-8")
+        return t.id
+
+    def _proj(self, tids, arch_tasks):
+        """**必须落盘** —— `_declared_files_for` 是从盘上读项目拿架构的。"""
+        p = P.ProjectState(id="p1", name="t")
+        p.phase = Phase.EXECUTING
+        p.task_ids = list(tids)
+        p.issues = []
+        p.architecture = {"tasks": arch_tasks}
+        P.save(p)
+        return p
+
+    def test_架构声明压过散文_事故复现(self, tmp_path, monkeypatch):
+        """**这一条就是那一轮的现场**：声明说不相交，散文里却互相点名。"""
+        from singularity.scheduler import workflow as W
+        self._env(tmp_path, monkeypatch)
+        arch = [
+            {"id": "T1", "title": "骨架", "description": "建契约",
+             "estimated_files": ["jsonlstat/models.py"]},
+            {"id": "T2", "title": "解析", "description": "实现解析器",
+             "estimated_files": ["jsonlstat/parser.py"]},
+        ]
+        # 两条描述**都**点名 models.py —— 复刻真实形状（写实现时必然要提它）
+        t1 = self._task("[T1] 骨架: 建 jsonlstat/models.py 契约", ["jsonlstat/models.py"])
+        t2 = self._task("[T2] 解析: 用 jsonlstat/models.py 的 LogRecord，实现 jsonlstat/parser.py",
+                        ["jsonlstat/models.py", "jsonlstat/parser.py"])
+        p = self._proj([t1, t2], arch)
+        assert W._flag_file_overlap(p) is True, \
+            "T2 改了声明里属于 T1 的文件却没报 —— 散文判据就是在这类形状上瞎的"
+        assert "task_file_overlap" in [i.get("type") for i in p.issues]
+
+    def test_改自己声明内的文件不算越界(self, tmp_path, monkeypatch):
+        """**反例**：改的是自己声明里的文件 ⇒ 不报（哪怕兄弟描述也提了它）。"""
+        from singularity.scheduler import workflow as W
+        self._env(tmp_path, monkeypatch)
+        arch = [
+            {"id": "T1", "title": "骨架", "description": "建契约",
+             "estimated_files": ["jsonlstat/models.py"]},
+            {"id": "T2", "title": "解析", "description": "实现解析器",
+             "estimated_files": ["jsonlstat/parser.py"]},
+        ]
+        t1 = self._task("[T1] 骨架: 建 jsonlstat/models.py 契约", ["jsonlstat/models.py"])
+        t2 = self._task("[T2] 解析: 用 jsonlstat/models.py 的 LogRecord，实现 jsonlstat/parser.py",
+                        ["jsonlstat/parser.py"])
+        p = self._proj([t1, t2], arch)
+        W._flag_file_overlap(p)
+        assert "task_file_overlap" not in [i.get("type") for i in p.issues]
+
+    def test_两任务声明重叠时互不冤枉(self, tmp_path, monkeypatch):
+        """**反例**：架构真的把同一个文件声明给了两个任务 ⇒ 谁改都不算越界。
+
+        这条钉的是判据里那个 `- mine[tid]`（少了它，两边都会互相指认）。
+        """
+        from singularity.scheduler import workflow as W
+        self._env(tmp_path, monkeypatch)
+        arch = [
+            {"id": "T1", "title": "A", "description": "x", "estimated_files": ["shared.py"]},
+            {"id": "T2", "title": "B", "description": "y", "estimated_files": ["shared.py"]},
+        ]
+        t1 = self._task("[T1] A: 改 shared.py", ["shared.py"])
+        t2 = self._task("[T2] B: 也用 shared.py", [])
+        p = self._proj([t1, t2], arch)
+        W._flag_file_overlap(p)
+        assert "task_file_overlap" not in [i.get("type") for i in p.issues], \
+            "架构自己把文件声明给了两边，却去指认其中一边 —— 这是纯噪声"
+
+    def test_无人声明的文件不报(self, tmp_path, monkeypatch):
+        """**精度边界（写进契约）**：模型顺手建的 helper 没人声明 ⇒ 不报。
+
+        为什么有意不报：issue 文案写的是「改了**本属 X** 的文件」，
+        而对无人声明的文件那句话是**假话**。
+        """
+        from singularity.scheduler import workflow as W
+        self._env(tmp_path, monkeypatch)
+        arch = [
+            {"id": "T1", "title": "骨架", "description": "x",
+             "estimated_files": ["jsonlstat/models.py"]},
+            {"id": "T2", "title": "解析", "description": "y",
+             "estimated_files": ["jsonlstat/parser.py"]},
+        ]
+        t1 = self._task("[T1] 骨架: 建 jsonlstat/models.py", [])
+        t2 = self._task("[T2] 解析: 实现 jsonlstat/parser.py", ["jsonlstat/helpers.py"])
+        p = self._proj([t1, t2], arch)
+        W._flag_file_overlap(p)
+        assert "task_file_overlap" not in [i.get("type") for i in p.issues]
+
+    def test_构建产物被过滤(self, tmp_path, monkeypatch):
+        """`.pyc` / `__pycache__` 不该当成"改动"（真机 T3/T5 就栽在 pyc 冲突上）。"""
+        from singularity.scheduler import workflow as W
+        self._env(tmp_path, monkeypatch)
+        tid = self._task("[T1] x", [
+            "jsonlstat/__pycache__/models.cpython-311.pyc",
+            "jsonlstat/stale.pyc",
+            "jsonlstat/models.py",
+        ])
+        assert W._changed_files_of(tid) == {"models.py"}
+
+    def test_越界检查幂等_不刷屏(self, tmp_path, monkeypatch):
+        """每 tick 都会调它 ⇒ 不许攒重复 issue、不许重复告警。"""
+        from singularity.scheduler import workflow as W, config
+        self._env(tmp_path, monkeypatch)
+        arch = [
+            {"id": "T1", "title": "骨架", "description": "x",
+             "estimated_files": ["jsonlstat/models.py"]},
+            {"id": "T2", "title": "解析", "description": "y",
+             "estimated_files": ["jsonlstat/parser.py"]},
+        ]
+        t1 = self._task("[T1] 骨架: 建 jsonlstat/models.py", [])
+        t2 = self._task("[T2] 解析: 用 jsonlstat/models.py 实现 jsonlstat/parser.py",
+                        ["jsonlstat/models.py"])
+        p = self._proj([t1, t2], arch)
+        W._flag_file_overlap(p)
+        W._flag_file_overlap(p)
+        W._flag_file_overlap(p)
+        assert len([i for i in p.issues if i.get("type") == "task_file_overlap"]) == 1, \
+            "每 tick 攒一条 ⇒ 人审页会被同一件事刷屏"
+        # ⚠️ 数**行**，不是数出现次数 —— 一行里 `msg` 和 `key` 各带一次这个串。
+        log = (config.QIDIAN_DIR / "alerts.jsonl").read_text(encoding="utf-8")
+        assert len([ln for ln in log.splitlines() if "task_file_overlap" in ln]) == 1, \
+            "告警也不许重复发"
+
+    def test_越界解除后_撤票(self, tmp_path, monkeypatch):
+        """越界没了（任务重跑 / 架构重出）⇒ 旧 issue 必须走，别赖着。"""
+        from singularity.scheduler import workflow as W
+        self._env(tmp_path, monkeypatch)
+        arch = [
+            {"id": "T1", "title": "骨架", "description": "x",
+             "estimated_files": ["jsonlstat/models.py"]},
+            {"id": "T2", "title": "解析", "description": "y",
+             "estimated_files": ["jsonlstat/parser.py"]},
+        ]
+        t1 = self._task("[T1] 骨架: 建 jsonlstat/models.py", [])
+        t2 = self._task("[T2] 解析: 用 jsonlstat/models.py 实现 jsonlstat/parser.py", [])
+        p = self._proj([t1, t2], arch)
+        p.issues = [{"type": "task_file_overlap", "detail": "旧结论"}]
+        assert W._flag_file_overlap(p) is True
+        assert "task_file_overlap" not in [i.get("type") for i in p.issues]
+
+    def test_两个入口都接了文件边界行(self):
+        """**接线钉子**：架构声明的文件边界必须进**两条**建任务的路（§60 那个形状）。"""
+        import inspect
+        from singularity.scheduler import orchestrator, _workflow_phases as wfp
+        assert "declared_files_text" in inspect.getsource(
+            orchestrator._decompose_and_create_tasks), \
+            "入口①（拆解）漏了文件边界 —— 那条路建出来的任务不知道自己的边界"
+        assert "declared_files_text" in inspect.getsource(wfp._run_execution), \
+            "入口②（执行）漏了文件边界"
+
+    def test_拆解器必须转发_estimated_files(self):
+        """**接线钉子**：架构里声明了、拆解器不转发 ⇒ 入口① 那行**永远出不来**。
+
+        ⚠️ 这条是写修复时**当场抓到**的：`decompose_architecture` 原来的出参只有
+        `desc/suggested_level/depends_on_local_id/context_snippet/acceptance`，
+        `estimated_files` 被丢掉 ⇒ `._decompose_and_create_tasks` 里 `.get()` 恒为空。
+        """
+        from singularity.scheduler.execution_judge import decompose_architecture
+        out = decompose_architecture({"tasks": [{
+            "id": "T1", "title": "骨架", "description": "建契约",
+            "estimated_files": ["jsonlstat/models.py"]}]})
+        assert out and out[0].get("estimated_files") == ["jsonlstat/models.py"], \
+            "拆解器把架构声明的文件边界丢了 —— 入口① 的文件边界行恒为空"
+
+    def test_没声明就不出行(self):
+        """**反例**：架构没给 `estimated_files` ⇒ 整行不出，**不许硬塞一行假的**。"""
+        from singularity.scheduler import _machine_checks as mc
+        assert mc.declared_files_text({}) == ""
+        assert mc.declared_files_text({"estimated_files": []}) == ""
+        assert mc.declared_files_text({"estimated_files": "jsonlstat/x.py"}) == ""
+        assert mc.declared_files_text(None) == ""
+        got = mc.declared_files_text({"estimated_files": ["a.py", "b.py"]})
+        assert "a.py、b.py" in got and "只许改这些" in got
+
+    def test_检查挂在每tick那一跳_且早于halt早退(self):
+        """**接线钉子**：卡住时不进验收 ⇒ 只挂在验收末尾等于永远不跑。"""
+        import inspect
+        from singularity.scheduler import orchestrator
+        src = inspect.getsource(orchestrator._advance_project)
+        assert "_flag_file_overlap" in src, "没挂到每 tick 那一跳"
+        assert src.index("_flag_file_overlap") < src.index('halt["halted"]'), \
+            "挂在 halt 早退之后 ⇒ 项目一停就再也扫不到，正是那 47 分钟的形状"
+
+
+class TestConflictHeldIsVisible:
+    """⑪ 任务停在 `conflict_held`（等人解冲突）⇒ 必须在盘上看得见。
+
+    `round-20260928i` 真机：`_park` 正常落盘时**一条告警都不发**（只有落盘失败才发）、
+    `issues` 里也没有对应 type ⇒ 下游永久 blocked、调度循环**正常 break**
+    ⇒ 整机静默 47 分钟，靠人肉读盘才发现。
+
+    ⚠️ 它**不触发 `halt_state`**（判据只看 FAILED/ROLLED_BACK，而 `CONFLICT_HELD`
+    有意不在 `_DEAD_END` 里 —— `94598cea`）⇒ 一个"既不算死、也不前进"的格子，
+    正是这条 issue 补的。
+    """
+
+    def _env(self, tmp_path, monkeypatch):
+        from singularity.scheduler import config
+        q = tmp_path / "qidian"
+        q.mkdir(exist_ok=True)
+        monkeypatch.setattr(config, "QIDIAN_DIR", q)
+        monkeypatch.setattr(config, "TRACE_DIR", q / "traces")
+        monkeypatch.setattr(config, "PARKED_DIR", q / "parked")
+        config.ensure_dirs()
+        return q
+
+    def test_park_要出声(self, tmp_path, monkeypatch):
+        from singularity.scheduler import merge, config, tracker
+        self._env(tmp_path, monkeypatch)
+        t = tracker.create("[T1] x", project_id="p1")
+        mq = merge.MergeQueue()
+        mq._park(merge.MergeRequest(task_id=t.id, branch="refs/x", base_ref="abc"),
+                 ["jsonlstat/models.py"])
+        log = (config.QIDIAN_DIR / "alerts.jsonl").read_text(encoding="utf-8")
+        assert "merge_conflict_held" in log, \
+            "正常进 conflict_held 是静默的 ⇒ 盘上一条信号都没有（那 47 分钟的形状）"
+
+    def test_冲突进issues_幂等_且解除后撤票(self, tmp_path, monkeypatch):
+        from singularity.scheduler import orchestrator, tracker, project as P
+        self._env(tmp_path, monkeypatch)
+        t = tracker.create("[T1] x", project_id="p1")
+        tracker.transition(t.id, tracker.TaskStatus.CONFLICT_HELD, error="merge 冲突")
+        p = P.ProjectState(id="p1", name="t")
+        p.task_ids = [t.id]
+        p.issues = []
+        assert orchestrator._flag_conflict_held(p) is True
+        assert orchestrator._flag_conflict_held(p) is False, "第二次不该再变"
+        held = [i for i in p.issues if i.get("type") == "conflict_held"]
+        assert len(held) == 1 and t.id in held[0]["task_ids"]
+        assert "等" in held[0]["detail"] and "resolve" in held[0]["detail"], \
+            "得说清『它在等一个人』和怎么处理，只报个状态名等于没报"
+
+        # 人解掉之后 ⇒ 撤票，别留下一条赖着不走的旧结论
+        tracker.transition(t.id, tracker.TaskStatus.DONE)
+        assert orchestrator._flag_conflict_held(p) is True
+        assert "conflict_held" not in [i.get("type") for i in p.issues]
+
+
 class TestKilledTaskIsNotSelfWrapup:
     """⑨ "被砍" ≠ "自己收尾" —— 后者是修复生效，前者是它没生效。
 
