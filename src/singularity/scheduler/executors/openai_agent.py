@@ -1306,6 +1306,9 @@ class OpenAIAgentExecutor(BaseExecutor):
         content, reasoning = [], []
         tool_calls, finish, usage = {}, "", {}
         bad_frames = 0
+        # 别名对账用：**实际**服务这个请求的模型名（流里每个 chunk 都带 `model`）。
+        # 见下面 chunk 循环里那段注释 —— 这是 `_aliases` 唯一的写入点。
+        _actual_model: str | None = None
         # 单次调用也要封在**剩余预算**内：只在轮间看表是不够的 —— 一轮本身可能跑
         # 几分钟，看完表再开一轮照样冲过 900s，又变成被无声收割。
         _left = getattr(self, "_deadline_at", 0.0)
@@ -1460,6 +1463,28 @@ class OpenAIAgentExecutor(BaseExecutor):
                         # 按 §58 的规矩：**认不出要明报**，不能静默吞（下面计数 + 告警）。
                         bad_frames += 1
                         continue
+                    # ── 别名对账（2026-09-27）────────────────────────────────
+                    # 🔴 **这条必须在流式这条路上**：默认 `_STREAM=1` 走的就是本函数，
+                    #    而原来的对账只写在**非流式**那一支（`_STREAM=0` 才走得到）
+                    #    ⇒ 实测 `.qidian/api_store.json` 里**压根没有 `_aliases` 这个键**，
+                    #    一条都没记过。
+                    # **代价分两半**（都不小）：
+                    #   ① **能力**：`dispatcher` 的委员会去重（那句 `canonical`）恒空转 ——
+                    #      而 `phase_models.json` 的 planning 席位是
+                    #      `["deepseek-flash","glm-5.3-flash","deepseek-v4-pro"]`，
+                    #      **第 1 和第 3 实际是同一个模型** ⇒ "多视角碰撞"是自己跟自己碰，
+                    #      而那段注释说这是**唯一验证过有价值的能力**。
+                    #   ② **钱**：计价按请求名走（`model_prices.json` 里 v4-pro 1.848 /
+                    #      flash 0.48）⇒ 高估 3.85 倍。⚠️ **这一半本次没动**：
+                    #      它取决于"实际按哪个价计费"，而那个数清单上还挂着
+                    #      （**待用户给账单实际扣费数**）—— 别拿推断改钱的路。
+                    # ⚠️ **发现即记**，不等收尾：被掐断的调用（`_over_budget` 之后会抛）
+                    #    也照样把这条信息留下。`record_alias` 自己幂等、且内部吞异常
+                    #    ⇒ 这里**不套** `except: pass`（那会踩静默异常棘轮）。
+                    if _actual_model is None and chunk.get("model"):
+                        _actual_model = str(chunk["model"])
+                        from .. import api_store
+                        api_store.record_alias(self._model, _actual_model)
                     if chunk.get("usage"):
                         usage = chunk["usage"]
                     for ch in chunk.get("choices", []) or []:
