@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from typing import Any
 
@@ -12,6 +13,19 @@ _log = logging.getLogger("observer")
 
 # 当前会话的执行模式（前端下拉硬传，绕开关键词检测的软链路）
 _pending_exec_mode = "auto_edit"
+
+# `list_tasks` 里每条描述的**字符上限**。
+#
+# 🔴 **2026-09-27 真机**：观察者一次"门汇报"吃了 **108,968 token**（那一轮 205,603 的 53%，
+# 比项目三个任务 + 架构 + QA + 安全审计加起来还贵）。量出来是这条工具撑的 ——
+# 它把每个任务的**整份 dict** 原样返回，而实测本仓 17 个任务里
+# **`description` 一项就占 64,965 / 68,723 字符（94.5%）**（任务描述里塞着验收标准 +
+# 约束 + 机器检查命令，单条最长 4,286 字符）。而 `_answer_question_inner` 是**工具循环**
+# （`max_turns` 默认 3），**每轮把累积的消息重发** ⇒ 一次调用就十万。
+# ⚠️ **"那次调的就是它"是按体积推断的**（76KB 是唯一候选；观察者的工具调用**没有日志**，
+# 我没法直接证明）—— 但"列表不该返回全文"这件事本身站得住，所以照修。
+# **全文一直有出口**：`get_task_details(task_id)`。列表要的是"这是哪个任务"，不是正文。
+_LIST_DESC_CHARS = int(os.environ.get("QIDIAN_OBSERVER_LIST_DESC_CHARS", "160"))
 
 
 def set_exec_mode(mode: str) -> None:
@@ -51,6 +65,10 @@ def _tool_list_tasks(status: str | None = None, limit: int = 50,
                      project_id: str = "", active_only: bool = False) -> list[dict]:
     """列出任务。active_only=True 时只返回非终态 (排除 DONE/FAILED/ROLLED_BACK)。
 
+    ⚠️ **`description` 只给前 `_LIST_DESC_CHARS` 个字符**（2026-09-27，见那个常量的注释）——
+    这个返回值会进 LLM 的 prompt，而它原来把整份描述带上 ⇒ 一次门汇报烧到 10.9 万 token。
+    要全文走 `get_task_details(task_id)`，那条路是单个任务、本来就有边界。
+
     ⚠️ 终态判据走 `tracker.is_terminal`，**不在这儿手写集合**（2026-09-14）：
     同一份集合原来在仓里散着好几处，`task_timeline` 那处就因为**自己抄了一份、
     还多抄了两个非终态**（decomposed / conflict_held）给没跑完的任务编造了终点。
@@ -68,7 +86,13 @@ def _tool_list_tasks(status: str | None = None, limit: int = 50,
             continue
         if project_id and t.project_id != project_id:
             continue
-        tasks.append(t.to_dict())
+        d = t.to_dict()
+        # 描述**只给摘要**（见 `_LIST_DESC_CHARS` 那段）：整份返回过一次就把一次调用
+        # 撑到十万 token。其他字段都小（合计不到 4k 字符），别顺手也去动它们。
+        _desc = d.get("description") or ""
+        if len(_desc) > _LIST_DESC_CHARS:
+            d["description"] = _desc[:_LIST_DESC_CHARS] + "…"
+        tasks.append(d)
     tasks.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
     return tasks[:limit]
 
@@ -239,7 +263,8 @@ _TOOL_REGISTRY: list[dict] = [
     # {name, description, handler, params: {param_name: {type, description, required?}}}
     {"name": "get_system_status", "description": "获取系统整体状态：任务计数、运行负载、平均等待/完成时间、token消耗、停滞任务列表、最近告警。",
      "handler": _tool_get_system_status, "params": {}},
-    {"name": "list_tasks", "description": "列出任务，可按状态过滤，默认按更新时间倒序。",
+    {"name": "list_tasks", "description": "列出任务，可按状态过滤，默认按更新时间倒序。"
+                                          "⚠️ 描述是**摘要**（截断到 160 字符）——要看某个任务的全文用 get_task_details。",
      "handler": _tool_list_tasks, "params": {
          "status": {"type": "string", "description": "过滤状态如 pending/running/done/failed"},
          "limit": {"type": "integer", "description": "最多返回条数，默认50"},
