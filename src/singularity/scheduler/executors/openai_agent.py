@@ -697,8 +697,12 @@ class OpenAIAgentExecutor(BaseExecutor):
                 _no_output_urged = True
                 messages.append({
                     "role": "system",
-                    "content": "[系统] 你已经长时间只思考、没有任何产出。立即停止思考，"
-                               "现在就用工具把文件写出来。",
+                    # ⚠️ **措辞不许依赖时长**（2026-09-27）:阈值现在会跟着剩余预算压下来
+                    # （见 `_output_idle_limit`），可能只过了十几秒就劝 —— 原来那句
+                    # "你已经**长时间**只思考" 在那种情况下**不成立**，模型（正确地）
+                    # 会觉得"我才想十几秒、正常"而不听劝。改成只讲**事实**：没产出 + 预算快没了。
+                    "content": "[系统] 你还没有产出任何正文或工具调用，而任务预算快用完了。"
+                               "立即停止思考，现在就用工具把文件写出来。",
                 })
                 continue
             except _NetworkError as e:
