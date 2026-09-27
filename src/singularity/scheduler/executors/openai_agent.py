@@ -1430,6 +1430,8 @@ class OpenAIAgentExecutor(BaseExecutor):
                 # `loops` 小 + `idle≈elapsed` = 循环**饿着**（流那头不出货）；
                 # `loops` 大 + `idle` 小 = 循环在转、是**判据没掐住**。两种修法完全不同。
                 _loops = 0
+                # 循环体最后一次执行是什么时候 —— 只给 `starve_s` 用（见那一段的注释）
+                _last_loop_ts = time.time()
 
                 def _lines():
                     """按行吐，但**每收到一批字节**就先看一眼表。
@@ -1451,10 +1453,11 @@ class OpenAIAgentExecutor(BaseExecutor):
                         ⇒ 总时长判据兜得住；
                       · **吐字节但凑不满一行** → **两条都兜不住** ← 真机死的就是这种。
                     """
-                    nonlocal _over_budget, _loops, _first_byte
+                    nonlocal _over_budget, _loops, _first_byte, _last_loop_ts
                     buf = ""
                     for text in resp.iter_text():
                         _loops += 1
+                        _last_loop_ts = time.time()
                         if _first_byte is None:
                             _first_byte = time.time() - _call_started
                         if time.time() >= _call_deadline:
@@ -1690,6 +1693,16 @@ class OpenAIAgentExecutor(BaseExecutor):
                         "tool_calls": len(tool_calls),
                         "loops": _loops,
                         "cut": bool(_over_budget),
+                        # 🔴 **「循环最后转了一次，之后又干等了多久」**（2026-09-28 加）。
+                        # 为什么非要这个数：`round-20260927h` 有一发 `cap=265s` 却活到
+                        # `elapsed=644s` —— 而循环体**第一句**就是 `time.time() >= _call_deadline`
+                        # ⇒ **只要它在 265 秒后还转过一次，当场就返回了**
+                        # ⇒ 那 379 秒里循环一圈没转（推论**成立**，`cut=true` 证明是走循环退出的）。
+                        # 但那 379 秒**为什么**不转，我没查出来：90 秒的读超时本该断、它没断。
+                        # ⇒ `loops` 只说"一共转了几圈"，**说不出"什么时候转的"** ——
+                        #   这个数就是那次缺的那个：`starve_s` 大 = 循环后段被饿住。
+                        # ⚠️ **别拿它当"睡眠时长"读**：循环不转也可能是流那头真没数据。
+                        "starve_s": round(time.time() - _last_loop_ts, 1),
                     }, ensure_ascii=False) + "\n")
             except Exception as _e:      # noqa: BLE001 —— 记账不许连累调用本身
                 # ⚠️ **不吞**（本仓的静默异常棘轮抓过两次这个形状）：写不进去也要吭一声,
