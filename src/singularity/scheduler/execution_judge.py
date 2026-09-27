@@ -942,10 +942,17 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
                                   transcript="\n\n".join(transcript)),
                 writer, max_tokens=_FUSION_MAX_TOKENS) or "") or {}
             transcript.append(f"[{writer} 确认]\n{_j(c)}")
-            cur_c = _votes_into(conf_votes, writer, c.get("confirms"), "verdict")
+            # 空口 agree 不算认输 —— 与轮 1/轮 2 的空口 accept、独有做法的空口
+            # adopt 同一条规则。这是同一族漏网的**第三处**：`conf == "agree"`
+            # 现在是仅有的两条"裁决成立"的路之一，一句不带理由的"我认了"就能定掉
+            # 一条分歧 —— 而它恰恰是最该要理由的那一步（让步方是被说服了吗？）。
+            cur_c = _votes_into(conf_votes, writer,
+                                _demote_bare_accept(c.get("confirms"),
+                                                    accept_value="agree"), "verdict")
             # 确认调用失败/空返回时 c 是 {} → cur_c 为空 → 下面 `not any(...)` 成立
             # → 被当成"发言方全认了"退出。静默的后果是：conf_votes 里一张票都没有，
-            # 于是所有分歧点走默认裁决 —— **全部判给发言方**，坚持方的 insist 被丢掉。
+            # 于是所有分歧点都缺确认票 → 走 `unresolved`（2026-09-27 之前是
+            # **全部判给发言方**），坚持方的 insist 被丢掉。
             # 轮 2 的解析失败有告警（fusion_round2_json），轮 3 原来没有；补上。
             if not c.get("confirms"):
                 witness.warn("execution_judge", "fusion_round3_empty"[:80])
@@ -955,21 +962,31 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
             if not any(v == "question" for v in cur_c.values()):
                 break                       # 发言方全认了 → 收敛
 
-    # 撞上限仍有 question 的点 → 按发言方处理，但别让它静默通过
+    # 撞上限仍有 question 的点 → 不许静默通过（它们现在判成"僵持"，见下）
     stuck = [i for (w, i), v in conf_votes.items() if v == "question"]
     if stuck:
         witness.warn("execution_judge", f"fusion_stuck:{len(stuck)}"[:80])
 
-    # 分歧结论：默认发言方胜；对方 insist 且发言方 agree（认输）→ 对方胜。
+    # 分歧结论：**结论必须挣来**，不默认落在谁头上（2026-09-27）。
+    # 旧规则是「默认判给发言方，除非他当面认输」，而定稿人有数据时按纪律选、
+    # 没数据时 `members[0]` ⇒ 它其实不是一条裁决规则，是「永远判给第一家」。
+    # 依据 `docs/多智能体辩论-文献通读-20260927.md`：AgentAuditor 表 2 里
+    # **多数票在「多数错、少数对」子集上恒为 0.00%**（结构上救不回来），
+    # 而这条比多数票还窄 —— 它连票都不数。
+    # 现在只有两种情形算"裁了"：
+    #   ① 对方**全体** accept（真一致）→ 按发言方
+    #   ② 有人 insist **且**发言方 agree（当面认输）→ 按坚持方
+    # 其余一律 `winner=None` 进 `unresolved`，交给定稿人按「未裁决」那一段办。
     # ponytail: 多个 insist 方各自立场不同时只记第一个 —— N>2 才有的歧义，
     # 实际分歧点几乎都是两家对立（spec 按两方设计）。
     resolved = []
     unresolved = []
+    deadlock = 0
     for d in disagreements:
         did = str(d.get("id"))   # 与 _votes_into 的归一化对齐
         vs = [v for (m, i), v in resp_votes.items() if i == did]
         conf = conf_votes.get((writer, did))
-        if conf is None:
+        if conf is None or len(vs) < len(others):
             # 没有发言方的确认票 ⇒ **这一条没被裁决过**，不能默认判给发言方
             # （2026-09-19 外派评审 A7）。原来这里走 `winner = writer` 只是加了个
             # `basis="default_no_confirm_vote"` 的标注 —— 标是标了，**结论还是
@@ -979,13 +996,32 @@ def fuse_architecture_v2(task_desc: str, plans: list[tuple[str, str]],
             # 只进 `unresolved`，**不进 `resolved`**：提示词里那一段的标题是
             # 「分歧结论（逐条已定，按此采用）」，把"没定"的塞进去自相矛盾 ——
             # 定稿人会照 winner 字段办事，那正是这次要修的东西。
+            # ⚠️ **`len(vs) < len(others)` 那半是 A8 的同一形状**：A8 把「全体 adopt」
+            # 的门槛补到了独有做法上（`len(stances) == len(members)`），分歧票这边
+            # 一直没收口 —— 少投一票时"收到的那几张全是 accept"会被当成"全体 accept"。
             unresolved.append({**d, "winner": None, "basis": "unresolved"})
             continue
-        winner = writer
-        if "insist" in vs and conf == "agree":
-            winner = next((m for (m, i), v in resp_votes.items()
-                           if i == did and v == "insist"), writer)
-        resolved.append({**d, "winner": winner, "basis": "voted"})
+        # `vs and` 不是多余的：`all([])` 是 True，只靠上面那道 `len(vs) < len(others)`
+        # 挡住"空票算全体同意"是**借别的分支的保证**。`others` 现在恒非空
+        # （`len(plans) < 2` 在函数开头就早退），但那个早退离这儿很远。
+        if vs and all(v == "accept" for v in vs):
+            resolved.append({**d, "winner": writer, "basis": "unanimous"})
+            continue
+        insisters = [m for (m, i), v in resp_votes.items()
+                     if i == did and v == "insist"]
+        if conf == "agree" and insisters:
+            # 发言方当面认输，且**确实有人 insist**（认输得有个对象）
+            resolved.append({**d, "winner": insisters[0], "basis": "conceded"})
+            continue
+        # 僵持：对方 insist（或空口 accept 被降级成 question），发言方也不认输
+        # ⇒ **没有依据判给任何一方**。旧规则在这种情形下判给发言方，
+        # 而"谁是发言方"按定稿人规则定 ⇒ 等于永远判给第一家。
+        deadlock += 1
+        unresolved.append({**d, "winner": None, "basis": "deadlock"})
+    if deadlock:
+        # 不吭声就查不出来：事后要分得开「真僵持」和「没人投票」——两者都进
+        # `unresolved`，但 `basis` 不同，这里再出声一次好在告警页上看得见。
+        witness.warn("execution_judge", f"fusion_deadlock:{deadlock}"[:80])
 
     # 独有做法：**全体** adopt 才采纳（保守 —— 长度就是膨胀的主因）
     adopted = []

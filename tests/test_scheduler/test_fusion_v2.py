@@ -141,16 +141,33 @@ def test_insist_then_agree_gives_point_to_responder(monkeypatch):
     assert '"id": 1' in p and "幂等键" in p   # 全票 adopt → 进采纳清单
 
 
-def test_insist_then_question_keeps_writers_view(monkeypatch):
-    """发言方对某条回 question（不认输）→ 那条仍归发言方（辩论没让步，就按发言方走）。"""
+def test_insist_then_question_is_deadlock_not_writers_view(monkeypatch):
+    """僵持（对方 insist、发言方也 question）→ **不裁决**，不是"仍归发言方"。
+
+    2026-09-27 改的口径。旧规则是「默认判给发言方，除非他当面认输」，而定稿人
+    没纪律数据时按 `members[0]` 兜底（`_pick_writer`）⇒ 两条合起来不是裁决规则，
+    是「**永远判给第一家**」—— 它连票都不数。
+    新规则：只有「对方**全体** accept」和「对方 insist + 发言方 agree」算裁决。
+    依据 `docs/多智能体辩论-文献通读-20260927.md`（AgentAuditor 表 2：多数票在
+    「多数错、少数对」子集上恒为 0.00%，而这条比多数票还窄）。
+    """
     calls = []
-    _stub(monkeypatch, calls=calls,
-          r3={"confirms": [{"id": 1, "verdict": "question"},
-                           {"id": 2, "verdict": "agree"}]})
-    ej.fuse_architecture_v2("需求", PLANS)
+    rulings = {}
+    _stub(monkeypatch, calls=calls, r3={"confirms": [
+        {"id": 1, "verdict": "question", "reason": "你还是误判了精度"},
+        {"id": 2, "verdict": "agree", "reason": "同意"}]})
+    ej.fuse_architecture_v2("需求", PLANS, rulings=rulings)
+
     p = _finalize_prompt(calls)
-    # 分歧 1 归发言方 A；分歧 2 是 accept → 也是 A
-    assert p.count('"winner": "A"') == 2
+    resolved = p.split("【分歧结论")[1].split("【未裁决的分歧")[0]
+    unresolved = p.split("【未裁决的分歧")[1].split("【采纳的独有做法")[0]
+    # 分歧 1：对方 insist、发言方 question ⇒ 僵持 ⇒ 不许采用任一方
+    assert '"id": 1' not in resolved, f"僵持的分歧被当成裁决了: {resolved}"
+    assert '"id": 1' in unresolved and '"winner": null' in unresolved
+    # 分歧 2：对方 accept、发言方 agree ⇒ 真一致 ⇒ 按发言方 A
+    assert '"id": 2' in resolved and '"winner": "A"' in resolved
+    assert {d["id"]: d["basis"] for d in rulings["resolved"]} == {2: "unanimous"}
+    assert {d["id"]: d["basis"] for d in rulings["unresolved"]} == {1: "deadlock"}
 
 
 def test_disagreement_without_confirm_vote_is_not_awarded(monkeypatch):
@@ -162,7 +179,11 @@ def test_disagreement_without_confirm_vote_is_not_awarded(monkeypatch):
     """
     calls = []
     rulings = {}
-    _stub(monkeypatch, calls=calls, r3={"confirms": [{"id": 1, "verdict": "agree"}]})
+    # ⚠️ 这条 agree **必须带理由**：不带理由的"我认了"现在也算空口让步，
+    # 会被降级成 question（见 `test_bare_agree_is_not_a_concession`）——
+    # 那样 id 1 也会落进"僵持"，这条用例就测不到它本来要测的东西了。
+    _stub(monkeypatch, calls=calls, r3={"confirms": [
+        {"id": 1, "verdict": "agree", "reason": "确实是我误判了精度"}]})
     ej.fuse_architecture_v2("需求", PLANS, rulings=rulings)
 
     p = _finalize_prompt(calls)
@@ -174,6 +195,68 @@ def test_disagreement_without_confirm_vote_is_not_awarded(monkeypatch):
     assert '"id": 2' in unresolved and '"winner": null' in unresolved, \
         f"没裁决的分歧没被单列（定稿人于是会替它选一边）: {unresolved}"
     assert [u["basis"] for u in rulings["unresolved"]] == ["unresolved"], rulings
+
+
+PLANS3 = [("A", "方案A全文"), ("B", "方案B全文"), ("C", "方案C全文")]
+
+
+def test_disagreement_with_missing_votes_is_not_decided(monkeypatch):
+    """有成员**压根没表过态** ⇒ 不是"全体 accept"，只是"收到的那几张是 accept"。
+
+    这是 A8 的同一形状：A8 把「全体 adopt」的门槛补到了独有做法上
+    （`len(stances) == len(members)`），**分歧票这边一直没收口** —— 3 席里只回来
+    1 张时旧代码走到 `winner = writer`，产物上看着像"委员会一致同意"。
+    断言 `basis == "unresolved"` 而不是 `"deadlock"`：要钉的正是"缺票"那一支，
+    不是"僵持"那一支（发言方这次是**带了理由认输**的，票齐就该判给他）。
+    """
+    rulings = {}
+    one = {"consensus": [], "unique_gains": [],
+           "disagreements": [{"id": 1, "dimension": "modules", "point": "拆不拆 billing",
+                              "positions": {"A": "拆", "B": "不拆"}, "raised_by": "A"}]}
+
+    def fake(prompt, model, max_tokens=2000, project_id=""):
+        if "架构委员会秘书" in prompt:
+            return _j(one)
+        if "陈述己方理由" in prompt:
+            return _j({"arguments": [{"id": 1, "reason": "拆了更清楚"}], "unique_gains": []})
+        if "逐条回应" in prompt:
+            if "「C」" in prompt:
+                return _j({"unique_gains": []})     # C 没回应任何分歧 ⇒ 这一票不存在
+            return _j({"responses": [{"id": 1, "verdict": "insist", "reason": "不拆更省"}],
+                       "unique_gains": []})
+        if "对你的论证给出了回应" in prompt:
+            return _j({"confirms": [{"id": 1, "verdict": "agree", "reason": "你说得对"}]})
+        if "架构定稿人" in prompt:
+            return "最终稿"
+        if "检查三件事" in prompt:
+            return _j({"approved": True, "issues": []})
+        raise AssertionError("未打桩的 prompt: " + prompt[:60])
+
+    monkeypatch.setattr(ej, "_call_model", fake)
+    ej.fuse_architecture_v2("需求", PLANS3, rulings=rulings)
+    assert rulings["resolved"] == [], f"缺票却当成裁决了: {rulings['resolved']}"
+    assert [d["basis"] for d in rulings["unresolved"]] == ["unresolved"], rulings
+
+
+def test_bare_agree_is_not_a_concession(monkeypatch):
+    """空口 agree 不算认输 —— 同一族漏网的**第三处**（2026-09-27）。
+
+    轮 1/轮 2 的空口 accept 有闸（`_demote_bare_accept`），独有做法的空口 adopt
+    也补过（A8），但轮 3 发言方那句 agree 一直没有 —— 而 `conf == "agree"` 恰好是
+    新口径下仅有的两条"裁决成立"的路之一：一句不带理由的"我认了"就能把一条分歧
+    定给对方，裁决记录事后看还像有依据。
+    """
+    calls = []
+    rulings = {}
+    _stub(monkeypatch, calls=calls, r3={"confirms": [
+        {"id": 1, "verdict": "agree"},                    # 空口 ⇒ 不算让步
+        {"id": 2, "verdict": "agree", "reason": "同意"}]})
+    ej.fuse_architecture_v2("需求", PLANS, rulings=rulings)
+
+    assert 1 not in {d["id"] for d in rulings["resolved"]}, \
+        f"空口 agree 被当成认输了: {rulings['resolved']}"
+    assert {d["id"]: d["basis"] for d in rulings["unresolved"]} == {1: "deadlock"}
+    assert {d["id"]: d["basis"] for d in rulings["resolved"]} == {2: "unanimous"}
 
 
 def test_gain_needs_every_member_to_vote(monkeypatch):
