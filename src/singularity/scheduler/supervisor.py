@@ -313,10 +313,48 @@ def _check_completeness(
     )
 
 
+#: 约束文本里表示"禁改"的词
+_FORBID_WORDS = ("不改", "禁止", "冻结", "不可改")
+
+
+def _forbids_file(rule: str, f: str) -> bool:
+    """这条约束**是不是在禁止改这个文件**。
+
+    🔴 **必须"文件名和禁止词同处一个分句"**（2026-09-27 真机 `round-20260927g`）：
+    原来是把**整段**分开判 —— 整段里有没有禁止词 ∧ 整段里有没有这个文件名。
+    而约束正文里**同时装着"规矩"和"它的判据"两截**，于是两截拼出一条不存在的"禁改"：
+
+        约束'分层隔离：…四者之间**禁止**互相 import…**判据：tests/test_skeleton.py**
+        用 ast 解析…'**禁改**,但修改了 tests/test_skeleton.py
+
+    `禁止` 来自前半截（讲的是模块之间不许互相 import），`test_skeleton.py` 来自
+    后半截（**那是它的验证手段，不是禁改对象**）⇒ 判出一条假违规。
+    🔴 而那个任务名就叫「项目骨架、**架构守护测试**」——**它必须建那个文件**
+    ⇒ **那个任务不可能通过，整轮必死**（只花 102,173 token 就停了）。
+    ⚠️ **同一个形状当天第二次**：与 `_workflow_phases` 那条 `"tasks" in i` 撞上路径
+    `架构.tasks[9]` 一模一样 —— **子串匹配撞上"这段文本本来还另有语义"**。
+
+    ⚠️ **代价如实记**：跨分句的禁止清单会**漏**（"禁止下列改动：改 a.py；改 b.py"
+      —— 两截各缺一半）。有意的：**误杀整轮比漏一条贵得多**。
+    """
+    name = Path(f).name.lower()
+    low = f.lower()
+    for seg in re.split(r"[；;。\n]", rule):
+        if not any(k in seg for k in _FORBID_WORDS):
+            continue
+        sl = seg.lower()
+        if low in sl or name in sl:
+            return True
+    return False
+
+
 def _check_constraints(
     constraints: list[dict], changed_files: list[str], root: Path,
 ) -> CheckResult:
-    """约束合规: 机械比对改动的文件是否在禁止名单中。"""
+    """约束合规: 机械比对改动的文件是否在禁止名单中。
+
+    ⚠️ 匹配规则见 `_forbids_file`（**按分句**，不是整段扫）。
+    """
     from .project import constraint_text
     if not constraints:
         return CheckResult(passed=True, reason="无约束清单,跳过")
@@ -324,17 +362,20 @@ def _check_constraints(
     violations = []
     for c in constraints:
         rule = constraint_text(c)
-        cl = rule.lower()
         for f in changed_files:
-            # 约束中提到的文件是否被改了
-            if (f.lower() in cl or Path(f).name.lower() in cl) and (
-                    "不改" in rule or "禁止" in rule or "冻结" in rule or "不可改" in rule):
+            if _forbids_file(rule, f):
                 violations.append(f"约束'{rule}'禁改,但修改了{f}")
 
     if violations:
         return CheckResult(
             passed=False,
-            reason=f"违反 {len(violations)} 条约束",
+            # 🔴 **详情必须进 `reason`**（2026-09-27）：`evidence` 里**一直存着**详情，
+            #    而**没有任何消费者读它**（`SupervisionVerdict.issues` 只拼 `result.reason`）
+            #    ⇒ task 的 `error` / trace 的 `unverified` 里只剩「违反 1 条约束」七个字
+            #    —— **判了，但说不出依据**（§93 同族：值在下一跳被丢）。
+            #    真机上我为了知道违反的是哪条，只能自己离线拿真数据复现一遍。
+            reason=f"违反 {len(violations)} 条约束：" + "；".join(violations[:3])
+                   + ("…" if len(violations) > 3 else ""),
             evidence={"violations": violations, "hard": True},
         )
     return CheckResult(passed=True, reason=f"约束 {len(constraints)} 条全部合规")

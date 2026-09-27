@@ -98,6 +98,59 @@ class TestCheckConstraints:
         )
         assert not r.passed
 
+    # 真机原文（`round-20260927g` 落盘的那条约束，逐字抄的，别改写措辞）：
+    # `禁止` 在讲"模块之间不许互相 import"，`test_skeleton.py` 在讲"**判据**用什么验"
+    # —— 两截拼起来凭空造出一条"禁改 tests/test_skeleton.py"。
+    _REAL_RULE = (
+        "分层隔离：parser/filters/stats/output 只允许 import models 与标准库，"
+        "四者之间禁止互相 import；cli 是唯一允许依赖全部模块的模块；"
+        "logstat 包内不得出现任何第三方 import。判据：tests/test_skeleton.py "
+        "用 ast 解析已存在的 logstat/*.py，断言 import 集合落在白名单内。")
+
+    def test_判据里提到的文件不算禁改_真机那一例(self):
+        """🔴 **`round-20260927g` 的死因** —— 这一整轮就是被这条假违规杀死的。
+
+        T1 的任务是「项目骨架、数据契约与**架构守护测试**」⇒ **它必须建
+        `tests/test_skeleton.py`** ⇒ 判成"禁改"就是"这个任务不可能通过"。
+
+        判据：把 `_forbids_file` 退回**整段扫** ⇒ 本条红。
+        """
+        from singularity.scheduler.supervisor import _check_constraints
+        r = _check_constraints(
+            [self._REAL_RULE],
+            ["logstat/models.py", "logstat/__init__.py", "pyproject.toml",
+             "conftest.py", "tests/fixtures/sample.jsonl", "tests/test_skeleton.py"],
+            Path("/tmp"),
+        )
+        assert r.passed, f"判据里提到的文件名被当成禁改对象了: {r.reason}"
+
+    def test_真禁改一条都不许漏(self):
+        """**反方向**：按分句判别把真违规也放过（否则这道门又变成装饰）。
+
+        判据：把 `_forbids_file` 写成恒假 ⇒ 本条红。
+        """
+        from singularity.scheduler.supervisor import _check_constraints
+        r = _check_constraints(
+            ["禁止修改 pyproject.toml 的 dependencies；不改 tests/ 下任何文件"],
+            ["pyproject.toml"], Path("/tmp"),
+        )
+        assert not r.passed, "真禁改被放过了"
+        r2 = _check_constraints(["冻结 core.py：不改动其字段定义"], ["src/core.py"], Path("/tmp"))
+        assert not r2.passed, "冻结的文件被改了却没拦"
+
+    def test_判失败时依据要进reason(self):
+        """🔴 **判了就得说得出是哪条**（`evidence` 里一直有，但没人读 ⇒ 白判）。
+
+        真机上 task 的 `error` / trace 的 `unverified` 只剩「违反 1 条约束」七个字，
+        为了知道违反的是哪条，只能离线拿真数据复现一遍。
+
+        判据：把 `reason` 改回只报条数 ⇒ 本条红。
+        """
+        from singularity.scheduler.supervisor import _check_constraints
+        r = _check_constraints(["冻结 core.py"], ["src/core.py"], Path("/tmp"))
+        assert "core.py" in r.reason, f"reason 里没有文件名，说不出违反的是哪条: {r.reason}"
+        assert "冻结 core.py" in r.reason, f"reason 里没有约束原文: {r.reason}"
+
     def test_same_filename_different_dir_no_violation(self):
         """同文件名但约束不命中 → 通过。"""
         from singularity.scheduler.supervisor import _check_constraints
