@@ -699,6 +699,11 @@ def project_resume(project_id: str) -> tuple[dict, int]:
        （今天对一个停在 EXECUTING 的项目调 `/start` 就会踩这个 —— 所以 `project_start`
        在停了的时候直接 409，顺带把这个地雷也堵上。）
 
+    ③ 🔴 **解了禁令不等于项目在动**：还有任务失败（`halt_state` 的派生那条）时，
+       项目**仍然停着** —— 这时返回 200 但 `halted:true`，issue 也**留着**。
+       见下面那段"只在真的解除了才撤票"（2026-09-27 真机：无条件撤 ⇒ 界面看着没事、
+       其实还停着）。
+
     没停过 ⇒ 409（**不假装成功**）：返回 200 会让人以为"我按了恢复，项目在动了"。
     """
     from . import project as proj_mod
@@ -708,16 +713,37 @@ def project_resume(project_id: str) -> tuple[dict, int]:
     if getattr(proj, "halted_reason", "") != proj_mod.HALT_USER_STOP:
         return {"error": "该项目没有被人叫停，无需恢复"}, 409
     proj.clear_user_stop(reason=f"POST /api/projects/{project_id}/resume")
-    # 撤票：停的是人工那种，`_advance_project` 里的撤票只管调度循环那一 tick，
-    # 而人在更早的阶段（template/gate2…）恢复时**调度循环根本走不到那个项目**。
-    if any(i.get("kind") == "project_stalled" for i in proj.issues):
-        proj.issues = [i for i in proj.issues if i.get("kind") != "project_stalled"]
-    proj_mod.save(proj)
+
+    # ── 撤票：**只在"停"真的解除了才撤** ──────────────────────────
+    #
+    # 为什么这里非要自己撤（不能等 `_advance_project`）：停的是人工那种，而那个函数的
+    # 撤票只管调度循环那一 tick，人在更早的阶段（template/gate2…）恢复时
+    # **调度循环根本走不到那个项目**。
+    #
+    # 🔴 **但它原来是无条件撤的（2026-09-27 真机撞出来）**：`clear_user_stop` 只解
+    #    `user_stop` 那一半，**派生**那一半（`halt_state` 的 `task_failed`）不因 resume 而
+    #    消失 ⇒ 撤掉 issue 之后 `halt` 仍报 `halted:true`，而**界面读的就是 `issues`**
+    #    （全仓前端源码里 `halt` 出现 0 次）⇒ 结果：**界面看着项目没事，其实它还停着。**
+    #    ⇒ 判据回到 `halt_state` 自己（唯一出处），停没停由它说，不由这里猜。
     halted_now = proj_mod.halt_state(proj)
+    proj.issues = [i for i in proj.issues if i.get("kind") != "project_stalled"]
+    if halted_now["halted"]:
+        # 形状/去重/告警都在那一份里 —— 别在这儿再抄一遍（本仓栽过：两份逻辑迟早会漂）
+        from singularity.scheduler.orchestrator import _record_halt_issue
+        _record_halt_issue(proj, halted_now)
+    # 🔴 **落盘不能押在上一句身上**：它按契约是**幂等**的（已记过就 early return，
+    #    连它内部那句 `save` 也一起不执行）。这个依赖是变异②当场打出来的 ——
+    #    把上面撤票那行去掉 ⇒ 解禁令**根本没落盘**、盘上 `halted_reason` 还是 `user_stop`。
+    proj_mod.save(proj)
+
+    if halted_now["halted"]:
+        message = f"已解除人工叫停，但项目**仍然停着**：{halted_now['detail']}"
+    else:
+        message = ("已解除人工叫停。任务不会自己回来 —— 要哪个回来用 "
+                   "`POST /api/tasks/<id>/retry`")
     return {"ok": True, "resumed": True, "halted": halted_now["halted"],
             "halt_reason": halted_now["reason"],
-            "message": "已解除人工叫停。任务不会自己回来 —— 要哪个回来用 "
-                       "`POST /api/tasks/<id>/retry`"}, 200
+            "message": message}, 200
 
 
 def project_cost(project_id: str) -> tuple[dict, int]:

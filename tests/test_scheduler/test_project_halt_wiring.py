@@ -100,6 +100,51 @@ def test_resume_只解禁令不重派任务(proj):
         "恢复把任务状态动了 —— 那成了「暂停续跑」，而 09-21 拍板的语义是「停」"
 
 
+def test_resume_派生那条还成立就不撤issue(proj):
+    """🔴 **resume 只解人工那一半**：还有失败任务 ⇒ 项目仍停滞 ⇒ 界面上那条**必须留着**。
+
+    09-27 真机撞出来的现场：`resume` 之后 `halt_state` 仍报 `halted=True / task_failed(13)`，
+    而 `issues` 被清空了 —— 而**界面读的就是 `issues`**（全仓前端源码里 `halt` 出现 0 次）
+    ⇒ 界面看着项目没事、其实它还停着。
+
+    变异：把撤票改回**无条件**（去掉 `if halted_now["halted"]` 那层）⇒ 本条红。
+    """
+    from singularity.scheduler._api_projects import project_resume, project_stop
+    _mk_task(proj, TaskStatus.FAILED)
+    project_stop(proj.id)
+    assert project_resume(proj.id)[1] == 200
+
+    after = P.load(proj.id)
+    kept = [i for i in after.issues if i.get("kind") == "project_stalled"]
+    assert kept, "停还没解除就把 issue 撤了 —— 界面上唯一的证据没了"
+    assert kept[0]["reason"] == "task_failed", \
+        f"理由还停在上一条（user_stop）上，而它已经不成立了：{kept[0]}"
+    assert P.halt_state(after)["halted"] is True
+
+
+def test_resume_停真解除了才撤issue(proj):
+    """**反方向对照**：撤票别写成恒不撤（那样恢复之后界面永远在说"已停"）。
+
+    ⚠️ **本条的现场刻意选"还没任务"**：`project_stop` 会把 PENDING/BLOCKED 直接转
+    **FAILED**（"停"的语义），所以**任何在 executing 期停过的项目，恢复后都必然
+    还带着失败任务**、派生那条必然成立 ⇒ 拿 PENDING 任务造的这个对照是假的
+    （第一版就是那么写的，当场红）。真实的"停真解除"就是文档里那句
+    「人在更早的阶段（template/gate2…）恢复」—— 那时一条任务都还没有。
+
+    变异：把 `if halted_now["halted"]` 那层去掉另一半（恒不撤）⇒ 本条红。
+    """
+    from singularity.scheduler._api_projects import project_resume, project_stop
+    proj.phase = P.Phase.TEMPLATE
+    P.save(proj)
+    project_stop(proj.id)
+    assert project_resume(proj.id)[1] == 200
+
+    after = P.load(proj.id)
+    assert [i for i in after.issues if i.get("kind") == "project_stalled"] == [], \
+        "停已经解除了，issue 还赖着 —— 界面永远在说「已停」"
+    assert P.halt_state(after)["halted"] is False
+
+
 def test_resume_没停过就409(proj):
     """**不假装成功**：返回 200 会让人以为"我按了恢复，项目在动了"。"""
     from singularity.scheduler._api_projects import project_resume
