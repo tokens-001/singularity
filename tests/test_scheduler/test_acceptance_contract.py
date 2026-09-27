@@ -284,15 +284,57 @@ def test_未澄清只记不致命_别把它做成死结():
     奇点**没有"编辑架构"的接口** ⇒ 拦成致命的唯一后果是**人也改不了、只能打回重出**，
     而它本来就要在 GATE2 被人看一遍。**加一道必须打回才能过的门 = 白加一道门。**
 
-    判据：把 `classify_arch_issues` 的致命判据里加上 `ARCH_NEEDS_CLARIFICATION` ⇒ 这条红。
+    🔴🔴 **2026-09-27 真机补的第二半 —— 这条判据原来只验了 `tech_stack` 那一条路。**
+    提醒落在 **`tasks[i]`** 里时，正文会内嵌路径 `架构.tasks[9].description`
+    ⇒ 撞上 `classify_arch_issues` 的 `"tasks" in i` **子串** ⇒ 被判成致命。
+    `round-20260927e` 就这么死的：架构师标了 2 处未澄清，**一处在 `risks[0]`（无害）、
+    一处在 `tasks[9]`（致命）** ⇒ GATE2 硬拦，而唯一出路"打回"正是验收清单 §四
+    明写不算数的动作 ⇒ 两条路都堵。**撞不撞全看模型写在哪个字段。**
+    ⇒ 所以这里**必须走 `split_arch_issues` 那一跳**（`_run_planning` 的真实路径）——
+    只喂 `_validate_architecture` 的产出会跳过它，上一版就是这么漏的
+    （同族见上面 `test_散文验收真的会被致命档拦下_端到端接线`）。
+
+    判据：把那句排除整个删掉 ⇒ **只有 (b) 红**（(a) 的路径里没有 `tasks`，原来就一直绿着）。
+
+    ⚠️ **不要拿"子串版"当变异**：那个改法**今天等价、全量 2113 条一条不红**（核过）。
+    原因是除了这条提醒本身，没有别的 blocker 行会带 `NEEDS CLARIFICATION` ——
+    所以这条差别**没有测试钉住**，别以为它被验过。
     """
-    from singularity.scheduler.workflow import _validate_architecture, classify_arch_issues
-    arch = _arch([{"text": "契约就位", "check": {"text_only_reason": "人看"}}])
-    arch["tech_stack"] = {"language": "NEEDS CLARIFICATION: 题面未指定实现语言"}
-    fatal, noted = classify_arch_issues(_validate_architecture(arch))
-    assert any("未澄清" in i for i in noted), f"没报出来，人在 GATE2 上看不见: {noted}"
-    assert not any("未澄清" in i for i in fatal), \
-        f"归了致命档 ⇒ 人也没法改（没有编辑架构的接口）⇒ 死结: {fatal}"
+    from singularity.scheduler.workflow import (
+        _validate_architecture, split_arch_issues, classify_arch_issues)
+
+    cases = {}
+    # (a) 落在 tech_stack 上 —— 原来只验了这条
+    a = _arch([{"text": "契约就位", "check": {"text_only_reason": "人看"}}])
+    a["tech_stack"] = {"language": "NEEDS CLARIFICATION: 题面未指定实现语言"}
+    cases["tech_stack"] = a
+    # (b) 🔴 落在 **tasks[i]** 里 —— 路径里带 "tasks"，真机死的那条
+    b = _arch([{"text": "契约就位", "check": {"text_only_reason": "人看"}}])
+    b["tasks"][0]["description"] += " NEEDS CLARIFICATION: 过滤表达式语法题面未定义"
+    cases["tasks[0]"] = b
+
+    for where, arch in cases.items():
+        audit, _noted = split_arch_issues(_validate_architecture(arch))
+        assert any("未澄清" in i for i in audit), \
+            f"{where}: 没进 blockers ⇒ GATE2 上看不见，等于没报"
+        fatal, _ = classify_arch_issues(audit)
+        assert not any("未澄清" in i for i in fatal), \
+            f"{where}: 归了致命档 ⇒ 人也没法改（没有编辑架构的接口）⇒ 死结: {fatal}"
+
+
+def test_另一条致命的还在_排他没把别人一起放走():
+    """**反方向对照**：那次排除只许摘掉提醒自己，别的致命项一条都不许少。
+
+    判据：把 `classify_arch_issues` 里的排除从"前缀"改成"**整个 blockers 直接丢掉**"
+    （即无条件 `return [], blockers`）⇒ 本条红。
+    """
+    from singularity.scheduler.workflow import (
+        _validate_architecture, split_arch_issues, classify_arch_issues, ACCEPTANCE_UNSTATED)
+    arch = _arch([{"text": "CONTRACTS.md 列出三个契约的全部字段"}])   # ← 没 check = 没表态
+    audit, _ = split_arch_issues(_validate_architecture(arch))
+    fatal, _ = classify_arch_issues(audit)
+    assert any(ACCEPTANCE_UNSTATED in i for i in fatal), \
+        f"「没表态」被那次排除一起带走了 ⇒ 门又变成装饰: {fatal}"
 
 
 def test_go_不许匹配到别的词里():

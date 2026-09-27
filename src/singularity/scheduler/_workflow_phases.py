@@ -11,6 +11,20 @@ ACCEPTANCE_UNSTATED = "acceptance 没表态"
 # 同上：产它和认它的地方共用这一个常量。
 ARCH_SELF_CONTRADICTION = "架构自相矛盾"
 
+#: 架构**自己举手说"拿不准"**那条提醒的**前缀**（2026-09-27 加）。
+#: 产它的是 `_arch_open_questions`，认它的是 `classify_arch_issues` —— **共用这一个常量**。
+#:
+#: 🔴 **必须是前缀**：这条提醒的正文里**内嵌字段路径**（`架构.tasks[9].description: …`），
+#: 而 `classify_arch_issues` 的致命判据里有个 `"tasks" in i` —— 拿子串去认，
+#: 模型把提醒写进 `tasks[i]` 就撞上 ⇒ 判成致命，**而设计上它该归"只记"**。
+#: **2026-09-27 真机就这么死了一轮**（`round-20260927e`：架构师标了 2 处未澄清，
+#: 一处落在 `risks[0]`（无害）、一处落在 `tasks[9]`（致命）⇒ GATE2 硬拦，
+#: 而唯一出路"打回"正是验收清单 §四 明写不算数的动作 ⇒ 两条路都堵，必死）。
+#: **撞不撞全看模型把提醒写在了哪个字段** —— 那是运气，不是判据。
+#: ⚠️ 而"前缀 vs 子串"这个选择**今天两者等价、没有测试钉住**（详情见 `classify_arch_issues`
+#: 里那段注释）—— 别把它读成一条已验证的加固。
+ARCH_CLARIFICATION_PREFIX = "架构未澄清:"
+
 import json
 import re
 
@@ -775,12 +789,27 @@ def classify_arch_issues(blockers: list[str]) -> tuple[list[str], list[str]]:
               打转 811 秒 / 275,806 token / 零文件 ⇒ 整轮全灭）
       只记：`data_model` / `tech_stack` 等**缺项** —— 一个单文件 CLI 本来就没有 data_model，
             按"六字段齐全"拦会把好活挡在门外
+            `ARCH_CLARIFICATION_PREFIX` 那条（模型自己标的"未澄清"）—— 理由见它上面的注释
             ⚠️ 注意分界：**缺不缺**只记，**打架不打架**要拦 —— 这俩不是一回事
 
     ⚠️ 抽成独立函数是为了**能单独测** —— 它原来是内联在 `_run_planning` 里的一行字符串匹配，
     而字符串匹配正是这个仓栽过的地方（改措辞就静默失效，且没人会注意到）。
     """
-    fatal = [i for i in blockers
+    # 🔴 **先摘掉"未澄清"那条提醒**（2026-09-27 加）：它按设计就归"只记不拦"
+    #    （理由见 `_arch_open_questions` 的 docstring：没有编辑架构的接口，
+    #     拦成致命的唯一后果是人也没法改、只能打回重出 = 白加一道门）。
+    #    而它**必须走前缀**：正文里内嵌 `架构.tasks[9].description` 这种路径，
+    #    拿 `"tasks"` 子串去撞就会把它误判成致命 —— 2026-09-27 真机死的就是这一下。
+    #
+    # ⚠️ **为什么用前缀、不用"正文里含 `NEEDS CLARIFICATION`"子串 —— 如实记**：
+    #    **今天这两种写法完全等价**（2026-09-27 核过：除了这条提醒本身，
+    #    没有别的 blocker 行会带上那个标记；把这里换成子串，全量 **2113 条一条不红**）。
+    #    ⇒ **这条差别没有测试钉住，是防将来的选择，别当已验证的加固读。**
+    #    选前缀的理由不是"子串今天会错"，是它**认产地自己写下的标记**、不吃"别人的行里
+    #    恰好没有这个串"这个巧合 —— 这个仓栽过的正是"判据写在产问题的地方之外就静默掉队"
+    #    （见 `split_arch_issues` 的来历）。
+    audit = [i for i in blockers if not i.startswith(ARCH_CLARIFICATION_PREFIX)]
+    fatal = [i for i in audit
              if "tasks" in i or ACCEPTANCE_UNSTATED in i or ARCH_SELF_CONTRADICTION in i]
     return fatal, [i for i in blockers if i not in fatal]
 
@@ -901,7 +930,9 @@ def _arch_open_questions(arch: dict) -> list[str]:
     walk(arch, "架构")
     if not hits:
         return []
-    return [f"架构有 {len(hits)} 处**未澄清**（模型自己标的，等人回答）："
+    # ⚠️ 开头那截**就是 `ARCH_CLARIFICATION_PREFIX`**（人读得通，同时是分类器认它的唯一依据）
+    #    —— 别为了好看改措辞，改了分类器就认不出来，这条又会被 `"tasks" in i` 撞成致命。
+    return [f"{ARCH_CLARIFICATION_PREFIX} {len(hits)} 处（模型自己标的，等人回答）："
             + "；".join(hits[:3])
             + ("…" if len(hits) > 3 else "")]
 
