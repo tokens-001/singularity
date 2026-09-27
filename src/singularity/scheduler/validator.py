@@ -111,7 +111,12 @@ def validate(candidate, gate_required, task_type, changed_files, snap, turn, max
     _base = _diff_base(snap)
     if not _base:
         report.unverified.append("审查基准不可用(快照非 git 型) → diff 类硬规则检查未执行")
-    hard = _hard_diff_rules(changed_files, cwd=cwd or str(config.PROJECT_ROOT), base=_base)
+    # 🔴 **不再兜底成 `config.PROJECT_ROOT`**（2026-09-27）：那行兜底只在 `cwd` 为假值时生效，
+    # 而生产路径（`_exec.py` 的 `cwd = str(wt.path) if wt else str(repo_root)`）恒传真值 ⇒
+    # 现在走不到；但**一旦有新调用点不传 cwd，它当场会跑出反的结论**。拿不到就不做 + 披露。
+    hard = _hard_diff_rules(changed_files, cwd=cwd, base=_base)
+    if hard.get("skipped"):
+        report.unverified.append(f"硬规则未执行: {hard['skipped']}")
     if hard.get("issues"):
         report.hard_rule_issues = hard["issues"]
         for iss in hard["issues"]:
@@ -393,12 +398,23 @@ def _hard_diff_rules(changed_files: list[str], diff_text: str = "", cwd=None, ba
     base: diff 基准 ref（见 _diff_base）。空 = 取不到基准，diff 类检查**不做**，
     由调用方披露 —— 不能静默当作通过。
 
-    Returns: {"issues": [...], "passed": bool}
+    cwd: 任务的工作目录（= worktree）。**空 = 不知道这批改动落在哪 ⇒ 三条检查全都不做**，
+    同样由调用方披露。🔴 **不许拿别的根顶替**（2026-09-27 拆掉 `config.PROJECT_ROOT` 那个兜底）：
+    这三条的前提都是"root 里看得见那批文件"，换个根跑出来的**不是保守，是反的结论** ——
+    2026-09-07 就这么把一个**新建**的 `test_fibonacci.py` 判成"测试文件缺失或已删除"(critical)
+    ⇒ `abort`、任务 blocked，而**同一份报告的 validate 判词是"通过"**
+    （现场：trace `1788793813324`）。
+
+    Returns: {"issues": [...], "passed": bool, "skipped": str}
     """
     import subprocess as _sp
     from pathlib import Path as _Path
     issues = []
-    root = _Path(cwd) if cwd else config.PROJECT_ROOT
+    if not cwd:
+        return {"issues": [], "passed": True, "skipped":
+                "没拿到任务工作目录(cwd) —— 「测试文件缺失 / 安全文件缺失 / 裸 except」"
+                "三条都以「改动就落在 cwd 里」为前提，换个根去跑等于臆测"}
+    root = _Path(cwd)
 
     # 1. 检测被删除的文件 (仅检查 changed_files 中标记为删除的文件)
     for f in changed_files[:]:
@@ -453,7 +469,8 @@ def _hard_diff_rules(changed_files: list[str], diff_text: str = "", cwd=None, ba
             except Exception:
                 continue
 
-    return {"issues": issues, "passed": len([i for i in issues if i["severity"] == "critical"]) == 0}
+    return {"issues": issues, "skipped": "",
+            "passed": len([i for i in issues if i["severity"] == "critical"]) == 0}
 
 
 def _extract_json_obj(text: str):
