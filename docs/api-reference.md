@@ -23,10 +23,20 @@ Base: `http://127.0.0.1:5050`
 | GET | `/api/projects` | 项目列表 |
 | GET | `/api/projects/:id` | 项目详情 |
 | POST | `/api/projects` | 创建，body: `{name, description, template}` |
+| DELETE | `/api/projects/:id` | 删项目（**先取消它的非终态任务**；任务文件不删） |
+| POST | `/api/projects/:id/start` | **立项**（template 档用 `run-phase` 会 409） |
 | POST | `/api/projects/:id/run-phase` | 手动推进阶段 |
 | POST | `/api/projects/:id/gate-confirm` | GATE 审批，body: `{gate, decision}` |
+| POST | `/api/projects/:id/stop` | **停整轮**：先落「停」标记 ⇒ 阶段推进冻住，再给任务发取消 |
+| POST | `/api/projects/:id/resume` | **解除人工叫停**：只解禁令、**不重派任务**（要哪个回来用 `/api/tasks/:id/retry`） |
 
 Phase: `template` → `researching` → `gate1` → `planning` → `gate2` → `executing` → `integrating` → `reviewing` → `gate3` → `delivering` → `done`
+
+🔴 **「停」是与 `phase` 正交的一个维度**（2026-09-27）。停着的时候：`start` / `gate-confirm` /
+`run-phase` 一律 **409**，调度循环也不再推进、不再派它还没起跑的任务。
+两种停：`user_stop`（人按的，落盘，只能 `/resume` 解）· `task_failed`
+（**派生** —— 还有 FAILED/ROLLED_BACK 就停，人一重试自己就没了）。
+项目详情（`GET /api/projects/:id`）多一个 `halt` 字段答"停没停、为什么"。详见 `防御模式.md` §92。
 
 ## Observer
 
