@@ -231,7 +231,12 @@ class TestBudgetAwareLimit:
         assert oa._output_idle_limit(480 + M) == 480.0, "正好够 ⇒ 必须还是 480"
         assert oa._output_idle_limit(600.0) == 480.0, "富余 ⇒ 必须还是 480"
         assert oa._output_idle_limit(480 + M - 1) == 480 - 1, "差一点 ⇒ 开始压"
-        assert oa._output_idle_limit(158.0) == 158.0 - M, "T6 那一发的 cap"
+        # 🔴 **这一格的期望在 2026-09-27 真机之后反过来了**（`round-20260927f`）：
+        #    原来写的是 `_output_idle_limit(158.0) == 158.0 - M`（= 68 秒）——
+        #    而那正是把 T7 杀死的算法（判词 `只想不写 1s（阈值 1s，剩余预算 91s）`）。
+        #    现在**低于判别力下界就不开口**。⇒ 断言反过来。
+        assert oa._output_idle_limit(158.0) == 480.0, \
+            "预算紧到判别力没了 ⇒ 该闭嘴，不该给个 68 秒的阈值去误杀正常调用"
         # 🔴 **这一格是回归判据**（第一版漏了它，被既有的 `test_吐了正文就不掐` 抓红）：
         # 剩余预算连余量都不够 ⇒ **返回 480、行为一字不变**。
         # 要是让它压到 0，阈值就是 0、`_out_idle > 0` 几乎立刻成立
@@ -241,11 +246,39 @@ class TestBudgetAwareLimit:
         assert oa._output_idle_limit(10.0) == 480.0, "不够余量 ⇒ 不变（有回归用例守着）"
         assert oa._output_idle_limit(-5.0) == 480.0, "负数也一样"
 
+    def test_判别力下界(self):
+        """🔴 **有判别力才开口**（2026-09-27 真机 `round-20260927f`）。
+
+        量出来的分界：**正常调用空转 20~222.8s、打转 904~945s** ⇒ 阈值压到
+        222.8 以下分不出好坏，那时掐了只会误杀。实测被咬的一发：
+        `只想不写 1s（阈值 1s，剩余预算 91s）` —— 1 秒没吐字在正常调用里太常见。
+
+        判据：**下面那两条边界**（`刚好 ≥ 下界` 要压、`差一点` 要闭嘴）。
+        变异：把 `if limit < _OUTPUT_IDLE_FLOOR: return _OUTPUT_IDLE_LIMIT` 那句删掉
+        ⇒ 本条红。
+        """
+        M = oa.config.TASK_WRAPUP_MARGIN_S
+        F = oa._OUTPUT_IDLE_FLOOR
+        assert F > 222.8, "下界必须高于实测的正常上限 —— 否则就是拿它去猜"
+        # 正好在下界上 ⇒ **要压**（判别力还在）
+        assert oa._output_idle_limit(F + M) == F, "正好够下界 ⇒ 按预算压，别闭嘴"
+        # 差一点 ⇒ **闭嘴**（这就是 T7 那一发所在的位置）
+        assert oa._output_idle_limit(F + M - 1) == 480.0, "低于下界 ⇒ 不开口"
+        # 真机上真出现过的那几个数，一个都不许再压
+        for left in (91.0, 96.0, 105.0, 145.0, 161.0):
+            assert oa._output_idle_limit(left) == 480.0, \
+                f"剩余预算 {left}s 是老代码给出 1/6/15/55/71 秒的位置 ⇒ 现在必须闭嘴"
+
     def test_预算见底时提前掐断(self, monkeypatch):
         """**接线那半边**：`_lines()` 里真的用了这个阈值。
 
         变异：把那行的 `_output_idle_limit(_budget_left)` 换回 `_OUTPUT_IDLE_LIMIT`
         ⇒ 本条红（会一直等到服务器收工，白等 8 秒）。
+
+        ⚠️ **`_OUTPUT_IDLE_FLOOR` 必须一起放小**（2026-09-27 加下界之后）：
+        有了下界，**能被短测触发的最小阈值是 300 秒**，8 秒的桩怎么等都等不到。
+        ⇒ 这里把**下界这个策略值**剥出去（另有 `test_判别力下界` 单独钉它），
+        本条只钉"接线有没有用那个算出来的阈值"。
         """
         M = oa.config.TASK_WRAPUP_MARGIN_S
         with _OnlyReasoningServer(feed_s=8.0) as srv:
@@ -254,6 +287,7 @@ class TestBudgetAwareLimit:
             ex._deadline_at = time.time() + M + 5.0     # 剩余预算只够"余量 + 5 秒"
             monkeypatch.setattr(oa, "_STALL_TIMEOUT", 30.0)
             monkeypatch.setattr(oa, "_OUTPUT_IDLE_LIMIT", 480.0)   # **那把尺本身没动**
+            monkeypatch.setattr(oa, "_OUTPUT_IDLE_FLOOR", 1.0)     # 见 docstring
             monkeypatch.setattr(oa, "_get_http_client", lambda: httpx.Client())
             t0 = time.time()
             with pytest.raises(oa._NoOutputError):

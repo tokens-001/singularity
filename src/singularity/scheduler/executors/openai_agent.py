@@ -230,6 +230,21 @@ _STALL_TIMEOUT = float(os.environ.get("QIDIAN_STALL_TIMEOUT", "90"))
 #   本轮 25 条里一条都没有，但**只有一轮数据**。撞上了就调大 `QIDIAN_OUTPUT_IDLE_LIMIT`。
 _OUTPUT_IDLE_LIMIT = float(os.environ.get("QIDIAN_OUTPUT_IDLE_LIMIT", "480"))
 
+# ── 这把尺的**判别力下界**（2026-09-27 真机 `round-20260927f` 加）─────────────
+# 🔴 **来历**：上面那组数据说"正常调用空转 20~222.8s、打转 904~945s"，
+#    而 `min(480, 剩余预算 − 余量)` 当预算是 91 秒时给出**阈值 1 秒** ——
+#    `round-f` 的 T7 就死在这上面：判词原话
+#    `只想不写 1s（阈值 1s，剩余预算 91s）：转 30 圈`。
+#    **正常调用"1 秒没吐字"太常见了** ⇒ 那不是提前止损，是把好调用当坏的在杀。
+#    ⚠️ 而且不是末段才有：900s 的任务预算里**剩余 < 570s 的整段**都在塌陷区间。
+# ⇒ **判据（这一条是量出来的，不是拍的）**：阈值低于正常上限 222.8s 就没有判别力
+#    ⇒ **宁可不开口**，让预算那条路（`_over_budget`）按老样子收尾。
+#    300 ≈ 222.8 × 1.35。
+# ⚠️ **代价如实记**：这把尺从此只在「剩余预算 ≥ 390s」时才工作 ——
+#    剩余不到 390s 的那段，"掐了先劝一轮"（`except _NoOutputError` 那支）**不会触发**。
+#    这是**有意的**：那一段它分不出好坏，而 `round-f` 实测那 5 次劝**一次都没救回来**。
+_OUTPUT_IDLE_FLOOR = float(os.environ.get("QIDIAN_OUTPUT_IDLE_FLOOR", "300"))
+
 
 def _output_idle_limit(budget_left: float) -> float:
     """这把尺**这一次调用**真正用的阈值 = `min(480, 剩余预算 − 收尾余量)`。
@@ -257,7 +272,14 @@ def _output_idle_limit(budget_left: float) -> float:
     """
     if budget_left <= config.TASK_WRAPUP_MARGIN_S:
         return _OUTPUT_IDLE_LIMIT
-    return min(_OUTPUT_IDLE_LIMIT, budget_left - config.TASK_WRAPUP_MARGIN_S)
+    limit = budget_left - config.TASK_WRAPUP_MARGIN_S
+    # 🔴 **判别力下界**（来历见 `_OUTPUT_IDLE_FLOOR` 上面那一段）：
+    #    压到 300 秒以下就没有判别力了 ⇒ **不开口**，让预算那条路收尾。
+    #    ⚠️ 返回 480（不是 `inf`）：和上一格同一种写法 —— 阈值 480 而预算只剩
+    #    不到 390 秒，它本来就永远等不到，语义就是"这次不掐"。
+    if limit < _OUTPUT_IDLE_FLOOR:
+        return _OUTPUT_IDLE_LIMIT
+    return min(_OUTPUT_IDLE_LIMIT, limit)
 # 执行器自查的总预算 = orchestrator 的收割上限 − 收尾余量（单一来源在 config）。
 # **为什么执行器要自己看表**：以前它只转 max_turns 轮、一圈表都不看，唯一的上限
 # 就是 orchestrator 到 900s 的**无声收割** —— 被杀就什么都留不下（token/文件/轮次全丢，
