@@ -322,6 +322,34 @@ if __name__ == "__main__":
     finally:
         shutil.rmtree(t6, ignore_errors=True)
 
+    print("── 时间账：等待 / 在跑 / 空档 分得开（2026-09-27 加）──")
+    t7 = Path(tempfile.mkdtemp())
+    try:
+        qd = t7 / ".qidian"
+        (qd / "tasks").mkdir(parents=True)
+        (qd / "partial_usage").mkdir(parents=True)
+        # 现场：创建于 1000 → 1100 才第一次上场（等了 100s）；两次派发各跑
+        # 10s / 20s，中间隔着 5s；被整个重跑 2 遍，内层返工 1 轮。
+        task = {"id": "9001", "created_at": 1000.0, "status": "failed", "error": "x"}
+        (qd / "tasks" / "9001.json").write_text(json.dumps(task))
+        (qd / "partial_usage" / "9001.json").write_text(json.dumps({
+            "dispatches": [{"at": 1110.0, "elapsed": 10.0, "turn": 1, "attempt": 0},
+                           {"at": 1135.0, "elapsed": 20.0, "turn": 2, "attempt": 1}],
+            "tokens": 42}))
+        a = _with_qd(t7, lambda: df._time_account(task))
+        check("等待 = 任务创建 → 首次上场（不是 0）", a and a["wait_s"] == 100.0, f"{a}")
+        check("在跑 = sum(elapsed)，不是墙钟", a and a["run_s"] == 30.0, f"{a}")
+        check("空档 = 两次派发之间的缝（1110 结束 → 1115 再起）",
+              a and a["idle_s"] == 5.0, f"{a}")
+        check("重跑 = max(attempt)+1", a and a["reruns"] == 2, f"{a}")
+        check("内层返工 = turn>1 的条数", a and a["inner"] == 1, f"{a}")
+        # 🔴 本仓最恨的形状：**「查不到」和「没跑过」不许长得一样**
+        check("没有侧车 ⇒ None（**不是** 0 秒）",
+              _with_qd(t7, lambda: df._time_account({"id": "nope", "created_at": 1.0})) is None,
+              "查不到被读成了「跑了 0 秒」")
+    finally:
+        shutil.rmtree(t7, ignore_errors=True)
+
     print("── 守卫：生产 settings.json 一个字都没动 ──")
     check("生产 settings.json 指纹不变",
           _fingerprint() == _fp_before,

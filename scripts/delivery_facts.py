@@ -16,6 +16,8 @@
     .venv/bin/python scripts/delivery_facts.py --last      # 最近一个项目
     .venv/bin/python scripts/delivery_facts.py --rounds 3  # 最近 3 轮摆一起对照
     .venv/bin/python scripts/delivery_facts.py --refs      # 孤儿 pending ref（只数不删）
+    .venv/bin/python scripts/delivery_facts.py --stalls    # 非 done 任务：排队 vs 在跑
+    .venv/bin/python scripts/delivery_facts.py --stalls 1790505124595
 
 只读。不写任何文件、不碰状态机。
 """
@@ -434,11 +436,115 @@ def _salvaged_clues() -> dict[str, dict]:
     return out
 
 
+def _all_tasks() -> list:
+    d = config.QIDIAN_DIR / "tasks"
+    out = []
+    for f in sorted(d.glob("*.json")) if d.exists() else []:
+        t = _j(f)
+        if isinstance(t, dict) and t.get("id"):
+            out.append(t)
+    return out
+
+
+def _time_account(t: dict):
+    """一个任务的时间账。回 None = **查不到**（不是"没跑过"）。
+
+    `dispatches` 在侧车 `.qidian/partial_usage/<id>.json`，不在任务文件里。
+    语义写死在 `_exec.py` 那段注释里，照抄：
+      · `at`      = **这次 dispatch 结束**的时刻
+      · `elapsed` = 它跑了多久          ⇒ 起点 = `at - elapsed`
+      · `turn`    = 内层返工第几圈（同一个 wt 带反馈重派）
+      · `attempt` = `ctx.retry_count`，`max(attempt)+1` = 整个 run() 重跑了几遍
+    """
+    sc = _j(config.QIDIAN_DIR / "partial_usage" / f"{t['id']}.json") or {}
+    ds = [d for d in (sc.get("dispatches") or []) if isinstance(d, dict)]
+    if not ds:
+        return None
+    runs = [float(d.get("elapsed") or 0) for d in ds]
+    first_start = float(ds[0].get("at") or 0) - runs[0]
+    span = float(ds[-1].get("at") or 0) - first_start
+    run_s = sum(runs)
+    created = float(t.get("created_at") or first_start)
+    return {"n": len(ds), "run_s": run_s, "span_s": span,
+            # 派发之间的空档（两次 dispatch 之间，任务没在跑也没在等第一次上场）
+            "idle_s": max(0.0, span - run_s),
+            # ⚠️ **叫「等待」不叫「排队」**：这一段 = 任务被创建 → 第一次上场，
+            # 而**所有任务是在拆解那一刻一次性创建的** ⇒ 它**同时包含
+            # "等依赖满足"和"等 worker 空位"两件事**，盘上分不开
+            # （没有任何地方记"这个任务什么时候变成可跑"）。
+            # 拿它当"排队等死"读之前先看 `depends_on` —— 深层任务天生等待长。
+            "wait_s": max(0.0, first_start - created),
+            "reruns": max(int(d.get("attempt") or 0) for d in ds) + 1,
+            "inner": sum(1 for d in ds if int(d.get("turn") or 0) > 1),
+            "tokens": sc.get("tokens")}
+
+
+def _pct(part: float, whole: float) -> str:
+    return f"{100 * part / whole:3.0f}%" if whole > 0 else "  ? "
+
+
+def stalls_report(pid: str | None = None) -> None:
+    """非 done 任务的时间账：**排队 vs 在跑**。
+
+    为什么单列（2026-09-27）：09-26 那轮两个失败任务的死因**完全不同** ——
+    `T3` 排队 813s（85% 的寿命在等），`T1` 一次没等、811s 全在跑（打转）。
+    **两者的修法没有任何共同点**，而只看"失败了"那一栏根本分不出来。
+    那次的读数是**手工**从 `dispatches` 反推的，这个函数把它固化成一条命令。
+
+    ⚠️ **没有侧车 ≠ 没跑过** —— 侧车跟 token 一个理由，只在慢/超时那条路上落盘。
+    查不到就如实标"查不到"，别读成"它没跑"。
+    """
+    rows = [(t, _time_account(t))
+            for t in (_tasks_of(pid) if pid else _all_tasks())
+            if t.get("status") != "done"]
+
+    if not rows:
+        print("没有非 done 的任务。")
+        return
+
+    print(f"=== 非 done 任务的时间账（{len(rows)} 个）"
+          f"{'' if pid else ' · 全场'} ===")
+    print("判据 `dispatches`：`at`=这次派发**结束**的时刻 · `elapsed`=跑了多久")
+    print("⚠️ 「等待」= 创建 → 第一次上场 —— 它**同时含「等依赖」和「等 worker 空位」**，")
+    print("   盘上没有「任务什么时候变成可跑」这个时刻，分不开 ⇒ 拿它当排队等死读之前")
+    print("   先看 `depends_on`（深层任务天生等待长）。「空档」= 两次派发之间的缝。")
+    print("⚠️ 没有侧车 = **查不到**，不是「没跑过」")
+    print()
+    seen = waiting = spinning = 0
+    for t, a in rows:
+        label = str(t.get("description") or t.get("id"))[:22]
+        if a is None:
+            print(f" {label:22s} {t.get('status'):8s} —— 没有侧车，时间账查不到")
+            print(f"   └ {str(t.get('error'))[:96]}")
+            continue
+        seen += 1
+        total = a["wait_s"] + a["span_s"]
+        if total > 0 and a["run_s"] / total >= 0.8:
+            spinning += 1
+        elif total > 0 and (a["wait_s"] + a["idle_s"]) / total >= 0.5:
+            waiting += 1
+        print(f" {label:22s} {t.get('status'):8s} "
+              f"等待 {a['wait_s']:6.0f}s({_pct(a['wait_s'], total)}) · "
+              f"在跑 {a['run_s']:6.0f}s({_pct(a['run_s'], total)}) · "
+              f"空档 {a['idle_s']:5.0f}s | 派发 {a['n']} 次 · 重跑 {a['reruns']} 遍 · "
+              f"内层返工 {a['inner']} 轮 · {a['tokens'] if a['tokens'] is not None else '?'} token")
+        print(f"   └ {str(t.get('error'))[:96]}")
+
+    print()
+    print(f"小结（只看数得出来的那些，{seen} 个）：")
+    print(f"  · 在跑占比 ≥80% 的 **{spinning}** 个 —— 时间给了它，它没产出（**打转**）")
+    print(f"  · 等待+空档 ≥50% 的 **{waiting}** 个 —— 没轮到它（**但要先排掉等依赖**）")
+    print("⚠️ 这两个数分不开就修不对地方：09-26 那次 T1 在打转、T3 在等（同一轮、同一张图）。")
+
+
 def main() -> int:
     args = sys.argv[1:]
     if not args:
         print(__doc__)
         return 2
+    if args[0] == "--stalls":
+        stalls_report(args[1] if len(args) > 1 else None)
+        return 0
     if args[0] == "--refs":
         refs_report()
         return 0
