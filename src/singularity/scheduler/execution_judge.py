@@ -154,6 +154,16 @@ def _stream_once(client, base_url: str, headers: dict, payload: dict,
                      f'stream_over_budget:fusion:{int(_FUSION_CALL_CAP)}s'
                      f':chars={sum(len(p) for p in parts)}'[:120],
                      key='stream_over_budget')
+        # 🔴 **别让 `finish` 停在空串**（2026-09-27 真机追溯）：空串在下游
+        # `_call_model` 那里**同时表示两件事** —— "服务端正常收尾但没给 finish_reason"
+        # 和 "被我们 600s 掐断"。而下游那句
+        # `if not content and reasoning and finish != "length": return reasoning`
+        # 正是靠"不是 length"来判断"reasoning 里装的是答案、可以当结果回退"。
+        # 掐断时 `finish` 也是空 ⇒ **那道守卫放行了半截思考**，把它当提取结果返回
+        # （盘上证据：`round-20260922` 三条 `stream_over_budget:fusion:...:chars=0`
+        # 紧跟三条 `reasoning_only:<模型>:`，收尾是架构少了 `test_cases`）。
+        # ⇒ 给"我方掐断"一个**能 grep 的明确值**，别再用空串兼职两种含义。
+        finish = "over_budget"
 
     # 融合/合成是系统里**单次最贵**的调用（一次要吐两万字）。以前连用量都没申请，
     # 这条路的开销完全不在统计里。
@@ -246,10 +256,13 @@ def _call_model(prompt: str, model: str, max_tokens: int = 2000,
                 status, content, finish, err, reasoning = _stream_once(
                     client, base_url, headers, payload, project_id=project_id)
             if status == 200:
-                if not content and reasoning and finish != "length":
+                if not content and reasoning and finish not in ("length", "over_budget"):
                     # 模型正常收尾、但把答案落在 reasoning_content 里（执行器同样这么兜）
-                    # → 回退。**只有 finish != "length" 才能这么干**：撞上限时 reasoning
+                    # → 回退。**只有"模型自己收的尾"才能这么干**：撞上限时 reasoning
                     # 是半截思考、不是答案，当结果返回会误导上层。
+                    # ⚠️ 排除名单里**必须有 `over_budget`**（2026-09-27 补）：它是我方
+                    # 600s 那把尺断的，和 `length` 一样属于"半截思考"，只是断的人不同。
+                    # 漏了它 = 上面那段注释说的误导**照旧发生**（盘上真发生过 3 次）。
                     witness.warn('execution_judge',
                                  f'reasoning_only:{model}:{finish}'[:80])
                     return reasoning
