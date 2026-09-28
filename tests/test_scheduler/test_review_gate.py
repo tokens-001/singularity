@@ -448,3 +448,40 @@ def test_three_files_not_flagged_as_unreviewed(monkeypatch, tmp_path):
     v, _ = _run(monkeypatch, tmp_path, pool=[{"model": "r1"}, {"model": "r2"}],
                 changed=("a.py", "b.py", "c.py"))
     assert not any("未审查" in u for u in v.unverified), v.unverified
+
+
+# ── 测试失败的**证据**要能看出"哪条、为什么" ────────────────────
+#
+# 🔴 来历（`round-20260928j` 真机，2026-09-28）：T1 挂了，而落盘的唯一证据是
+# `output[:200]` —— 那 200 字符**正好**是 pytest `-q` 的开头：进度行 + `FAILURES`
+# 标题 + **失败测试名的前半截** ⇒ 存的是一句
+# `tests failed: .......F......  ____ test_common_options_ma`，
+# 测试名断在中间、断言一行都没有。真正的原因从第 264 字符才开始。
+# ⇒ **判了失败，却说不出哪条、为什么**，人只能把产物捞出来重跑一遍。
+
+def test_测试失败时落盘的证据要能看出哪条为什么(monkeypatch, tmp_path):
+    """**接线**：`_review` 得把失败证据**完整**放进 `unverified`。
+
+    把 `failed_output_tail(...)` 换回 `output[:200]` ⇒ 本用例红。
+    ⚠️ 只测 `failed_output_tail` 是没用的 —— 那正是"函数对 ≠ 接线通"。
+    """
+    真机输出 = (
+        ".......F......................                                           [100%]\n"
+        "=================================== FAILURES ===================================\n"
+        "________________ test_common_options_may_precede_the_subcommand ________________\n"
+        "tests/test_cli_parse_args.py:145: in test_common_options_may_precede_the_subcommand\n"
+        "    assert args.format == \"tsv\"\n"
+        "E   AssertionError: assert 'json' == 'tsv'\n"
+        "=========================== short test summary info ============================\n"
+        "FAILED tests/test_cli_parse_args.py::test_common_options_may_precede_the_subcommand\n"
+        "1 failed, 29 passed in 0.73s\n")
+    v, q = _run(monkeypatch, tmp_path, tests={
+        "passed": False, "runner": "pytest", "exit_code": 1, "failures": 1,
+        "output": 真机输出})
+
+    assert v.action == "retry"
+    证据 = " ".join(str(u) for u in v.unverified)
+    assert "test_common_options_may_precede_the_subcommand" in 证据, \
+        f"测试名被截断了 = 说不出是哪条：{证据[:200]}"
+    assert "assert 'json' == 'tsv'" in 证据, "断言行没了 = 说不出为什么"
+    assert "1 failed" in 证据, "汇总行没了 = 说不出几条"

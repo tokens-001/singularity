@@ -318,8 +318,12 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                         + tests_failed_msg(test_result))
                     quality["failure_kind"] = "test_failure"
                     quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.3)
+                    # ⚠️ **取尾巴，不取头**（2026-09-28）：`[:200]` 存下来的正好是
+                    # pytest 的开头（进度行 + `FAILURES` 标题 + **失败测试名的前半截**），
+                    # 断言一行都进不来 ⇒ 真机上只能看到
+                    # `tests failed: .......F......  ____ test_common_options_ma`。
                     validation.unverified.append(
-                        f"tests failed: {test_result.get('output','')[:200]}")
+                        f"tests failed: {val_mod.failed_output_tail(test_result.get('output',''))}")
                     validation.action = "retry"
                     _record_review_failure("test_failure")
                 elif test_result.get("runner") != "none":
@@ -333,8 +337,10 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                     # 带上 runner 自己给的原因 —— 原来这里写死"无可用 runner
                     # (三个都不可用)"，但真相经常是"**没找到测试文件**"（两回事：
                     # 一个查环境、一个查测试在不在）。见 validator.run_project_tests。
+                    # 同一个病（2026-09-28）：pytest 的 `no tests ran` / `Ran 0 tests`
+                    # 也在**末尾**，取头同样取不到。
                     validation.unverified.append(
-                        f"项目测试未执行: {str(test_result.get('output', ''))[:120]}")
+                        f"项目测试未执行: {val_mod.failed_output_tail(str(test_result.get('output', '')), 300)}")
             finally:
                 _ex.shutdown(wait=False)   # 不 join：挂死的调用不能拖住整条流水线
         except Exception as e:

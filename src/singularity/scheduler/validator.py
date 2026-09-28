@@ -276,6 +276,27 @@ def tests_failed_msg(tr: dict) -> str:
     return f"tests failed: {n if n is not None else '?'} failures"
 
 
+def failed_output_tail(output: str, n: int = 600) -> str:
+    """测试失败证据的**尾巴**—— 不是头。**两个消费端共用这一份。**
+
+    🔴 来历（`round-20260928j` 真机，2026-09-28）：T1 挂了，落盘的唯一证据是
+    `output[:200]`，而那 200 字符**正好**是 pytest `-q` 的开头：
+    进度行（74）+ `=== FAILURES ===`（81）+ **失败测试名的前半截**
+    ⇒ 存的是一句 `tests failed: .......F......  ____ test_common_options_ma`，
+    **测试名断在中间、断言一行都没有**。真正的原因（`assert 'json' == 'tsv'`）
+    从第 264 字符才开始 —— **那条 200 的线根本够不到**。
+    ⇒ 判了失败，却说不出**哪条、为什么**，人只能去把产物捞出来重跑一遍。
+
+    **为什么取尾巴**：pytest 把「哪几条失败」放在 `short test summary info`、
+    把「为什么」放在 `FAILURES` 段的断言处 —— **两样都在末尾**。
+    掐头留尾是唯一能把它们留下来的切法。
+    ⚠️ 不是"取大一点"：`output` 本身在 `run_project_tests` 里也有上限，
+    单纯把 200 改成 2000 对长输出照样会丢掉末尾的汇总行。
+    """
+    s = output or ""
+    return s if len(s) <= n else "…（前略）…\n" + s[-n:]
+
+
 def run_project_tests(cwd=None):
     """Run project test suite (pytest->unittest->npm). Returns {passed,total,failures,output,runner}."""
     import os as _os
@@ -304,7 +325,12 @@ def run_project_tests(cwd=None):
     for cmd, name in runners:
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=60, cwd=root)
-            output = (r.stdout + "\n" + r.stderr)[:4000]
+            # 🔴 **截断要掐头留尾**（2026-09-28）。原来只有 `[:4000]`，
+            #    而 pytest 把失败详情和汇总行都放在**末尾** ⇒ 输出一长，
+            #    被砍掉的恰好是唯一有用的那段（`round-20260928j` 那条的放大版）。
+            _raw = r.stdout + "\n" + r.stderr
+            output = (_raw if len(_raw) <= 4000
+                      else _raw[:2000] + "\n…（中略）…\n" + _raw[-2000:])
             low = output.lower()
             # "没找到测试"有好几种说法，都得认成**没找到**、不能当失败：
             # pytest / unittest(3.14 是 "NO TESTS RAN" + rc=5) → "no tests ran"；
@@ -327,8 +353,22 @@ def run_project_tests(cwd=None):
             # 于是"纯 JS 项目 npm 全红"被报成"没跑" —— 既不是"跑过了"也不是"跑挂了"。
             if r.returncode != 0:
                 result["passed"] = False
-                # 这里**只拿到了退出码，数不出失败个数** ⇒ failures 保持 0（不知道就是不知道），
-                # 退出码另存一格，让消费端说真话（见 `tests_failed_msg`）。
+                # 🔴 **数不出失败个数这句原话是错的，2026-09-28 更正。**
+                # 原来这里直接 return，一个正则都不跑；而**退出码非零时 pytest
+                # 照样在末尾打印 `1 failed, 29 passed in 0.73s`** ⇒ 于是
+                # `tests_failed_msg` 永远走"数不出来"那一支，真机现场长这样：
+                # `tests failed: 退出码 1（失败个数没能从输出里数出来）`
+                # —— **数字就在输出里躺着，代码却说自己数不出来**。
+                # （同 §「孤儿探测量的是声明不是实际」那一族：判据没去看真信号。）
+                # ⚠️ 解析失败仍然保持 `failures=0`（不知道就是不知道，不编），
+                #    消费端靠 `tests_failed_msg` 那条 `if code and not n` 分辨。
+                # ⚠️ 计数用的是**整份 output**（已掐头留尾）—— 汇总行在末尾，
+                #    拿头部截断后的串去搜同样会搜不到。
+                mf_nz = _re.search(r'(\d+)\s+failed', output)
+                mp_nz = _re.search(r'(\d+)\s+passed', output)
+                if mf_nz:
+                    result["failures"] = int(mf_nz.group(1))
+                    result["total"] = result["failures"] + (int(mp_nz.group(1)) if mp_nz else 0)
                 result["exit_code"] = r.returncode
                 result["output"] = output
                 result["runner"] = name

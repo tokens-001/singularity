@@ -30,16 +30,119 @@ class TestValidatorV2:
         self._write("test_fail.py", "def test_oops(): assert False")
         r = run_project_tests(cwd=self.root)
         assert not r["passed"]
-        # ⚠️ 判据 2026-09-14 改过：原来断言 `r["failures"] > 0` ——
-        # 而当时 `failures` 里塞的其实是**退出码**（pytest 挂了 rc=1 ⇒ "1 failures"）。
-        # 那是在给"把退出码说成失败数"作证。现在退出码单独存 `exit_code`，
-        # 数不出个数时 `failures` 保持 0（不知道就是不知道）。
         assert r["exit_code"] != 0, "退出码该记下来"
-        assert r["failures"] == 0, "数不出失败个数时不该编一个"
+        # 🔴 **2026-09-28 改判据**。原来这里断言 `failures == 0`，注释写的是
+        # 「数不出失败个数时不该编一个」—— 但**代码压根没去数**：退出码非零那一支
+        # 直接 return，一个正则都不跑。于是那条断言实际钉住的是"**我们不解析**"，
+        # 而不是"我们不编造"—— 两回事，而它挡住的正是这个修复。
+        # 真机现场（`round-20260928j`）：pytest **明明打印了** `1 failed, 29 passed`，
+        # 代码却报「失败个数没能从输出里数出来」⇒ 判了失败却说不出几条、为什么。
+        assert r["failures"] == 1, "pytest 的汇总行里就写着 1 failed，该读出来"
+
+    def test_失败个数来自汇总行而不是退出码(self):
+        """🔴 **这条才是 2026-09-14 那个 bug 的守门人。**
+
+        那次的病是 `result["failures"] = r.returncode` —— 退出码被当成失败数念。
+        修法是把退出码另存一格。但**光断言"1 个失败"挡不住它**：
+        退出码非零那一支恰好也是 1，两边撞在同一个数上，怎么改都绿。
+        ⇒ 喂一个**退出码与失败数必然不等**的输入：3 个失败用例 ⇒ pytest 退 **1**、
+        而失败数是 **3**。谁再把退出码塞进 `failures`，这条当场红。
+        """
+        self._write("test_three.py",
+                    "def test_a(): assert False\n"
+                    "def test_b(): assert False\n"
+                    "def test_c(): assert False\n")
+        r = run_project_tests(cwd=self.root)
+        assert r["exit_code"] == 1, "pytest 三条失败也是退 1"
+        assert r["failures"] == 3, "拿退出码顶替失败数的话这里会是 1"
+
+    def test_数不出来时不许编(self):
+        """反方向：**解析不到就保持 0**，不许拿退出码凑一个数。
+
+        形状与 `test_架构没给_context_时不许硬塞一行假的` 同族 ——
+        "不知道"要能说出来，不许被一个看着合理的数盖住。
+        """
         from singularity.scheduler.validator import tests_failed_msg
-        msg = tests_failed_msg(r)
-        assert "退出码" in msg and "failures" not in msg, \
-            f"措辞又在把退出码说成失败数了：{msg}"
+        msg = tests_failed_msg({"exit_code": 1, "failures": 0})
+        assert "退出码" in msg and "没能从输出里数出来" in msg, \
+            f"解析不到却报了个失败数：{msg}"
+        assert "0 failures" not in msg, "0 个失败是「没数出来」，不是「零个失败」"
+
+    def test_失败证据取的是尾巴不是头(self):
+        """🔴 **这条钉的是 `round-20260928j` 那个真机现场本身。**
+
+        那次落盘的唯一证据是 `output[:200]`，而那 200 字符**正好**是 pytest 的开头：
+        进度行（74）+ `=== FAILURES ===`（81）+ **失败测试名的前半截**
+        ⇒ 存的是一句 `tests failed: .......F......  ____ test_common_options_ma`，
+        **测试名断在中间、断言一行都没有**，而真正的原因从第 264 字符才开始。
+        ⇒ 判了失败，却说不出**哪条、为什么**。
+        **判据**：喂一份**逐字抄的真机输出**，断言留下的是断言行和汇总行，
+        并且**失败测试名的完整拼写**在里面（`test_common_options_ma` 那种半截不算）。
+        """
+        from singularity.scheduler.validator import failed_output_tail
+        真机输出 = (
+            ".......F......................                                           [100%]\n"
+            "=================================== FAILURES ===================================\n"
+            "________________ test_common_options_may_precede_the_subcommand ________________\n"
+            "tests/test_cli_parse_args.py:145: in test_common_options_may_precede_the_subcommand\n"
+            "    assert args.format == \"tsv\"\n"
+            "E   AssertionError: assert 'json' == 'tsv'\n"
+            "=========================== short test summary info ============================\n"
+            "FAILED tests/test_cli_parse_args.py::test_common_options_may_precede_the_subcommand\n"
+            "1 failed, 29 passed in 0.73s\n")
+        out = failed_output_tail(真机输出)
+        assert "test_common_options_may_precede_the_subcommand" in out, \
+            "测试名必须是完整拼写 —— 断在中间等于没说是哪条"
+        assert "assert 'json' == 'tsv'" in out, "断言行没了 = 说不出为什么"
+        assert "1 failed, 29 passed" in out, "汇总行没了 = 说不出几条"
+
+    def test_长输出掐头留尾也要留住汇总行(self):
+        """`run_project_tests` 里那个 4000 字符上限：**不许只留头**。
+
+        pytest 把失败详情和汇总行都放在**末尾** ⇒ 只 `[:N]` 的话，
+        输出一长，被砍掉的恰好是唯一有用的那段。
+        ⚠️ **必须真跑 `run_project_tests`**，不能把切片式子抄进测试里再断言它 ——
+        抄一份等于测我这个测试自己，改生产代码它照样绿（"替身喂的是我以为的行为"）。
+        """
+        # 一个会失败、且在失败前吐 1500 行 stdout 的用例 ⇒ pytest 把它放进
+        # FAILURES 段 ⇒ 整份输出远超 4000 字符，而汇总行在最末尾。
+        self._write("test_noisy.py",
+                    "def test_noisy():\n"
+                    "    for i in range(1500):\n"
+                    "        print('noise line %d' % i)\n"
+                    "    assert False\n")
+        r = run_project_tests(cwd=self.root)
+        assert not r["passed"]
+        assert len(r["output"]) > 4000, "这份输出本来就没超上限，那这条测不到东西"
+        assert "1 failed" in r["output"], "掐头留尾没生效 ⇒ 末尾的汇总行被砍了"
+        assert r["failures"] == 1, "汇总行在，就该数出来"
+
+    def test_失败证据取的是尾巴不是头(self):
+        """🔴 **这条钉的是 `round-20260928j` 那个真机现场本身.**
+
+        那次落盘的唯一证据是 `output[:200]`，而那 200 字符**正好**是 pytest 的开头：
+        进度行（74）+ `=== FAILURES ===`（81）+ **失败测试名的前半截**
+        ⇒ 存的是一句 `tests failed: .......F......  ____ test_common_options_ma`，
+        **测试名断在中间、断言一行都没有**，而真正的原因从第 264 字符才开始。
+        **判据**：喂一份**逐字抄的真机输出**，断言留下的是断言行和汇总行，
+        且失败测试名的**完整拼写**在里面（`test_common_options_ma` 那种半截不算）。
+        """
+        from singularity.scheduler.validator import failed_output_tail
+        真机输出 = (
+            ".......F......................                                           [100%]\n"
+            "=================================== FAILURES ===================================\n"
+            "________________ test_common_options_may_precede_the_subcommand ________________\n"
+            "tests/test_cli_parse_args.py:145: in test_common_options_may_precede_the_subcommand\n"
+            "    assert args.format == \"tsv\"\n"
+            "E   AssertionError: assert 'json' == 'tsv'\n"
+            "=========================== short test summary info ============================\n"
+            "FAILED tests/test_cli_parse_args.py::test_common_options_may_precede_the_subcommand\n"
+            "1 failed, 29 passed in 0.73s\n")
+        out = failed_output_tail(真机输出)
+        assert "test_common_options_may_precede_the_subcommand" in out, \
+            "测试名必须是完整拼写 —— 断在中间等于没说是哪条"
+        assert "assert 'json' == 'tsv'" in out, "断言行没了 = 说不出为什么"
+        assert "1 failed, 29 passed" in out, "汇总行没了 = 说不出几条"
 
     def test_run_tests_no_tests(self):
         r = run_project_tests(cwd=self.root)
