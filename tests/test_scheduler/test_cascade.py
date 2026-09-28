@@ -129,6 +129,20 @@ class TestDecideCascade:
             f"反馈里没有失败的测试名 —— 模型只能盲改：{fb[:300]}"
         assert "assert 'json' == 'tsv'" in fb, "反馈里没有断言 —— 说不出为什么失败"
 
+        # 🔴 **非要一段"比上限长"的输入不可**（2026-09-28 变异复核当场抓到）：
+        # 上面那份真机输出才 500 来字符，而反馈那一段的上限是 1500
+        # ⇒ `out[:1500]` 返回的就是**整串**，**取头和取尾结果一模一样**
+        # ⇒ 把实现改成 `output[:1500]`，上面两条断言**照样绿**。
+        # ⚠️ **同一个坑这一晚踩了两次**（`test_validator` 那条"取尾巴"也是这个病）
+        # —— 判据是：**凡是断言"取的是尾"，输入就必须比阈值长**，
+        # 否则它测的是"这段被留下了"，不是"留下的是尾"。
+        long_out = ("noise line\n" * 400) + self.真机输出
+        fb2 = self._retry_with_test_result(
+            {"passed": False, "runner": "pytest", "exit_code": 1, "failures": 1,
+             "output": long_out})
+        assert "assert 'json' == 'tsv'" in fb2, "尾巴被丢了 = 取的是头"
+        assert "noise line" not in fb2, "头部那段噪声还在 = 取的是头不是尾"
+
     def test_测试通过时不许往反馈里塞输出(self):
         """反方向：**没失败就别塞**。
 
