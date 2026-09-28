@@ -243,7 +243,7 @@ class TestBudgetAwareLimit:
         # ⇒ **连正文一直在长的正常调用也照杀**。没有余量可劝时，那劝不动，
         # 就该让预算那条路（`_over_budget`）按老样子收尾。
         assert oa._output_idle_limit(M) == 480.0, "正好等于余量 ⇒ 不变"
-        assert oa._output_idle_limit(10.0) == 480.0, "不够余量 ⇒ 不变（有回归用例守着）"
+        assert oa._output_idle_limit(10.0) == 480.0, "不够余量 ⇒ 不变"
         assert oa._output_idle_limit(-5.0) == 480.0, "负数也一样"
 
     def test_判别力下界(self):
@@ -268,6 +268,35 @@ class TestBudgetAwareLimit:
         for left in (91.0, 96.0, 105.0, 145.0, 161.0):
             assert oa._output_idle_limit(left) == 480.0, \
                 f"剩余预算 {left}s 是老代码给出 1/6/15/55/71 秒的位置 ⇒ 现在必须闭嘴"
+
+    def test_预算不够余量时那格还承重吗(self, monkeypatch):
+        """🔴 **2026-09-28 补的钉子** —— 上面那句"不够余量 ⇒ 不变"原来**没有东西守着**。
+
+        ## 它是怎么变成"没人守"的
+
+        `b9571003`（09-27 上午）加这一格时，变异复核**确实是红的**：
+        删掉它 ⇒ 阈值算成 0 ⇒ 既有那条 `test_吐了正文就不掐` 当场红。
+        **但同一天下午 `d3972c61` 加了 `_OUTPUT_IDLE_FLOOR = 300`**，而
+        `budget_left ≤ 余量` ⇒ 算出来的 `limit` **恒 ≤ 0** ⇒ `0 < 300` 恒成立
+        ⇒ **下界把这一格整个盖住了**。
+        ⇒ 从那以后，**删掉这一格，全量测试一条都不红**（2026-09-28 实测：9 passed）。
+
+        ## 那它现在是死代码吗？—— 不是
+
+        把下界调低（`QIDIAN_OUTPUT_IDLE_FLOOR` 是环境变量，文档写着"真机数据到了再调"）
+        它就露出来：下界 = 0 时 `limit = 0`，`0 < 0` 为假 ⇒ 下界兜不住 ⇒
+        `min(480, 0) = 0` ⇒ **阈值 0 秒，连正文一直在长的正常调用也照杀** ——
+        正是 `b9571003` 要修的那个 bug。
+
+        ⇒ 它是**配置相关的兜底**，不是冗余。这条测试就是让它变成"有人守的"。
+        判据：删掉 `if budget_left <= config.TASK_WRAPUP_MARGIN_S:` 那两行 ⇒ 本条红。
+        """
+        M = oa.config.TASK_WRAPUP_MARGIN_S
+        monkeypatch.setattr(oa, "_OUTPUT_IDLE_FLOOR", 0.0)   # 下界兜不住的那种配置
+        assert oa._output_idle_limit(10.0) == 480.0, \
+            "下界兜不住时这一格必须自己顶上 —— 否则阈值成了 0 秒，好调用被照杀"
+        assert oa._output_idle_limit(-5.0) == 480.0, "负数同理"
+        assert oa._output_idle_limit(M) == 480.0, "正好等于余量同理"
 
     def test_预算见底时提前掐断(self, monkeypatch):
         """**接线那半边**：`_lines()` 里真的用了这个阈值。
