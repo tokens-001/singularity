@@ -223,6 +223,24 @@ class TestBuildEffectiveTask:
                                        is_planner=False)
         assert "核心任务" in result
 
+    def test_首轮必须带上自己跑测试那条底线(self, monkeypatch):
+        """**接线**：第 7 条「写了测试就要真跑一遍」要真的进到 prompt 里。
+
+        🔴 来历（`round-20260928j` 真机，2026-09-28）：T1 写了 `tests/test_cli_parse_args.py`，
+        而那 8 次工具调用**只跑过 `python --version` / `pytest --version`** ——
+        **它从没运行过自己写的测试**，而那条测试恰好是红的 ⇒ 任务失败。
+        （原来第 4 条只有一句笼统的"改完验证"，没说要跑测试。）
+
+        ⚠️ **断言的是"进到最终 prompt 里"，不是"常量里有这句话"** ——
+        常量写了不注入 = 白写（本仓最爱的形状：写在那儿、没人读）。
+        删掉 `_build_effective_task` 里那句注入 ⇒ 本用例红。
+        """
+        monkeypatch.setattr("singularity.scheduler._exec._inject_memory", lambda d: "")
+        monkeypatch.setattr("singularity.scheduler._exec._build_project_context", lambda t: "")
+        result = _build_effective_task(_task(description="核心任务"), turn=1, feedback="",
+                                       is_planner=False)
+        assert "真跑一遍" in result, "「自己跑测试」那条没进 prompt —— 写了等于没写"
+
     def test_turn2_no_memory_injection(self, monkeypatch):
         """turn>1 不注入记忆。"""
         called = []
