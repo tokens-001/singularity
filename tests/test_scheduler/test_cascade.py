@@ -265,3 +265,50 @@ if __name__ == "__main__":
     # AttributeError；而 pytest 不走 `__main__`，所以它**早就悄悄坏了、没人发现**
     # （2026-09-14 审计读到即坐实）。方法现在还要吃 `monkeypatch` 夹具、脚本里给不了，
     # 索性去掉这一段——那两条用例交给 pytest 跑。
+
+
+# ── 第二跳：反馈要一路进到**派发出去的 prompt** ────────────────
+#
+# 🔴 2026-09-29 查出来的缺口：`_decide_cascade` 的返回值有测试钉着（上面三条），
+# 但那是**半条** —— 它离"模型看见什么"还隔着一跳：
+#   `_exec.run` 把返回值当 `feedback=` 传给 `disp_mod.dispatch(...)`
+#   → `_dispatch_exec.dispatch` 拼成 `[上一轮校验反馈, 请据此修正]` 那一段。
+# **全仓没有一个测试碰过那一跳**（`grep -rn 上一轮校验反馈 tests/` = 空）。
+# ⇒ 今晚这条修复（失败输出进反馈）原本只证明到"函数返回对了"，
+#    **没有任何东西保证它真的送到模型手里**。这正是本仓的"函数对 ≠ 接线通"。
+
+def test_反馈要一路进到最终_prompt(monkeypatch):
+    """**接线第二跳**：`_decide_cascade` 给的反馈，必须出现在真正派发的那份 prompt 里。
+
+    删掉 `_dispatch_exec` 里那段 `if feedback:` 拼接 ⇒ 本用例红。
+    """
+    from singularity.scheduler import _dispatch_exec as dx
+
+    class _R:
+        raw_output = "ok"
+        error_kind = ""
+        error = ""
+        token_count = 1
+        tool_events = []
+
+    抓到 = {}
+    monkeypatch.setattr(dx, "pick_agent_fallback_chain",
+                        lambda *a, **k: [{"model": "m1", "type": "claude-cli"}])
+    monkeypatch.setattr(dx, "_EXECUTOR_BY_TYPE", {"claude-cli": object}, raising=False)
+    monkeypatch.setattr(
+        dx, "_run_executor",
+        lambda cls, cfg, full_task, task_id, level, **k:
+            (抓到.__setitem__("task", full_task), _R())[1])
+
+    # 反馈就是 `_decide_cascade` 会产出的那种（含真机那份输出的尾巴）
+    反馈 = ("【测试失败输出】（**末尾**是失败详情；照着它改，不要猜）\n"
+          "    assert args.format == \"tsv\"\n"
+          "E   AssertionError: assert 'json' == 'tsv'\n"
+          "1 failed, 29 passed in 0.73s")
+    dx.dispatch("原始任务描述", "any", "t1", {}, feedback=反馈)
+
+    发出 = 抓到.get("task", "")
+    assert "原始任务描述" in 发出, "原任务描述没了"
+    assert "assert 'json' == 'tsv'" in 发出, \
+        f"反馈**没拼进派发出去的 prompt** —— 模型还是看不见哪条、为什么：\n{发出[:300]}"
+    assert "[上一轮校验反馈" in 发出, "那一段的抬头没了"
