@@ -136,12 +136,15 @@ class TestDecideCascade:
         # ⚠️ **同一个坑这一晚踩了两次**（`test_validator` 那条"取尾巴"也是这个病）
         # —— 判据是：**凡是断言"取的是尾"，输入就必须比阈值长**，
         # 否则它测的是"这段被留下了"，不是"留下的是尾"。
-        long_out = ("noise line\n" * 400) + self.真机输出
+        # ⚠️ 哨兵必须放在**开头**、且唯一 —— 一开始我断言的是
+        # `"noise line" not in fb2`，**那是错的**：掐头留尾本来就会带上一截尾巴上的噪声。
+        # 能判别"取的是头还是尾"的，只有"**开头那个东西在不在**"。
+        long_out = "头部的哨兵_取尾就该被切掉\n" + ("noise line\n" * 400) + self.真机输出
         fb2 = self._retry_with_test_result(
             {"passed": False, "runner": "pytest", "exit_code": 1, "failures": 1,
              "output": long_out})
         assert "assert 'json' == 'tsv'" in fb2, "尾巴被丢了 = 取的是头"
-        assert "noise line" not in fb2, "头部那段噪声还在 = 取的是头不是尾"
+        assert "头部的哨兵_取尾就该被切掉" not in fb2, "头部的哨兵还在 = 取的是头不是尾"
 
     def test_测试通过时不许往反馈里塞输出(self):
         """反方向：**没失败就别塞**。
