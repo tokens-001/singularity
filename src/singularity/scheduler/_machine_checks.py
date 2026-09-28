@@ -310,8 +310,11 @@ def declared_files_text(tdef) -> str:
     同 `test_架构没给_context_时不许硬塞一行假的` 立下的规矩。
 
     ⚠️ 末尾那句"出口"（契约不够用就在自己的产出文件里定义）**是有意的**：
-    T4 那次扩契约是**被迫**的（它的验收标准要 p50/p95，而契约里的 `GroupBucket`
-    只有计数）—— **没有出口，它就只能违反边界**。
+    T4 那次确实没有出口 —— **没有出口，它就只能违反边界**。
+    🔴 **但"契约装不下"这个当初的理由，2026-09-28 查实是错的、已更正**：
+    架构的 `data_model` 里 `GroupBucket.metrics: dict[str,float]` 本来就写着，
+    T4 要的 `p50/p95` 也逐字列在 `RunConfig.metrics` 的约束里 ⇒ **装得下**。
+    真正断的是**转发**（`data_model` 全仓零消费者，见 `data_model_text`）。
     """
     files = tdef.get("estimated_files") if isinstance(tdef, dict) else None
     if not isinstance(files, list):
@@ -321,6 +324,62 @@ def declared_files_text(tdef) -> str:
         return ""
     return (f"你的产出文件（架构声明，只许改这些）: {names}\n"
             f"契约不够用时，在你自己的产出文件里定义你自己的类型，不要改别人的文件。\n")
+
+
+def data_model_text(data_model) -> str:
+    """把架构的 `data_model` 拍成任务描述里的一段。**唯一产出点，别各处再写一份**。
+
+    🔴 **为什么必须有这一段**（`round-20260928i` 真机，2026-09-28 查实）：
+    架构把 `data_model` 声明得**又全又准**（六个实体逐字段写全，`GroupBucket` 带着
+    `metrics`、`RunConfig` 的约束里逐字列了 `count/sum/avg/min/max/p50/p95`），
+    而**它从没进过任何任务的提示词** —— 全仓 `grep 'get("data_model")'` **0 命中**，
+    唯一的校验是 `_validate_architecture` 那句"这个键在不在"，**不问够不够用**。
+    两条产地也都不转发它（`decompose_architecture` 只拼 modules/api_contracts/constraints；
+    `_exec_context._build_project_context` 只取 `tasks[].acceptance`）。
+
+    ⇒ **T1 拿到的原话是「按 `data_model` 定义 … 六个 frozen dataclass」，
+      而 `data_model` 不在它的上下文里** ⇒ 它只能自己发明
+      ⇒ 名字全对不上（`buckets` vs 架构的 `groups`、`key: str` vs `keys: list[str]`、
+      `path` vs `inputs`）⇒ `models.py` 被 T1/T2/T4 **三个人**改 ⇒ 冲突。
+    🔵 反证：T4 **从没看过架构**，却独立推出了 `dropped_by_filter` / `groups` 这两个
+      **架构里的原名**（它的任务描述里漏了一个 `groups` 过去）—— 能推到的都推到了，
+      **唯一没推到的是那个被明确要求"按 data_model 定义"的任务**。
+
+    ⇒ 形状与 `declared_files_text` **逐字同形**：*声明得好好的，从没送到干活的人手里*。
+    不是"没声明"，是**没送到**。
+
+    ⚠️ **架构没给就返回空串**（整段不出），**不许硬塞一段假的**
+    —— 同 `test_架构没给_context_时不许硬塞一行假的` 立下的规矩。
+
+    ⚠️ **这里只说"契约长什么样"，不说"归谁、能不能改"** —— 那是
+    `declared_files_text` 的活（它已经写了"只许改这些 / 不要改别人的文件"）。
+    两段各管一件事，别重复。
+    """
+    entities = data_model.get("entities") if isinstance(data_model, dict) else None
+    if not isinstance(entities, list):
+        return ""
+    lines = []
+    for e in entities:
+        if not isinstance(e, dict):
+            continue
+        name = str(e.get("name") or "").strip()
+        fields = e.get("fields")
+        if not name or not isinstance(fields, list):
+            continue
+        fs = []
+        for f in fields:
+            if not isinstance(f, dict):
+                continue
+            fn = str(f.get("name") or "").strip()
+            ft = str(f.get("type") or "").strip()
+            if fn:
+                fs.append(f"{fn}: {ft}" if ft else fn)
+        if fs:
+            lines.append(f"  {name}: " + ", ".join(fs))
+    if not lines:
+        return ""
+    return ("[数据契约] 本项目的共享数据契约（架构声明，实现后即冻结，跨模块只经它传递）:\n"
+            + "\n".join(lines))
 
 
 def acceptance_coverage(acceptance) -> tuple[int, int]:

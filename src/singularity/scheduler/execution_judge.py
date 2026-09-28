@@ -1156,6 +1156,16 @@ def decompose_architecture(arch_json: dict) -> list[dict]:
 
         # 提取上下文片段
         ctx_parts = []
+        # 🔴 **数据契约排在最前**（2026-09-28）：它是跨模块通信的唯一载体，
+        # 其他的（模块职责 / 接口 / 约束）都靠它才说得通。见
+        # `_mck.data_model_text` 的 docstring —— 这段原来**根本没转发过**
+        # （`grep 'get("data_model")'` 全仓 0 命中），而 T1 的任务描述里写着
+        # "按 `data_model` 定义六个 frozen dataclass" ⇒ 它只能自己发明名字。
+        # 放在这里 = **一次改动覆盖两个入口**（`_workflow_phases._run_execution`
+        # 读的是 `decompose_architecture` 落盘的 `.executable_tasks.json`）。
+        _dm = _mck.data_model_text(arch_json.get("data_model"))
+        if _dm:
+            ctx_parts.append(_dm)
         # 关联模块
         for mod_name in t.get("related_modules", []):
             if mod_name in modules:

@@ -108,3 +108,66 @@ def test_check_是别的垃圾类型也不许炸():
         out = decompose_architecture(arch)
         assert len(out) == 1, f"check={junk!r} 把拆解带崩了"
         assert "机器检查会真跑" not in out[0]["context_snippet"]
+
+
+# ── 数据契约也要送到干活的人手里（2026-09-28）────────────────────────────
+# 🔴 `round-20260928i` 真机：架构把 `data_model` 声明得**又全又准**，而**它从没进过
+# 任何任务的提示词** —— 全仓 `grep 'get("data_model")'` **0 命中**。T1 拿到的原话是
+# 「按 `data_model` 定义 … 六个 frozen dataclass」，**而 `data_model` 不在它手里**
+# ⇒ 它只能自己发明 ⇒ 名字全对不上（`buckets` vs 架构的 `groups`、`key` vs `keys`、
+# `path` vs `inputs`）⇒ `models.py` 被 T1/T2/T4 **三个人**改 ⇒ 合并冲突 ⇒ 静默停 47 分钟。
+# ⇒ 与 `estimated_files` 那条**逐字同形**：不是"没声明"，是**没送到**。
+# ⚠️ 断言一律用**这一段独有的**字串（`GroupBucket` / `dict[str, float]`）——
+#    用通用词会连约束正文一起命中，那就变成"变不变异都绿"（本仓栽过）。
+
+
+def _arch_with_contract():
+    """在最小架构上挂一份数据模型（形状抄真机那轮的原样）。"""
+    arch = _arch()
+    arch["data_model"] = {"entities": [{
+        "name": "GroupBucket",
+        "fields": [
+            {"name": "keys", "type": "list[str]"},
+            {"name": "count", "type": "int"},
+            {"name": "metrics", "type": "dict[str, float]"},
+        ],
+    }]}
+    return arch
+
+
+def test_数据契约要进上下文():
+    """**这条就是真机那个合并冲突的病根。**
+
+    判据钉的是**接线**（`decompose_architecture` 真把它拼进 `context_snippet`），
+    不是 `data_model_text` 本身 —— 只测那个函数的话，**删掉 `ctx_parts.append` 照样绿**。
+    """
+    ctx = decompose_architecture(_arch_with_contract())[0]["context_snippet"]
+    assert "GroupBucket" in ctx, (
+        f"契约类型没进上下文 ⇒ 干活的人只能自己发明名字（T1 就是这么错的）：\n{ctx}")
+    assert "dict[str, float]" in ctx, (
+        f"只有类型名没有字段，等于没给 —— 字段名才是撞车的那个：\n{ctx}")
+
+
+def test_架构没给_data_model_时不硬塞一段假的():
+    """边界：没有 `data_model` ⇒ **整段不出**，别留一句空的"[数据契约]"。
+
+    同 `test_没有_check_时不硬塞一行空的` 那条立下的规矩。
+    """
+    ctx = decompose_architecture(_arch())[0]["context_snippet"]
+    assert "[数据契约]" not in ctx, f"架构没给却写了假契约：\n{ctx}"
+
+
+def test_data_model_长得再脏也不许炸():
+    """同一格的其它长相：不是 dict / 没有 entities / 实体缺 fields / 字段缺 name。
+
+    ⚠️ 别学 `check` 那次（2026-09-18 真机：一条散文 check 把**整条建任务流程**崩了，
+    项目永远拿不到任务）—— 拆解器对脏数据一律"当没给"，不许抛。
+    """
+    for junk in (None, "无持久化", [], {"entities": "nope"},
+                 {"entities": [{"name": "X"}, {"fields": [{"name": "a"}]}, 7]}):
+        arch = _arch()
+        arch["data_model"] = junk
+        out = decompose_architecture(arch)
+        assert len(out) == 1, f"data_model={junk!r} 把拆解带崩了"
+        assert "[数据契约]" not in out[0]["context_snippet"], (
+            f"data_model={junk!r} 什么都不剩，不该出一段空契约：\n{out[0]['context_snippet']}")
