@@ -296,9 +296,11 @@ def test_未澄清只记不致命_别把它做成死结():
 
     判据：把那句排除整个删掉 ⇒ **只有 (b) 红**（(a) 的路径里没有 `tasks`，原来就一直绿着）。
 
-    ⚠️ **不要拿"子串版"当变异**：那个改法**今天等价、全量 2113 条一条不红**（核过）。
-    原因是除了这条提醒本身，没有别的 blocker 行会带 `NEEDS CLARIFICATION` ——
-    所以这条差别**没有测试钉住**，别以为它被验过。
+    ⚠️ **不要拿"子串版"当变异**：2026-09-27 核过，那个改法**当时等价、全量 2113 条
+    一条不红**（原因是除这条提醒本身，没有别的 blocker 行会带那个标记）。
+    ✅ **2026-09-28：这条差别已经单独钉住了** —— 见下面
+    `test_未澄清的免票只发给产地那一行`。⇒ 现在换子串版**会红一条**，
+    但那一条红的是**契约**（免票只发给产地那一行），不是这条测试。
     """
     # ⚠️ **从 `workflow` 导**（不是 `_workflow_phases`）：这条路径顺带钉住它进了 `__all__`
     #    —— 我第一版漏加，测试全绿而 `from workflow import ...` 会 ImportError
@@ -325,6 +327,48 @@ def test_未澄清只记不致命_别把它做成死结():
         fatal, _ = classify_arch_issues(audit)
         assert not any("未澄清" in i for i in fatal), \
             f"{where}: 归了致命档 ⇒ 人也没法改（没有编辑架构的接口）⇒ 死结: {fatal}"
+
+
+def test_未澄清的免票只发给产地那一行():
+    """🔴 **上一条自己写明"没有测试钉住"的就是这里 —— 这条把它钉上。**
+
+    `classify_arch_issues` 摘掉"未澄清"用的是 `startswith`。另一种写法是子串
+    `ARCH_CLARIFICATION_PREFIX in i`，**今天两者完全等价**（核过：换子串版全量
+    一条不红）。别名写明的性质只有一条：
+
+        **免票只发给"产地（`_arch_open_questions`）自己写下的那一行"，
+        不发给"别人的行里恰好出现了这个串"。**
+
+    后者正是本仓栽过的「判据写在产问题的地方之外，就静默掉队」
+    （见 `split_arch_issues` 的来历）。选前缀的理由不是"子串今天会错"，
+    是它**不吃"别人的行里恰好没有这个串"这个巧合**。
+
+    ⚠️ **输入是构造的，不是观测到的 —— 别把它读成"已经救过一轮"**：
+    今天全仓**没有**第二个产商会产出"含这个串但不在开头"的 blocker 行。
+    这条钉的是**契约**。
+
+    判据：把 `startswith` 换成 `in` ⇒ **只有第二条断言红**（第一条两边都过）。
+    """
+    from singularity.scheduler.workflow import classify_arch_issues
+    from singularity.scheduler._workflow_phases import (
+        _arch_open_questions, ARCH_CLARIFICATION_PREFIX)
+
+    # ① 产地写下的那一行 → 只记（放行）。它正文里**正好**含 `架构.tasks[0]` ——
+    #    那正是它要免疫 `"tasks" in i` 的原因，摘不掉它就会被判致命。
+    produced = _arch_open_questions(
+        {"tasks": [{"description": "实现语言？ NEEDS CLARIFICATION"}]})
+    assert produced and produced[0].startswith(ARCH_CLARIFICATION_PREFIX), produced
+    fatal, noted = classify_arch_issues(produced)
+    assert fatal == [] and noted == produced, (fatal, noted)
+
+    # ② **不是产地写的**、但正文里含同一个串 + `架构.tasks[9]` 的行
+    #    → 必须仍然进致命档。拿子串判的话它会被当成①一并放走。
+    quoted = (f"任务 T9 的验收引用了「{ARCH_CLARIFICATION_PREFIX}」这一行，"
+              "而架构.tasks[9] 没人回答")
+    fatal, _noted = classify_arch_issues([quoted])
+    assert fatal == [quoted], (
+        "正文里恰好含这个串的行被当成「产地那一行」放走了 ⇒ 该拦的没拦："
+        f"{fatal}")
 
 
 def test_另一条致命的还在_排他没把别人一起放走():
