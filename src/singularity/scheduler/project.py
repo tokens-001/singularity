@@ -790,7 +790,16 @@ def failed_task_ids(proj) -> list[str]:
 
 
 def halt_state(proj) -> dict:
-    """**「这个项目停没停」的唯一判据** —— 阶段推进 / HTTP 详情 / 界面都读它。
+    """**「这个项目停没停」的唯一判据** —— 阶段推进 / HTTP 详情都读它。
+
+    🔴 **别写"界面也读它" —— 那是一句假话**（2026-09-27 真机撞出来、09-28 核实后更正）：
+    全仓**前端源码里 `halt` 出现 0 次**（`grep -rn halt src/singularity/web/frontend/src/` 空）。
+    界面看的是 `info.issues`（`GatePanel.tsx` 的 `ProjectIssues`，空就 `return null`）。
+    ⚠️ **这个错曾经有过后果**：`project_resume` 原来**无条件**撤 issue ⇒
+    `halt` 仍报 `halted:true`，而界面读的 `issues` 被清空了 ⇒
+    **界面看着项目没事、其实它还停着**。修法已落在 `_api_projects.project_resume`
+    （只按本函数说的撤票）。⇒ **界面对"停"的可见性是由 `issues` 代理的**，
+    要让它看见"停"，**得往 `issues` 里写**，不是指望它读这个函数。
 
     两种停，来源不同、解除方式也不同，所以一个函数两个分支：
 

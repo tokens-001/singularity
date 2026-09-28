@@ -92,6 +92,36 @@ class TestWhitelist:
         ok, why = mc.validate_check({"argv": argv, "expect_exit": 0})
         assert not ok, f"必须拒绝: {argv}"
 
+    # ── node 也吃代码（2026-09-28）────────────────────────────────────
+    #
+    # 🔴 规则 2 原来只落在 `python3` 上，而 `node` 也在白名单里、**没有任何参数层检查**
+    # ⇒ `node -e '<任意代码>'` 直接过闸，而 `python3 -c` 是拒的。
+    # 严重度**低**（`npm run` 本来就在跑模型写的脚本，不增加新能力），
+    # 但那是「**规则写了、只对一个解释器执行**」—— 单边落地正是本仓栽过的形状。
+
+    @pytest.mark.parametrize("argv", [
+        ["node", "-e", "require('fs').rmSync('/', {recursive:True})"],
+        ["node", "--eval", "x"],
+        ["node", "-p", "process.env"],
+        ["node", "--print", "1"],
+    ])
+    def test_node_内联代码必须拒绝(self, argv):
+        """判据：把 `validate_check` 里 `if prog == "node":` 那一段删掉 ⇒ 这条红。"""
+        ok, why = mc.validate_check({"argv": argv, "expect_exit": 0})
+        assert not ok, f"必须拒绝: {argv}"
+
+    @pytest.mark.parametrize("argv", [
+        ["node", "--test"],
+        ["node", "tests/x.test.js"],
+        ["node", "--test", "tests/"],
+        # 🔴 **反例里的反例**：`-p` 在**脚本名之后**是脚本自己的参数，不是 node 的选项
+        # ⇒ 全参数扫会误伤一整类正常的 `node <file>` 调用。解析必须停在第一个非选项参数。
+        ["node", "script.js", "-p", "8080"],
+        ["node", "-r", "./x.js", "main.js"],
+    ])
+    def test_node_跑文件放行(self, argv):
+        assert mc.validate_check({"argv": argv, "expect_exit": 0})[0], argv
+
     def test_白名单文本从代码现算(self):
         """`argv0_whitelist_text()` 是**唯一**的名单描述 —— 加一个程序，
         文本里就得出现，**不需要改任何提示词**。"""

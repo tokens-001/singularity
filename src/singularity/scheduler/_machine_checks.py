@@ -13,6 +13,8 @@
    全都只是普通字符，注入面归零。
 2. **argv[0] 白名单**，且**解释器只允许紧跟 `-m pytest`**。
    `python3 -c "..."` 等于任意代码执行，必须堵死。堵法是**在参数层判**，不是只判程序名。
+   ⚠️ **`node` 也吃代码** —— `node -e/-p/--eval/--print` 同一性质，同样堵
+   （2026-09-28 补，原来只落在 `python3` 上，`node -e` 是直接过闸的）。
 3. **cwd 锁死在项目仓库内**（传进来的 root 之下），不许跑出去。
 4. **超时**必给。
 5. **环境变量洗过** —— 只留 PATH/HOME/LANG：不带 API key，也不带代理（断掉"顺着代理出网"）。
@@ -86,6 +88,30 @@ _TOOL_OK_SUBCOMMAND = {
 _INTERPRETERS = {"python3", "python"}
 _INTERPRETER_OK_PREFIX = ["-m", "pytest"]
 
+#: 解释器里**吃一串代码**的选项 —— 见模块头规则 2。
+#: 🔴 **2026-09-28 补**：规则 2 原来只落在 `python3` 一个解释器上，而 `node` 也在
+#: 白名单里、也吃代码，于是 **`node -e '<任意代码>'` 直接过闸**（`python3 -c` 是拒的）。
+#: 严重度**低**（`npm run` 本来就在跑模型写的脚本，它不增加新能力），但那是
+#: **"规则写了、只对一个解释器执行"** —— 本仓栽过的正是这种单边落地。
+_NODE_CODE_FLAGS = {"-e", "--eval", "-p", "--print"}
+
+
+def _node_runs_inline_code(argv: list) -> str:
+    """`node` 的参数里有没有"吃一串代码"的选项。**只看 node 自己的选项位。**
+
+    ⚠️ **不能全参数扫**：`node script.js -p 8080` 里那个 `-p` 是**脚本的参数**，
+    不是 node 的选项 ⇒ 全扫会误伤一整类正常的 `node <file>` 调用。
+    node 的选项必须排在第一个非选项参数**之前** ⇒ 扫到第一个不以 `-` 开头的就停。
+    （同族：本仓栽过"判据写在产问题的地方之外"和"两份拷贝必然漂"，所以这条
+    解析只此一处，别在调用点再抄一遍。）
+    """
+    for a in argv[1:]:
+        if not isinstance(a, str) or not a.startswith("-"):
+            break                       # 到脚本名了 ⇒ 后面全是它的参数
+        if a.split("=", 1)[0] in _NODE_CODE_FLAGS:
+            return a
+    return ""
+
 DEFAULT_TIMEOUT = 60.0
 
 
@@ -140,6 +166,11 @@ def validate_check(check) -> tuple[bool, str]:
         return False, f"argv[0] 不在白名单: {prog}"
     if prog in _INTERPRETERS and argv[1:3] != _INTERPRETER_OK_PREFIX:
         return False, f"解释器只允许 `-m pytest`，实际: {' '.join(argv[1:3]) or '(无参数)'}"
+    if prog == "node":
+        bad = _node_runs_inline_code(argv)
+        if bad:
+            return False, (f"node 不许跑内联代码（{bad} 等于任意代码执行），"
+                           f"只能跑文件或 `--test`")
     ok_sub = _TOOL_OK_SUBCOMMAND.get(prog)
     if ok_sub is not None and (len(argv) < 2 or argv[1] not in ok_sub):
         return False, (f"{prog} 只允许 {'/'.join(sorted(ok_sub))}，"
