@@ -502,7 +502,30 @@ def _decide_cascade(task, level, turn, validation, disp_result, all_tool_events,
         if conf < 0.35 and len(fallback_chain) > 1:
             return ("break", None)
         # 中置信 → 正常重试（给同一个模型改进机会, 复用同一 wt）
-        fb_parts = [json.dumps(validation.evidence, ensure_ascii=False, indent=2)]
+        #
+        # 🔴🔴 **第一段必须是测试的失败输出**（2026-09-28，`round-20260928j`）。
+        #
+        # 那次 T1 的反馈只有这三样：`evidence`（validate.py 对产出的判词）·
+        # `质量警告: tests failed (pytest): tests failed: 退出码 1（失败个数没能从输出里数出来）`·
+        # `失败类型: test_failure` —— **没有测试名、没有文件、没有断言、没有输出**。
+        # 而**要改的东西全在那里**。⇒ 它连试 3 次都是盲改（每次的判词一模一样），
+        # 一个任务烧 435,832 token，整轮死在这一格。
+        #
+        # ⚠️ **`quality["test_result"]` 里本来就存着完整输出** —— `_review.py` 那句
+        # `quality["test_result"] = test_result  # 供 supervisor._check_artifact 复用`
+        # 早就在了，只是**没有人把它送去给要改代码的那个人**。
+        # 形状与本仓 09-28 那两条（`data_model` / `estimated_files`）**逐字同形**：
+        # **不是没声明，是没送到。**
+        #
+        # ⚠️ 取的是 `failed_output_tail`（**尾巴**）：pytest 把"哪几条失败"放在
+        # short test summary、把"为什么"放在 FAILURES 段 —— **两样都在末尾**。
+        fb_parts = []
+        _tr = quality.get("test_result") or {}
+        if _tr.get("passed") is False:
+            fb_parts.append(
+                "【测试失败输出】（**末尾**是失败详情；照着它改，不要猜）\n"
+                + val_mod.failed_output_tail(_tr.get("output", ""), 1500))
+        fb_parts.append(json.dumps(validation.evidence, ensure_ascii=False, indent=2))
         if quality.get("warnings"):
             fb_parts.append("质量警告:\n" + "\n".join(f"- {w}" for w in quality["warnings"]))
         if quality.get("failure_kind") and quality["failure_kind"] != "ok":

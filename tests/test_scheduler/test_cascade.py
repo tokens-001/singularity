@@ -82,6 +82,69 @@ class TestDecideCascade:
         )
         assert action == "continue", "failure_kind 非 ok 却走了 cascade_accept —— 软修被跳过"
 
+    # ── 测试失败时，**失败输出必须进反馈**（2026-09-28）────────────────────
+    #
+    # 🔴 来历（`round-20260928j` 真机）：T1 连试 3 次，三次判词一模一样，最后失败。
+    # 查下来它的重试反馈只有三样：`evidence`（validate.py 对产出的判词）·
+    # `质量警告: tests failed (pytest): tests failed: 退出码 1（失败个数没能从输出里数出来）`·
+    # `失败类型: test_failure` —— **没有测试名、没有文件、没有断言、没有输出**，
+    # 而**要改的东西全在那里**。⇒ 三个回合全在盲改，一个任务烧 435,832 token。
+    # ⚠️ **完整输出本来就躺在 `quality["test_result"]` 里**（`_review.py` 那句
+    # `quality["test_result"] = test_result  # 供 supervisor._check_artifact 复用`），
+    # 只是**没有人把它送去给要改代码的那个人** —— 和本仓 09-28 那两条
+    # （`data_model` / `estimated_files`）**逐字同形：不是没声明，是没送到。**
+
+    真机输出 = (
+        ".......F......................                                           [100%]\n"
+        "=================================== FAILURES ===================================\n"
+        "________________ test_common_options_may_precede_the_subcommand ________________\n"
+        "tests/test_cli_parse_args.py:145: in test_common_options_may_precede_the_subcommand\n"
+        "    assert args.format == \"tsv\"\n"
+        "E   AssertionError: assert 'json' == 'tsv'\n"
+        "=========================== short test summary info ============================\n"
+        "FAILED tests/test_cli_parse_args.py::test_common_options_may_precede_the_subcommand\n"
+        "1 failed, 29 passed in 0.73s\n")
+
+    def _retry_with_test_result(self, tr):
+        """跑一次 retry 分支，返回喂给模型的反馈文本。"""
+        task = self._make_task()
+        validation = val_mod.ValidationReport(
+            verdict="需改进", action="retry", confidence=0.5,
+            evidence={"issues": ["x"]}, unverified=[])
+        action, feedback = _decide_cascade(
+            task, "any", 1, validation, self._make_disp(), [], None,
+            ["E_model1"], set(),
+            {"warnings": ["tests failed (pytest): tests failed: 退出码 1（失败个数没能从输出里数出来）"],
+             "failure_kind": "test_failure", "confidence": 0.2,
+             "test_result": tr})
+        assert action == "continue", "这一支应当是重试"
+        return feedback
+
+    def test_测试失败时反馈里要有运行输出(self):
+        """判据：**哪条、为什么**都得在反馈里 —— 那正是模型改代码要照的东西。"""
+        fb = self._retry_with_test_result(
+            {"passed": False, "runner": "pytest", "exit_code": 1, "failures": 1,
+             "output": self.真机输出})
+        assert "test_common_options_may_precede_the_subcommand" in fb, \
+            f"反馈里没有失败的测试名 —— 模型只能盲改：{fb[:300]}"
+        assert "assert 'json' == 'tsv'" in fb, "反馈里没有断言 —— 说不出为什么失败"
+
+    def test_测试通过时不许往反馈里塞输出(self):
+        """反方向：**没失败就别塞**。
+
+        否则每一轮正常重试都会拖着一段几千字符的运行输出（那是真金白银的 context）。
+        同族判据：`test_架构没给_context_时不许硬塞一行假的` —— 有就说、没有就别编。
+        """
+        fb = self._retry_with_test_result(
+            {"passed": True, "runner": "pytest", "output": self.真机输出})
+        assert "测试失败输出" not in fb, "测试是过的，却把输出塞进了反馈"
+        assert "assert 'json' == 'tsv'" not in fb
+
+    def test_没有test_result时不许炸(self):
+        """`quality` 里没有 test_result（没跑到测试那一步）时，反馈照旧要给出来。"""
+        fb = self._retry_with_test_result(None)
+        assert "失败类型: test_failure" in fb, "反馈整段没了 —— 比少一段更坏"
+
     def test_abort_terminal(self):
         task = self._make_task()
         validation = val_mod.ValidationReport(verdict="阻断", action="abort", unverified=["fatal"])
