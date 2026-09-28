@@ -20,6 +20,31 @@ function fmtTokens(n: number): string {
   return String(n)
 }
 
+/** 顶栏那一格「多久没动」的文案。**`null` = 不显示。**
+
+ *  🔴 **后端只给一个数**（`info.idle_seconds` = 距最后一次状态变化多久），
+ *  **判断放在这儿** —— 因为"它是不是卡住了"要看两样页面才有的东西：
+ *  ① 有没有任务在跑（`running`）② 它是不是**本来就在等人**。
+ *  一个数扛不动那个判断（后端 `_idle_seconds` 的 docstring 写着同一个 caveat）。
+
+ *  ⚠️ **等人时返回 `null`**：门岗 / 已停 / 已交付 / 还没开始 —— 那些时候"没动作"
+ *  是**对的**，报成告警就是假红（而假红比不报坏：人学会无视它之后，
+ *  真停住那次也一起被无视）。同族：`AcceptancePanel` 那条"读不出来不是通过"。
+ *
+ *  ⚠️ 不足 5 分钟不显示：正常的一轮调用就有几分钟，报出来全是噪声。
+ */
+export function idleCopy(info: any, running: number, isGate: boolean):
+    { text: string; warn: boolean } | null {
+  const s = info?.idle_seconds
+  if (typeof s !== 'number' || s < 300) return null
+  if (isGate || info?.halt?.halted || ['done', 'template'].includes(info?.phase)) return null
+  const ago = s < 3600 ? `${Math.round(s / 60)} 分钟` : `${(s / 3600).toFixed(1)} 小时`
+  // 有任务在跑 ⇒ 只是"还没有状态变化"，正常；一个都没有 ⇒ 这才值得看一眼。
+  return running > 0
+    ? { text: `${ago} 无状态变化（${running} 个任务在跑）`, warn: false }
+    : { text: `${ago} 没有任何动作`, warn: true }
+}
+
 export default function Chat() {
   const conversations = useAppStore(s => s.conversations)
   const activePid = useAppStore(s => s.activeProjectId)
@@ -259,6 +284,7 @@ export default function Chat() {
   const info = activePid !== '_default' ? projects.find(p => p.id === activePid) : null
   const gatePhase = info?.phase || ''
   const isGate = gatePhase.startsWith('gate')
+  const idle = idleCopy(info, running, isGate)
 
   // 这个项目的用量 —— 2026-09-17 用户提：「看不到单独项目 token 用量，
   // 我建议放在独立项目对话框」。数据一直在（`/api/token-usage` 的 `by_project`），
@@ -330,6 +356,16 @@ export default function Chat() {
                       ? `${running} 个执行中${waiting > 0 ? ` · ${waiting} 个等待（等前置/暂停）` : ''} · ${completed}/${tasks.length}`
                       : completed === tasks.length ? '全部完成' : `进度 ${completed}/${tasks.length}`}
                     {failed > 0 && <span style={{ color: '#dc2626' }}> {failed} 失败</span>}
+                  </span>
+                )}
+                {/* 「多久没动」—— 2026-09-28 加。round-i 那个项目**静默停住 47 分钟**
+                    而这一条上什么都没有：进度那行照样写着「4/9 完成」，看着像在干活。
+                    ⚠️ 文案与"该不该报警"全在 `idleCopy` 里，别在这儿另写一份判据。 */}
+                {idle && (
+                  <span className="fs-11"
+                        style={{ color: idle.warn ? '#dc2626' : undefined }}
+                        title="距最后一次状态变化（阶段流转 / 停 / 审查结论…）过了多久">
+                    · {idle.warn ? '⚠ ' : ''}{idle.text}
                   </span>
                 )}
                 {usage && (

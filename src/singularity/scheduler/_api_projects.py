@@ -192,6 +192,32 @@ def project_integration(proj) -> dict:
     return out
 
 
+def _idle_seconds(proj) -> float:
+    """距**最后一次状态变化**过了多久（秒）。
+
+    🔴 **它量的是一个事实，不是一个判断 —— 别读成"卡住了"。**
+    一个任务正常跑满 900 秒**期间不产生任何 `lineage`**，这个数照样一路涨
+    （09-28 定这条时的原话：`idle` 只回答"多久没有状态变化"）。
+    ⇒ 要判"它是不是卡住"，得配上"有没有任务在跑"（`Chat.tsx` 手里就有 `tasks`）。
+    **一个数扛不动那个判断，别让它扛。**
+
+    🔴 **判据取 `lineage` 末条的 `ts`，不取 `updated_at`** —— `updated_at` 每次
+    `save()` 都动，而 `_flag_conflict_held` 这类节流 30 秒的 tick 检查会定期 save
+    ⇒ 那个数量的是"**有人碰过它**"，不是"**它有进展**"。
+    （同族：09-17「孤儿探测量'表里有没有名字'」——**量声明还是量实际**。）
+
+    ⚠️ 没有 `lineage`（刚建的项目）退回 `created_at`；两个都没有**如实返回 0**
+    （"说不出多久"不该编一个数出来）。
+    """
+    rows = proj.lineage or []
+    stamps = [e.get("ts") for e in rows
+              if isinstance(e, dict) and isinstance(e.get("ts"), (int, float))]
+    last = max(stamps) if stamps else getattr(proj, "created_at", None)
+    if not isinstance(last, (int, float)):
+        return 0.0
+    return max(0.0, time.time() - last)
+
+
 def project_detail(project_id: str) -> tuple[dict, int]:
     """GET /api/projects/<id>"""
     from . import project as proj_mod
@@ -204,6 +230,13 @@ def project_detail(project_id: str) -> tuple[dict, int]:
     # ⚠️ **界面别自己从 `phase` 推**：停住的 phase 和"正常走在那一档"长得一模一样，
     #    在 TS 里重推就是第二份判据（§5 过线同理）。
     d["halt"] = proj_mod.halt_state(proj)
+    # 「多久没动」—— **事实**（距最后一次状态变化多久），**不是判断**。
+    # 为什么要有它：round-20260928i 那个项目**静默停住 47 分钟**，而盘上/界面上
+    # 一个字都没有 —— **沉默看起来和"在干活"一模一样**（那轮我的监视器也看漏了，
+    # 因为它只盯 phase 变化，而卡住时阶段不变）。
+    # ⚠️ 读数与措辞的 caveat 全在 `_idle_seconds` 的 docstring 里，**别在界面上
+    #    把它渲染成"卡住了"** —— 那正是"一个数扛不动一个判断"。
+    d["idle_seconds"] = _idle_seconds(proj)
     # 「集成」的账（2026-09-20）：进仓几个任务 / **没进仓几个**。
     # 挂在详情上而不是新开接口 —— 前端展开项目时本来就在调这个，省一次请求和一份加载态。
     try:

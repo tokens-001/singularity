@@ -147,6 +147,64 @@ describe('门禁摘要条 + 兜底来路必须在**页面**上（不是某个没
 })
 
 /**
+ * 顶栏那一格「多久没动」（2026-09-28）。
+ *
+ * 由来：`round-20260928i` 的项目 **02:14 之后完全静止 47 分钟**，而顶栏一切正常
+ * ——进度那行照样写着「4 done + 1 卡住 + 4 等待」，**沉默看起来和在干活一模一样**。
+ * 盘上也没有任何信号（那轮我的监视器同样看漏了，因为它只盯 phase 变化）。
+ *
+ * 🔴 **判据是页面**：删掉 `Chat.tsx` 里那行 `{idle && …}` 就红。
+ * 后端 `idle_seconds` 只是**一个事实**，"要不要报警"的判断在页面手里 ——
+ * 只有它同时知道"有没有任务在跑"和"是不是本来就在等人"（一个数扛不动那个判断）。
+ */
+describe('「多久没动」那一格', () => {
+  const 卡住 = { ...PROJECT, idle_seconds: 2820 }   // 47 分钟
+
+  it('没任务在跑 + 很久没动 ⇒ 出告警', async () => {
+    ;(api.projects as any).mockResolvedValue({ projects: [卡住] })
+    const { el, done } = await mount()
+    const text = (el.textContent || '').replace(/\s+/g, ' ')
+    expect(text, '静默停住时顶栏一个字都没有 —— 沉默又能冒充在干活了')
+      .toContain('没有任何动作')
+    done()
+  })
+
+  it('有任务在跑 ⇒ **不许**报警（长调用本来就不产生状态变化）', async () => {
+    ;(api.projects as any).mockResolvedValue({ projects: [卡住] })
+    ;(api.tasks as any).mockResolvedValue([TASK('t1', '写 parser')])
+    const { el, done } = await mount()
+    const text = (el.textContent || '').replace(/\s+/g, ' ')
+    expect(text, '任务在跑却什么都不说 —— 那这一格就没法区分"忙"和"卡"')
+      .toContain('1 个任务在跑')
+    expect(text, '任务在跑却报"没有任何动作" —— 假红').not.toContain('没有任何动作')
+    done()
+  })
+
+  it('**本来就在等人**（门岗 / 已停 / 已交付）⇒ 一个字都不显示', async () => {
+    // 这三种时候"没动作"是**对的**。报了就是假红，而假红比不报坏：
+    // 人学会无视它之后，真停住那次也一起被无视。
+    for (const p of [{ ...卡住, phase: 'gate2' },
+                     { ...卡住, halt: { halted: true } },
+                     { ...卡住, phase: 'done' }]) {
+      ;(api.projects as any).mockResolvedValue({ projects: [p] })
+      const { el, done } = await mount()
+      expect(el.textContent || '', `${p.phase || 'halted'} 时还报"没动作"`)
+        .not.toContain('没有任何动作')
+      done()
+    }
+  })
+
+  it('不足 5 分钟 ⇒ 不显示（正常一轮调用就有几分钟，报出来全是噪声）', async () => {
+    ;(api.projects as any).mockResolvedValue({ projects: [{ ...PROJECT, idle_seconds: 120 }] })
+    const { el, done } = await mount()
+    const text = el.textContent || ''
+    expect(text).not.toContain('没有任何动作')
+    expect(text).not.toContain('无状态变化')
+    done()
+  })
+})
+
+/**
  * 布局：**状态钉住、材料侧滑、正文留给观察者**（2026-09-17 用户提：
  * 「之前忽略了观察者对话窗口，导致现在调研架构等任务都堆在对话窗口」）。
  *
