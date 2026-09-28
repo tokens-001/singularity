@@ -57,6 +57,36 @@ def test_等和在跑必须分成两个数():
     assert "2 跑" in t and "12 等" in t, f"把『在等』报成了『在跑』：\n{t}"
 
 
+def test_在等和在跑是_从盘上分出来的():
+    """🔴 **必须真喂任务文件。**
+
+    上面那条 `test_等和在跑必须分成两个数` 只构造了一个 state dict ⇒ 它验的是
+    "render 会不会照着打印"，而**分类逻辑在 `task_counts` 里**，那条测试根本走不到它。
+    变异复核当场打出来：把 `out["waiting"] += 1` 改成 `out["running"] += 1`
+    （= 09-27 那个「14 个执行中，真正在跑的只有 2 个」）**一条都不红**。
+    """
+    import json as _json
+    import tempfile
+    import watch
+
+    old = watch.QIDIAN
+    with tempfile.TemporaryDirectory() as d:
+        watch.QIDIAN = Path(d)
+        (Path(d) / "tasks").mkdir()
+        for i, s in enumerate(["running", "dispatched", "blocked", "pending",
+                               "done", "failed", "rolled_back"]):
+            (Path(d) / "tasks" / f"t{i}.json").write_text(
+                _json.dumps({"project_id": "p1", "status": s}), encoding="utf-8")
+        # **别人的项目不许算进来** —— 判据错了会把整个盘上的任务都数上
+        (Path(d) / "tasks" / "other.json").write_text(
+            _json.dumps({"project_id": "p2", "status": "running"}), encoding="utf-8")
+        try:
+            c = watch.task_counts("p1")
+        finally:
+            watch.QIDIAN = old
+    assert c == {"running": 2, "waiting": 2, "done": 1, "failed": 2, "total": 7}, c
+
+
 def test_后端连不上时要说话不许炸():
     """取不到就说取不到 —— 空屏和"项目很安静"长得一模一样。"""
     t = 文本(状态(err="后端连不上 / 项目读不到：URLError", phase="?", idle=None))
