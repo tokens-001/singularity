@@ -68,34 +68,6 @@ class TestValidatorV2:
             f"解析不到却报了个失败数：{msg}"
         assert "0 failures" not in msg, "0 个失败是「没数出来」，不是「零个失败」"
 
-    def test_失败证据取的是尾巴不是头(self):
-        """🔴 **这条钉的是 `round-20260928j` 那个真机现场本身。**
-
-        那次落盘的唯一证据是 `output[:200]`，而那 200 字符**正好**是 pytest 的开头：
-        进度行（74）+ `=== FAILURES ===`（81）+ **失败测试名的前半截**
-        ⇒ 存的是一句 `tests failed: .......F......  ____ test_common_options_ma`，
-        **测试名断在中间、断言一行都没有**，而真正的原因从第 264 字符才开始。
-        ⇒ 判了失败，却说不出**哪条、为什么**。
-        **判据**：喂一份**逐字抄的真机输出**，断言留下的是断言行和汇总行，
-        并且**失败测试名的完整拼写**在里面（`test_common_options_ma` 那种半截不算）。
-        """
-        from singularity.scheduler.validator import failed_output_tail
-        真机输出 = (
-            ".......F......................                                           [100%]\n"
-            "=================================== FAILURES ===================================\n"
-            "________________ test_common_options_may_precede_the_subcommand ________________\n"
-            "tests/test_cli_parse_args.py:145: in test_common_options_may_precede_the_subcommand\n"
-            "    assert args.format == \"tsv\"\n"
-            "E   AssertionError: assert 'json' == 'tsv'\n"
-            "=========================== short test summary info ============================\n"
-            "FAILED tests/test_cli_parse_args.py::test_common_options_may_precede_the_subcommand\n"
-            "1 failed, 29 passed in 0.73s\n")
-        out = failed_output_tail(真机输出)
-        assert "test_common_options_may_precede_the_subcommand" in out, \
-            "测试名必须是完整拼写 —— 断在中间等于没说是哪条"
-        assert "assert 'json' == 'tsv'" in out, "断言行没了 = 说不出为什么"
-        assert "1 failed, 29 passed" in out, "汇总行没了 = 说不出几条"
-
     def test_长输出掐头留尾也要留住汇总行(self):
         """`run_project_tests` 里那个 4000 字符上限：**不许只留头**。
 
@@ -143,6 +115,17 @@ class TestValidatorV2:
             "测试名必须是完整拼写 —— 断在中间等于没说是哪条"
         assert "assert 'json' == 'tsv'" in out, "断言行没了 = 说不出为什么"
         assert "1 failed, 29 passed" in out, "汇总行没了 = 说不出几条"
+
+        # 🔴 **非要一段"比 n 长"的输入不可**（2026-09-28 变异复核当场抓到）：
+        # 上面那份真机输出一共才 500 来字符 ⇒ `s[:600]` 返回的就是**整串**，
+        # **取头和取尾结果一模一样** ⇒ 把实现改成取头，上面三条断言**照样绿**。
+        # 换句话说：只喂短输入的话，这条测试**根本没在测"尾"**。
+        # （同族：变异掐不断时先怀疑变异没生效 —— 这次是**测试本身没判别力**。）
+        long_input = ("A" * 3000) + "\n" + 真机输出
+        out2 = failed_output_tail(long_input)
+        assert len(out2) < len(long_input), "这段本来就该被截，没截说明这条测不到东西"
+        assert "assert 'json' == 'tsv'" in out2, "尾巴被丢了 = 取的是头"
+        assert "A" * 100 not in out2, "头部那段噪声还在 = 取的是头不是尾"
 
     def test_run_tests_no_tests(self):
         r = run_project_tests(cwd=self.root)
