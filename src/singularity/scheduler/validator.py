@@ -280,6 +280,131 @@ def failed_test_files(tr: dict) -> list[str]:
     return list(dict.fromkeys(m.group(1) for m in _FAILED_TEST_FILE_RE.finditer(out)))
 
 
+# ── 基线差分：让"整仓红"里**别人的红**不记到这个任务头上（2026-09-29）──
+# 来历见 `防御模式.md` §102：`run_project_tests` 跑的是**整仓**，而任务的 worktree 是
+# 从「开工那一刻的仓库快照」建的 ⇒ **基线里本来就红的测试**会让后面每一个任务都过不了，
+# 而它改不动、也不该改。差分要求知道"基线那一刻哪些是红的"，只能真跑一遍 ——
+# 但**只在判失败时才付**（调用方只在测试红了才调它），不是每个任务都跑两遍。
+_FAILED_TEST_ID_RE = re.compile(r"^FAILED\s+(\S+?::\S+)", re.MULTILINE)
+
+# 基线那一跑的墙钟上限。`run_project_tests` 自己每个 runner 封 60s ⇒ 三个 runner 的
+# 最坏情况就是这个数。正常项目秒级返回；超了就**不声称算过差分**（见下面的保守分支）。
+_BASELINE_TIMEOUT_SEC = 180
+
+
+def failed_test_ids(tr: dict) -> list[str]:
+    """失败用例的**编号**（`文件::用例`，去重保序）。取不到就 `[]` —— 不猜。
+
+    比 `failed_test_files` 细一级，**必须**细到用例：文件级的话，
+    "基线红一条、现在红三条"会被当成"同一个文件，忽略" —— 那两条真回归就漏了。
+    """
+    if not isinstance(tr, dict):
+        return []
+    out = str(tr.get("output") or "")
+    return list(dict.fromkeys(m.group(1) for m in _FAILED_TEST_ID_RE.finditer(out)))
+
+
+def run_project_tests_at_ref(ref: str, work_dir: str) -> dict | None:
+    """在**基线那一版代码**上跑一遍项目测试。只给差分归因用。算不出来返回 `None`。
+
+    实现：`git worktree add --detach` 起一个临时干净副本 —— **绝不在任务自己的
+    worktree 里 checkout**（那会动到它的产物）。跑完 `remove --force` + 删目录。
+
+    拿不到（不是 git 仓 / ref 无效 / git 不在 / 超时）一律 `None`，调用方**保持原判定**
+    —— 宁可照旧判红，也不因为"差分没算成"就放行。
+    """
+    import shutil
+    import tempfile
+
+    from singularity.scheduler import witness
+    tmp = ""
+    try:
+        tmp = tempfile.mkdtemp(prefix="qidian-baseline-")
+        add = subprocess.run(["git", "worktree", "add", "--detach", tmp, ref],
+                             capture_output=True, text=True, timeout=60,
+                             cwd=str(work_dir))
+        if add.returncode != 0:
+            # 出声：差分算不出来等于这条防线没生效，而"没生效"和"没差别"在盘上
+            # 长得一模一样（`防御模式.md` §59 那个边界的同族）。
+            witness.warn("validator", f"baseline_worktree_failed:{add.stderr.strip()[:120]}",
+                         key="baseline_diff_unavailable")
+            return None
+        return run_project_tests(cwd=tmp)
+    except Exception as e:
+        witness.warn("validator", f"baseline_tests_failed:{type(e).__name__}:{e}"[:160],
+                     key="baseline_diff_unavailable")
+        return None
+    finally:
+        if tmp:
+            # 先让 git 注销登记项，再删目录 —— 反过来的话 `.git/worktrees/` 会随
+            # 每个判失败的任务攒一堆死登记（`remove` 要求目录还在）。
+            r = subprocess.run(["git", "worktree", "remove", "--force", tmp],
+                               capture_output=True, text=True, timeout=60,
+                               cwd=str(work_dir))
+            if r.returncode != 0:
+                witness.warn("validator", f"baseline_worktree_remove_failed:{r.stderr.strip()[:120]}",
+                             key="baseline_diff_unavailable")
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+def mark_baseline_diff(tr: dict, base_ref: str, work_dir: str) -> None:
+    """在 `tr` 上标出"现在红的里面，哪些**基线本来就红**"。**唯一产地。**
+
+    写入两个键（**两个消费端共用** `has_own_test_failure` 读它）：
+      · `baseline_checked: True` —— 差分**真算出来了**（不是"没标"）
+      · `new_failures: [...]`    —— 现在红、基线不红的那几条 = 这个任务真弄红的
+
+    三种情况**都不写** `baseline_checked`（⇒ 调用方照旧按 `passed` 判，fail-closed）：
+    基线跑不起来 · 基线红但说不出是哪几条（分不了类就别猜）· 现在这几条一条都解析不出来。
+    """
+    import concurrent.futures
+    try:
+        if not base_ref or tr.get("passed"):
+            return
+        _ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            fut = _ex.submit(run_project_tests_at_ref, base_ref, work_dir)
+            try:
+                base_tr = fut.result(timeout=_BASELINE_TIMEOUT_SEC)
+            except concurrent.futures.TimeoutError:
+                from singularity.scheduler import witness as _w
+                _w.warn("validator", f"baseline_tests_timeout:{_BASELINE_TIMEOUT_SEC}s"[:120],
+                        key="baseline_diff_unavailable")
+                base_tr = None
+        finally:
+            _ex.shutdown(wait=False)      # 同 `_review`：不 join，挂死的调用不能拖住流水线
+        if not isinstance(base_tr, dict):
+            return
+        now_ids = failed_test_ids(tr)
+        if not now_ids:
+            return
+        if base_tr.get("passed"):
+            base_ids: set[str] = set()          # 基线全绿 ⇒ 现在红的都是新引入的
+        else:
+            base_ids = set(failed_test_ids(base_tr))
+            if not base_ids:
+                return                          # 基线红、却说不清哪几条 ⇒ 分不了类
+        tr["baseline_checked"] = True
+        tr["new_failures"] = [t for t in now_ids if t not in base_ids]
+    except Exception as e:
+        from singularity.scheduler import witness
+        witness.warn("validator", f"baseline_diff_failed:{type(e).__name__}:{e}"[:160],
+                     key="baseline_diff_unavailable")
+
+
+def has_own_test_failure(tr: dict) -> bool:
+    """这个任务的测试判定 —— **它自己弄红的**才算失败。**两个消费端共用这一份。**
+
+    · 没标 `baseline_checked`（差分没算出来）⇒ 照旧按 `passed` 判（fail-closed）
+    · 标了 ⇒ 只看 `new_failures`；全是基线就红的那几条时**不判它失败**
+    """
+    if not isinstance(tr, dict) or tr.get("passed"):
+        return False
+    if not tr.get("baseline_checked"):
+        return True
+    return bool(tr.get("new_failures"))
+
+
 def tests_failed_msg(tr: dict, changed_files=None) -> str:
     """把 `run_project_tests` 的结果说成一句人话。**三处消费端共用这一份。**
 
@@ -304,6 +429,10 @@ def tests_failed_msg(tr: dict, changed_files=None) -> str:
         msg = f"tests failed: 退出码 {code}（失败个数没能从输出里数出来）"
     else:
         msg = f"tests failed: {n if n is not None else '?'} failures"
+    if isinstance(tr, dict) and tr.get("baseline_checked") and not tr.get("new_failures"):
+        # 差分算过、而且这几条**基线本来就红** ⇒ 说清楚，别让人照着一条改不动的测试改
+        msg += "（⚠️ 这几条**在基线里就是红的**，不是这次改动引入的）"
+        return msg
     if changed_files is None:
         return msg
     own = {_basename(f) for f in changed_files}

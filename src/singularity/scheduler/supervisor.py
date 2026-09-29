@@ -529,16 +529,21 @@ def _check_artifact(changed_files: list[str], root: Path, tests_result: dict = N
     if tests_result is not None:
         # 调用方 (run_post_exec_checks) 刚跑过 → 复用, 不重复跑
         evidence["tests"] = tests_result
-        if not tests_result.get("passed"):
-            from singularity.scheduler.validator import tests_failed_msg
+        # ⚠️ 用 `has_own_test_failure` 而不是裸 `passed`：差分算过、且红的全是基线就红的
+        # 那几条时，**这不是这个任务弄红的** ⇒ 不记它的账（`防御模式.md` §102）。
+        # 没标过差分的（`baseline_checked` 不在）⇒ 照旧按 `passed` 判，fail-closed。
+        from singularity.scheduler.validator import has_own_test_failure, tests_failed_msg
+        if has_own_test_failure(tests_result):
             errors.append(tests_failed_msg(tests_result, changed_files=changed_files))
     else:
         try:
             from singularity.scheduler.validator import run_project_tests
             test_result = run_project_tests(cwd=str(root))
             evidence["tests"] = test_result
-            if not test_result.get("passed"):
-                from singularity.scheduler.validator import tests_failed_msg
+            # 这一支**没有 base_ref**（不是从 `_review` 复用）⇒ 算不了差分，
+            # 按 `has_own_test_failure` 的老语义走：红了就记（fail-closed）。
+            from singularity.scheduler.validator import has_own_test_failure, tests_failed_msg
+            if has_own_test_failure(test_result):
                 errors.append(tests_failed_msg(test_result, changed_files=changed_files))
         except Exception:
             pass  # test runner 挂了不阻塞，记在 supervisor 日志

@@ -280,16 +280,23 @@ def run_post_exec_checks(*, validation, quality, exec_result,
     _skipped: list = []
 
     if validation.action == "pass" and changed and _trivial:
+        # ⚠️ 2026-09-29 起**只跳多模型审查**，项目测试照跑（见下面"1)"那段）。
+        # 原来这条说"未跑项目测试"是实话，但那个"省一步"把模型唯一的纠错信息
+        # 一起省掉了（`round-j` 同一个病：判了失败，原因没送到改代码的人手里）。
         validation.unverified.append(
-            "审查已跳过: 改动被判为小改动(单文件, diff<50行) — 未跑项目测试/未多模型审查")
+            "多模型审查已跳过: 改动被判为小改动(单文件, diff<50行) — 项目测试照跑")
     elif validation.action == "pass" and changed and not base_ref:
         # 如实说：不是"改得小"，是"拿不到基准所以没法判小"。两者在产物里必须可区分。
         validation.unverified.append(
             "审查基准不可用(快照非 git 型或缺失) — 已按 fail-closed 全量跑审查，未经 trivial 裁剪")
 
     # 1) run project tests (S2: 带超时包装)
-    # 小改动(单文件<50行)跳过项目全量测试：独立小任务(如写 hello.py)跟项目测试套件无关，跑了会误判
-    if validation.action == "pass" and changed and not _trivial:
+    # 🔴 **2026-09-29 起"小改动"也跑**（原来这里带 `and not _trivial`）。理由：
+    # 产物门禁（`supervisor._check_artifact`）本来就会跑全量 pytest，跳过这一步**没有省下
+    # 那次跑**，只是让结果落在模型看不见的终态判词里。而飞着的重试是模型唯一的纠正机会
+    # —— 跳过测试 = 把那个机会的信息清空（`round-20260928j` 就是这么死的，见 `防御模式.md`）。
+    # ⚠️ **多模型审查照旧跳过**（下面的 "2)" 那段，那是真省钱，且审查不产出可执行的信息）。
+    if validation.action == "pass" and changed:
         try:
             # 不能用 `with ThreadPoolExecutor(...)`: 退出时会 shutdown(wait=True) 去 join，
             # 底层调用挂死的话超时形同虚设 —— 整个任务跟着挂（实测 A/B 探针三次这样卡住）。
@@ -313,6 +320,11 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                     return
                 quality["test_result"] = test_result  # 供 supervisor._check_artifact 复用, 免重复跑
                 if not test_result.get("passed"):
+                    # 先算差分：这几条红是不是**基线本来就红**（只在判失败时才付这次基线跑）。
+                    # 不先问这一句，红的可能是别人的文件 —— 基线里就有的、或先合并的兄弟
+                    # 弄红的，而这个任务改不动也不该改（`防御模式.md` §102）。
+                    val_mod.mark_baseline_diff(test_result, base_ref, cwd)
+                if val_mod.has_own_test_failure(test_result):
                     quality["warnings"].append(
                         f"tests failed ({test_result.get('runner','?')}): "
                         + tests_failed_msg(test_result, changed_files=changed))
@@ -326,6 +338,15 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                         f"tests failed: {val_mod.failed_output_tail(test_result.get('output',''))}")
                     validation.action = "retry"
                     _record_review_failure("test_failure")
+                elif not test_result.get("passed"):
+                    # 红了，但**红的全是基线本来就红的那些** ⇒ 不是这个任务弄红的。
+                    # **不判重试**（它改不动那条测试），也**不给"测试通过"的分**（它并没有通过）。
+                    quality["warnings"].append(
+                        "测试未通过，但失败用例在基线里就是红的（不是本任务引入）: "
+                        + tests_failed_msg(test_result, changed_files=changed))
+                    validation.unverified.append(
+                        "测试未通过，但失败的是基线已有的用例（不是本次改动引入）: "
+                        f"{val_mod.failed_output_tail(test_result.get('output',''))}")
                 elif test_result.get("runner") != "none":
                     quality["quality_signals"]["tests_passed"] = test_result.get("total", 0)
                     quality["confidence"] = min(1.0, quality.get("confidence", 0.5) + 0.1)

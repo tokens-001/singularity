@@ -21,16 +21,25 @@ WARNS: list = []
 def _run(monkeypatch, tmp_path, *, project_id="", changed=("a.py", "b.py"),
          pool=(), scan=None, tests=None, multi=None, crossover=None,
          qa=None, conformance=None, audit=None, constraints=None,
-         trivial=False, tests_fn=None, confidence=0.5):
+         trivial=False, tests_fn=None, confidence=0.5, baseline=None):
     """跑一次门禁，返回 (validation, quality)。默认全绿，各测试只覆盖关心的那一段。
 
     pool=() → 走单模型 crossover fallback；给 2 个模型才走多人审查。
     project_id="" → 跳过 QA 约束 / 需求符合性 / 审查失败计数（不碰磁盘）。
+    baseline=... → 基线那一跑的返回；**默认 None = 这个桩世界里没有基线**
+    （见下面那条注释，别让"当前这一跑"的桩自己兼任自己的基线）。
     """
     from singularity.scheduler import validator as val, dispatcher as disp, project as proj_mod
 
     WARNS.clear()
     monkeypatch.setattr(rv.witness, "warn", lambda *a, **k: WARNS.append((a, k)))
+    # 🔴 **必须单独桩掉基线那一跑**（2026-09-29）：`run_project_tests_at_ref` 内部调的
+    # 就是 `run_project_tests`，而上面那行把后者换成了固定返回同一个 dict 的假货 ⇒
+    # **"开工前"和"开工后"拿到一模一样的结果** ⇒ 差分判成"红的都是基线就有的" ⇒
+    # 真失败被静默放行。桩世界里没有真的历史版本，所以默认 `None`（= 算不出差分，
+    # fail-closed 照旧判红）。要测差分的用例直接给 `baseline=`。
+    monkeypatch.setattr(val, "run_project_tests_at_ref",
+                        lambda *a, **k: baseline if baseline is not None else None)
     monkeypatch.setattr(rv, "_is_trivial_change", lambda *a, **k: trivial)
     monkeypatch.setattr(val, "security_review", lambda *a, **k: scan or {"issues": []})
     # tests_fn 优先于 tests：要在 _run 之外定制行为（比如让它卡住）时用
@@ -101,14 +110,66 @@ def test_all_green_passes(monkeypatch, tmp_path):
     assert q["quality_signals"]["tests_passed"] == 1
 
 
-def test_trivial_change_skips_everything(monkeypatch, tmp_path):
-    """单文件小改动不该为审查付 90s 开销（跳过后连测试都不跑）。"""
+def test_trivial_change_runs_tests_but_skips_review(monkeypatch, tmp_path):
+    """小改动**照跑项目测试**，只跳多模型审查（2026-09-29 改）。
+
+    原来这条叫 `test_trivial_change_skips_everything`、断言"连测试都不跑"——
+    🔴 **而它从来没测到过任何东西**：它先 `setattr(val, "run_project_tests", spy)`，
+    紧接着 `_run` 又 setattr 了**同一个属性** ⇒ 桩被覆盖、`calls` 永远是空的
+    ⇒ `calls == []` 恒成立（改不改生产代码都绿）。
+    （同族的"自检自己掐不断"见 `test-wiring` 那条。）想拦截 `_run` 里那一跑，
+    **只能走它自己的通道**（`tests_fn=`）。
+    """
     calls = []
-    from singularity.scheduler import validator as val
-    monkeypatch.setattr(val, "run_project_tests",
-                        lambda *a, **k: calls.append(1) or {"passed": True, "runner": "pytest"})
-    v, _ = _run(monkeypatch, tmp_path, changed=("a.py",), trivial=True)
-    assert v.action == "pass" and calls == []
+
+    def _spy(*a, **k):
+        calls.append(1)
+        return {"passed": True, "runner": "pytest", "total": 1}
+
+    v, _ = _run(monkeypatch, tmp_path, changed=("a.py",), trivial=True, tests_fn=_spy)
+    assert calls == [1], (
+        "小改动没跑项目测试 —— 那模型就拿不到失败原因，而飞着的重试是它唯一的纠正机会"
+        "（`round-20260928j` 那个病）")
+    assert any("多模型审查已跳过" in u for u in v.unverified), v.unverified
+
+
+# ── 基线差分：整仓红里"基线本来就红"的那几条不记这个任务的账 ─────────
+#
+# 来历（2026-09-29，原「疑3」）：worktree 从开工快照建 ⇒ 基线里任何一条红测试
+# 都会让后面每个任务都过不了，而它改不动也不该改。见 `防御模式.md` §102。
+
+_基线红输出 = (
+    "F                                                                        [100%]\n"
+    "=================================== FAILURES ===================================\n"
+    "____________________ test_base_red _____________________\n"
+    "test_base_red.py:8: in test_base_red\n"
+    "    assert False\n"
+    "=========================== short test summary info ============================\n"
+    "FAILED test_base_red.py::test_base_red\n"
+    "1 failed in 0.01s\n")
+
+
+def test_红的全是基线就有的就不判重试(monkeypatch, tmp_path):
+    """**接线**：差分算过、且红的全是基线就有的 ⇒ **不判 retry**，但如实记进 unverified。
+
+    把 `val_mod.has_own_test_failure(test_result)` 换回 `not test_result.get("passed")`
+    ⇒ 本用例红。⚠️ 只测 `has_own_test_failure` 是不够的（"函数对 ≠ 接线通"）。
+    """
+    v, _ = _run(monkeypatch, tmp_path, changed=("strkit.py",),
+                tests={"passed": False, "runner": "pytest", "exit_code": 1,
+                       "failures": 1, "output": _基线红输出},
+                baseline={"passed": False, "runner": "pytest", "exit_code": 1,
+                          "failures": 1, "output": _基线红输出})
+    assert v.action == "pass", f"红的全是基线就有的，却还判了重试：{v.unverified}"
+    assert any("基线" in u for u in v.unverified), f"放行了却不说为什么：{v.unverified}"
+
+
+def test_基线算不出来就照旧判重试(monkeypatch, tmp_path):
+    """反方向（fail-closed）：**没有基线**时红的照旧算这个任务的 ⇒ 判 retry。"""
+    v, _ = _run(monkeypatch, tmp_path, changed=("strkit.py",),
+                tests={"passed": False, "runner": "pytest", "exit_code": 1,
+                       "failures": 1, "output": _基线红输出})
+    assert v.action == "retry", "没有基线对照却说'不是它弄红的'"
 
 
 # ── fail-closed：异常一律不放行 ──────────────────────────────

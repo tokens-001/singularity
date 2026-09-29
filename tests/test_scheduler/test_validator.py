@@ -488,3 +488,108 @@ def test_调用点把只读标记传下去了(tmp_path, monkeypatch):
     assert seen[-1].get("readonly") is True, (
         f"只读标记没传到验收层（`_exec.py` 那行被删了？）"
         f"—— 线上就又回到「只读任务被零文件改动判死」：{seen[-1]}")
+
+
+class TestBaselineDiff:
+    """基线差分：整仓测试里"**基线本来就红**"的那几条不该记到当前任务头上。
+
+    来历（2026-09-29，原单子里的「疑3」）：`run_project_tests` 跑**整仓**，
+    而任务的 worktree 是从**开工那一刻的仓库快照**建的 ⇒ 基线里任何一条红测试
+    都会让后面**每一个**任务都过不了，而它改不动、也不该改。见 `防御模式.md` §102。
+
+    ⚠️ 这一组**必须用真 git 仓库**：差分靠 `git worktree add` 起一个基线副本，
+    替身证明不了"它真的跑在另一版代码上"（"替身喂的是我以为的行为"那个坑）。
+    """
+
+    def setup_method(self):
+        import subprocess
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = self.tmpdir.name
+
+        def _g(*a):
+            return subprocess.run(["git", *a], cwd=self.root, capture_output=True, text=True)
+
+        self._g = _g
+        _g("init", "-q")
+        _g("config", "user.email", "t@t")
+        _g("config", "user.name", "t")
+        # 基线：**一条本来就红的测试** + 一条绿的
+        self._write("test_base_red.py", "def test_red(): assert False\n")
+        self._write("test_ok.py", "def test_ok(): assert True\n")
+        _g("add", "-A")
+        _g("commit", "-qm", "base")
+        self.base = _g("rev-parse", "HEAD").stdout.strip()
+
+    def teardown_method(self):
+        self.tmpdir.cleanup()
+
+    def _write(self, relpath, content):
+        p = os.path.join(self.root, relpath)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w") as f:
+            f.write(content)
+
+    def test_基线就红的那条不算这次弄红的(self):
+        from singularity.scheduler.validator import (
+            has_own_test_failure, mark_baseline_diff, run_project_tests)
+        # 任务在这之后加了一条**自己写红的**测试
+        self._write("test_mine.py", "def test_mine(): assert False\n")
+        tr = run_project_tests(cwd=self.root)
+        assert not tr["passed"], "硬造：这一版本来就该是红的"
+
+        mark_baseline_diff(tr, self.base, self.root)
+        assert tr.get("baseline_checked") is True, f"差分没算出来：{tr.get('output','')[:200]}"
+        assert tr["new_failures"] == ["test_mine.py::test_mine"], tr.get("new_failures")
+        assert has_own_test_failure(tr) is True, "自己写红的那条被差分放过了"
+
+    def test_只有基线红时不算这个任务的失败(self):
+        from singularity.scheduler.validator import (
+            has_own_test_failure, mark_baseline_diff, run_project_tests)
+        self._write("strkit.py", "def f(): return 1\n")   # 任务只加了个无关文件
+        tr = run_project_tests(cwd=self.root)
+        assert not tr["passed"]
+
+        mark_baseline_diff(tr, self.base, self.root)
+        assert tr.get("baseline_checked") is True
+        assert tr["new_failures"] == [], tr.get("new_failures")
+        assert has_own_test_failure(tr) is False, "红的全是基线就有的，却还记这个任务的账"
+
+    def test_算不出差分就照旧判红(self):
+        """**fail-closed**：拿不到基线 ⇒ 保持原判定，不因为"差分没算成"就放行。"""
+        from singularity.scheduler.validator import (
+            has_own_test_failure, mark_baseline_diff, run_project_tests)
+        self._write("test_mine.py", "def test_mine(): assert False\n")
+        tr = run_project_tests(cwd=self.root)
+
+        mark_baseline_diff(tr, "不存在的ref", self.root)
+        assert "baseline_checked" not in tr, "ref 是假的却声称算过差分"
+        assert has_own_test_failure(tr) is True
+
+        # 空 base_ref（快照不是 git 型）同样算不出
+        tr2 = run_project_tests(cwd=self.root)
+        mark_baseline_diff(tr2, "", self.root)
+        assert "baseline_checked" not in tr2
+        assert has_own_test_failure(tr2) is True
+
+    def test_基线全绿时现在红的全是新引入的(self):
+        from singularity.scheduler.validator import (
+            mark_baseline_diff, run_project_tests)
+        self._write("test_base_red.py", "def test_red(): assert True\n")  # 把基线的红修绿
+        self._g("add", "-A")
+        self._g("commit", "-qm", "make base green")
+        green_base = self._g("rev-parse", "HEAD").stdout.strip()
+        self._write("test_mine.py", "def test_mine(): assert False\n")
+
+        tr = run_project_tests(cwd=self.root)
+        mark_baseline_diff(tr, green_base, self.root)
+        assert tr.get("baseline_checked") is True
+        assert tr["new_failures"] == ["test_mine.py::test_mine"], tr.get("new_failures")
+
+    def test_差分跑完不留临时worktree(self):
+        """跑完要把临时 worktree 注销掉 —— 否则 `.git/worktrees/` 会随判失败的任务攒死登记。"""
+        from singularity.scheduler.validator import mark_baseline_diff, run_project_tests
+        self._write("test_mine.py", "def test_mine(): assert False\n")
+        tr = run_project_tests(cwd=self.root)
+        mark_baseline_diff(tr, self.base, self.root)
+        out = self._g("worktree", "list", "--porcelain").stdout
+        assert out.count("worktree ") == 1, f"临时 worktree 没清干净：{out}"
