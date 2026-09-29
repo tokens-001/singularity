@@ -189,7 +189,7 @@ def test_exception_never_passes(monkeypatch, tmp_path, knob, kind):
     assert q["confidence"] < 0.5
 
 
-def test_crossover_failcloses_without_reviewer(monkeypatch):
+def test_crossover_failcloses_without_reviewer(monkeypatch, tmp_path):
     """拿不到 reviewer 时不能返回"通过" —— 造一条 critical 硬拦（测真函数，不打桩）。"""
     from singularity.scheduler import validator as val, dispatcher as disp
     # diff 为空时 crossover_review 会提前返回 "pass"（:278），根本走不到 chain 检查 ——
@@ -198,8 +198,11 @@ def test_crossover_failcloses_without_reviewer(monkeypatch):
                         lambda *a, **k: SimpleNamespace(stdout="diff --git a/a.py b/a.py\n+x=1\n"))
     monkeypatch.setattr(disp, "load_agents", lambda: {})
     monkeypatch.setattr(disp, "pick_agent_fallback_chain", lambda *a, **k: [])
+    # ⚠️ `cwd` 必须是**真目录**：2026-09-29 起 `cwd` 为空 = "不知道改动落在哪" ⇒
+    # 直接返回 `unavailable`、根本走不到下面那条 fail-closed。原来这儿写 `cwd=""`
+    # 是拿它当"不关心"用 —— 那层含义是旧代码的兜底**偷偷**给上的。
     r = val.crossover_review(task_desc="d", raw_output="o", changed_files=["a.py"],
-                             writer_level="any", writer_model="m", cwd="")
+                             writer_level="any", writer_model="m", cwd=str(tmp_path))
     assert r["verdict"] == "retry"
     assert r["issues"] and r["issues"][0]["severity"] == "critical"
 
@@ -438,7 +441,7 @@ class TestReviewerPoolExpansion:
         monkeypatch.setenv("QIDIAN_REVIEW_POOL_EXPAND", "0")
         assert rv._expand_review_pool(self._fake_registry(monkeypatch), "writer", []) == []
 
-    def test_multi_review_actually_uses_registry_model(self, monkeypatch):
+    def test_multi_review_actually_uses_registry_model(self, monkeypatch, tmp_path):
         """补进来的注册表模型必须真的被 multi_model_review 用上。"""
         from singularity.scheduler import validator as val, dispatcher as disp
         monkeypatch.setattr("subprocess.run",
@@ -449,9 +452,40 @@ class TestReviewerPoolExpansion:
         monkeypatch.setattr(disp, "dispatch", lambda *a, **k: SimpleNamespace(
             executor_result=SimpleNamespace(
                 raw_output='{"issues":[],"verdict":"pass","summary":"ok"}')))
-        r = val.multi_model_review("x.py", models=["registry-only"], cwd="", diff_only=True)
+        # 同上面那条：`cwd` 得给真目录（为空 = 不知道改动落在哪 ⇒ 直接 `unavailable`）
+        r = val.multi_model_review("x.py", models=["registry-only"],
+                                   cwd=str(tmp_path), diff_only=True)
         assert r.get("error") != "no models available", r
         assert "registry-only" in r.get("models_used", []), r
+
+
+class TestNoCwdIsNotSilent:
+    """拿不到 `cwd` ⇒ **不审、也不装作审过**（2026-09-29）。
+
+    同 `_hard_diff_rules` 那次拆兜底（2026-09-27，把**新建**的测试判成"已删除"）：
+    `cwd or config.PROJECT_ROOT` 会让 diff 在**奇点自己那个仓**里算 ⇒ 恒为空 ⇒
+    `crossover_review` 早退 `pass`、`multi_model_review` 返回 `{"issues": []}`
+    ⇒ **审查在"一条改动都没看到"的情况下放行**。
+    生产调用点都显式传 `cwd`（`_exec.py` 那句恒为真值）⇒ 现在走不到，
+    拆的是「将来新调用点不传就当场复发」这个必然性。
+    """
+
+    def test_交叉审查拿不到cwd不许装通过(self, monkeypatch):
+        from singularity.scheduler import validator as val
+        # 就算 subprocess 能返回一段像样的 diff，也不许拿别的根去算
+        monkeypatch.setattr("subprocess.run",
+                            lambda *a, **k: SimpleNamespace(stdout="diff --git a/a.py b/a.py\n+x=1\n"))
+        r = val.crossover_review(task_desc="d", raw_output="o", changed_files=["a.py"],
+                                 writer_level="any", writer_model="m", cwd="", base_ref="HEAD")
+        assert r["verdict"] == "unavailable", f"没拿到 cwd 却给了个像样的裁决：{r}"
+        assert "没拿到任务工作目录" in r["summary"], r
+        assert r["issues"] == [], "「没做」不该造出 issues（那是判失败）"
+
+    def test_多模型审查拿不到cwd要能被上层认出来(self):
+        from singularity.scheduler import validator as val
+        r = val.multi_model_review("x.py", models=["m"], cwd="", diff_only=True, base_ref="HEAD")
+        assert r.get("unavailable") == "没拿到任务工作目录(cwd)", r
+        assert r["models_used"] == [] and r["issues"] == []
 
 
 class TestReviewFailLimit:

@@ -769,6 +769,11 @@ def _review_dispatch(prompt, level, tag, model_cfgs, **kw):
     return result
 
 
+# 拿不到任务工作目录时的统一措辞（**不许拿别的根顶替**，见 `_hard_diff_rules` 那段）。
+# 2026-09-27 拆掉 `_hard_diff_rules` / `validate` 里那两处兜底，下面是**同形的另两处**。
+_NO_CWD_MSG = "没拿到任务工作目录(cwd)"
+
+
 def crossover_review(task_desc, raw_output, changed_files, writer_level, writer_model="", cwd=None,
                      base_ref=""):
     """Use a DIFFERENT model to review agent output. Returns {issues,verdict,summary}.
@@ -784,16 +789,28 @@ def crossover_review(task_desc, raw_output, changed_files, writer_level, writer_
 
     review_level = writer_level
 
+    # 🔴 **拿不到 cwd 就不审**（2026-09-29）。原来这里 `cwd=cwd or str(config.PROJECT_ROOT)`
+    # —— 会去**奇点自己那个仓**里算 diff ⇒ 恒为空 ⇒ 下面那句早退直接返回 `pass`，
+    # 于是**审查在"一条改动都没看到"的情况下放行**。上面刚拆掉的
+    # `_hard_diff_rules` 兜底是同一个病（那次把**新建**的测试判成"已删除"⇒ abort），
+    # 这是同形的第三处。生产调用点都显式传 cwd（`_exec.py` 那句恒为真值）⇒ 现在走不到，
+    # 拆的是「将来新调用点不传就当场复发」这个必然性。
+    # 「没做」既不放行也不判失败：返回 `unavailable`，由调用方如实披露。
+    if not cwd:
+        return {"issues": [], "verdict": "unavailable",
+                "summary": f"{_NO_CWD_MSG} —— diff 没算，这条 review 没做"
+                           "（不是「审过且没问题」）"}
+
     # Get git diff —— 带基准
     _base = [base_ref] if base_ref else []
     diff_text = ""
     try:
         r = subprocess.run(["git","diff",*_base,"--stat",*changed_files],
-                         capture_output=True,text=True,timeout=10,cwd=cwd or str(config.PROJECT_ROOT))
+                         capture_output=True,text=True,timeout=10,cwd=cwd)
         diff_text = (r.stdout or "")[:3000]
         if diff_text:
             r2 = subprocess.run(["git","diff",*_base,*changed_files],
-                              capture_output=True,text=True,timeout=10,cwd=cwd or str(config.PROJECT_ROOT))
+                              capture_output=True,text=True,timeout=10,cwd=cwd)
             diff_text += "\n" + (r2.stdout or "")[:5000]
     except Exception as _e:
         logging.getLogger(__name__).warning("git diff failed: %s", _e)
@@ -874,7 +891,16 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
     import time as _time
     from pathlib import Path as _Path
 
-    root = cwd or str(config.PROJECT_ROOT)
+    # 🔴 **拿不到 cwd 就不审**（2026-09-29，同 `crossover_review` 那一处）：
+    # 原来退回 `config.PROJECT_ROOT` ⇒ 在**奇点自己那个仓**里取 diff / 找文件 ⇒
+    # 拿到空 diff 或"文件不存在" ⇒ 返回 `{"issues": []}`，**上层读成"审过且没问题"**。
+    # 返回一个显式标记，由调用方如实披露（「没做」既不放行也不判失败）。
+    if not cwd:
+        return {"issues": [], "verdicts": [], "summaries": [], "models_used": [],
+                "elapsed": 0, "file": filepath, "mode": "unavailable", "lines": 0,
+                "unavailable": _NO_CWD_MSG}
+
+    root = cwd
 
     # S4: review_level 在闭包 review_chunk 中被引用, 必须在此定义 (两档后统一 "any")
     review_level = "any"

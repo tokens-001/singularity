@@ -439,7 +439,13 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                         return
                     rev_files.append(f)
                     rev_models = review.get("models_used", [])
-                    if not rev_models:
+                    if review.get("unavailable"):
+                        # 🔴 **刻意跟下面那条分开说**（2026-09-29）：审查没跑成有两种原因，
+                        # 而那条文案写死了"审查输入为空" —— 拿它去说"不知道改动落在哪个
+                        # 目录"是**归因错**（查的人会去翻 diff，而真正的问题是没传 cwd）。
+                        validation.unverified.append(
+                            f"未经多模型审查: {f} ({review['unavailable']})")
+                    elif not rev_models:
                         # 审查输入为空（见 P0-1）时一个模型都不会被调 —— 这不是
                         # "审过且没问题"，必须如实披露，别让报告写 delivered。
                         validation.unverified.append(
@@ -536,6 +542,11 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                     raw_output=exec_result.raw_output,
                     changed_files=changed, writer_level=level,
                     writer_model=writer_model, cwd=cwd, base_ref=base_ref)
+                if review.get("verdict") == "unavailable":
+                    # 没传 cwd ⇒ 没算 diff ⇒ 这条 review **没做**（不是"审过且没问题"）。
+                    # 既不放行也不判失败：只如实披露（同 `_hard_diff_rules` 拆兜底那次的规矩）。
+                    validation.unverified.append(
+                        f"未经交叉审查: {review.get('summary', '')[:200]}")
                 if review.get("issues"):
                     crit = [i for i in review["issues"]
                             if _sev(i) == "critical"]
