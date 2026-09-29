@@ -261,19 +261,57 @@ def post_execution_hook(exec_result, snap):
 # v2: Independent tests + crossover review
 # ═══════════════════════════════════════════════════════════════
 
-def tests_failed_msg(tr: dict) -> str:
+# 失败用例**所属文件** —— 只认 pytest 汇总行 `FAILED <文件>::<用例>`。
+# 它在 `failed_output_tail` 留住的尾巴里（汇总行就在末尾）；**不认** `___ test_x ___`
+# 那种分隔行（会混进 fixture 名），**也不认** traceback 里的 `文件:行号`
+# （那是栈帧，只要文件进过栈就会被算进来 ⇒ 全是噪音）。
+_FAILED_TEST_FILE_RE = re.compile(r"^FAILED\s+(\S+?\.py)\b", re.MULTILINE)
+
+
+def _basename(p) -> str:
+    return str(p).replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def failed_test_files(tr: dict) -> list[str]:
+    """测试输出里那些失败用例**分别在哪个文件**（去重保序）。取不到就 `[]` —— 不猜。"""
+    if not isinstance(tr, dict):
+        return []
+    out = str(tr.get("output") or "")
+    return list(dict.fromkeys(m.group(1) for m in _FAILED_TEST_FILE_RE.finditer(out)))
+
+
+def tests_failed_msg(tr: dict, changed_files=None) -> str:
     """把 `run_project_tests` 的结果说成一句人话。**三处消费端共用这一份。**
 
     ⚠️ 为什么要有它：`failures` 那个字段一度被塞进**退出码**，
     于是 "npm 退出码 9" 被渲染成 **"tests failed: 9 failures"** —— 编出来的数字
     （2026-09-14，外派 D 反升级里点名的"编造数字"同族）。
     现在退出码单独存 `exit_code`，这里按"有没有数出失败数"分开措辞。
+
+    `changed_files` 传了的话**多补一句归因**：失败的那几条在不在这个任务的改动里。
+    ⚠️ **门的强度一个字不动**（`passed` 不看它）—— 本仓对"判据没错、但归因要说清"
+    这一族一贯只标归因（见 `docs/判据错位审计-20260918.md`）。
+    2026-09-29 加，来历是 `run_project_tests` 的**整仓**语义：任务的 worktree 是从
+    「开工那一刻的仓库状态」建的 ⇒ **基线里任何一条红测试、或先合并进来的兄弟产物
+    弄红的测试，都会让后面每一个任务都过不了**，而它一个字都没碰过那个文件。
+    真机实例：trace `1790613497734`（只改了 `strkit.py`，红的却是
+    `test_planted_baseline_broken_20260929.py`）。不说这一句，读的人（和拿到这条
+    重试反馈的模型）只会照着一条**自己改不动、也不该改**的测试反复改。
     """
-    code = tr.get("exit_code")
-    n = tr.get("failures")
+    code = tr.get("exit_code") if isinstance(tr, dict) else None
+    n = tr.get("failures") if isinstance(tr, dict) else None
     if code and not n:
-        return f"tests failed: 退出码 {code}（失败个数没能从输出里数出来）"
-    return f"tests failed: {n if n is not None else '?'} failures"
+        msg = f"tests failed: 退出码 {code}（失败个数没能从输出里数出来）"
+    else:
+        msg = f"tests failed: {n if n is not None else '?'} failures"
+    if changed_files is None:
+        return msg
+    own = {_basename(f) for f in changed_files}
+    outside = [f for f in failed_test_files(tr) if _basename(f) not in own]
+    if outside:
+        msg += ("；⚠️ 失败的 " + "、".join(_basename(f) for f in outside[:3])
+                + " **不在这个任务的改动里**（可能是基线或别的任务带进来的）")
+    return msg
 
 
 def failed_output_tail(output: str, n: int = 600) -> str:

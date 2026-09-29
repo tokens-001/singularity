@@ -56,6 +56,35 @@ class TestValidatorV2:
         assert r["exit_code"] == 1, "pytest 三条失败也是退 1"
         assert r["failures"] == 3, "拿退出码顶替失败数的话这里会是 1"
 
+    def test_失败的测试不在自己改动里要说出归因(self):
+        """`run_project_tests` 跑的是**整仓** ⇒ 要能说出"红的这条不是它改的"。
+
+        2026-09-29 坐实（原单子在 `docs/判据错位审计-20260918.md` 的「疑3」）：
+        任务的 worktree 是从**开工那一刻的仓库状态**建的（`_git_worktree.create`
+        的 base 就是快照 ref），所以基线里任何一条红测试、或先合并进来的兄弟产物
+        弄红的测试，都会让后面**每一个**任务都过不了 —— 而它没碰过那个文件。
+        真机实例：trace `1790613497734`，只改了 `strkit.py`，红的是
+        `test_planted_baseline_broken_20260929.py`。
+        ⚠️ **只标归因，门一个字不动** —— 所以这条同时钉住"判词说了"和"passed 没变"。
+        """
+        from singularity.scheduler.validator import tests_failed_msg
+        # 真跑一次 pytest：红的是**别人**的文件
+        self._write("test_别人的.py", "def test_x(): assert False")
+        self._write("strkit.py", "def f(): return 1")
+        r = run_project_tests(cwd=self.root)
+        assert not r["passed"], "硬造：这条测试本来就该是红的"
+
+        msg = tests_failed_msg(r, changed_files=["strkit.py"])
+        assert "test_别人的.py" in msg and "不在这个任务的改动里" in msg, \
+            f"红的是别人的文件，判词却不说：{msg}"
+
+        # 反方向：红的就是自己改的文件 ⇒ **不许**加那句（否则这句成了噪音）
+        msg2 = tests_failed_msg(r, changed_files=["test_别人的.py"])
+        assert "不在这个任务的改动里" not in msg2, f"它自己改的也报归因：{msg2}"
+
+        # 不传 changed_files 的老调用点行为不变
+        assert tests_failed_msg(r).startswith("tests failed: "), tests_failed_msg(r)
+
     def test_数不出来时不许编(self):
         """反方向：**解析不到就保持 0**，不许拿退出码凑一个数。
 

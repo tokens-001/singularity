@@ -315,7 +315,7 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                 if not test_result.get("passed"):
                     quality["warnings"].append(
                         f"tests failed ({test_result.get('runner','?')}): "
-                        + tests_failed_msg(test_result))
+                        + tests_failed_msg(test_result, changed_files=changed))
                     quality["failure_kind"] = "test_failure"
                     quality["confidence"] = max(0.0, quality.get("confidence", 0.5) - 0.3)
                     # ⚠️ **取尾巴，不取头**（2026-09-28）：`[:200]` 存下来的正好是

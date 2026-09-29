@@ -531,7 +531,7 @@ def _check_artifact(changed_files: list[str], root: Path, tests_result: dict = N
         evidence["tests"] = tests_result
         if not tests_result.get("passed"):
             from singularity.scheduler.validator import tests_failed_msg
-            errors.append(tests_failed_msg(tests_result))
+            errors.append(tests_failed_msg(tests_result, changed_files=changed_files))
     else:
         try:
             from singularity.scheduler.validator import run_project_tests
@@ -539,7 +539,7 @@ def _check_artifact(changed_files: list[str], root: Path, tests_result: dict = N
             evidence["tests"] = test_result
             if not test_result.get("passed"):
                 from singularity.scheduler.validator import tests_failed_msg
-                errors.append(tests_failed_msg(test_result))
+                errors.append(tests_failed_msg(test_result, changed_files=changed_files))
         except Exception:
             pass  # test runner 挂了不阻塞，记在 supervisor 日志
 
