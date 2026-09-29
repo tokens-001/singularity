@@ -540,6 +540,24 @@ def _decide_cascade(task, level, turn, validation, disp_result, all_tool_events,
             fb_parts.append(
                 "【测试失败输出】（**末尾**是失败详情；照着它改，不要猜）\n"
                 + val_mod.failed_output_tail(_tr.get("output", ""), 1500))
+        # 🔴🔴 **`unverified` 必须进反馈**（2026-09-30，`round-20260930b`）。
+        #
+        # 它是"我们这边**看见了**、但没验证过"的那几条 —— 而**要改的东西经常就在里面**：
+        # 「执行器未产出任何文件 (changed_files 空)」（这轮 T1 就是这个）·
+        # 「一个自己的产出文件都没交」（`9fd32832` 那条 —— **我当时就是把它塞进 `unverified`
+        # 指望 `_decide_cascade` 带过去的，而这条接线不存在**）· 「硬规则未执行」…
+        #
+        # 原来这段只拼 `evidence` + `warnings`，而 `evidence` 在这种失败下**全是空值**
+        # （上面那句注释里的 `validate_verdict: ""` / `validate_reason: ""`）⇒ 模型收到的
+        # 反馈**等于什么都没说** ⇒ 它只能**一模一样地重演**：T1 连试 3 次，每次都交同一份
+        # 「我已完成」的报告（109,118 token，零文件产出）。
+        #
+        # 形状与 `data_model` / `estimated_files` / `test_result` 以及 `fb_parts` 最初那版
+        # **逐字同形**：**不是没检测到，是没送到。**
+        if validation.unverified:
+            fb_parts.append(
+                "【本轮未验证 / 未达标的地方】（看这几条 —— 要改的通常就在里面）\n"
+                + "\n".join(f"- {u}" for u in validation.unverified))
         fb_parts.append(json.dumps(validation.evidence, ensure_ascii=False, indent=2))
         if quality.get("warnings"):
             fb_parts.append("质量警告:\n" + "\n".join(f"- {w}" for w in quality["warnings"]))

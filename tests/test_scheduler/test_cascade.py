@@ -162,6 +162,46 @@ class TestDecideCascade:
         fb = self._retry_with_test_result(None)
         assert "失败类型: test_failure" in fb, "反馈整段没了 —— 比少一段更坏"
 
+    # ── `unverified` 也要进反馈（2026-09-30）────────────────────────────
+
+    def _retry_with_unverified(self, unverified):
+        """跑 retry 分支，`evidence` 用**真机上那种全空值**的（那正是要命的点）。"""
+        task = self._make_task()
+        validation = val_mod.ValidationReport(
+            verdict="信息不足", action="retry", confidence=0.0,
+            evidence={"verdict": "信息不足", "action": "retry",
+                      "validate_verdict": "", "validate_reason": ""},
+            unverified=list(unverified))
+        action, feedback = _decide_cascade(
+            task, "any", 1, validation, self._make_disp(), [], None,
+            ["E_model1"], set(),
+            {"warnings": [], "failure_kind": "ok", "confidence": 0.0,
+             "test_result": {"passed": True, "output": ""}})
+        assert action == "continue", "这一支应当是重试"
+        return feedback
+
+    def test_零文件产出必须进反馈(self):
+        """🔴 **`round-20260930b` 的 T1 就死在这一格** —— 连试 3 次、每次交同一份
+        「我已完成」的报告、零文件产出（109,118 token，整轮因此死）。
+
+        来因：那句可执行的事实（「执行器未产出任何文件」）在 `validation.unverified` 里，
+        而 `fb_parts` 只拼 `evidence` + `warnings`；这种失败下 `evidence` **全是空值**
+        （`validate_verdict: ""` / `validate_reason: ""`）⇒ 反馈等于**什么都没说**
+        ⇒ 模型只能一模一样地重演（它连"为什么要重试"都不知道）。
+
+        ⚠️ 同一个坑当天已经犯过一次：`9fd32832` 把「一个自己的产出文件都没交」塞进
+        `unverified`，那句注释还写着"交给 `_decide_cascade`" —— 而**这条接线不存在**。
+
+        判据：拿掉 `if validation.unverified:` 那一整段 ⇒ 本条红。
+        """
+        fb = self._retry_with_unverified(["执行器未产出任何文件 (changed_files 空)"])
+        assert "未产出任何文件" in fb, f"反馈里没有那句要命的事实：{fb[:300]}"
+
+    def test_没有unverified时不许硬塞一段空的(self):
+        """反方向：没有就别编一个空标题出来（同「测试通过时不许塞输出」）。"""
+        fb = self._retry_with_unverified([])
+        assert "未验证 / 未达标的地方" not in fb
+
     def test_abort_terminal(self):
         task = self._make_task()
         validation = val_mod.ValidationReport(verdict="阻断", action="abort", unverified=["fatal"])

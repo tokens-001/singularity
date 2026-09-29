@@ -111,11 +111,18 @@ def _task(**kw):
     return type("T", (), defaults)()
 
 
-def _val(action="pass", confidence=0.9, verdict="通过", evidence=None):
-    """创建模拟 ValidationReport。"""
+def _val(action="pass", confidence=0.9, verdict="通过", evidence=None, unverified=None):
+    """创建模拟 ValidationReport。
+
+    ⚠️ `unverified` **必须在**（2026-09-30）：真 `ValidationReport` 一定有这个字段
+    （`field(default_factory=list)`），而 `_decide_cascade` 现在会读它拼反馈
+    —— 替身少了它 ⇒ `AttributeError`，**而那不是被测代码的错，是替身形状不对**。
+    同族：`round-20260930` 那天我拿手搓的 `output` 当替身，喂出了"修复是绿的、生产是哑弹"。
+    """
     return type("V", (), {
         "action": action, "confidence": confidence,
         "verdict": verdict, "evidence": evidence or {},
+        "unverified": list(unverified or []),
         "quality_signals": {},
     })()
 
