@@ -634,6 +634,17 @@ def project_start(project_id: str, push_event=None) -> tuple[dict, int]:
     #    会把人正要重试的那批失败任务**整批丢掉**。恢复走 `/resume`。
     if proj_mod.halt_state(proj)["halted"]:
         return _halted_409(proj, "启动/重跑流程（要接着跑请先用 `/resume` 解除停）")
+    # 🔴🔴 **"没停" ≠ "没有正在跑的批次"，两个都得拦**（2026-09-29 `round-20260929d` 真机）。
+    #    上面那句只拦了"停"，而**批次已经在跑**的项目调 `/start` 一样会整批重建：
+    #    那一轮门批准（23:16:01）之后调度循环**自己**拆了第一批并派了 T1，
+    #    我 5 秒后照清单调 `/start`（23:16:06）⇒ 第一批**整批变孤儿**，
+    #    而它的 T1 还在跑（白烧 25,959 token，还占着一个并发位）。
+    #    ⇒ 闸门按**有没有批次**判，不按"停没停"判（那是两件事）。
+    if proj.task_ids:
+        return {"error": (f"项目已有 {len(proj.task_ids)} 个任务，`/start` 会**整批重建**"
+                          "（正在跑的会变孤儿、等着重试的会被丢掉）。"
+                          "要接着跑：等调度循环推，或 `/resume` 解除停。"),
+                "task_count": len(proj.task_ids)}, 409
     agents = disp_mod.load_agents()
     if not _start_background(project_id, "start_workflow",
                              wf_mod.start_project_workflow, agents):

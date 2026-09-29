@@ -188,6 +188,33 @@ def test_run_phase_接口在停了的项目上被拒(proj):
     assert code == 409, res
 
 
+def test_start_在已有批次的项目上被拒(proj):
+    """🔴 **"没停" ≠ "没有正在跑的批次"** —— 2026-09-29 `round-20260929d` 真机踩出来的。
+
+    `/start` → `run_phase` → `_run_execution` 第一件事就是 `project.task_ids = []`
+    整批重建。原来只拦"停着的项目"，而**没停、批次已经在跑**的项目调它照样整批重建：
+    那一轮门批准之后调度循环**自己**拆了第一批并派了 T1，我 5 秒后调 `/start`
+    ⇒ 第一批**整批变孤儿**，它的 T1 还在跑（白烧 25,959 token + 占一个并发位）。
+
+    变异：删掉 `project_start` 里 `if proj.task_ids:` 那一支 ⇒ 本条红。
+    """
+    from singularity.scheduler._api_projects import project_start
+    _mk_task(proj, TaskStatus.RUNNING)                 # 批次在跑，而**项目没停**
+    assert P.halt_state(P.load(proj.id))["halted"] is False, "前提：这个项目没停"
+    res, code = project_start(proj.id)
+    assert code == 409, f"批次在跑还让它整批重建：{res}"
+    assert P.load(proj.id).task_ids == proj.task_ids, "任务批次被动过了"
+
+
+def test_start_没有批次的不受这条影响(proj):
+    """**反方向对照**：一条任务都没有的项目不该被这条闸门挡（否则第一次就跑不起来）。"""
+    from singularity.scheduler._api_projects import project_start
+    assert not proj.task_ids
+    res, code = project_start(proj.id)
+    assert not (code == 409 and "已有" in str(res.get("error", ""))), \
+        f"没批次的项目被新闸门挡了：{res}"
+
+
 def test_HTTP路由接通(tmp_path, monkeypatch):
     """函数对 ≠ 接线通：把路由删掉 ⇒ 本条红。"""
     from singularity.web import app as webapp
