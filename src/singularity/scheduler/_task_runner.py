@@ -21,6 +21,7 @@ from singularity.scheduler._exec import (
     _save_trace,
     decompose,
     read_partial_started_at,
+    read_partial_usage,
 )
 from singularity.scheduler._planner import (
     _materialize_in_main,
@@ -126,7 +127,22 @@ def _archive_task_outcome(task, route, disp_result, failure_mode: str = "") -> N
     """
     exec_out = disp_result.executor_result if disp_result else None
     model = getattr(disp_result, 'agent_cfg', {}).get("model", "") if disp_result else ""
-    tokens = getattr(exec_out, 'token_count', 0) if exec_out else 0
+    # ── 用量要用**任务累计**，不是"这一批交回来的那一次"（2026-09-29 修）──
+    # `exec_out.token_count` 是**单次 dispatch** 的量：执行器每次 dispatch 新建
+    # （`_dispatch_exec._run_executor`），它那个 `total_tokens` 从 0 起算。
+    # 而这一行记的是**任务**的账 ⇒ 一个任务跑过 N 次 dispatch（重试 / 返工 /
+    # 换模型）时只记了其中一次，前面的全丢。
+    # 实测（round-20260928j 的 T1，6 次 dispatch）：账本 113,197 vs 侧车 435,832。
+    # 侧车 `partial_usage/<task>.json` 由 `_exec._persist_partial_usage` **每次
+    # dispatch 之后累加**落盘 ⇒ 它才是任务累计，超时那条路
+    # （`orchestrator._account_salvaged`）本来就按它记 —— 只有正常收尾这条漏了，
+    # 于是同一个任务在两条路上给出两个数。
+    # 取 max 是防"侧车那次没写成功"（`partial_usage_persist_failed`）把批次数也丢了。
+    _tok_cum = read_partial_usage(task.id)[0]
+    tokens = max(int(_tok_cum or 0),
+                 int(getattr(exec_out, 'token_count', 0) or 0) if exec_out else 0)
+    # ⚠️ `elapsed` 没跟着改：它是"这一次 dispatch 花了多久"，而超时那条路记的是
+    # **任务墙钟**（`_account_salvaged(..., elapsed_s)`）—— 两个定义，要统一是另一个决定。
     elapsed = getattr(exec_out, 'elapsed', 0) if exec_out else 0
 
     try:

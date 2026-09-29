@@ -630,6 +630,49 @@ def test_partial_usage_distinguishes_never_started_from_not_persisted(monkeypatc
     assert read_partial_usage("t2")[0] == 100
 
 
+def test_账本记的是任务累计_不是最后一次派发(monkeypatch, tmp_path):
+    """一个任务跑过 N 次 dispatch 时，账本要记**任务累计**（2026-09-29 修）。
+
+    实测（`round-20260928j` 的 T1，**6 次 dispatch**）：侧车 `435,832`，
+    而 `token_usage.json` 里那一行只有 **113,197** —— 只记了其中一次。
+    根因：`exec_out.token_count` 是**单次** dispatch 的量（执行器每次 dispatch
+    新建，`total_tokens` 从 0 起算），而这一行记的是**任务**的账。
+    ⇒ 凡是重试 / 返工 / 换过模型的任务，账本都少记，而它正是「花了多少钱」的来源。
+    """
+    import singularity.scheduler._task_runner as tr
+
+    from singularity.scheduler import config
+    from singularity.scheduler import tracker as tr_mod
+    from singularity.scheduler._exec import _persist_partial_usage
+
+    monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+    monkeypatch.setattr(config, "PARTIAL_USAGE_DIR", tmp_path / "partial_usage")
+    monkeypatch.setattr(tr_mod.config, "QIDIAN_DIR", tmp_path)
+    (tmp_path / "partial_usage").mkdir()
+
+    task = tr_mod.create("要跑好几轮的任务")
+    # 三次 dispatch 各烧一笔 —— 走的**是真函数**，替身证明不了"它累加"
+    for d in (1000, 2000, 4000):
+        _persist_partial_usage(task.id, "any", "m", d)
+
+    grabbed = {}
+    monkeypatch.setattr(tr, "record_tokens", lambda **k: grabbed.update(k))
+    monkeypatch.setattr(tr.mem_mod, "archive_experience", lambda **k: None)
+    monkeypatch.setattr(tr.rl_mod, "record_outcome", lambda **k: None)
+
+    class _Res:
+        token_count = 4000          # ← 只有最后一次，这正是 bug 的形状
+        elapsed = 12.0
+        changed_files: list = []
+
+    class _Disp:
+        executor_result = _Res()
+        agent_cfg = {"model": "m"}
+
+    tr._archive_task_outcome(task, None, _Disp())
+    assert grabbed["tokens"] == 7000, f"记成了单次派发的量: {grabbed}"
+
+
 def test_salvage_names_which_kind_of_no_account(monkeypatch, tmp_path):
     """收尾那句要**说清是哪一种**没账。"""
     tr = _patch_dispatch_env(monkeypatch, tmp_path)
