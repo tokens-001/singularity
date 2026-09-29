@@ -490,3 +490,43 @@ def run_check(check, root: str | os.PathLike, timeout: float = DEFAULT_TIMEOUT) 
         "missing_inputs": missing_inputs(_out, _err) if proc.returncode != parsed["expect_exit"] else [],
         "reason": "",
     }
+
+
+def run_check_at_ref(check, ref: str, work_dir: str, timeout: float = DEFAULT_TIMEOUT) -> dict | None:
+    """在**基线那一版**里跑同一条检查。只给归因用。算不出来返回 `None`。
+
+    ⚠️ **懒导入 `validator`**：本模块**顶层**没有任何内部依赖（只用 os/re/subprocess），
+    这条不能破 —— `execution_judge` 等地方在导入期就摸它。worktree 那套卫生
+    （`worktree add --detach` → `remove --force` + 删目录）也只有 `in_ref_worktree` 一处。
+    """
+    from singularity.scheduler import validator as val_mod
+    return val_mod.in_ref_worktree(ref, work_dir, lambda tmp: run_check(check, tmp, timeout))
+
+
+def pre_existing_failure(now: dict, base: dict | None) -> bool:
+    """这条失败**是不是基线里本来就有的**（⇒ 不记这个项目的账）。
+
+    🔴 **2026-09-30**（`round-20260930`）：机械检查原来只看
+    `returncode == expect_exit`，而**架构声明的命令**（通常是 `python3 -m pytest`）
+    跑的是**整仓** ⇒ 基线里本来就红的测试让它**假红** —— 实测 2/3 条 `passed=false`
+    而 stdout 是 `1 failed, 24 passed`（唯一红的只有种进基线的那条）。
+    同一轮里 `e538c0d3` 已经在**任务级**修了同一个病，这层漏了。
+
+    🔴 **三种情况一律 `False`（fail-closed，照旧判红）**：
+      · 基线那次没跑成 / 压根没跑（`None` / `ran=False`）
+      · 基线那次**过了** ⇒ 现在红是这次弄的
+      · 两边失败用例**一条都解析不出来** ⇒ 分不了类就别猜
+        （非 pytest 声明的命令本来就没有 `FAILED <文件::用例>` 这种行）
+
+    判据与任务级那份**同口径**（`validator.has_own_test_failure`）：只看
+    "现在红的 ⊆ 基线红的"，**不比条数、不降到文件级** —— 文件级的话
+    "基线红一条、现在红三条"会被当成"同一个文件"糊过去，那两条真回归就漏了。
+    """
+    from singularity.scheduler import validator as val_mod
+    if not isinstance(base, dict) or not base.get("ran") or base.get("passed"):
+        return False
+    now_ids = val_mod.failed_test_ids(now)
+    base_ids = val_mod.failed_test_ids(base)
+    if not now_ids or not base_ids:
+        return False
+    return set(now_ids) <= set(base_ids)

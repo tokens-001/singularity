@@ -433,28 +433,196 @@ class TestRunCheckAttribution:
 
 
 class TestSplitCheckResults:
-    """三分类的**接线**：分错了界面会静默说错话，而不会有人因此收到告警。"""
+    """四分类的**接线**：分错了界面会静默说错话，而不会有人因此收到告警。"""
 
     @staticmethod
     def _split(rs):
         from singularity.scheduler.workflow import _split_check_results
         return _split_check_results(rs)
 
-    def test_三类各归各的(self):
-        unran, timed_out, missing = self._split([
+    def test_四类各归各的(self):
+        unran, timed_out, missing, pre = self._split([
             {"ran": False, "passed": False, "reason": "无法执行: FileNotFoundError"},
             {"ran": True, "passed": False, "reason": "超时 60s"},
             {"ran": True, "passed": False, "missing_inputs": ["tests/test_filters.py"]},
             {"ran": True, "passed": False, "missing_inputs": []},     # 真没过
+            {"ran": True, "passed": False, "missing_inputs": [], "pre_existing": True},
             {"ran": True, "passed": True, "missing_inputs": []},      # 通过
         ])
-        assert len(unran) == 1 and len(timed_out) == 1 and len(missing) == 1
+        assert len(unran) == 1 and len(timed_out) == 1
+        assert len(missing) == 1 and len(pre) == 1
 
     def test_超时那条不算产物没到(self):
         """超时是**我们的秒数不够**，不是"上游没交付" —— 两者都报的话，
         人会去查错方向（去问哪个任务没交付，而其实是该加 timeout）。"""
-        _, timed_out, missing = self._split([{"ran": True, "passed": False, "reason": "超时 60s"}])
+        _, timed_out, missing, _ = self._split([{"ran": True, "passed": False, "reason": "超时 60s"}])
         assert len(timed_out) == 1 and missing == []
 
-    def test_空结果是三个空表(self):
-        assert self._split([]) == ([], [], [])
+    def test_基线就红那条不算产物没到(self):
+        """四栏**两两不相交** —— 要相加之前先问交集（`防御模式.md` 那一族）。"""
+        _, _, missing, pre = self._split([
+            {"ran": True, "passed": False, "missing_inputs": ["a.py"], "pre_existing": True}])
+        assert len(pre) == 1 and missing == []
+
+    def test_空结果是四个空表(self):
+        assert self._split([]) == ([], [], [], [])
+
+
+class TestPreExistingFailure:
+    """机械检查里的"基线就红" —— **不记这个项目的账**，但也**不是通过**。
+
+    来历 `round-20260930`：机械检查原来只看 `returncode == expect_exit`，而架构声明的
+    命令跑的是**整仓** ⇒ 种在基线里的坏测试让它假红（实测 2/3 条 `passed=false`，
+    而 stdout 是 `1 failed, 24 passed`，唯一红的只有那条）。
+    同一轮里 `e538c0d3` 已经在**任务级**修了同一个病，这层漏了。
+    """
+
+    @staticmethod
+    def _res(ids, passed=False):
+        return {"ran": True, "passed": passed, "exit": 1,
+                "output": "".join(f"FAILED {i}\n" for i in ids)}
+
+    @staticmethod
+    def _pre(now, base):
+        from singularity.scheduler._machine_checks import pre_existing_failure
+        return pre_existing_failure(now, base)
+
+    def test_红的同一条_不算项目弄的(self):
+        assert self._pre(self._res(["tests/test_qq7.py::test_qq7"]),
+                         self._res(["tests/test_qq7.py::test_qq7"])) is True
+
+    def test_基线是绿的_就是这次弄的(self):
+        base = {"ran": True, "passed": True, "exit": 0, "output": "5 passed"}
+        assert self._pre(self._res(["a.py::t"]), base) is False
+
+    def test_现在多红一条_就是这次弄的(self):
+        """⚠️ **必须细到用例**：降到文件级的话，"基线红一条、现在红三条"会被
+        当成"同一个文件、忽略" —— 那两条真回归就漏了。"""
+        assert self._pre(self._res(["a.py::t1", "a.py::t2"]),
+                         self._res(["a.py::t1"])) is False
+
+    def test_现在少红一条_仍算基线就红(self):
+        assert self._pre(self._res(["a.py::t1"]),
+                         self._res(["a.py::t1", "a.py::t2"])) is True
+
+    def test_分不了类一律照旧判红(self):
+        """非 pytest 声明的命令压根没有 `FAILED <文件::用例>` 这种行 ⇒ 别猜。"""
+        now = {"ran": True, "passed": False, "exit": 1, "output": "npm ERR! test failed"}
+        assert self._pre(now, dict(now)) is False
+
+    def test_基线没跑成或压根没跑也不放行(self):
+        now = self._res(["a.py::t"])
+        assert self._pre(now, None) is False
+        assert self._pre(now, {"ran": False, "passed": False}) is False
+
+
+class TestProjectBaselineRef:
+    """基线 ref = 项目**动手前那一刻** —— 本项目快照里 `created_at` 最早的那个。
+
+    钉的是那一跳：`_phase_cwd` 返回 **str**（不是 Path），写成
+    `_phase_cwd(p).resolve()` 会抛，而函数里那句 `except` 会把它咽成 `""`
+    ⇒ **归因全程静默失效**，盘上一点痕迹都没有。
+    """
+
+    @staticmethod
+    def _meta(dirpath, name, ref, at, root):
+        import json
+        (dirpath / f"{name}.json").write_text(json.dumps(
+            {"id": name, "method": "git", "ref": ref,
+             "created_at": at, "repo_root": str(root)}), encoding="utf-8")
+
+    def test_只认本项目_且取最早那个(self, tmp_path, monkeypatch):
+        from singularity.scheduler import config as cfg, workflow as w
+        snaps = tmp_path / "snaps"
+        snaps.mkdir()
+        monkeypatch.setattr(cfg, "SNAPSHOT_DIR", snaps)
+        repo = tmp_path / "项目仓库" / "demo"
+        monkeypatch.setattr(w, "_phase_cwd", lambda p: str(repo))   # 生产里返回 str
+
+        self._meta(snaps, "s3", "ccccccc", 300, repo)          # 本项目，最晚
+        self._meta(snaps, "s1", "aaaaaaa", 100, repo)          # 本项目，最早 ← 要的是它
+        self._meta(snaps, "s2", "bbbbbbb", 200, tmp_path / "别的项目")
+        assert w._project_baseline_ref(object()) == "aaaaaaa"
+
+    def test_取不到就返回空串(self, tmp_path, monkeypatch):
+        """空串 ⇒ 调用方跳过归因、照旧判红（fail-closed）。"""
+        from singularity.scheduler import config as cfg, workflow as w
+        snaps = tmp_path / "空的"
+        snaps.mkdir()
+        monkeypatch.setattr(cfg, "SNAPSHOT_DIR", snaps)
+        monkeypatch.setattr(w, "_phase_cwd", lambda p: str(tmp_path / "没快照"))
+        assert w._project_baseline_ref(object()) == ""
+
+
+class TestMachineChecksWiring:
+    """**接线**：失败的那几条有没有真去问基线。
+
+    🔴 这一跳断掉是**完全静默**的 —— 盘上照样只有一句「机械检查 x/y 条通过」，
+    看不出归因压根没跑。所以判据必须是"跑完之后 `pre_existing` 标上了没有"，
+    而不是"这两个函数各自对不对"。
+    """
+
+    def _project(self):
+        class _P:
+            id = "p1"
+            issues = []
+
+            def add_lineage(self, *a, **k):
+                pass
+        return _P()
+
+    def test_失败的那条被标了pre_existing(self, tmp_path, monkeypatch):
+        from singularity.scheduler import _machine_checks as mchk, workflow as w
+        monkeypatch.setattr(w, "_phase_cwd", lambda p: str(tmp_path))
+        monkeypatch.setattr(w, "_project_baseline_ref", lambda p: "base123")
+        monkeypatch.setattr(w, "_save_phase_output", lambda *a, **k: None)
+        monkeypatch.setattr(mchk, "run_check", lambda chk, root: {
+            "ran": True, "passed": False, "exit": 1, "missing_inputs": [],
+            "output": "FAILED tests/test_qq7.py::test_qq7\n"})
+        monkeypatch.setattr(mchk, "run_check_at_ref", lambda chk, ref, root: {
+            "ran": True, "passed": False, "exit": 1, "missing_inputs": [],
+            "output": "FAILED tests/test_qq7.py::test_qq7\n"})
+
+        note = w._run_machine_checks(self._project(), [
+            {"rule": "全量 pytest 退出码 0",
+             "check": {"argv": ["python3", "-m", "pytest"], "expect_exit": 0}}])
+
+        assert note is not None and "基线里本来就红" in note, note
+        assert "0/1 条通过" in note
+
+    def test_基线取不到时不做归因_照旧算不通过(self, tmp_path, monkeypatch):
+        """取不到基线 ⇒ **不许**因此变成"没失败"。"""
+        from singularity.scheduler import _machine_checks as mchk, workflow as w
+        monkeypatch.setattr(w, "_phase_cwd", lambda p: str(tmp_path))
+        monkeypatch.setattr(w, "_project_baseline_ref", lambda p: "")
+        monkeypatch.setattr(w, "_save_phase_output", lambda *a, **k: None)
+        monkeypatch.setattr(mchk, "run_check", lambda chk, root: {
+            "ran": True, "passed": False, "exit": 1, "missing_inputs": [],
+            "output": "FAILED a.py::t\n"})
+        called = []
+        monkeypatch.setattr(mchk, "run_check_at_ref",
+                            lambda *a, **k: called.append(1) or None)
+
+        note = w._run_machine_checks(self._project(), [
+            {"rule": "r", "check": {"argv": ["python3", "-m", "pytest"], "expect_exit": 0}}])
+
+        assert called == [], "没基线还去跑基线，等于白花钱"
+        assert "0/1 条通过" in note and "基线里本来就红" not in note
+
+    def test_通过的那条不去问基线(self, tmp_path, monkeypatch):
+        """只在**失败**时才付这次基线跑（同任务级 `mark_baseline_diff` 的口径）。"""
+        from singularity.scheduler import _machine_checks as mchk, workflow as w
+        monkeypatch.setattr(w, "_phase_cwd", lambda p: str(tmp_path))
+        monkeypatch.setattr(w, "_project_baseline_ref", lambda p: "base123")
+        monkeypatch.setattr(w, "_save_phase_output", lambda *a, **k: None)
+        monkeypatch.setattr(mchk, "run_check", lambda chk, root: {
+            "ran": True, "passed": True, "exit": 0, "missing_inputs": [], "output": "ok"})
+        called = []
+        monkeypatch.setattr(mchk, "run_check_at_ref",
+                            lambda *a, **k: called.append(1) or None)
+
+        note = w._run_machine_checks(self._project(), [
+            {"rule": "r", "check": {"argv": ["python3", "-m", "pytest"], "expect_exit": 0}}])
+
+        assert called == []
+        assert "1/1 条通过" in note

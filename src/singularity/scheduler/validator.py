@@ -304,14 +304,18 @@ def failed_test_ids(tr: dict) -> list[str]:
     return list(dict.fromkeys(m.group(1) for m in _FAILED_TEST_ID_RE.finditer(out)))
 
 
-def run_project_tests_at_ref(ref: str, work_dir: str) -> dict | None:
-    """在**基线那一版代码**上跑一遍项目测试。只给差分归因用。算不出来返回 `None`。
+def in_ref_worktree(ref: str, work_dir: str, fn):
+    """在 `ref` 那一版的**临时干净副本**里跑 `fn(tmp)`，跑完注销 + 删目录。**唯一产地。**
 
-    实现：`git worktree add --detach` 起一个临时干净副本 —— **绝不在任务自己的
-    worktree 里 checkout**（那会动到它的产物）。跑完 `remove --force` + 删目录。
+    实现：`git worktree add --detach` 起一个临时干净副本 —— **绝不在调用方自己的
+    worktree / 项目仓里 checkout**（那会动到它的产物）。
 
-    拿不到（不是 git 仓 / ref 无效 / git 不在 / 超时）一律 `None`，调用方**保持原判定**
-    —— 宁可照旧判红，也不因为"差分没算成"就放行。
+    拿不到副本（不是 git 仓 / ref 无效 / git 不在 / `fn` 抛了）一律 `None`，
+    调用方**保持原判定** —— 宁可照旧判红，也不因为"基线没算成"就放行。
+
+    ⚠️ **2026-09-30 抽出来的**：原来这套只长在 `run_project_tests_at_ref` 里，
+    机械检查要跑**它自己声明的命令**（不一定是 pytest）就没得用 —— 于是那层
+    一直拿裸退出码判，基线里本来就红的测试让它**假红**（`round-20260930`）。
     """
     import shutil
     import tempfile
@@ -324,12 +328,12 @@ def run_project_tests_at_ref(ref: str, work_dir: str) -> dict | None:
                              capture_output=True, text=True, timeout=60,
                              cwd=str(work_dir))
         if add.returncode != 0:
-            # 出声：差分算不出来等于这条防线没生效，而"没生效"和"没差别"在盘上
+            # 出声：基线算不出来等于这条防线没生效，而"没生效"和"没差别"在盘上
             # 长得一模一样（`防御模式.md` §59 那个边界的同族）。
             witness.warn("validator", f"baseline_worktree_failed:{add.stderr.strip()[:120]}",
                          key="baseline_diff_unavailable")
             return None
-        return run_project_tests(cwd=tmp)
+        return fn(tmp)
     except Exception as e:
         witness.warn("validator", f"baseline_tests_failed:{type(e).__name__}:{e}"[:160],
                      key="baseline_diff_unavailable")
@@ -345,6 +349,15 @@ def run_project_tests_at_ref(ref: str, work_dir: str) -> dict | None:
                 witness.warn("validator", f"baseline_worktree_remove_failed:{r.stderr.strip()[:120]}",
                              key="baseline_diff_unavailable")
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_project_tests_at_ref(ref: str, work_dir: str) -> dict | None:
+    """在**基线那一版代码**上跑一遍项目测试。只给差分归因用。算不出来返回 `None`。
+
+    拿不到（不是 git 仓 / ref 无效 / git 不在 / 超时）一律 `None`，调用方**保持原判定**
+    —— 宁可照旧判红，也不因为"差分没算成"就放行。
+    """
+    return in_ref_worktree(ref, work_dir, lambda tmp: run_project_tests(cwd=tmp))
 
 
 def mark_baseline_diff(tr: dict, base_ref: str, work_dir: str) -> None:

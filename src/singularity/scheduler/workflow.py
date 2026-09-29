@@ -729,6 +729,68 @@ def _record_verification_marker(project: ProjectState, qa_saved: bool, qa_verdic
     witness.warn("workflow", f"verification_ran_withheld:{project.id}"[:120])
 
 
+def _run_machine_checks(project: ProjectState, constraints: list) -> str | None:
+    """跑"约束里**能机器跑**"的那几条，返回汇总那句话（一条都没跑 ⇒ `None`）。
+
+    这是"信任上限 = 机械证据覆盖的验证面比例"的那个分子。
+    运行前提：人在 **GATE2 批架构时就看过这些命令**（面板上明写"批准后会实际执行"）。
+    安全护栏在 `_machine_checks`：argv 数组不过 shell / argv[0] 白名单 /
+    解释器只许 `-m pytest` / cwd 锁项目仓 / 超时 / 环境洗掉 key 与代理。
+
+    🔴 **抽成独立函数是为了能单测接线**（同 `_split_check_results` 的理由）：
+    "失败的那几条**有没有去问基线**"这一跳断掉是完全静默的 —— 盘上照样只有一句
+    「机械检查 x/y 条通过」，看不出归因压根没跑（`round-20260930` 就是这个病）。
+    """
+    from singularity.scheduler import _machine_checks as mchk
+    runnable = [c for c in (constraints or [])
+                if isinstance(c, dict) and mchk.validate_check(c.get("check"))[0]]
+    if not runnable:
+        return None
+    _max_machine_checks = 10      # 有上限就明说，别静默截断
+    root = _phase_cwd(project)
+    picked, dropped = runnable[:_max_machine_checks], runnable[_max_machine_checks:]
+    # 基线 ref 只算一次；取不到 ⇒ 那几条失败**不做归因**，照旧算不通过
+    _base_ref = _project_baseline_ref(project)
+    results = []
+    for c in picked:
+        r = mchk.run_check(c.get("check"), root)
+        # 失败的那几条**再问一句**："基线里本来就红吗？"
+        # 只在失败时才付这次基线跑（同任务级 `mark_baseline_diff` 的口径）。
+        if (_base_ref and r.get("ran") and not r.get("passed")
+                and not r.get("missing_inputs")):
+            _base = mchk.run_check_at_ref(c.get("check"), _base_ref, root)
+            if mchk.pre_existing_failure(r, _base):
+                r["pre_existing"] = True
+        results.append({"rule": c.get("rule", c.get("text", "")), **r})
+    passed = sum(1 for r in results if r.get("passed"))
+    _unran, _timed_out, _missing, _pre_existing = _split_check_results(results)
+    _ours = len(_unran) + len(_timed_out)
+    note = f"机械检查 {passed}/{len(results)} 条通过"
+    if _ours:
+        note += (f"；另有 {_ours} 条**是我们没跑完**（超时/命令起不来），"
+                 f"不计入通过、也不算它失败")
+    if _missing:
+        _files = sorted({f for r in _missing for f in r["missing_inputs"]})
+        _shown = "、".join(_files[:5]) + ("…" if len(_files) > 5 else "")
+        note += (f"；另有 {len(_missing)} 条**是产物没到**（点名的文件不存在：{_shown}）"
+                 f"—— 它仍算不通过，但根子在**上游有任务没交付**，别当「没写对」去修")
+    if _pre_existing:
+        note += (f"；另有 {len(_pre_existing)} 条**是基线里本来就红的**"
+                 f"（项目动手前那条就红着 ⇒ 不记这个项目的账，但**也不是通过**）")
+    if dropped:
+        note += f"（另有 {len(dropped)} 条超出上限 {_max_machine_checks}，本轮未跑）"
+    project.issues = [i for i in project.issues if i.get("type") != "machine_checks"]
+    project.issues.append({"type": "machine_checks", "detail": note})
+    project.add_lineage({"action": "machine_checks", "ran": len(results),
+                         "passed": passed, "skipped": len(dropped),
+                         "our_side": _ours,
+                         "missing_inputs": len(_missing),
+                         "pre_existing": len(_pre_existing)})
+    _save_phase_output(project.id, "machine-checks.json",
+                       json.dumps(results, ensure_ascii=False, indent=2))
+    return note
+
+
 def _run_verification(project: ProjectState, agents: dict) -> list[str]:
     """Step 5: QA工程师 + 安全审计师并行出验收报告。
 
@@ -770,46 +832,11 @@ def _run_verification(project: ProjectState, agents: dict) -> list[str]:
         "\n".join(f"- {f}" for f in sorted(changed_files)[:30])
     )
 
-    # ── ① 机械检查：约束里**能机器跑**的那几条，先跑（机器证据优先）──
-    # 这是"信任上限 = 机械证据覆盖的验证面比例"的那个分子。
-    # 运行前提：人在 **GATE2 批架构时就看过这些命令**（面板上明写"批准后会实际执行"）。
-    # 安全护栏在 `_machine_checks`：argv 数组不过 shell / argv[0] 白名单 /
-    # 解释器只许 -m pytest / cwd 锁项目仓 / 超时 / 环境洗掉 key 与代理。
-    _max_machine_checks = 10      # 有上限就明说，别静默截断
+    # ── ① 机械检查（机器证据优先）—— 主体抽在 `_run_machine_checks` 里，好单测接线
     try:
-        from singularity.scheduler import _machine_checks as mchk
-        runnable = [c for c in (constraints or [])
-                    if isinstance(c, dict) and mchk.validate_check(c.get("check"))[0]]
-        if runnable:
-            root = _phase_cwd(project)
-            picked, dropped = runnable[:_max_machine_checks], runnable[_max_machine_checks:]
-            results = []
-            for c in picked:
-                r = mchk.run_check(c.get("check"), root)
-                results.append({"rule": c.get("rule", c.get("text", "")), **r})
-            passed = sum(1 for r in results if r.get("passed"))
-            _unran, _timed_out, _missing = _split_check_results(results)
-            _ours = len(_unran) + len(_timed_out)
-            note = f"机械检查 {passed}/{len(results)} 条通过"
-            if _ours:
-                note += (f"；另有 {_ours} 条**是我们没跑完**（超时/命令起不来），"
-                         f"不计入通过、也不算它失败")
-            if _missing:
-                _files = sorted({f for r in _missing for f in r["missing_inputs"]})
-                _shown = "、".join(_files[:5]) + ("…" if len(_files) > 5 else "")
-                note += (f"；另有 {len(_missing)} 条**是产物没到**（点名的文件不存在：{_shown}）"
-                         f"—— 它仍算不通过，但根子在**上游有任务没交付**，别当「没写对」去修")
-            if dropped:
-                note += f"（另有 {len(dropped)} 条超出上限 {_max_machine_checks}，本轮未跑）"
-            project.issues = [i for i in project.issues if i.get("type") != "machine_checks"]
-            project.issues.append({"type": "machine_checks", "detail": note})
-            project.add_lineage({"action": "machine_checks", "ran": len(results),
-                                 "passed": passed, "skipped": len(dropped),
-                                 "our_side": _ours,
-                                 "missing_inputs": len(_missing)})
-            _save_phase_output(project.id, "machine-checks.json",
-                               json.dumps(results, ensure_ascii=False, indent=2))
-            msgs.append(note)
+        _mc_note = _run_machine_checks(project, constraints)
+        if _mc_note:
+            msgs.append(_mc_note)
     except Exception as e:
         from singularity.scheduler import witness
         witness.warn("review", f"machine_checks:{type(e).__name__}:{e}"[:120])
@@ -1300,7 +1327,54 @@ def _resolve_fix_route(project: ProjectState) -> tuple[str, str, str, list]:
     return fix_route, route_source, no_qa_reason, issues
 
 
-def _split_check_results(results: list) -> tuple[list, list, list]:
+def _project_baseline_ref(project) -> str:
+    """项目**动手前那一刻**的仓 ref —— 本项目快照里 `created_at` 最早的那个。
+
+    ⚠️ **不是**项目仓的根提交（`init project repo`）：那上面往往连测试文件都还没有
+    ⇒ 拿它当基线只会得到"基线红、却说不清哪几条" ⇒ 归因一律失败（fail-closed），
+    这条防线等于没装（`round-20260930` 上就是 `8354f86`「我种坏测试那一版」才对）。
+    要的是「开始派任务那一刻仓库长什么样 = 第一个任务开工时的快照」。
+
+    快照元数据若被 `purge_old_snapshot_meta` 清掉，取到的会是**更晚**的 ref ⇒
+    基线里"已经绿的"更多 ⇒ 归因更保守（照旧判红），**不会反过来放行**。
+
+    取不到 `""`（调用方跳过归因，照旧判红）。
+    """
+    try:
+        # ⚠️ `_phase_cwd` 返回的是 **str**（不是 Path）—— 直接 `.resolve()` 会抛，
+        # 而这里那句 `except` 会把它咽成 `""` ⇒ **归因全程静默失效**。
+        # 测试钉的就是这一跳（`TestProjectBaselineRef`）。
+        repo = str(Path(_phase_cwd(project)).resolve())
+    except Exception as e:
+        # 出声：`""` 会让调用方跳过**全部**归因 —— 而"没归因"和"归因了没差别"
+        # 在盘上长得一模一样（`防御模式.md` §59 那个边界的同族）。
+        from singularity.scheduler import witness
+        witness.warn("workflow", f"baseline_ref_failed:{type(e).__name__}:{e}"[:120],
+                     key="baseline_ref_unavailable")
+        return ""
+    best, best_at = "", None
+    for f in config.SNAPSHOT_DIR.glob("*.json"):
+        try:
+            meta = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            # 读不出来的快照**跳过**（跳过只会让基线的 ref 更晚 ⇒ 归因更保守，
+            # 方向是安全的），但**不能静默** —— 万一被跳掉的正是最早那个，
+            # 表现只是"归因没命中"，盘上一点痕迹都没有。
+            from singularity.scheduler import witness
+            witness.warn("workflow", f"baseline_snapshot_unreadable:{f.name}:{type(e).__name__}"[:120],
+                         key="baseline_ref_unavailable")
+            continue
+        if str(meta.get("repo_root") or "") != repo:
+            continue
+        at = meta.get("created_at")
+        if not isinstance(at, (int, float)) or not isinstance(meta.get("ref"), str):
+            continue
+        if best_at is None or at < best_at:
+            best, best_at = meta["ref"], at
+    return best
+
+
+def _split_check_results(results: list) -> tuple[list, list, list, list]:
     """把机械检查的结果分成**三种失败**，返回 `(没跑成, 超时, 产物没到)`。
 
     🔴 **为什么要分**：那句"机械检查 x/y 条通过"把三种完全不同的处境说成了一件事，
@@ -1313,16 +1387,23 @@ def _split_check_results(results: list) -> tuple[list, list, list]:
         没交付**，不是"代码写错了"（2026-09-20 加的第三类；真机 round b/c 那些
         `file or directory not found` 就卡在这个歧义上）
 
-    ⚠️ **这只是"分开说"** —— `passed` 一分没动：超时和缺文件**都仍算不通过**
-    （fail-closed 不许松）。抽成独立函数是为了能单测：这三个分类一旦写错，
+    ⚠️ **这只是"分开说"** —— `passed` 一分没动：超时、缺文件、基线就红**都仍算不通过**
+    （fail-closed 不许松）。抽成独立函数是为了能单测：这几个分类一旦写错，
     界面上的文案会**静默地**说错话，而没人会因此收到告警。
+
+    第四类 **基线就红**（2026-09-30 加）：失败用例在**项目动手前**就红着 ⇒
+    **不记这个项目的账**（`_machine_checks.pre_existing_failure` 判的）。
+    它**不是"通过"**，只是"别拿这个去修项目"。
+    ⚠️ 四栏**两两不相交**（调用方只在"非产物没到"的失败上做归因）——
+    要相加之前先问交集，同 `防御模式.md` 那条。
     """
     unran = [r for r in results if not r.get("ran")]
     failed = [r for r in results if r.get("ran") and not r.get("passed")]
     timed_out = [r for r in failed if "超时" in str(r.get("reason", ""))]
+    pre_existing = [r for r in failed if r.get("pre_existing")]
     # 超时那条分支压根不带这个键（`run_check` 里超时是提前 return 的）⇒ 不用再排一次
-    missing = [r for r in failed if r.get("missing_inputs")]
-    return unran, timed_out, missing
+    missing = [r for r in failed if r.get("missing_inputs") and not r.get("pre_existing")]
+    return unran, timed_out, missing, pre_existing
 
 
 def _clear_cancel_marker_for_rewind(task_id: str) -> str:
