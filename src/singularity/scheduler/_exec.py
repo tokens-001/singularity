@@ -27,6 +27,7 @@ from singularity.scheduler._exec_context import (
     _inject_memory,
 )
 from singularity.scheduler._git_worktree import (
+    changed_files_between,
     commit_wt,
 )
 from singularity.scheduler._git_worktree import (
@@ -445,6 +446,18 @@ def _process_planner_or_merge(task, ctx, turn, level, is_planner, wt,
             # 连合并都不做 —— 比原 bug 更坏。**跟基线比才是对的。**
             # `snapshot_ref` 为空（没建快照）时 `branch_ref != ""` 成立 ⇒ 退回原行为。
             if branch_ref and branch_ref != ctx.snapshot_ref:
+                # 🔴 **"一个自己的产出文件都没交"的版本，不许送去合并**（2026-09-30，
+                # `round-20260929e` 真机）：合并成功 ⇒ `merge._mark_merged` 就
+                # `transition(DONE)` ⇒ 那任务**照样算成了**，而它连自己的产物都没写。
+                # ⚠️ 判据与 `_review` 里那条**共用同一个函数**（一个定义点）——
+                # 而且这里**要显式清掉上一轮留下的请求**：不清的话早先那轮建的那个
+                # 还挂在那儿，这一版照样会被合进去。
+                _chg = changed_files_between(ctx.snapshot_ref, branch_ref, repo_root=repo_root)
+                _miss = _missing_own_deliverable(task, _chg)
+                if _miss:
+                    pending_merge_req_holder[0] = None
+                    return ("missing_own_deliverable", level, turn, disp_result,
+                            all_tool_events, _miss)
                 _anchor_ref(task.id, branch_ref, repo_root=repo_root)  # 防 gc 回收 (重要 #3)
                 pending_merge_req_holder[0] = _build_merge_request(
                     task, branch_ref, ctx.snapshot_ref, repo_root=repo_root,
@@ -777,6 +790,22 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                     # v2 merge 冲突信号: ("merge_conflict", level, turn, disp_result, all_tool_events, reason)
                     if isinstance(pm_signal, tuple) and len(pm_signal) >= 6:
                         _, level, turn, disp_result, all_tool_events, reason = pm_signal
+                        # 🔴 **"没交自己的产出文件"不是"合并撞了"** —— 它要的是**带反馈重试**
+                        #（2026-09-30）。原样走下面那条会判 `abort`，模型下一轮**看不到为什么**
+                        #（`task.error` 从来不进提示词）⇒ 又是一次盲改（`round-j` 那个病）。
+                        # 所以：设成 retry + 把理由放进 `unverified`，交给 `_decide_cascade`
+                        # 走正常的内层重试（反馈正文 = `validation.evidence` + `quality["warnings"]`）。
+                        if pm_signal[0] == "missing_own_deliverable":
+                            # ⚠️ 这一跳**在 `quality` 建出来之前**（它是本轮后面才建的）——
+                            # 别顺手往 `quality` 里写（`test_no_undefined_names` 会当场红）。
+                            validation = val_mod.ValidationReport(
+                                verdict="通过", action="retry",
+                                unverified=[reason], turns_used=turn)
+                            last_validation = validation
+                            if turn >= level_max:
+                                break          # 轮到顶了 ⇒ 走 abort 收尾（**没有 merge_request**）
+                            feedback = reason  # 下一轮把理由带进去
+                            continue
                     else:
                         last_validation = val_mod.ValidationReport(verdict="阻断", action="abort",
                             unverified=["内部错误: 意外的 _process_planner_or_merge 返回类型"])
@@ -1201,6 +1230,34 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
             _md.record_scope(_model, changed_files, _declared_files_for(task))
     except Exception as _e:
         witness.warn('exec', f'discipline:{type(_e).__name__}'[:80])
+
+
+def _missing_own_deliverable(task, changed: list[str]) -> str:
+    """**声明了产出文件，却一个都没交** ⇒ 返回原因；没问题返回 `""`。
+
+    🔴 来历（2026-09-30，`round-20260929e` 真机）：T6 的描述里明写
+    「你的产出文件（架构声明，**只许改这些**）: `tests/test_e2e.py`」，
+    而它**改了 T1 的 `cli.py`、自己的产物全历史都没交**，最后**照样判 `done` 并进仓**
+    （`merge._mark_merged` 只看"能不能合上"，`changed_files` 一个都不在声明里也不问）。
+
+    ⚠️ **只判"一个都没交"这一半**（用户 2026-09-30 拍板）：改别人的文件仍然只记
+    `task_file_overlap`（那一半误伤面大 —— 依赖共享模块/契约的任务会被打飞）。
+    ⚠️ **没声明就不判**（`estimated_files` 是架构师给的，不给 = 没有尺子）——
+    宁可放过，也不拿一把不存在的尺子去卡任务。
+    """
+    declared = _declared_files_for(task)
+    if not declared:
+        return ""
+    # ⚠️ **比完整相对路径，不比 basename**：`src/cli.py` 和 `web/cli.py` 是两个文件，
+    # 按 basename 会把它俩当成同一个 ⇒ 越界改同名的别人的文件照样放行。
+    _norm = lambda p: str(p).replace("\\", "/").lstrip("./")          # noqa: E731
+    _decl = {_norm(x) for x in declared}
+    _have = {_norm(x) for x in (changed or [])}
+    if _decl & _have:
+        return ""
+    return (f"你**一个自己的产出文件都没交**：架构声明本任务的产出是 {declared}，"
+            f"而这次改动是 {sorted(_have) if _have else '（零改动）'}。"
+            f"这一版**不会被合并、也不会判完成** —— 请去写你自己的产出文件。")
 
 
 def _declared_files_for(task) -> list[str]:
