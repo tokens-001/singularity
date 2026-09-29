@@ -487,6 +487,25 @@ class TestNoCwdIsNotSilent:
         assert r.get("unavailable") == "没拿到任务工作目录(cwd)", r
         assert r["models_used"] == [] and r["issues"] == []
 
+    # ── 接线：上面那两个「函数对」不算数，得看 `_review` 有没有把它说出来 ──
+    def test_多模型审查没做成要进未经审查(self, monkeypatch, tmp_path):
+        """**接线**：`unavailable` ⇒ 必须进 `unverified`（否则交付报告照写 `delivered`）。
+
+        把 `if review.get("unavailable"):` 那支去掉 ⇒ 落进下面那句写死的
+        "审查输入为空"，**原因就变成了错的**（真问题是没传 cwd，不是输入为空）⇒ 本用例红。
+        """
+        v, _ = _run(monkeypatch, tmp_path, pool=[{"model": "r1"}, {"model": "r2"}],
+                    multi={"unavailable": "没拿到任务工作目录(cwd)",
+                           "models_used": [], "issues": [], "verdicts": [], "summaries": []})
+        assert any("没拿到任务工作目录" in u for u in v.unverified), v.unverified
+
+    def test_交叉审查没做成要进未经审查(self, monkeypatch, tmp_path):
+        """**接线**：单模型那条路（`pool=()`）走 `crossover_review`，同样要披露。"""
+        v, _ = _run(monkeypatch, tmp_path, pool=(),
+                    crossover={"issues": [], "verdict": "unavailable",
+                               "summary": "没拿到任务工作目录(cwd) —— diff 没算"})
+        assert any("没拿到任务工作目录" in u for u in v.unverified), v.unverified
+
 
 class TestReviewFailLimit:
     """审查自动修触顶 → 升 GATE2 人工兜底。失效就等于无限自动重试，烧钱不止。"""
