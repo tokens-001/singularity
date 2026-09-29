@@ -300,7 +300,12 @@ def failed_test_ids(tr: dict) -> list[str]:
     """
     if not isinstance(tr, dict):
         return []
-    out = str(tr.get("output") or "")
+    # ⚠️ **两个键名都要认**（2026-09-30）：任务级那份来自 `run_project_tests`
+    # （键是 `output`），而**机械检查**那份来自 `_machine_checks.run_check`（键是 `stdout`）
+    # —— 只认 `output` 的话，机械检查那边**恒返回"解析不出来"**，而 fail-closed
+    # 会把它咽成"照旧判红"：**修复成了哑弹，盘上一点痕迹都没有**。
+    # 当天先是拿手搓 dict 的替身喂出了假绿，改用真 `run_check` 才露出来。
+    out = str(tr.get("output") or tr.get("stdout") or "")
     return list(dict.fromkeys(m.group(1) for m in _FAILED_TEST_ID_RE.finditer(out)))
 
 

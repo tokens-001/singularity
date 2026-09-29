@@ -479,13 +479,44 @@ class TestPreExistingFailure:
 
     @staticmethod
     def _res(ids, passed=False):
+        # ⚠️ 键名是 **`stdout`**，不是 `output` —— 这是 `run_check` 的**真形状**。
+        # 手搓 `output` 会让这里全绿、而生产里恒返回 False（哑弹）。
         return {"ran": True, "passed": passed, "exit": 1,
-                "output": "".join(f"FAILED {i}\n" for i in ids)}
+                "stdout": "".join(f"FAILED {i}\n" for i in ids)}
 
     @staticmethod
     def _pre(now, base):
         from singularity.scheduler._machine_checks import pre_existing_failure
         return pre_existing_failure(now, base)
+
+    def test_真实run_check的输出解析得出失败用例(self, tmp_path):
+        """🔴 **形状对接**：`run_check` 返回的是 `stdout`，而 `failed_test_ids`
+        读的是 `output` —— 两边对不上时这里**恒返回 False**，而 fail-closed
+        会把它咽成"照旧判红" ⇒ 修复成了**哑弹，盘上一点痕迹都没有**。
+
+        ⇒ 判据必须走**真的** `run_check`（同 `TestMissingInputs` 的理由：
+        喂替身等于测替身）。这条是 2026-09-30 当天先假绿、换真货才露出来的那一条。
+        """
+        import sys
+        from singularity.scheduler._machine_checks import run_check
+        from singularity.scheduler.validator import failed_test_ids
+        (tmp_path / "test_fails.py").write_text(
+            "def test_x():\n    assert 1 == 2\n", encoding="utf-8")
+        chk = {"argv": [sys.executable, "-m", "pytest", "test_fails.py"], "expect_exit": 0}
+        r = run_check(chk, tmp_path)
+        assert r["passed"] is False, r
+        assert failed_test_ids(r) == ["test_fails.py::test_x"], \
+            f"真 run_check 的输出解析不出失败用例（键名对不上？）: {r.get('stdout', '')[:200]}"
+
+    def test_基线满足了声明_不算基线就红(self):
+        """⚠️ 声明的 `expect_exit` 不一定是 0。基线**满足了那条声明**（`passed=True`）
+        却仍带着 `FAILED` 行时，"基线就红"这句就是错的 —— 现在红才是这次弄的。
+
+        ⚠️ 这条**必须用"现在红的 ⊆ 基线红的"**，否则隔离不出这个守卫：
+        拿"现在多红一条"去测的话，子集判断自己就挡住了，`passed` 那句删掉也不红
+        （2026-09-30 实测：第一版就是这么写的，变异没咬中）。
+        """
+        assert self._pre(self._res(["a.py::t1"]), self._res(["a.py::t1"], passed=True)) is False
 
     def test_红的同一条_不算项目弄的(self):
         assert self._pre(self._res(["tests/test_qq7.py::test_qq7"]),
@@ -578,10 +609,10 @@ class TestMachineChecksWiring:
         monkeypatch.setattr(w, "_save_phase_output", lambda *a, **k: None)
         monkeypatch.setattr(mchk, "run_check", lambda chk, root: {
             "ran": True, "passed": False, "exit": 1, "missing_inputs": [],
-            "output": "FAILED tests/test_qq7.py::test_qq7\n"})
+            "stdout": "FAILED tests/test_qq7.py::test_qq7\n"})
         monkeypatch.setattr(mchk, "run_check_at_ref", lambda chk, ref, root: {
             "ran": True, "passed": False, "exit": 1, "missing_inputs": [],
-            "output": "FAILED tests/test_qq7.py::test_qq7\n"})
+            "stdout": "FAILED tests/test_qq7.py::test_qq7\n"})
 
         note = w._run_machine_checks(self._project(), [
             {"rule": "全量 pytest 退出码 0",
@@ -598,7 +629,7 @@ class TestMachineChecksWiring:
         monkeypatch.setattr(w, "_save_phase_output", lambda *a, **k: None)
         monkeypatch.setattr(mchk, "run_check", lambda chk, root: {
             "ran": True, "passed": False, "exit": 1, "missing_inputs": [],
-            "output": "FAILED a.py::t\n"})
+            "stdout": "FAILED a.py::t\n"})
         called = []
         monkeypatch.setattr(mchk, "run_check_at_ref",
                             lambda *a, **k: called.append(1) or None)
