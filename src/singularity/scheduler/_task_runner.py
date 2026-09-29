@@ -167,8 +167,16 @@ def _archive_task_outcome(task, route, disp_result, failure_mode: str = "") -> N
                 from singularity.scheduler import project as _proj
                 _p = _proj.load(_pid)
                 _pname = getattr(_p, 'name', '') or ''
-            except Exception:
-                pass      # 拿不到名字不该影响记账
+                # ── 任务**成功** = 前进了一步 ⇒ 把"连续没修好"那个计数清零 ──
+                # （2026-09-30：触顶判据改看这个计数，来龙去脉见 `project.py` 那段注释。）
+                # 判据是**任务真的做成了**（DONE），不是"跑完了"——失败的收尾**不清零**，
+                # 否则一个一直失败的项目会被自己的每次收尾重置、永远到不了触顶。
+                if task.status == TaskStatus.DONE and getattr(_p, 'review_failures_streak', 0):
+                    _p.review_failures_streak = 0
+                    _proj.save(_p)
+            except Exception as e:
+                # 拿不到名字不该影响记账；清零失败也一样（只影响触顶早或晚）
+                witness.warn('orch', f'archive_streak:{type(e).__name__}:{e}'[:100])
         record_tokens(project_id=_pid, project_name=_pname, task_id=task.id,
                       model=model, level=task.route_level, tokens=tokens,
                       elapsed_s=elapsed)

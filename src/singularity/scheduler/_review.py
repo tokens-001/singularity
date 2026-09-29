@@ -16,6 +16,9 @@ from singularity.scheduler import witness
 from singularity.scheduler.validator import tests_failed_msg
 
 # D1: 审查自动修上限 (比实现层3轮更紧, 审查修不动=架构/拆解有问题)
+# 🔴 **这个数配的是"连续失败"，不是"历史累计"**（2026-09-30 `round-20260929e` 撞出来的）：
+# 判据只能喂 `proj.review_failures_streak`（"距上次有任务成功以来攒了几次"）——
+# 喂只增不减的 `review_failures` 会让**任何 6 任务的项目必被顶回 GATE2 兜底**。
 _REVIEW_MAX_AUTO_FIX = 2
 # D1: 审查超时阈值 (秒)
 _REVIEW_TIMEOUT_SEC = 600  # 10 minutes
@@ -214,6 +217,9 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             if proj is None:
                 return
             proj.review_failures = getattr(proj, 'review_failures', 0) + 1
+            # 「连续没修好」的那个计数 —— **触顶只看它**（2026-09-30，见 `project.py` 里那段）。
+            # 任务一成功就清零（`_archive_task_outcome`）⇒ 全绿的项目到合并时它是 0。
+            proj.review_failures_streak = getattr(proj, 'review_failures_streak', 0) + 1
             # 🔵 记下**这一分是怎么来的**（2026-09-19 复核 B2）：这个计数器里混着两样东西 ——
             #    模型侧的（`review_critical`）和**我们自己这边**的（`test_timeout` /
             #    `multi_review_timeout` / `test_error` / `review_error`）。触顶那句原文案
@@ -221,9 +227,10 @@ def run_post_exec_checks(*, validation, quality, exec_result,
             # ⚠️ **计数和触顶判定一分没动** —— 它是安全阀（审查这条路走不通就该叫人），
             #    这里只是让"攒够 2 分的是哪两分"事后查得到（用现成的 `lineage`，不新增字段）。
             proj.add_lineage({"action": "review_failure", "reason": reason,
-                              "count": proj.review_failures})
+                              "count": proj.review_failures,
+                              "streak": proj.review_failures_streak})
             proj_mod.save(proj)
-            fail_check = check_review_fail_limit(project_id, proj.review_failures)
+            fail_check = check_review_fail_limit(project_id, proj.review_failures_streak)
             if fail_check["blocked"]:
                 quality["warnings"].append(fail_check["reason"])
                 quality["failure_kind"] = "review_limit_hit"
@@ -780,12 +787,16 @@ def check_review_fail_limit(project_id: str = "", current_retries: int = 0) -> d
     """
     remaining = _REVIEW_MAX_AUTO_FIX - current_retries
     if remaining <= 0:
-        # ⚠️ 文案要说清这个数**不全是模型的锅**（2026-09-19 复核 B2）：审查侧自己的超时 /
-        #    测试执行异常也在给它充值（见 `_record_review_failure` 的调用点）。
-        #    光写"审查自动修已达上限"，人会去查模型改没改好，而真因可能是审查那条链路
-        #    —— 构成看 `project.lineage` 里 `action:"review_failure"` 那几条的 `reason`。
+        # ⚠️ 文案要说清**它数的到底是什么**（2026-09-30 改口径）。传进来的必须是
+        #    `review_failures_streak`（"距上次有任务成功以来攒了几次"），**不是**
+        #    `review_failures`（只增不减的遥测累计）—— 拿后者比 2，六任务的项目必被顶回
+        #    GATE2 兜底（`round-20260929e` 实测，见 `project.py` 那段）。
+        # ⚠️ 另一半照旧（2026-09-19 复核 B2）：这个数里**混着审查侧自己的超时/异常**
+        #    （`test_timeout` / `review_timeout` / `test_error` / `review_error` 也在充值），
+        #    所以别读成"模型连着错 N 次"；构成看 lineage 里 `action:"review_failure"` 的 `reason`。
         return {"blocked": True, "action": "escalate_to_gate2", "remaining": 0,
-                "reason": (f"审查自动修已达上限({_REVIEW_MAX_AUTO_FIX}轮), 升GATE2人工兜底"
-                           f"（这个数**含审查侧自身的超时/异常**，不全是模型没改好；"
-                           f"构成见 lineage 的 review_failure 条）")}
+                "reason": (f"连续 {current_retries} 次审查没通过（限 {_REVIEW_MAX_AUTO_FIX}）"
+                           f"—— 期间没有任何任务成功，升GATE2人工兜底。"
+                           f"⚠️ 这几条里**含审查侧自身的超时/异常**，不全是模型没改好；"
+                           f"构成见 lineage 的 review_failure 条")}
     return {"blocked": False, "action": "continue", "remaining": remaining}

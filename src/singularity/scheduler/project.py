@@ -154,6 +154,16 @@ class ProjectState:
     handoffs: list[dict] = field(default_factory=list)              # Agent 交接记录
     token_budget_total: float = 5.0        # $ (默认 $5)
     review_failures: int = 0                # D1: 审查自动修失败计数 (上限 _REVIEW_MAX_AUTO_FIX)
+    # 🔴 **触顶判据只许用这一个**（2026-09-30 `round-20260929e` 撞出来的）。
+    # `review_failures` 是**只增不减的遥测累计**（lineage / `_process_ledger` / `_workflow_phases` 的 `_deep`
+    # 都在读它，**语义别动**）；而触顶阈值 `_REVIEW_MAX_AUTO_FIX = 2` **是给"一个任务"定的**。
+    # 拿"项目累计"去比它 = "这个项目历史上出过 2 次审查问题就交人"：
+    # **6 个任务的轮次必然 ≥2** ⇒ 集成合并成功后**必被顶回 GATE2 兜底** ⇒ ③ 结构上不可达。
+    # （盘上对照：**唯一走到 `done` 的项目 `review_failures = 0`**；`e` 轮 37 · `i` 轮 21 · `f` 轮 18。）
+    # ⇒ 触顶改看这个**连续**计数，语义是「**距上次有任务成功以来，攒了几次审查失败**」——
+    # 任务一成功就清零（`_task_runner._archive_task_outcome`）。
+    # 全绿的项目在最后一个任务成功时归零；真"修不动"的项目**没有成功事件**，它一路涨。
+    review_failures_streak: int = 0
     integrate_failures: int = 0             # D2: 集成合并失败计数 (上限 _INTEGRATE_MAX_RETRIES)
     # 验收（run_test_fix_loop）**连续**没走到 GATE3 的次数（上限 orchestrator._VERIFY_MAX_ATTEMPTS）。
     # 与上面两个不同：**进 REVIEWING 时清零**（那一支在 orchestrator 里）—— 它量的是
@@ -244,6 +254,7 @@ class ProjectState:
         d.setdefault("auto_mode", False)
         d.setdefault("token_budget_total", 5.0)
         d.setdefault("review_failures", 0)
+        d.setdefault("review_failures_streak", 0)
         d.setdefault("integrate_failures", 0)
         d.setdefault("verify_attempts", 0)
         d.setdefault("halted_reason", "")

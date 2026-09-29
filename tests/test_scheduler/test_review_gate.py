@@ -507,6 +507,91 @@ class TestNoCwdIsNotSilent:
         assert any("没拿到任务工作目录" in u for u in v.unverified), v.unverified
 
 
+class TestReviewFailLimitUsesStreak:
+    """🔴 **触顶判据只许看"连续"计数，不许看历史累计**（2026-09-30 `round-20260929e` 真机撞出来的）。
+
+    拿 `review_failures`（只增不减）去比阈值 2 ⇒ **任何 6 任务的项目，集成合并成功后必被
+    顶回 GATE2 人工兜底** ⇒ §四 明写"停在 gate2 兜底不算" ⇒ **③ 结构上不可达**。
+    盘上对照（不是推理）：**唯一走到 `done` 的项目 `review_failures = 0`**；
+    `e` 轮 37 · `i` 轮 21 · `f` 轮 18 —— **前八轮是没跑到这堵墙就死了，`e` 是第一个跑到的**。
+
+    变异：把 `orchestrator` 那处的入参换回 `review_failures` ⇒
+    `test_累计再大也不该顶回GATE2` 红。
+    """
+
+    def test_累计再大也不该顶回GATE2(self, monkeypatch, tmp_path):
+        from singularity.scheduler import project as P
+        import singularity.scheduler.orchestrator as orch
+        from singularity.scheduler.orchestrator import _run_integration_merge_async
+
+        monkeypatch.setattr(orch, "_run_integration_merge", lambda proj: (True, "ok"))
+        # 后一支会去跑验收循环 —— 那是另一件事（而且很重），这里只关心**有没有被顶回兜底门**
+        monkeypatch.setattr("singularity.scheduler.workflow.run_test_fix_loop",
+                            lambda proj, agents: "（测试替身）")
+        p = P.create(name="_t_review_streak", template="feature", description="x")
+        p.phase = P.Phase.INTEGRATING
+        p.review_failures = 37            # 历史累计很大（round-e 的真实值）
+        p.review_failures_streak = 0      # 但**期间有任务成功过** ⇒ 早就清零了
+        P.save(p)
+
+        _run_integration_merge_async(p.id, {})
+
+        after = P.load(p.id)
+        assert str(getattr(after.phase, "value", after.phase)) != "gate2", (
+            f"历史累计 37 又把项目顶回兜底门了 —— 那就是 e 轮撞的那堵墙：{after.phase}")
+
+    def test_连续没修好才顶(monkeypatch):
+        rv = _review_of()
+        assert rv.check_review_fail_limit("p1", rv._REVIEW_MAX_AUTO_FIX - 1)["blocked"] is False
+        assert rv.check_review_fail_limit("p1", rv._REVIEW_MAX_AUTO_FIX)["blocked"] is True
+
+    def test_任务成功要清零_失败不清(self, tmp_path, monkeypatch):
+        """**接线**：清零挂在 `_archive_task_outcome` 上，而且**只看 DONE**。
+
+        失败也清零的话，一个一直失败的项目会被自己的每次收尾重置 ⇒ **永远到不了触顶**。
+        变异：把判据改成"只要收了尾就清" ⇒ 本条红。
+        """
+        import singularity.scheduler._task_runner as tr
+        from singularity.scheduler import config, project as P, tracker
+        monkeypatch.setattr(config, "QIDIAN_DIR", tmp_path)
+        monkeypatch.setattr(tracker.config, "QIDIAN_DIR", tmp_path)
+        monkeypatch.setattr(P, "_projects_dir", lambda: tmp_path, raising=False)
+        monkeypatch.setattr(tr.mem_mod, "archive_experience", lambda **k: None)
+        monkeypatch.setattr(tr, "record_tokens", lambda **k: None)
+        monkeypatch.setattr(tr.rl_mod, "record_outcome", lambda **k: None)
+
+        proj = P.ProjectState(id="p_streak", name="n", phase=P.Phase.EXECUTING)
+        proj.review_failures_streak = 5
+        P.save(proj)
+
+        failed = tracker.create("失败的任务", project_id="p_streak")
+        failed.status = tracker.TaskStatus.FAILED
+        tr._archive_task_outcome(failed, None, _Disp())
+        assert P.load("p_streak").review_failures_streak == 5, \
+            "失败的任务把'连续没修好'的计数清零了 ⇒ 一个一直失败的项目永远到不了触顶"
+
+        done = tracker.create("成功的任务", project_id="p_streak")
+        done.status = tracker.TaskStatus.DONE
+        tr._archive_task_outcome(done, None, _Disp())
+        assert P.load("p_streak").review_failures_streak == 0, \
+            "任务做成了（前进了一步）却没清零 ⇒ 触顶会误伤全绿的项目"
+
+
+def _review_of():
+    from singularity.scheduler import _review as rv
+    return rv
+
+
+class _Disp:
+    """最小 disp_result 替身（`_archive_task_outcome` 只读这几个字段）。"""
+    class _Res:
+        token_count = 0
+        elapsed = 0.0
+        changed_files: list = []
+    executor_result = _Res()
+    agent_cfg = {"model": "m"}
+
+
 class TestReviewFailLimit:
     """审查自动修触顶 → 升 GATE2 人工兜底。失效就等于无限自动重试，烧钱不止。"""
 

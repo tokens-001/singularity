@@ -1431,9 +1431,13 @@ def _run_integration_merge_async(project_id: str, agents: dict) -> None:
         ok, detail = _run_integration_merge(proj)
         if ok:
             # D1: 检查审查失败次数是否触顶
+            # ⚠️ 喂的是 **streak**（"距上次有任务成功以来攒了几次"），**不是** `review_failures`
+            #    （只增不减的累计）—— 拿后者比 2，**任何 6 任务的项目合并成功后必被顶回
+            #    GATE2 兜底** ⇒ ③ 结构上不可达（2026-09-30 `round-20260929e` 真机实测，
+            #    盘上对照：唯一走到 done 的项目 `review_failures = 0`；`e` 轮 37）。
             from singularity.scheduler._review import check_review_fail_limit
             fail_check = check_review_fail_limit(proj.id,
-                getattr(proj, 'review_failures', 0))
+                getattr(proj, 'review_failures_streak', 0))
             if fail_check["blocked"]:
                 # 🔴 **兜底之前先把验收层跑掉**（2026-09-17 真机坐实）。
                 # 原来这里直接 `set_phase(GATE2)`，而机器检查 + QA 验收**只挂在下面那一支**

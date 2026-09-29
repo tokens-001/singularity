@@ -103,7 +103,6 @@
  "scheduler/_review.py::run_post_exec_checks": 9,
  "scheduler/_review.py::run_post_exec_checks._record_review_failure": 1,
  "scheduler/_task_runner.py::TaskRunner.finalize": 1,
- "scheduler/_task_runner.py::_archive_task_outcome": 1,
  "scheduler/_types.py::<module>": 1,
  "scheduler/_workflow_phases.py::_probe_url": 1,
  "scheduler/_workflow_phases.py::_run_budget_gate": 1,
