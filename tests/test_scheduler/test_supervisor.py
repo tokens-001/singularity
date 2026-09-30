@@ -124,6 +124,27 @@ class TestCheckConstraints:
         )
         assert r.passed, f"判据里提到的文件名被当成禁改对象了: {r.reason}"
 
+    def test_逗号连缀的两截不算禁改_真机那一例(self):
+        """🔴 **`round-20260930c` 的死因** —— 和上一条同族，但**根因不同**。
+
+        架构写出来的约束是：
+
+            跨模块通信只允许使用 model.py 定义的数据类型(…)，禁止 import 其它模块的私有函数
+
+        `禁止` 管的是"import 别人的私有函数"，`model.py` 只是前半截的**举例**
+        —— 两截被一个**全角逗号**连着，而 `_forbids_file` 的切分集
+        （`[；;。\\n]`）**没有逗号** ⇒ 整条算一个分句 ⇒ 判它"禁改 model.py"。
+        **而那个文件正是 T1 的产出** ⇒ T1 永远不可能通过
+        （真机损失：T1 烧 251,309 token / 7 次派发后判失败，`project_stalled`）。
+
+        判据：把切分集里的 `，,` 拿掉 ⇒ 本条红。
+        """
+        from singularity.scheduler.supervisor import _check_constraints
+        real_rule = ("跨模块通信只允许使用 model.py 定义的数据类型"
+                     "(LogRecord/FilterSpec/AggSpec/StatResult)，禁止 import 其它模块的私有函数")
+        r = _check_constraints([real_rule], ["src/jsonl_stats/model.py"], Path("/tmp"))
+        assert r.passed, f"举例里提到的文件名被当成禁改对象了: {r.reason}"
+
     def test_真禁改一条都不许漏(self):
         """**反方向**：按分句判别把真违规也放过（否则这道门又变成装饰）。
 
