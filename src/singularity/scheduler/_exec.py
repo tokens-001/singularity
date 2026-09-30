@@ -629,26 +629,47 @@ def _premium_first(chain: list, force: bool, restricted: bool) -> list:
 
 
 @timed(name="executor")
-def _task_retry_feedback(task) -> str:
-    """任务级重试时，把**上一轮为什么被退**拿出来当 `feedback`。
+def _retry_feedback(ctx) -> str:
+    """任务级重试时，把**上一轮为什么被退**带进下一轮的 `feedback`。
 
     来历（2026-09-30，`round-20260930d` 直接观测到）：`feedback` 原来**只在内层 turn
     循环里被赋值**，跨不了任务级重试 ⇒ 一个失败任务被重排 N 次，**每次都从头盲改**。
-    d 轮现场：那个任务 4 次重试 / 319,026 token，最后还是 `tests failed: 2 failures`
-    —— 而侧车忠实记下的是**四次空反馈**。
+    d 轮现场：4 次重试 / 319,026 token，最后还是 `tests failed: 2 failures`，
+    而侧车忠实记下的是**四次空反馈**。
 
-    ⚠️ **只在"被重排过"时取**（`retry_count > 0`）—— 首次派发没有"上一次"。
-
-    ⚠️ 取的是 `task.error`（`_task_runner` 判失败 / 打回时写的那句），**不是**上一轮
-    `validation.unverified` 的全文 —— 后者更细（"执行器未产出任何文件"这类就藏在里面），
-    要拿它得去读上一轮的 trace。
-    ponytail: 这一版只带 `task.error` —— 它至少能说出 "tests failed: N failures" 这种
-    可动的信息，比"什么都不说"是质的差别。升级路径写在上面那行：需要更细时把最近一份
-    trace 的 `unverified` 也拼进来。
+    ⚠️ **第一版我修错了，把教训记在这儿免得重犯**：我读的是 `task.retry_count`，
+    而**真正的任务级重试是 `_run_with_retry` 那个 `while retry <= task.max_retries`
+    循环**，它设的是 `ctx.retry_count` —— 两个是**不同的东西**，`task.retry_count`
+    全程是 0 ⇒ guard 恒假、永远返回空。**改之前我"核过"，但核的是"`transition`
+    会不会清 `error`"，从没核过"谁在重试"。**
+    值挂在 `ctx` 上，是因为重试循环手里有 `ctx`（和 `ctx.retry_count` 同一个模式）。
     """
-    if not (getattr(task, "retry_count", 0) or 0):
+    return (getattr(ctx, "retry_feedback", "") or "").strip()
+
+
+def _reason_of(prev) -> str:
+    """把上一轮的失败理由拼成一段话，给下一轮当 `feedback`。首轮（`None`）给空串。
+
+    取材顺序：`term_reason`（这轮怎么结束的）→ `validation.unverified`（**更细**，
+    "执行器未产出任何文件"这类就在里面）→ `qa_issues`（QA 判词）。
+    ⚠️ 取不到就返回空 —— **不许凭空编一句理由**（首轮没有"上一轮"）。
+    """
+    if prev is None:
         return ""
-    return (getattr(task, "error", "") or "").strip()
+    parts: list[str] = []
+    term = (getattr(prev, "term_reason", "") or "").strip()
+    if term:
+        parts.append(f"上一轮结束原因：{term}")
+    val = getattr(prev, "validation", None)
+    uns = list(getattr(val, "unverified", None) or []) if val is not None else []
+    if uns:
+        parts.append("【上一轮未验证 / 未达标的地方】（要改的通常就在里面）")
+        parts += [f"- {u}" for u in uns[:5]]
+    qa = list(getattr(prev, "qa_issues", None) or [])
+    if qa:
+        parts.append("【上一轮 QA 问题】")
+        parts += [f"- {i}" for i in qa[:3]]
+    return "\n".join(parts)
 
 
 def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
@@ -673,14 +694,14 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     # Step 4: 读取 layer→角色路由
     route_role = getattr(task, 'route_role', None) or ""
 
-    # 🔴 **任务级重试要带着"上一轮为什么被退"进来**（2026-09-30，见 `_task_retry_feedback`）。
+    # 🔴 **任务级重试要带着"上一轮为什么被退"进来**（2026-09-30，见 `_retry_feedback`）。
     # 这里原来是一句裸的 `feedback = ""` —— 而 `feedback` 只在下面那个 turn 循环里被赋值
-    # ⇒ 它跨不了任务级重试：任务被重排 N 次，每次都从头盲改。
-    # 上面的 `read_task` 已经把任务重读过了，理由就在 `task.error` 上。
+    # ⇒ 它跨不了任务级重试：任务被 `_run_with_retry` 重排 N 次，每次都从头盲改。
+    # 值由 `_run_with_retry` 在每次进 run() 前挂到 `ctx.retry_feedback` 上（首轮为空）。
     # ⚠️ **副作用（有意）**：`_build_effective_task` 里那条 "turn==1 且无打回反馈才注入
     # MAGMA 记忆" 的规则会因此不再给重试注入记忆 —— 那正是它写着的意思
     #（"无打回反馈时"），重试本来就该先看反馈。
-    feedback = _task_retry_feedback(task)
+    feedback = _retry_feedback(ctx)
     last_validation = val_mod.ValidationReport(
         verdict="未知", action="abort",
         unverified=["dispatcher 未产出可校验结果"],
@@ -1120,6 +1141,11 @@ def _run_with_retry(task, ctx: RunContext, agents: dict) -> BatchOutput:
         if prev_batch is not None and _budget_exhausted(ctx):
             return prev_batch
         ctx.retry_count = retry  # ponytail: 传入 run() 用于 force_premium 判定
+        # 🔴 **任务级重试要把"上一轮为什么被退"带进下一轮**（2026-09-30，
+        # `round-20260930d` 实测：4 次重试全是空反馈 ⇒ 319,026 token 盲改）。
+        # 和 `retry_count` 一样挂在 `ctx` 上 —— 重试循环手里只有 `ctx`。
+        # ⚠️ 首轮 `prev_batch is None` ⇒ `_reason_of` 给空串，**不许凭空编理由**。
+        ctx.retry_feedback = _reason_of(prev_batch)
         batch = run(task, ctx, agents)
         # 🔴 **空壳不许顶掉真结果**（2026-09-18，和上面那道 guard 是**同一件事的另一半**）。
         #
