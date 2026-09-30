@@ -133,6 +133,34 @@ def test_dispatches_accumulate_not_overwrite(tmp_path, monkeypatch):
     assert got["started_at"], "started_at 被 elapsed 那次落盘抹了"
 
 
+def test_feedback_原文进侧车_头尾都要留(tmp_path, monkeypatch):
+    """🔴 **`round-20260930c` 查不下去的那条**：每次 dispatch 喂给模型的反馈**没落盘**
+    ⇒ 事后分不清"没送到"还是"送到了没照做"（trace 覆盖写，只剩最后一次）。
+
+    判据两条：
+    · 那条 dispatch 记录里要有 `feedback`（拿掉 `_persist_partial_usage` 里那个键 ⇒ 红）；
+    · 超长时**头尾都要在** —— 有效信息常在末尾（pytest 把失败测试名放 short summary），
+      写成 `s[:CAP]` 只留头 ⇒ 第二条断言红（这就是 §93 那个形状）。
+    """
+    import json
+    _isolate(tmp_path, monkeypatch)
+
+    # ① 正常长度：原文进得去
+    _exec._persist_partial_usage("f1", "any", "m", 1, elapsed=1.0, feedback="短反馈")
+    got = json.loads((config.PARTIAL_USAGE_DIR / "f1.json").read_text())
+    assert got["dispatches"][-1]["feedback"] == "短反馈"
+
+    # ② 超长：头（哨兵）和尾（真实失败名）都得留
+    head, tail = "头部的哨兵_掐头就该没了", "FAILED tests/x.py::test_尾部的哨兵"
+    long_fb = head + ("噪声\n" * 3000) + tail
+    assert len(long_fb) > _exec._FEEDBACK_LOG_CAP
+    _exec._persist_partial_usage("f2", "any", "m", 1, elapsed=1.0, feedback=long_fb)
+    saved = json.loads((config.PARTIAL_USAGE_DIR / "f2.json").read_text())["dispatches"][-1]["feedback"]
+    assert tail in saved, "尾巴被掐了 —— 失败测试名就在那儿（§93 同一个病）"
+    assert head in saved, "头被掐了"
+    assert len(saved) < len(long_fb), "压根没截断，长度上限是装饰"
+
+
 def test_tool_events_absent_stays_empty_not_crash(tmp_path, monkeypatch):
     """一次都没落（第一轮就超时）→ 空列表，别抛。"""
     _isolate(tmp_path, monkeypatch)

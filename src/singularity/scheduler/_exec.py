@@ -108,10 +108,29 @@ def _inject_role_context(route_role: str) -> str:
 _PARTIAL_TOOL_EVENTS_CAP = 500
 
 
+#: 侧车里那条 `feedback` 原文的长度上限。超了**头尾都留**（见 `_clip_feedback`）。
+_FEEDBACK_LOG_CAP = 6000
+
+
+def _clip_feedback(s: str) -> str:
+    """存反馈原文，超长时**头尾都留**。
+
+    ⚠️ **不能只掐尾**：有效信息常在**末尾**（pytest 把"哪几条失败"放在 short test summary、
+    把"为什么"放在 FAILURES 段）—— 掐尾正是本仓栽过的那条（§93「证据的有效部分在末尾、
+    代码掐的是头」）。所以两头各留一半，中间明写省略了多少。
+    """
+    s = s or ""
+    if len(s) <= _FEEDBACK_LOG_CAP:
+        return s
+    half = _FEEDBACK_LOG_CAP // 2
+    return s[:half] + f"\n…（中间省略 {len(s) - _FEEDBACK_LOG_CAP} 字符）…\n" + s[-half:]
+
+
 def _persist_partial_usage(task_id: str, level: str, model: str, delta: int,
                            tool_events: list | None = None,
                            elapsed: float | None = None,
-                           turn: int = 0, attempt: int = 0) -> None:
+                           turn: int = 0, attempt: int = 0,
+                           feedback: str = "") -> None:
     """把执行中**累计**的 token 落一盘，给超时路径用。
 
     为什么必须边跑边落：超时被杀的任务**走不到收尾记账**
@@ -164,7 +183,15 @@ def _persist_partial_usage(task_id: str, level: str, model: str, delta: int,
             # 读法：同一 attempt 里 turn>1 的条数 = 内层返工轮数；
             #       max(attempt)+1 = 这个任务被整个重跑了几次。
             _disp.append({"at": round(time.time(), 1), "elapsed": round(float(elapsed), 1),
-                          "turn": int(turn or 0), "attempt": int(attempt or 0)})
+                          "turn": int(turn or 0), "attempt": int(attempt or 0),
+                          # 🔴 **这次 dispatch 是带着什么反馈开始的**（2026-09-30）。
+                          # 来历 `round-20260930c`：T1 七次派发 / 251k token 没修掉一个
+                          # **6 行**的 bug，而事后**查不出"它当时看到了什么"** ——
+                          # trace 是覆盖写的，只剩最后一次；前六次的 `fb_parts` 没地方找。
+                          # ⇒ 于是分不清"没送到"和"送到了没照做"，**这条线就断在这儿**。
+                          # 存这儿是因为侧车本来就在记每次 dispatch，且它是**累加**的
+                          # （`[-20:]` 留最近 20 条）。
+                          "feedback": _clip_feedback(feedback)})
             payload["dispatches"] = _disp[-20:]
         if tool_events is not None:
             # tool_events 平时只在内存和 SSE 里过一遍、**从来不落盘**
@@ -757,6 +784,8 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                         elapsed=getattr(exec_result, "elapsed", 0.0),
                         # 「返工了几轮」的两个坐标（见 `_persist_partial_usage` 里那段）
                         turn=turn, attempt=getattr(ctx, "retry_count", 0),
+                        # 这次 dispatch 喂进去的反馈原文（诊断用，见 `_persist_partial_usage`）
+                        feedback=feedback or "",
                     )
 
                 # 收尾前**再查一次取消**。原来只在每轮开头查，于是超时（或人工取消）
