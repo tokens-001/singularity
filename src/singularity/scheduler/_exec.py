@@ -476,7 +476,13 @@ def _process_planner_or_merge(task, ctx, turn, level, is_planner, wt,
                 # 🔴 **"一个自己的产出文件都没交"的版本，不许送去合并**（2026-09-30，
                 # `round-20260929e` 真机）：合并成功 ⇒ `merge._mark_merged` 就
                 # `transition(DONE)` ⇒ 那任务**照样算成了**，而它连自己的产物都没写。
-                # ⚠️ 判据与 `_review` 里那条**共用同一个函数**（一个定义点）——
+                # ⚠️ 判据**只有一个定义点**（`_missing_own_deliverable`），而这里是它在
+                # `src/` 里的**唯一**调用点 —— 09-30 核过：`_review.py` **不查这一条**
+                #（`grep _missing_own_deliverable src/` 只有本行 + 定义）。
+                # ⇒ 后果：**没过这一跳的路，这道闸门管不着**。v2 那条
+                # （`ctx.merge_queue is None` ⇒ 直接 `merge_back`）就没有它。
+                # 实盘恒走 v3（`_run_queue_v3` 建 `mq` 并传给 `execute`）⇒ 今天碰不到，
+                # 但这是"闸门只装在一份实现上"的形状 —— 改执行路径时先回来看这行。
                 # 而且这里**要显式清掉上一轮留下的请求**：不清的话早先那轮建的那个
                 # 还挂在那儿，这一版照样会被合进去。
                 _chg = changed_files_between(ctx.snapshot_ref, branch_ref, repo_root=repo_root)
