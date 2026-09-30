@@ -507,6 +507,41 @@ class TestNoCwdIsNotSilent:
         assert any("没拿到任务工作目录" in u for u in v.unverified), v.unverified
 
 
+class TestNeedsFixCarriesReason:
+    """🔴 **"判重做"必须把理由一起发出去**（2026-09-30）。
+
+    prompt 契约允许 `issues:[]` + `verdict:retry` —— 那种情形下**理由只存在于 `summaries`**，
+    而这个键**全历史没人读过**（`docs/防御模式.md` §107）。原来发出去的只有
+    `r1:retry; r2:abort`：模型被告知重做、一个字原因都没有 ⇒ 只能盲改（同 `50337081` 那个病）。
+    """
+
+    def test_没给issues时理由要从summaries带出来(self, monkeypatch, tmp_path):
+        """变异：拿掉把 `summaries` 拼进 `_nf` 那一段 ⇒ 本用例红。"""
+        v, _ = _run(monkeypatch, tmp_path,
+                    pool=[{"model": "r1"}, {"model": "r2"}],
+                    multi={"models_used": ["r1", "r2"], "issues": [],
+                           "verdicts": [{"model": "r1", "verdict": "retry"},
+                                        {"model": "r2", "verdict": "abort"}],
+                           "summaries": [{"model": "r1", "summary": "空文件那条路没处理"},
+                                         {"model": "r2", "summary": "退出码不是 3"}]})
+        joined = " ".join(v.unverified)
+        assert "空文件那条路没处理" in joined, v.unverified
+        assert "退出码不是 3" in joined, v.unverified
+
+    def test_给了issues就不叠理由(self, monkeypatch, tmp_path):
+        """反方向：有 `issues` 时那一跳本来就把细节送出去了，别再加一层噪音。"""
+        v, _ = _run(monkeypatch, tmp_path,
+                    pool=[{"model": "r1"}, {"model": "r2"}],
+                    multi={"models_used": ["r1", "r2"],
+                           "issues": [{"model": "r1", "severity": "warning",
+                                       "line": 3, "detail": "没处理空文件"}],
+                           "verdicts": [{"model": "r1", "verdict": "retry"},
+                                        {"model": "r2", "verdict": "abort"}],
+                           "summaries": [{"model": "r1", "summary": "不该出现的理由"},
+                                         {"model": "r2", "summary": "不该出现的理由"}]})
+        assert not any("不该出现的理由" in u for u in v.unverified), v.unverified
+
+
 class TestReviewFailLimitUsesStreak:
     """🔴 **触顶判据只许看"连续"计数，不许看历史累计**（2026-09-30 `round-20260929e` 真机撞出来的）。
 

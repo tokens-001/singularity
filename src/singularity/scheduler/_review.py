@@ -521,9 +521,25 @@ def run_post_exec_checks(*, validation, quality, exec_result,
                             # 于是**审查层最明确的否定结论被省钱分支吃掉**，任务照样进
                             # DONE 并合进项目仓。同一段的 critical 分支扣了 0.25 才拦得住 ——
                             # 两支的差别恰好说明这里只是漏了，不是有意放行。
-                            _nf = "; ".join(
-                                f"{v.get('model', '')}:{v.get('verdict', '')}"
-                                for v in needs_fix[:3])
+                            # 🔴 **把每个模型的理由一起发出去**（2026-09-30）：prompt 契约
+                            # 允许 `issues:[]` + `verdict:retry`，那种情形下**理由只存在于
+                            # `summaries` 里** —— 而它从来没被读过（`docs/防御模式.md` §107），
+                            # 于是模型只收到 `r1:retry; r2:abort`：被告知重做、**一个字原因
+                            # 都没有** ⇒ 只能盲改（同 `50337081` 那个病）。
+                            # ⚠️ **只在 `issues` 为空时补** —— 有 issues 时那一路已经把
+                            # 细节送进 `unverified` 了，再叠一层就是噪音。
+                            _sums = {}
+                            if not issues:
+                                _sums = {s.get("model", ""): (s.get("summary") or "").strip()
+                                         for s in (review.get("summaries") or [])
+                                         if isinstance(s, dict)}
+                            _parts = []
+                            for v in needs_fix[:3]:
+                                _m = v.get("model", "")
+                                _why = _sums.get(_m, "")
+                                _parts.append(f"{_m}:{v.get('verdict', '')}"
+                                              + (f"（{_why[:200]}）" if _why else ""))
+                            _nf = "; ".join(_parts)
                             quality["warnings"].append(
                                 f"multi-review {len(needs_fix)} 个模型判 retry/abort: {_nf}")
                             # 必须同时进 unverified：quality 只活在内存里（见上面 critical 那段）

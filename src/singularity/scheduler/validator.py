@@ -914,8 +914,12 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
     # 拿到空 diff 或"文件不存在" ⇒ 返回 `{"issues": []}`，**上层读成"审过且没问题"**。
     # 返回一个显式标记，由调用方如实披露（「没做」既不放行也不判失败）。
     if not cwd:
+        # ⚠️ 这个"没做"的返回**故意跟成功返回同形**（消费者按同形读不会炸）。
+        # 🔵 **09-30 删掉了 `"lines": 0`** —— 它填的是个**错的键名**：主返回那边叫
+        # `total_lines`，两边对不上；而全仓（含前端）**没有任何读点** ⇒ 它既没起到
+        # "同形"的作用（名字都不一样），也没人用（`docs/防御模式.md` §107）。
         return {"issues": [], "verdicts": [], "summaries": [], "models_used": [],
-                "elapsed": 0, "file": filepath, "mode": "unavailable", "lines": 0,
+                "elapsed": 0, "file": filepath, "mode": "unavailable",
                 "unavailable": _NO_CWD_MSG}
 
     root = cwd
@@ -934,7 +938,7 @@ def multi_model_review(filepath: str, models: list[str] = None, cwd: str = None,
             code = (r.stdout or "").strip()
             if not code:
                 return {"issues":[],"verdicts":[],"summaries":[],
-                        "models_used":[],"elapsed":0,"file":filepath,"mode":"diff","lines":0}
+                        "models_used":[],"elapsed":0,"file":filepath,"mode":"diff"}
         except Exception:
             code = ""
         mode = "diff"
