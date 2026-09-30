@@ -109,6 +109,33 @@ class TestOwnDeliverable:
         assert sig and sig[0] == "missing_own_deliverable", f"没拦住：{sig}"
         assert holder[0] is None, "还建了合并请求 ⇒ 它会照旧被合并、任务照旧判 done"
 
+    def test_先过闸门后没过_不许把早先那个合并请求清掉(self, repo, proj_with_declared):
+        """🔴 **holder 的初值是上一轮建好的那个** —— 这一轮没过，**不许把它毁掉**。
+
+        2026-09-30 `round-20260930h` 真机（T1 `1790780775399`）：它真写出 186 行、
+        锚 `refs/qidian/pending/1790780775399`（`5ce94ab`）都在盘上，第 2 轮又没过闸门
+        ⇒ 原来那句 `holder[0] = None` 把它清成 None ⇒ 兜底 return 交回空壳
+        ⇒ `_batch_evidence` **从来没见过档 3** ⇒ 重试循环那三处比较无从救起
+        ⇒ 终局 `failed` +「[completeness] 无文件改动」，产物白丢。
+
+        变异：把 `pending_merge_req_holder[0] = None` 加回闸门失败分支 ⇒ 本用例红。
+        """
+        from singularity.scheduler import _exec
+        base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        (repo / "src" / "cli.py").write_text("x = 3\n")      # 这一轮改的不是自己的产出
+        _git(repo, "commit", "-aqm", "这一轮没交自己的产出文件")
+
+        task = _Task(proj_with_declared.id, "[T6] 集成测试: 写 tests/test_e2e.py")
+        prev = object()                       # 上一轮那个已经建好的合并请求（只要身份）
+        holder = [prev]
+        sig = _exec._process_planner_or_merge(
+            task, _ctx(repo, base), 2, "any", False, _wt(repo), _Disp().executor_result, _Disp(),
+            [], holder, repo_root=repo,
+        )
+        assert sig and sig[0] == "missing_own_deliverable", f"没拦住：{sig}"
+        assert holder[0] is prev, (
+            "把上一轮那个合并请求清掉了 ⇒ 真有产出的那一版会被判「无文件改动」（2026-09-30 真机）")
+
     def test_交了声明文件就照常合并(self, repo, proj_with_declared):
         """**反方向对照**：真交了产出文件，照旧建合并请求（别把正常路也堵了）。"""
         from singularity.scheduler import _exec

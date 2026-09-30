@@ -483,12 +483,29 @@ def _process_planner_or_merge(task, ctx, turn, level, is_planner, wt,
                 # （`ctx.merge_queue is None` ⇒ 直接 `merge_back`）就没有它。
                 # 实盘恒走 v3（`_run_queue_v3` 建 `mq` 并传给 `execute`）⇒ 今天碰不到，
                 # 但这是"闸门只装在一份实现上"的形状 —— 改执行路径时先回来看这行。
-                # 而且这里**要显式清掉上一轮留下的请求**：不清的话早先那轮建的那个
-                # 还挂在那儿，这一版照样会被合进去。
+                # 🔴 **不许清掉 holder 里已有的那个**（2026-09-30，`round-20260930h` 真机）。
+                #
+                # holder 的初值是**同一个 `run()` 里上一轮**建好的 merge_request
+                # （调用点那句 `pending_merge_req_holder = [pending_merge_req]`），
+                # 而上一轮**是过了这道闸门才建的** —— 声明文件齐了才 `_anchor_ref` +
+                # `_build_merge_request`。
+                #
+                # 原来这里写的是 `holder[0] = None`，注释自述的理由是
+                #「不清的话早先那轮建的那个还挂在那儿，这一版照样会被合进去」。
+                # ⚠️ **可那个取舍是反的**：过了闸门的那一版**是好的**，没过的是**这一版**。
+                # 按 `_batch_evidence` 自己的哲学——**弱的不许顶掉强的**——该留的是早先那个。
+                #
+                # 清掉的真实后果（T1 `1790780775399`）：它真写出 186 行、锚
+                # `refs/qidian/pending/1790780775399`（`5ce94ab`）都在盘上，第 2 轮又没过闸门
+                # ⇒ 被清成 None ⇒ 兜底 return（本文件那条 `merge_request=pending_merge_req`）
+                # 交回空壳 ⇒ **`_batch_evidence` 从来没见过档 3** ⇒ `_run_with_retry` 那三处
+                # 比较（`>=` 替换 / `>` 交回）无从救起 ⇒ 判 `failed` +「[completeness] 无文件改动」。
+                #
+                # ⇒ 这里只负责"**这一版**不通过"，不负责"把旧的也毁掉"。留着它，
+                #   重试循环按档比 —— 那才是它存在的意义。
                 _chg = changed_files_between(ctx.snapshot_ref, branch_ref, repo_root=repo_root)
                 _miss = _missing_own_deliverable(task, _chg)
                 if _miss:
-                    pending_merge_req_holder[0] = None
                     return ("missing_own_deliverable", level, turn, disp_result,
                             all_tool_events, _miss)
                 _anchor_ref(task.id, branch_ref, repo_root=repo_root)  # 防 gc 回收 (重要 #3)
