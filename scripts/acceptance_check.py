@@ -32,6 +32,25 @@ from singularity.scheduler import project as proj_mod          # noqa: E402
 ACCEPT = Path.home() / "qidian-accept"
 
 
+def _find_reports(projects_dir: Path, dl_dir: Path, pid: str) -> tuple[list[str], list[str]]:
+    """第 8 条要的两样：**QA 报告**文件名 · **交付清单**文件名。
+
+    ⚠️ **两处路径都反直觉，原版三处全找错 ⇒ 这条恒判不过，而系统其实是好的**
+    （2026-09-30 `round-20260930f` 判分时抓到，差一点把它报成"系统的洞"）：
+
+    · QA 报告是 `.qidian/projects/<id>.<名字>` —— **同级文件**，不在 `<id>/` 那个目录里
+      （`get_project_dir(pid)` 返回的正是那个**空目录**）。写者：`workflow._phase_output_path`。
+    · 交付清单在 `.qidian/deliverables/<id>/delivery_manifest.json` —— **不在**项目仓、
+      也不在 `.qidian/projects/`。写者：`orchestrator` 那段"写交付清单"。
+
+    抽成函数是为了**钉得住**：它错过一次，而且是"看起来像系统的洞"那种错。
+    """
+    qa = [f.name for f in projects_dir.glob(f"{pid}.*") if "qa" in f.name.lower()]
+    dl = ([f.name for f in dl_dir.glob("delivery_manifest.json")]
+          if dl_dir.exists() else [])
+    return qa, dl
+
+
 def _run(cmd: list[str], cwd=None, timeout=120) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
 
@@ -164,16 +183,21 @@ def grade(pid: str, stats_cmd: str = "") -> int:
         c.ok(False, "没解出包 ⇒ 这条没法核（**不是通过**）")
 
     c = Check(8, "报告齐（交付清单 / QA 报告）"); checks.append(c)
-    pdir = Path(proj_mod.get_project_dir(pid))
-    named = [f.name for f in pdir.iterdir()] if pdir.exists() else []
-    qa = [n for n in named if "qa" in n.lower()]
-    dl = [n for n in named if "deliver" in n.lower() or "交付" in n]
+    from singularity.scheduler import config as _cfg
+    pdir = Path(proj_mod.get_project_dir(pid)).parent          # `.qidian/projects/`
+    dl_dir = Path(_cfg.QIDIAN_DIR) / "deliverables" / pid
+    qa, dl = _find_reports(pdir, dl_dir, pid)
     c.ok(bool(qa), f"QA 报告：{qa or '（没有）'}")
     c.ok(bool(dl), f"交付清单：{dl or '（没有）'}")
     for n in qa:
         txt = (pdir / n).read_text(encoding="utf-8", errors="ignore")
         bad = [ln for ln in txt.splitlines() if "未跑" in ln and "通过" in ln]
         c.ok(not bad, f"{n} 里没有「没跑却写通过」" + (f"：{bad[:1]}" if bad else ""))
+    # 交付清单里那份"报告数"也一起看 —— 不然"报告一栏是空的"在清单里看不出来
+    for n in dl:
+        man = json.loads((dl_dir / n).read_text(encoding="utf-8", errors="ignore") or "{}")
+        reps = man.get("reports") or []
+        c.ok(bool(reps), f"{n} 的 reports 非空：{reps or '（空）'}")
 
     if work:
         shutil.rmtree(work, ignore_errors=True)
