@@ -94,6 +94,27 @@ class TestProducerSide:
         fake_dispatch(raw="模型写了一堆散文，没有任何 JSON")
         assert val_mod.security_audit_review("d", "/tmp")["verdict"] == "needs_fix"
 
+    def test_角色没配也是fails_closed(self, monkeypatch):
+        """🔴 **同一条边界的第四个面**（2026-09-30 用户拍板改的）。
+
+        原来「`security_auditor` 角色未定义」返回 `{"verdict": "clean", "findings": []}` ——
+        而本函数另外三条失败路径（无可用模型 / 调用失败 / 输出非 JSON）**全都是**
+        `needs_fix` + `high` + `category: review_error`。⇒ 那一条是**唯一的假绿**：
+        「角色没配」被读成「审过了、没问题」。
+        平时跑不到（角色一直在 `roles.toml` 里），但**角色表读不出来**时它会亮。
+
+        判据：把那条 `return {"verdict": "clean", ...}` 改回去 ⇒ 本条红。
+        """
+        # ⚠️ `get_role` 是**函数内**导入的（`from .roles import get_role`）⇒
+        # patch 的必须是它的**来源模块**，`val_mod.get_role` 压根不存在。
+        from singularity.scheduler import roles as roles_mod
+        monkeypatch.setattr(roles_mod, "get_role", lambda name: None)
+        out = val_mod.security_audit_review("diff", "/tmp")
+        assert out["verdict"] == "needs_fix", "角色没配被当成了'审过且干净'"
+        assert out["findings"] and out["findings"][0]["severity"] == "high"
+        assert out["findings"][0]["category"] == "review_error", \
+            "review_error 是这条边界的记号（同另外三条），别丢"
+
 
 class TestConsumerSide:
     """消费端：`_review.py` 拿 verdict 比 `needs_fix` 前必须归一。"""

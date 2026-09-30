@@ -1290,7 +1290,18 @@ def security_audit_review(diff_text, cwd, requirements=""):
 
     sa = get_role('security_auditor')
     if not sa:
-        return {"verdict": "clean", "findings": [], "summary": "security_auditor 角色未定义"}
+        # 🔴 **2026-09-30 改成 fail-closed**（用户拍板）。原来这里返回 `{"verdict": "clean",
+        # "findings": []}` —— 那是本函数**四条失败路径里唯一的例外**，另外三条
+        # （无可用模型 / 调用失败 / 输出非 JSON）全都是 `needs_fix` + `high` + `category: review_error`。
+        # ⇒ 「角色没配」被读成「审过了、没问题」，正是本仓最忌讳的形状：
+        # **一个值同时表示"没事"和"没做"**（`假绿`）。
+        # 平时跑不到（`security_auditor` 一直在 `roles.toml` 里），但**角色表读不出来**
+        # 时它就是一句假绿 —— 而安全门禁最怕的正是这个（同 `test_non_json_is_fail_closed`）。
+        return {"verdict": "needs_fix", "findings": [
+            {"severity": "high", "category": "review_error", "cwe": "CWE-0",
+             "location": "security_audit", "description": "security_auditor 角色未定义，未完成审计",
+             "remediation": "配置 security_auditor 角色；若持续失败需人工介入"}
+        ], "summary": "security_auditor 角色未定义"}
 
     prompt = f"""{sa.get_full_prompt()}
 
