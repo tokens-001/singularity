@@ -629,6 +629,28 @@ def _premium_first(chain: list, force: bool, restricted: bool) -> list:
 
 
 @timed(name="executor")
+def _task_retry_feedback(task) -> str:
+    """任务级重试时，把**上一轮为什么被退**拿出来当 `feedback`。
+
+    来历（2026-09-30，`round-20260930d` 直接观测到）：`feedback` 原来**只在内层 turn
+    循环里被赋值**，跨不了任务级重试 ⇒ 一个失败任务被重排 N 次，**每次都从头盲改**。
+    d 轮现场：那个任务 4 次重试 / 319,026 token，最后还是 `tests failed: 2 failures`
+    —— 而侧车忠实记下的是**四次空反馈**。
+
+    ⚠️ **只在"被重排过"时取**（`retry_count > 0`）—— 首次派发没有"上一次"。
+
+    ⚠️ 取的是 `task.error`（`_task_runner` 判失败 / 打回时写的那句），**不是**上一轮
+    `validation.unverified` 的全文 —— 后者更细（"执行器未产出任何文件"这类就藏在里面），
+    要拿它得去读上一轮的 trace。
+    ponytail: 这一版只带 `task.error` —— 它至少能说出 "tests failed: N failures" 这种
+    可动的信息，比"什么都不说"是质的差别。升级路径写在上面那行：需要更细时把最近一份
+    trace 的 `unverified` 也拼进来。
+    """
+    if not (getattr(task, "retry_count", 0) or 0):
+        return ""
+    return (getattr(task, "error", "") or "").strip()
+
+
 def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     """纯执行: dispatch + validate, 返回 BatchOutput。
 
@@ -651,7 +673,14 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
     # Step 4: 读取 layer→角色路由
     route_role = getattr(task, 'route_role', None) or ""
 
-    feedback = ""
+    # 🔴 **任务级重试要带着"上一轮为什么被退"进来**（2026-09-30，见 `_task_retry_feedback`）。
+    # 这里原来是一句裸的 `feedback = ""` —— 而 `feedback` 只在下面那个 turn 循环里被赋值
+    # ⇒ 它跨不了任务级重试：任务被重排 N 次，每次都从头盲改。
+    # 上面的 `read_task` 已经把任务重读过了，理由就在 `task.error` 上。
+    # ⚠️ **副作用（有意）**：`_build_effective_task` 里那条 "turn==1 且无打回反馈才注入
+    # MAGMA 记忆" 的规则会因此不再给重试注入记忆 —— 那正是它写着的意思
+    #（"无打回反馈时"），重试本来就该先看反馈。
+    feedback = _task_retry_feedback(task)
     last_validation = val_mod.ValidationReport(
         verdict="未知", action="abort",
         unverified=["dispatcher 未产出可校验结果"],

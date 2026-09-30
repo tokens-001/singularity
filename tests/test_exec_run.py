@@ -525,6 +525,51 @@ if __name__ == "__main__":
     check("有改动 → 照旧锚", ANCHORED == [("1234567890123", "newcommit")], f"实到 {ANCHORED}")
     _exec.commit_wt = lambda wt: "fakebranchref"    # 还原桩
 
+    print("── 接线: 任务级重试要把「上一轮为什么被退」带进 dispatch ──")
+    # 为什么要有这条：2026-09-30 `round-20260930d` 直接观测到 —— 一个失败任务被
+    # **任务级重试 4 次**（侧车 attempt=0..3），而**四次 feedback 全是空的**，
+    # 烧 319,026 token 后还是 `tests failed: 2 failures`。
+    # 根因：`feedback` 只在**内层 turn 循环**里被赋值，跨不了任务级重试。
+    # 🔴 这条钉的是**最后一跳**（那个理由真到了 `dispatch`），不是只测 helper ——
+    #    "函数对 ≠ 接线通"，本仓在这上面栽过多次。
+    reset_wt()
+    _t = make_task()
+    _t.retry_count = 2
+    _t.error = "QA:retry: [artifact] 质量门禁失败: tests failed: 3 failures"
+    S.task = _t
+    S.dispatch_queue = [("ok", FakeExec(success=True))]
+    S.validate_queue = [FakeVal(action="pass")]
+    _exec.run(_t, make_ctx(v3=True), {"any": list(S.chain)})
+    _fb = (S.last_dispatch_kw or {}).get("feedback", "")
+    check("重试时 dispatch 真收到了上一轮的理由",
+          "tests failed: 3 failures" in _fb, f"实到 {_fb!r}")
+
+    print("── 对照: 首次派发不许带理由（retry_count=0）──")
+    # 反方向：不设这条的话，把 `_task_retry_feedback` 改成"恒返回 task.error"
+    # 也能让上面那条绿 —— 而那会让**首次派发**凭空收到一句上一次的老错误。
+    reset_wt()
+    _t2 = make_task()
+    _t2.retry_count = 0
+    _t2.error = "上一轮遗留的老错误（不该被带进去）"
+    S.task = _t2
+    S.dispatch_queue = [("ok", FakeExec(success=True))]
+    S.validate_queue = [FakeVal(action="pass")]
+    _exec.run(_t2, make_ctx(v3=True), {"any": list(S.chain)})
+    _fb2 = (S.last_dispatch_kw or {}).get("feedback", "")
+    check("首次派发 feedback 是空的", _fb2 == "", f"实到 {_fb2!r}")
+
+    print("── 对照: 重试过但没理由 ⇒ 也不许编一个 ──")
+    reset_wt()
+    _t3 = make_task()
+    _t3.retry_count = 1
+    _t3.error = ""
+    S.task = _t3
+    S.dispatch_queue = [("ok", FakeExec(success=True))]
+    S.validate_queue = [FakeVal(action="pass")]
+    _exec.run(_t3, make_ctx(v3=True), {"any": list(S.chain)})
+    _fb3 = (S.last_dispatch_kw or {}).get("feedback", "")
+    check("没理由时 feedback 仍是空的", _fb3 == "", f"实到 {_fb3!r}")
+
     print("\n" + "=" * 48)
     total = PASS + FAIL
     print(f"{'✅ 全通过!' if FAIL == 0 else '❌ 有失败'}  通过 {PASS} / 失败 {FAIL} / 总 {total}")
