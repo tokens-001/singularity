@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -51,8 +52,32 @@ def _find_reports(projects_dir: Path, dl_dir: Path, pid: str) -> tuple[list[str]
     return qa, dl
 
 
-def _run(cmd: list[str], cwd=None, timeout=120) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+def _run(cmd: list[str], cwd=None, timeout=120, env=None) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
+
+
+def _find_package(work: Path) -> tuple[str, str]:
+    """解包目录里找包 ⇒ `(包名, 要设进 PYTHONPATH 的目录)`；找不到给 `("", "")`。
+
+    ⚠️ **`src/` 布局是标准做法，只看顶层会把好好的包判成"没找到"**
+    （2026-09-30 `round-20260930f` 就是：包在 `src/jsonlstat/`，
+    判分器报"没有带 `__init__.py` 的一级目录"⇒ 第 4/6 条**双双判不过**，
+    而那是**判分器的眼睛问题**，不是包的毛病）。
+    """
+    def _pkgs(root: Path) -> list[str]:
+        if not root.is_dir():
+            return []
+        return [p.name for p in root.iterdir()
+                if p.is_dir() and (p / "__init__.py").exists() and p.name != "tests"]
+
+    top = _pkgs(work)
+    if top:
+        return top[0], ""
+    src = work / "src"
+    under_src = _pkgs(src)
+    if under_src:
+        return under_src[0], str(src)        # `python -m` 要 import 得到它
+    return "", ""
 
 
 def _git(repo: Path, *args) -> str:
@@ -131,12 +156,14 @@ def grade(pid: str, stats_cmd: str = "") -> int:
     c = Check(4, "装得上、跑得起来"); checks.append(c)
     pkg = ""
     if work:
-        cands = [p.name for p in work.iterdir()
-                 if p.is_dir() and (p / "__init__.py").exists() and p.name != "tests"]
-        pkg = cands[0] if cands else ""
-        c.ok(bool(pkg), f"解包后找到包目录：{pkg or '（没有带 __init__.py 的一级目录）'}")
+        pkg, pkg_root = _find_package(work)
+        c.ok(bool(pkg), f"解包后找到包目录：{pkg or '（没有带 __init__.py 的一级目录）'}"
+                        + (f"（在 src/ 下）" if pkg and pkg_root else ""))
         if pkg:
-            h = _run([sys.executable, "-m", pkg, "--help"], cwd=work)
+            env = dict(os.environ)
+            if pkg_root:
+                env["PYTHONPATH"] = pkg_root + os.pathsep + env.get("PYTHONPATH", "")
+            h = _run([sys.executable, "-m", pkg, "--help"], cwd=work, env=env)
             c.ok(h.returncode == 0, f"`python -m {pkg} --help` 退 {h.returncode}")
             c.notes.append("     帮助输出首行：" + (h.stdout.strip().splitlines() or [""])[0][:90])
     else:

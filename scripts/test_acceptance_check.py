@@ -76,6 +76,28 @@ def main() -> int:
         qa4, _ = ac._find_reports(pdir, dld, PID)
         ok &= _check(f"只认本项目的：{qa4}", all(PID in n for n in qa4))
 
+    print("── 🔴 第 4 条：`src/` 布局也要认得（round-f 就是它判不过）──")
+    with tempfile.TemporaryDirectory() as td:
+        w = Path(td)
+        (w / "src" / "jsonlstat").mkdir(parents=True)
+        (w / "src" / "jsonlstat" / "__init__.py").write_text("", encoding="utf-8")
+        pkg, root = ac._find_package(w)
+        ok &= _check(f"src 布局下找到包：{pkg!r}（找的是非空名，且给得出 PYTHONPATH）",
+                     pkg == "jsonlstat" and root.endswith("src"))
+
+        w2 = Path(td) / "flat"
+        w2.mkdir()
+        (w2 / "mypkg").mkdir()
+        (w2 / "mypkg" / "__init__.py").write_text("", encoding="utf-8")
+        (w2 / "tests").mkdir()
+        (w2 / "tests" / "__init__.py").write_text("", encoding="utf-8")
+        pkg2, root2 = ac._find_package(w2)
+        ok &= _check(f"顶层布局照旧认得：{pkg2!r}（且不把 tests 当包）",
+                     pkg2 == "mypkg" and root2 == "")
+
+        pkg3, _ = ac._find_package(Path(td) / "空")
+        ok &= _check("没有包时给空，不炸", pkg3 == "")
+
     print("\n" + ("✅ 全通过" if ok else "❌ 有失败"))
     return 0 if ok else 1
 
