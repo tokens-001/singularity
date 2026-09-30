@@ -51,6 +51,10 @@ def proj_with_declared(tmp_path, monkeypatch):
     p.architecture = {"tasks": [
         {"id": "T1", "title": "实现 CLI", "estimated_files": ["src/cli.py"]},
         {"id": "T6", "title": "集成测试", "estimated_files": ["tests/test_e2e.py"]},
+        # 声明**两个**文件的任务 —— 「只交了一半」这条只有它能测出来（2026-09-30 补）。
+        {"id": "T7", "title": "解析模块", "estimated_files": ["src/parser.py", "tests/test_parser.py"]},
+        # **目录**声明 —— 按前缀判（架构师确实会这么写）
+        {"id": "T8", "title": "夹具", "estimated_files": ["tests/fixtures/"]},
     ]}
     P.save(p)
     return p
@@ -135,3 +139,34 @@ class TestOwnDeliverable:
         msg = _exec._missing_own_deliverable(t, ["src/cli.py"])
         assert "tests/test_e2e.py" in msg and "src/cli.py" in msg, msg
         assert "不会被合并" in msg, "没说清后果 ⇒ 模型不知道这一版算不算数"
+
+    # ── 2026-09-30：判据从「一个都没交」放宽到「缺任何一个」────────────────
+    # 为什么：`round-20260930f` 8/8 全判 done、合并进仓、`release/*` tag 都打了，
+    # 而 gate3 机械检查 7 条**只过 2 条** —— 另外 5 条点名的测试文件全不存在。
+    # 任务**交了 .py、没交测试** ⇒ 从「有交集就放行」那条缝里整批过去了。
+
+    def test_只交了一半也要拦住(self, proj_with_declared):
+        """🔴 声明 `src/parser.py` + `tests/test_parser.py`，只交了前一个 ⇒ **要拦**。
+
+        这是旧判据（`if _decl & _have: return ""`）放过去的那一类。
+        """
+        from singularity.scheduler import _exec
+        t = _Task(proj_with_declared.id, "[T7] 解析模块: 写 src/parser.py")
+        msg = _exec._missing_own_deliverable(t, ["src/parser.py"])
+        assert msg, "交了一半却放行了 —— 旧判据那条缝又开了"
+        assert "tests/test_parser.py" in msg, f"没点名缺的是哪个：{msg}"
+
+    def test_交齐了就放行(self, proj_with_declared):
+        """**反方向**：两个都交了 ⇒ 必须放行（别把正常路也堵了）。"""
+        from singularity.scheduler import _exec
+        t = _Task(proj_with_declared.id, "[T7] 解析模块: 写 src/parser.py")
+        assert _exec._missing_own_deliverable(
+            t, ["src/parser.py", "tests/test_parser.py"]) == ""
+
+    def test_目录声明按前缀判(self, proj_with_declared):
+        """`tests/fixtures/` 是**目录**声明 —— 下面有文件就算交过（否则会误伤一整类任务）。"""
+        from singularity.scheduler import _exec
+        t = _Task(proj_with_declared.id, "[T8] 夹具: 建 tests/fixtures/")
+        assert _exec._missing_own_deliverable(
+            t, ["tests/fixtures/sample.jsonl", "src/别的.py"]) == ""
+        assert _exec._missing_own_deliverable(t, ["src/别的.py"]), "目录下一个文件都没有，却放行了"

@@ -1335,15 +1335,28 @@ def _save_trace(task, route, snap, disp_result, validation, rolled_back: bool,
 
 
 def _missing_own_deliverable(task, changed: list[str]) -> str:
-    """**声明了产出文件，却一个都没交** ⇒ 返回原因；没问题返回 `""`。
+    """**声明的产出文件没交齐**（缺任何一个）⇒ 返回原因；齐了返回 `""`。
 
     🔴 来历（2026-09-30，`round-20260929e` 真机）：T6 的描述里明写
     「你的产出文件（架构声明，**只许改这些**）: `tests/test_e2e.py`」，
     而它**改了 T1 的 `cli.py`、自己的产物全历史都没交**，最后**照样判 `done` 并进仓**
     （`merge._mark_merged` 只看"能不能合上"，`changed_files` 一个都不在声明里也不问）。
 
-    ⚠️ **只判"一个都没交"这一半**（用户 2026-09-30 拍板）：改别人的文件仍然只记
-    `task_file_overlap`（那一半误伤面大 —— 依赖共享模块/契约的任务会被打飞）。
+    🔴 **2026-09-30 放宽到"缺任何一个"**（`round-20260930f` 真机）：
+    原来只判"**一个都没交**"（`if _decl & _have: return ""` —— 有交集就放行），
+    而 f 轮 8/8 全部判 `done`、合并进仓、打完 `release/*` tag 之后，
+    **gate3 的机械检查 7 条只过 2 条** —— 另外 5 条点名的文件
+    （`tests/test_parser.py` / `test_filters.py` / `test_output.py` / `test_cli.py` /
+    `test_e2e.py::test_perf_budget`）**全都不存在**。任务交了 `.py`、没交测试
+    ⇒ 从"有交集"这条缝里整批过去了。
+    （同一轮验收 ③ 失败的第 4 条也是它：`__main__.py` 没交 ⇒ `python -m jsonlstat` 起不来。）
+
+    📊 **改之前量过误伤面**（2026-09-30，拿盘上 6 轮真数据回放）：拦掉的任务里
+    **一条误伤都没有** —— 全是"声明了没交"（f 6/7 · e 2/3 · d 1/5 · 09-29-e 1/6，
+    最后那条正是 `9fd32832` 的原始案发现场 T6）。
+
+    ⚠️ **改别人的文件仍然不判**：那一半只记 `task_file_overlap`
+    （用户 2026-09-30 拍板不拦 —— 误伤面 26~29%，见 `~/OPEN-别动.md`）。
     ⚠️ **没声明就不判**（`estimated_files` 是架构师给的，不给 = 没有尺子）——
     宁可放过，也不拿一把不存在的尺子去卡任务。
     """
@@ -1353,13 +1366,22 @@ def _missing_own_deliverable(task, changed: list[str]) -> str:
     # ⚠️ **比完整相对路径，不比 basename**：`src/cli.py` 和 `web/cli.py` 是两个文件，
     # 按 basename 会把它俩当成同一个 ⇒ 越界改同名的别人的文件照样放行。
     _norm = lambda p: str(p).replace("\\", "/").lstrip("./")          # noqa: E731
-    _decl = {_norm(x) for x in declared}
     _have = {_norm(x) for x in (changed or [])}
-    if _decl & _have:
+
+    def _satisfied(entry: str) -> bool:
+        """`tests/fixtures/` 这种**目录**声明：下面有任何一个文件就算交过。"""
+        e = _norm(entry)
+        if e.endswith("/"):
+            return any(h.startswith(e) for h in _have)
+        return e in _have
+
+    missing = sorted(x for x in declared if not _satisfied(x))
+    if not missing:
         return ""
-    return (f"你**一个自己的产出文件都没交**：架构声明本任务的产出是 {declared}，"
-            f"而这次改动是 {sorted(_have) if _have else '（零改动）'}。"
-            f"这一版**不会被合并、也不会判完成** —— 请去写你自己的产出文件。")
+    return (f"你声明的产出文件**没交齐**，缺 {missing}。"
+            f"架构声明本任务的产出是 {declared}，而这次改动是 "
+            f"{sorted(_have) if _have else '（零改动）'}。"
+            f"这一版**不会被合并、也不会判完成** —— 请把缺的那些写出来。")
 
 
 def _declared_files_for(task) -> list[str]:
