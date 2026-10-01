@@ -364,6 +364,24 @@ class TestArtifactLintSkip:
         assert any("未执行" in i for i in v.issues), \
             f"没进 issues ⇒ 人审页上看不见：{v.issues}"
 
+    def test_判词不把成因说成root传错(self, tmp_path):
+        """**归因判据**（2026-10-01，`round-20261001` 的 T4）。
+
+        这一格**分不开**两种成因：`root` 传错 · **这一版没合并**（改动先落 worktree、
+        合并之后才进项目仓）。而**后者实盘更常见** —— 后者时 `root` 一点没错。
+
+        原来注释和判词只写了前者（原话"常见成因是 `root` 传错"）⇒ T4 那次判词把我引去
+        查 root，查了半天才发现真因是"这一版压根没合"。**判词说错成因 = 让人查错方向**
+        （同族：`3bd720e3`「门禁说不出哪一条」）。
+
+        变异：把判词里"合并 / 别默认是 root 传错"那半删掉 ⇒ 本条红。
+        """
+        from singularity.scheduler import supervisor as sv
+        r = sv._check_artifact(["pkg/other.py"], tmp_path, tests_result={"passed": True})
+        assert "合并" in r.reason, \
+            f"判词没提「这一版没合并」这个更常见的成因，会把人引去查 root：{r.reason}"
+        assert "未执行" in r.reason and not r.passed, r.reason
+
     def test_still_checks_existing_files(self, tmp_path, monkeypatch):
         """文件真在 root 下时照常走 lint（别把正常路径也跳过了）。"""
         from types import SimpleNamespace

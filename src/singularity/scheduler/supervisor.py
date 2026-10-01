@@ -490,8 +490,15 @@ def _check_artifact(changed_files: list[str], root: Path, tests_result: dict = N
         # 跑 **0 次**、ruff 也没得扫，`errors` 恒空；而 `evidence` 起手就是
         # `{"hard": True}` ⇒ 最后照样报「**质量门禁通过 (N 文件)**」——
         # **最硬的那一格，是零次检查换来的。**
-        # 常见成因是 `root` 传错（项目任务的改动在项目独立 repo 下，见 `run_qa` 开头那段）：
-        # 那时连"测试跑的其实是奇点自己的"也一起发生，而外面看到的是一片绿。
+        # 🔴 **成因有两种，判词必须都说到**（2026-10-01 更正，`round-20261001` 的 T4）：
+        #   ① **`root` 传错** —— 项目任务的改动在项目独立 repo 下、却传成奇点自己的仓。
+        #      那时连"测试跑的其实是奇点自己的"也一起发生，而外面看到的是一片绿。
+        #   ② **改动还没进 root**（**实盘更常见**）—— 任务干活在 worktree 里，
+        #      **过了闸门、合并之后**才出现在项目仓。**没过闸门 / 没合并的那一版，
+        #      这里必然找不到，而 `root` 一点没错。**
+        # 这一段原来只写了 ①（原话"常见成因是 `root` 传错"）⇒ T4 那次判词把我引去查
+        # root，查了半天才发现真因是"这一版压根没合"。**判词说错成因 = 让人查错方向**，
+        # 和"闸门说不出哪一条"是同一族（`3bd720e3`）。
         #
         # ⇒ 归到本仓对"没做"的**一贯处置**：`hard=False`（不冒充硬证据）+ `passed=False`
         # （进 issues）。supervisor 汇总时命中 `soft_escalation` ⇒ **`escalate`，交人审**。
@@ -499,8 +506,11 @@ def _check_artifact(changed_files: list[str], root: Path, tests_result: dict = N
         # 那是另一侧的病（刚在 `validator._run_gate` 那边栽过同一个形状）。
         return CheckResult(
             passed=False,
-            reason=(f"质量门禁**未执行**: 改动的 {len(py_files)} 个 py 文件一个都不在 "
-                    f"root 下 (root={root}) —— 不是通过"),
+            reason=(f"产物检查**未执行**: 改动的 {len(py_files)} 个 py 文件在 root 下"
+                    f"一个都找不到 —— 不是通过。"
+                    f"（root={root}。项目任务的改动先落在 worktree、**合并之后**才进项目仓，"
+                    f"所以「没过闸门 / 没合并的那一版」在这里必然找不到 —— "
+                    f"**别默认是 root 传错**）"),
             evidence={"hard": False,
                       "not_run": {"changed_py_files": list(py_files), "root": str(root)}},
         )
