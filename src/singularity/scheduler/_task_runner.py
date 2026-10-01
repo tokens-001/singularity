@@ -109,6 +109,44 @@ def requeue_if_never_dispatched(task) -> bool:
     return True
 
 
+def requeue_after_qa(task, qa_verdict: str, qa_issues: list) -> int | None:
+    """QA 判**中间态**（retry / escalate / block）⇒ 转 PENDING 重排。
+
+    **返回新的重排次数；到上限返回 `None`**（那时**不改状态**，判终态由调用方做）
+    —— 判据和 `requeue_if_never_dispatched` 同源（"到上限 ⇒ 握手，判终态由调用方做"）。
+
+    🔴 **为什么必须有上限**（2026-10-01 `round-20261001` 实测，这条是那天最贵的东西）：
+    这个分支原来**只 `+1`、没有任何人读它** —— 两处上限（本函数的兄弟
+    `requeue_if_never_dispatched`、以及 `finalize` 的 `else` 里"重试耗尽→自动拆分"）
+    **都长在别的路上**，这条路一个出口都碰不到。
+    真机形状：T4 判 `escalate` ⇒ 转 PENDING ⇒ 再跑 ⇒ 又 `escalate` …… **20 次派发、
+    186 万 token**，`retry_count` 涨到 **4（已 > `max_retries=3`）仍然被重派**，
+    一直到我手工杀后端才停。
+    ⚠️ 最刺眼的是**同一段注释自己的原话**："`retry_count` 必须在这里 +1：…… 于是
+    `_task_runner` 里'重试耗尽 → 自动拆分再提交'那条分支**永远进不去**" ——
+    **可那条分支在 `else` 里，走 `elif` 这条路根本到不了。**
+    生产者把值写上了，消费者长在另一条路上（本仓反复栽的形状）。
+
+    ⚠️ **判 `fail` 的那一支不走这里**（它有自己的 `requeue_if_never_dispatched`）；
+    两支共用同一个 `retry_count`，语义都是"这个任务被重排了几次"（见那段注释）。
+    """
+    rc = int(getattr(task, "retry_count", 0) or 0)
+    cap = int(getattr(task, "max_retries", 3) or 3)
+    if rc >= cap:
+        return None                      # 到上限，握手 —— 别在这儿改状态
+    try:
+        tracker.transition(
+            task.id, TaskStatus.PENDING,
+            error=f"QA:{qa_verdict}: " + "; ".join(qa_issues[:2]),
+            retry_count=rc + 1)
+    except Exception as e:
+        witness.warn("orch", f"qa_requeue_transition_failed:{task.id}:"
+                             f"{type(e).__name__}:{e}"[:180],
+                     key="qa_requeue_transition_failed")
+        return None
+    return rc + 1
+
+
 def _archive_task_outcome(task, route, disp_result, failure_mode: str = "") -> None:
     """任务结束后归档：经验 / 用量 / 路由学习。三件都写盘。
 
@@ -420,11 +458,23 @@ class TaskRunner:
             # 而全仓原来只有 tracker.recover()（进程重启）会写它 ——
             # 于是 _task_runner 里"重试耗尽 → 自动拆分再提交"那条分支**永远进不去**
             # （正常一次调度里 retry_count 恒为 0），任务只会无限重排。
-            _rc = int(getattr(task, 'retry_count', 0) or 0) + 1
-            tracker.transition(task.id, TaskStatus.PENDING,
-                             error=f"QA:{qa_verdict}: " + "; ".join(qa_issues[:2]),
-                             retry_count=_rc)
-            reason += f"; QA:{qa_verdict}→PENDING(第{_rc}次)"
+            #
+            # 🔴 **2026-10-01 补：上限也得在这儿判**（`round-20261001` 真机，T4 20 次派发）。
+            # 原来只 +1 没人读 —— 上面那句注释指的那个消费者长在 `else` 分支里，
+            # **走这条路根本到不了** ⇒ `retry_count` 涨到 4（> max_retries=3）还在重派。
+            # 到顶就**别再转 PENDING**：判 FAILED ⇒ 项目按 `d7b4d28b` 语义停滞、
+            # 人二选一（重试 / 叫停）—— 那正是设计好的出口，不是新的死路。
+            _n = requeue_after_qa(task, qa_verdict, qa_issues)
+            if _n is not None:
+                reason += f"; QA:{qa_verdict}→PENDING(第{_n}次)"
+            else:
+                qa_fail = True
+                _cap = int(getattr(task, 'max_retries', 3) or 3)
+                tracker.transition(
+                    task.id, TaskStatus.FAILED,
+                    error=(f"QA:{qa_verdict}: 重排到顶（{_cap} 次）仍不过: "
+                           + "; ".join(qa_issues[:2])))
+                reason += f"; QA:{qa_verdict}→FAILED(重排到顶)"
 
         # QA 通过才标 DONE + 推进父任务。QA 拒绝的任务实际失败了, 不能推进父任务。
         # planner_decomposed 的父任务走 DECOMPOSED (等子任务聚合), 也不能标 DONE。
