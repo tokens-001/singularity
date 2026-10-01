@@ -50,17 +50,38 @@ def _no_chancellor(monkeypatch):
 
 def test_没到上限_照旧转PENDING():
     t = _mk_task(rc=0, cap=3)
-    tr.TaskRunner().finalize(t, _batch("escalate"), NS(task_type=""), None, [])
+    tr.TaskRunner().finalize(t, _batch("retry"), NS(task_type=""), None, [])
 
     after = tracker.read_task(t.id)
-    assert after.status == TaskStatus.PENDING, "中间态还没到顶 ⇒ 该重排"
+    assert after.status == TaskStatus.PENDING, "retry 还没到顶 ⇒ 该重排"
     assert after.retry_count == 1, "重排次数没 +1 ⇒ 上限永远够不着"
 
 
-def test_到上限_判FAILED而不是再转PENDING():
-    """**这条就是本次修的东西**：到顶还转 PENDING = 一个没有上限的黑洞。"""
-    t = _mk_task(rc=3, cap=3)
+def test_escalate直接判FAILED交人审():
+    """🔴 **escalate = 交人审 ⇒ 停着等人，不重排**（2026-10-01 用户拍板）。
+
+    它**不看上限**：rc=0 也直接停。理由 —— 重跑修不了"软信号需要人判断"这件事
+    （同一个模型、同一个 prompt），`round-20261001` 的 T4 就是这么空转 20 次的。
+    变异：把 `if qa_verdict == "escalate"` 那一支删掉 ⇒ 本条红（会退回 PENDING）。
+    """
+    t = _mk_task(rc=0, cap=3)
     tr.TaskRunner().finalize(t, _batch("escalate"), NS(task_type=""), None, [])
+
+    after = tracker.read_task(t.id)
+    assert after.status == TaskStatus.FAILED, \
+        f"escalate 该停着等人（判 FAILED ⇒ 项目停滞 ⇒ 人二选一），实际 {after.status}"
+    assert "交人审" in after.error, f"判词要写清是交人审，不是硬失败: {after.error}"
+    assert after.retry_count == 0, "停着等人的任务不该被算成重排过"
+
+
+def test_到上限_判FAILED而不是再转PENDING():
+    """**这条是上限那条修的东西**：到顶还转 PENDING = 一个没有上限的黑洞。
+
+    ⚠️ 用 `retry` 而不是 `escalate` —— `escalate` 现在走上面那条（不看上限直接停），
+    用它会让这条测不到"上限"。（2026-10-01 改 escalate 语义时同步改的。）
+    """
+    t = _mk_task(rc=3, cap=3)
+    tr.TaskRunner().finalize(t, _batch("retry"), NS(task_type=""), None, [])
 
     after = tracker.read_task(t.id)
     assert after.status == TaskStatus.FAILED, "到顶又转回 PENDING ⇒ 会无限重派（T4 20 次）"

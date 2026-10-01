@@ -464,8 +464,25 @@ class TaskRunner:
             # **走这条路根本到不了** ⇒ `retry_count` 涨到 4（> max_retries=3）还在重派。
             # 到顶就**别再转 PENDING**：判 FAILED ⇒ 项目按 `d7b4d28b` 语义停滞、
             # 人二选一（重试 / 叫停）—— 那正是设计好的出口，不是新的死路。
-            _n = requeue_after_qa(task, qa_verdict, qa_issues)
-            if _n is not None:
+            if qa_verdict == "escalate":
+                # 🔴 **escalate = 交人审 ⇒ 停着等人，不重排**（2026-10-01 用户拍板）。
+                #
+                # 病：`escalate` 的语义一直是"交人审"（`supervisor` 汇总那段写着"升级 Owner"），
+                # 可实现是**转 PENDING 再跑一遍** —— 而重跑**修不了**"软信号需要人判断"这件事
+                # （跑的还是同一个模型、同一个 prompt）。`round-20261001` 的 T4 就是这么
+                # 空转 20 次、烧掉 186 万 token 的（它的 escalate 来自"产物检查未执行"，
+                # 那条已由 `3108a20f` 从源头修掉；这里修的是**兜底语义**）。
+                #
+                # 停的形态就用本仓设计好的那个出口：判 FAILED ⇒ 项目 `halted_reason=task_failed`
+                # 停滞 ⇒ 人二选一（重试 / 叫停）。**不新造状态。**
+                # ⚠️ **不置 `qa_fail`**：那个标记会提前 return，把 Chancellor（"这活出事了"的
+                # 上报通道）一起跳过 —— 而"交人审"要的恰恰是**让人看见**。
+                tracker.transition(
+                    task.id, TaskStatus.FAILED,
+                    error=("QA:escalate: 交人审（软信号需要人判断，不再自动重排）: "
+                           + "; ".join(qa_issues[:2])))
+                reason += "; QA:escalate→FAILED(交人审)"
+            elif (_n := requeue_after_qa(task, qa_verdict, qa_issues)) is not None:
                 reason += f"; QA:{qa_verdict}→PENDING(第{_n}次)"
             else:
                 qa_fail = True
