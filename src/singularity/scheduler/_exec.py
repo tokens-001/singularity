@@ -995,48 +995,61 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                 # 位置: merge_request 已构造、_decide_cascade 之前。清掉 merge_request
                 # 后代码进不了主仓库 (v3 不 submit / v2 不 merge_back)。
                 # 只拦 verdict=fail (硬证据); escalate/retry 是软信号, 不拦, 仅 SSE 通知 Owner。
-                if pending_merge_req is not None:
-                    try:
-                        from .supervisor import our_side_stop_of, qa_context, supervise
-                        _cons, _check = qa_context(task)
-                        # 改动文件在 worktree (cwd) 里, 不在项目 repo 根 —— 传错根
-                        # 会让 _check_artifact 的 py_compile/ruff 因 (root/f).exists()
-                        # 为假而静默跳过 (端到端实测: 语法错误文件被放行合并)
-                        sv = supervise(task.description, changed, _cons, _check,
-                                       getattr(exec_result, 'raw_output', '') or '',
-                                       task.id, repo_root=cwd,
-                                       tests_result=(quality or {}).get("test_result"),
-                                       # 让判据知道"这次是不是被我们掐断的"（审计 A4）
-                                       our_side_stop=our_side_stop_of(exec_result))
-                        qa_verdict = sv.verdict
-                        qa_issues = list(sv.issues)
-                        # "block" 必须和 "fail" 同等对待：supervise 在**模型隔离违规**
-                        # （supervisor 与 implementer 同模型）时返回 "block"，注释写明是"硬锁"。
-                        # 但消费端原来只认 "fail" / ("escalate","retry") —— "block" 两条都不中，
-                        # 直接穿过去、**合并照走**，那个硬锁从来没生效过。
-                        # 🔴 **修完消费端它照样没生效**（2026-09-25 核）：`supervise()` 的两个
-                        # 模型名形参全仓三处调用点**一个都没传** ⇒ 生产端恒不发 "block"
-                        # ⇒ **这一支至今是死代码**。详情写在 `supervisor.py` 文件头。
-                        if sv.verdict in ("fail", "block"):
-                            pending_merge_req = None
-                            quality.setdefault("warnings", []).append(
-                                ("QA 阻断: " if sv.verdict == "block" else "QA 硬证据失败: ")
-                                + "; ".join(sv.issues[:2] or [getattr(sv, "reason", "")]))
-                            quality["failure_kind"] = "qa_fail"
-                            # 压低置信度, 否则 _decide_cascade 的 cascade_accept 会直接放行
-                            validation.confidence = min(validation.confidence, 0.3)
-                            validation.action = "retry" if turn < level_max else "abort"
-                            validation.unverified.append(
-                                "QA 硬证据失败 (未合并): " + "; ".join(sv.issues[:2]))
-                        elif sv.verdict in ("escalate", "retry"):
-                            _pending_sse_events.append({
-                                "kind": "system",
-                                "msg": f"[{tracker.short_id(task.id)}] QA 软信号 {sv.verdict} (不拦合并): "
-                                       + "; ".join(sv.issues[:1]),
-                                "ts": time.time(), "task_id": task.id,
-                            })
-                    except Exception as e:
-                        witness.warn(task.id, f"qa_gate:{e}")
+                # 🔴 **检查要跑，不管有没有 MR**（2026-10-01，用户拍板"查"）。
+                # 原来整块挂在 `pending_merge_req is not None` 上 ⇒ **没过闸门（= 没有 MR）
+                # 的任务一次都没被查过** —— 而它们恰恰是最该查的那批。后果（round-20261001 T4）：
+                # worker 里没查 ⇒ 拖到 `_task_runner.finalize` 再查，可那时 root 已是**项目仓**、
+                # 而改动还在 worktree（已清）⇒ 只能报「产物检查未执行」，判词还说是 root 传错。
+                #
+                # ✅ **跑得起**：`supervise()` 是**纯机械**的（文本匹配 / 文件存在 / subprocess
+                #    跑 py_compile+ruff），**没有一次模型调用** —— 多跑不花钱。
+                #    ⚠️ `_task_runner` 那句"`supervise()` 是一次真模型调用"**是错的**。
+                # ✅ **root 也对**：这里的 `cwd` 就是 worktree，改动文件真在那儿。
+                #
+                # ⚠️ **后果仍然只在有 MR 时才发生**（下面那个 `and`）：没有 MR 时"清掉 MR"
+                #    本来就是空操作，而 `validation.action = retry` 会把这个任务推进内层重试 ——
+                #    那是改行为。这条只保证**判定被记下来**（`payload.qa_verdict`），不再谎报"未执行"。
+                try:
+                    from .supervisor import our_side_stop_of, qa_context, supervise
+                    _cons, _check = qa_context(task)
+                    # 改动文件在 worktree (cwd) 里, 不在项目 repo 根 —— 传错根
+                    # 会让 _check_artifact 的 py_compile/ruff 因 (root/f).exists()
+                    # 为假而静默跳过 (端到端实测: 语法错误文件被放行合并)
+                    sv = supervise(task.description, changed, _cons, _check,
+                                   getattr(exec_result, 'raw_output', '') or '',
+                                   task.id, repo_root=cwd,
+                                   tests_result=(quality or {}).get("test_result"),
+                                   # 让判据知道"这次是不是被我们掐断的"（审计 A4）
+                                   our_side_stop=our_side_stop_of(exec_result))
+                    qa_verdict = sv.verdict
+                    qa_issues = list(sv.issues)
+                    # "block" 必须和 "fail" 同等对待：supervise 在**模型隔离违规**
+                    # （supervisor 与 implementer 同模型）时返回 "block"，注释写明是"硬锁"。
+                    # 但消费端原来只认 "fail" / ("escalate","retry") —— "block" 两条都不中，
+                    # 直接穿过去、**合并照走**，那个硬锁从来没生效过。
+                    # 🔴 **修完消费端它照样没生效**（2026-09-25 核）：`supervise()` 的两个
+                    # 模型名形参全仓三处调用点**一个都没传** ⇒ 生产端恒不发 "block"
+                    # ⇒ **这一支至今是死代码**。详情写在 `supervisor.py` 文件头。
+                    if sv.verdict in ("fail", "block") and pending_merge_req is not None:
+                        pending_merge_req = None
+                        quality.setdefault("warnings", []).append(
+                            ("QA 阻断: " if sv.verdict == "block" else "QA 硬证据失败: ")
+                            + "; ".join(sv.issues[:2] or [getattr(sv, "reason", "")]))
+                        quality["failure_kind"] = "qa_fail"
+                        # 压低置信度, 否则 _decide_cascade 的 cascade_accept 会直接放行
+                        validation.confidence = min(validation.confidence, 0.3)
+                        validation.action = "retry" if turn < level_max else "abort"
+                        validation.unverified.append(
+                            "QA 硬证据失败 (未合并): " + "; ".join(sv.issues[:2]))
+                    elif sv.verdict in ("escalate", "retry"):
+                        _pending_sse_events.append({
+                            "kind": "system",
+                            "msg": f"[{tracker.short_id(task.id)}] QA 软信号 {sv.verdict} (不拦合并): "
+                                   + "; ".join(sv.issues[:1]),
+                            "ts": time.time(), "task_id": task.id,
+                        })
+                except Exception as e:
+                    witness.warn(task.id, f"qa_gate:{e}")
 
                 cascade_action, payload = _decide_cascade(
                     task, level, turn, validation, disp_result, all_tool_events,
