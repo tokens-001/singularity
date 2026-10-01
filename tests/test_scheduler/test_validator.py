@@ -97,6 +97,25 @@ class TestValidatorV2:
             f"解析不到却报了个失败数：{msg}"
         assert "0 failures" not in msg, "0 个失败是「没数出来」，不是「零个失败」"
 
+    def test_数不出个数时也要说出是哪几条(self):
+        """**本条钉的是"反馈里得有哪条"**（2026-10-01，`round-20261001b` 的 T1）。
+
+        来历：T1 拿到的重试反馈是「tests failed: 退出码 1（失败个数没能从输出里数出来）」——
+        **没说是哪条**。它摸到第 4 次 attempt 也没摸出来（54 个用例红 1 个，
+        是它自己写的断言和实现打架，而那个用例名就躺在 pytest 汇总行里）。
+        `failed_test_ids` 早就有（"取不到就 []，不猜"），只是这句话没用它。
+
+        变异：把 `ids = failed_test_ids(tr)` 那一支删掉 ⇒ 本条红。
+        """
+        from singularity.scheduler.validator import tests_failed_msg
+        tr = {"exit_code": 1, "failures": 0, "runner": "pytest",
+              "output": "........F........\n"
+                        "FAILED tests/test_models.py::test_sort_key_orders_keys - AssertionError\n"}
+        msg = tests_failed_msg(tr)
+        assert "test_models.py::test_sort_key_orders_keys" in msg, \
+            f"判词没说是哪条红，模型只能自己再摸一遍：{msg}"
+        assert "数不出来" not in msg, f"有清单就不该再说数不出来：{msg}"
+
     def test_长输出掐头留尾也要留住汇总行(self):
         """`run_project_tests` 里那个 4000 字符上限：**不许只留头**。
 

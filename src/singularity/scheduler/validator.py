@@ -444,7 +444,21 @@ def tests_failed_msg(tr: dict, changed_files=None) -> str:
     code = tr.get("exit_code") if isinstance(tr, dict) else None
     n = tr.get("failures") if isinstance(tr, dict) else None
     if code and not n:
-        msg = f"tests failed: 退出码 {code}（失败个数没能从输出里数出来）"
+        # 🔴 **数不出个数时，至少要说出"哪几条"**（2026-10-01，`round-20261001b` 的 T1）。
+        #
+        # 那句话原来只有 `退出码 1（失败个数没能从输出里数出来）` —— 而**模型拿到的重试反馈
+        # 就是它**。它一个字都没说"哪条红、为什么"，模型只能自己再摸一遍：
+        # T1 摸到第 4 次 attempt 也没摸出来（54 个用例红 1 个，是它自己写的断言打架，
+        # 那个用例名就躺在 pytest 汇总行里）。同族先例：`round-20260930c` 的 T1
+        # 七次派发 / 251k token 没修掉一个 6 行的 bug，而事后查不出"它当时看到了什么"。
+        # `failed_test_ids` 本来就是为这一族造的（`取不到就 [] —— 不猜`），这里只是用它。
+        # ⚠️ **门强度一个字不动**（`passed` 不看这个）—— 只把**已有的信息**说出来。
+        ids = failed_test_ids(tr)
+        if ids:
+            more = f" 等 {len(ids)} 条" if len(ids) > 2 else ""
+            msg = f"tests failed: 退出码 {code}，失败用例: " + "、".join(ids[:2]) + more
+        else:
+            msg = f"tests failed: 退出码 {code}（失败个数没能从输出里数出来）"
     else:
         msg = f"tests failed: {n if n is not None else '?'} failures"
     if isinstance(tr, dict) and tr.get("baseline_checked") and not tr.get("new_failures"):
