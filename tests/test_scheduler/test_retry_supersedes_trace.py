@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from singularity.scheduler import _api_tasks, config
+from singularity.scheduler import tracker as T
 from singularity.scheduler.tracker import TaskStatus
 
 
@@ -85,3 +86,54 @@ def test_task_retry接线到supersede(trace_dir, monkeypatch):
     # `_exec._save_trace` 的守卫判的就是这个 exists() —— 它必须是 False
     assert not (trace_dir / "T1.json").exists()
     assert list((trace_dir / "superseded").glob("T1.*.json")), "旧的那份应该在 superseded/ 里"
+
+
+# ── 2026-10-01 补：**自动重派**那条路（原来漏的就是它）────────────
+#
+# 病历（`round-20261001`）：`_supersede_trace` 原来只接在手工 `/api/tasks/<id>/retry`
+# 一条路上，而 `_task_runner.finalize` 判 QA retry、`workflow` 的 GATE3 打回、
+# 观察者重派 —— **都是直接 `transition(PENDING)`**，一次都没调它 ⇒
+# 那些任务重跑后 trace 停在第一轮（T3/T4 实测 stale 41/47 分钟）。
+# ⇒ 修法：挂到 `tracker.transition` 这个**总闸**上，下面三条钉住它。
+
+def test_自动重派也挪走旧trace(trace_dir):
+    """**自动那条路**（不经过任何 API）重派时，旧 trace 也要让位。"""
+    t = T.create("自动重派-行为")
+    _write_trace(trace_dir, t.id, '{"final_status": "blocked", "elapsed": 1588.6}')
+
+    T.transition(t.id, TaskStatus.FAILED, error="先失败一次")
+    T.transition(t.id, TaskStatus.PENDING)        # ← 自动重派只管这一句
+
+    assert not (trace_dir / f"{t.id}.json").exists(), "旧 trace 必须让位"
+    kept = list((trace_dir / "superseded").glob(f"{t.id}.*.json"))
+    assert len(kept) == 1, "而且**要留着**（不丢证据）"
+    assert kept[0].read_text(encoding="utf-8") == '{"final_status": "blocked", "elapsed": 1588.6}'
+
+
+def test_接线挂在transition总闸上(trace_dir, monkeypatch):
+    """**变异判据**：把 `tracker.transition` 里那三行（`_supersede_trace`）删掉，
+    这条必须变红。
+
+    ⚠️ 它和上面那条的分工：上面验"行为对不对"，这条验"**闸门装没装**"。
+    只留上面那条时，把调用点从 `transition` 挪回 `_api_tasks` 照样绿
+    （手工路仍然挪）—— 那正是这个 bug 原来的形状。
+    """
+    calls = []
+    monkeypatch.setattr(T, "_supersede_trace", lambda tid: calls.append(tid))
+    t = T.create("自动重派-接线")
+
+    T.transition(t.id, TaskStatus.FAILED, error="先失败一次")
+    assert calls == [], "FAILED 不是重跑，不该挪"
+    T.transition(t.id, TaskStatus.PENDING)
+    assert calls == [t.id], "转 PENDING = 要重跑 ⇒ 必须挪旧 trace"
+
+
+def test_PENDING到PENDING不是新尝试不挪(trace_dir):
+    """负向：原地转 PENDING 不该把刚写好的那份挪走（否则任务会凭空少一份 trace）。"""
+    t = T.create("原地转-PENDING")           # create 出来就是 PENDING
+    _write_trace(trace_dir, t.id, '{"final_status": "delivered"}')
+
+    T.transition(t.id, TaskStatus.PENDING)
+
+    assert (trace_dir / f"{t.id}.json").exists(), "没换尝试，trace 不该动"
+    assert not (trace_dir / "superseded").exists()

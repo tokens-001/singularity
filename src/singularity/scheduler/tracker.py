@@ -408,6 +408,45 @@ def _apply_attrs(task: Task, kwargs: dict, task_id: str, caller: str) -> None:
                      f"{caller}_unknown_kwargs:{','.join(unknown)}:task={short_id(task_id)}"[:200])
 
 
+def _supersede_trace(task_id: str) -> None:
+    """把**上一次尝试**的 trace 挪进 `superseded/`，让这次重试能写新的一份。
+
+    ⚠️ **为什么必须挪走**（2026-09-15 真机坐实）：`_exec._save_trace` 开头有一道
+    幂等守卫 —— 见到 trace 文件已存在就 `return`。而重试**复用同一个 task id**
+    （`tracker.transition(PENDING)`），重试前调的 `cleanup_task_artifacts` 又
+    **唯独不清 trace**（只有 `task_delete` 清）⇒ 第二趟跑完时那道守卫直接返回：
+    trace 永远停在**失败那一版**，而且因为 `return` 在函数开头，
+    **后半截（`mem_mod.index_task` / `update_attrs` / `record_scope`）整块跳过**
+    —— 记忆里那条任务于是永远以为自己是失败的。
+    真机现场：`1789477697814` / `1789477697816` 重试成功后，trace 仍写着
+    「执行超时(>1588s) 被杀，未及输出总结」，而两个任务其实都 `done` 了。
+
+    ⚠️ **别改成删、也别改成覆盖**：删 = 丢证据（本仓的大忌）；覆盖 = 把那道守卫
+    要防的"同一次尝试里被写两遍"一起拆掉。挪进子目录两边都保住 ——
+    全仓对 `traces/` 的 glob 都是**非递归**的（`witness` / `_memory_lifecycle`
+    用的都是 `glob("*.json")`），不会把旧证据当成"当前 trace"扫进去。
+
+    🔴 **2026-10-01：从 `_api_tasks` 搬来这儿，并且改由 `transition()` 自动调。**
+    原来它**只接在手工 `/api/tasks/<id>/retry` 一条路上**（`_api_tasks.py`），
+    而转 PENDING 的路至少四条（QA 判 retry · GATE3 打回 · 观察者重派 · 新建子任务）。
+    ⇒ 活生生的病例：`round-20261001` 的 T3/T4 走的是**自动那条**，
+    trace 停在第一轮（stale 41/47 分钟），**我据此得了一个错结论**（以为"产物白丢"）。
+    **闸门只装在一条路上 = 没装** —— 所以挂在 `transition` 这个总闸上，别再往调用点接。
+    """
+    src = config.TRACE_DIR / f"{task_id}.json"
+    if not src.exists():
+        return
+    try:
+        dst_dir = config.TRACE_DIR / "superseded"
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        src.rename(dst_dir / f"{task_id}.{int(src.stat().st_mtime)}.json")
+    except Exception as e:
+        # 挪不动**必须出声**：症状是"重试完 trace 还停在旧版"——那正是本次要修的
+        # 东西；静默失败会把刚修好的又变回没修，而且没人看得出来。
+        from singularity.scheduler import witness
+        witness.warn('tracker', f'supersede_trace:{type(e).__name__}:{e}'[:80])
+
+
 def transition(task_id: str, new_status: TaskStatus, force: bool = False, **kwargs) -> Task | None:
     """改状态。终态 (DONE/FAILED/ROLLED_BACK) 只允许 _TERMINAL_EXIT 白名单内的流转,
     其余改判拒绝并返回 None (force=True 可绕过, 仅 GATE3 打回这类显式重置用)。"""
@@ -424,6 +463,12 @@ def transition(task_id: str, new_status: TaskStatus, force: bool = False, **kwar
             except Exception:
                 pass
             return None
+        # 🔴 **重跑前，旧 trace 必须让位**（2026-10-01）—— 挂在**总闸**上而不是各调用点，
+        # 理由见 `_supersede_trace` 的 docstring：转 PENDING 的路至少四条，
+        # 接在调用点上必漏（原来就只接了手工 `/retry` 一条，自动那条漏了整整半个月）。
+        # `old_status != PENDING`：PENDING→PENDING 不是一次新尝试，别把刚写的那份挪走。
+        if new_status == TaskStatus.PENDING and old_status != TaskStatus.PENDING:
+            _supersede_trace(task_id)
         task.status = new_status
         _apply_attrs(task, kwargs, task_id, "transition")
         task.updated_at = time.time()
