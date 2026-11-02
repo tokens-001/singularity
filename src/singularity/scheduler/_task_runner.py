@@ -20,6 +20,7 @@ from singularity.scheduler._exec import (
     _run_with_retry,
     _save_trace,
     decompose,
+    qa_changed_files,
     read_partial_started_at,
     read_partial_usage,
 )
@@ -427,7 +428,11 @@ class TaskRunner:
             try:
                 from .project import repo_root_for
                 from .supervisor import our_side_stop_of, qa_context, supervise
-                changed = disp_result.executor_result.changed_files if disp_result else []
+                # 自报空时用 MR 的硬证据 —— 2026-11-02 假失败见 qa_changed_files。
+                changed = qa_changed_files(
+                    disp_result.executor_result if disp_result else None,
+                    getattr(batch, "merge_request", None),
+                )
                 constraints, checklist = qa_context(task)
                 sv = supervise(task.description, changed, constraints, checklist,
                               getattr(disp_result.executor_result, 'raw_output', '') if disp_result else '',

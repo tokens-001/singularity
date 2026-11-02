@@ -970,7 +970,8 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
                                "quality_signals": {}, "confidence": 0.5}
 
                 # ── v2: independent tests + multi-model review ──
-                changed = getattr(exec_result, 'changed_files', []) or []
+                # 自报空时用 MR 的硬证据 —— 2026-11-02 假失败见 qa_changed_files。
+                changed = qa_changed_files(exec_result, pending_merge_req)
                 if changed:
                     from . import _review as rev_mod
                     rev_mod.run_post_exec_checks(
@@ -1103,6 +1104,32 @@ def run(task, ctx: RunContext, agents: dict) -> BatchOutput:
         qa_verdict=qa_verdict, qa_issues=qa_issues,
         deadline_wrapup=deadline_wrapup,
     )
+
+def qa_changed_files(exec_result, merge_request) -> list[str]:
+    """QA 要看的改动清单：**执行器自报优先；自报空时用合并请求的硬证据**。
+
+    2026-11-02 `round-20261102` 真机：T2 的产物已 anchor 到
+    `refs/qidian/pending/1793625962153`（432 行）、MR 也建了，QA 却拿执行器自报的
+    `changed_files=[]` 判「无文件改动」⇒ 清掉 MR ⇒ 项目停滞。
+    `MergeRequest.changed_files` 来自 git diff（`_batch_evidence` 的档 3），
+    比执行器自报硬 —— **自报空时不许把硬证据也当成没有**。
+
+    ⚠️ 自报非空时仍以自报为准：它可能包含 MR 之外的信息（例如只读检查）。
+    """
+    changed = list(getattr(exec_result, "changed_files", None) or [])
+    if changed:
+        return changed
+    hard = (sorted(getattr(merge_request, "changed_files", None) or [])
+            if merge_request is not None else [])
+    if hard:
+        try:
+            from . import witness
+            witness.warn("exec", f"qa_changed_from_mr:{len(hard)}"[:160],
+                         key="qa_changed_from_mr")
+        except Exception:
+            pass
+    return hard
+
 
 def _batch_evidence(b) -> int:
     """这一批交回来的东西**有多硬** —— 数字越大越硬，`0` = 空壳。
