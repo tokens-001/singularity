@@ -108,7 +108,7 @@ git status
   > 原写 276（2026-09-11 更正）。数字会漂，自己测：`.venv/bin/python -m pytest tests/ --collect-only -q | tail -1`
 - 模型能力快照 + 推荐制（rating 评级 SSS+~A + recommended_for 推荐用途），已替代旧 E/E+/D 三层与 cheap/strong 两档
 - 出厂零模型：用户自选厂家、输 key、扫描导入
-- 端到端已验证（hello.py 任务 5s 交付、3 模型委员会碰撞、Observer 对话→执行）
+- 小任务端到端可跑通（hello.py 任务 5s 交付、3 模型委员会碰撞、Observer 对话→执行）
 - 自部署：Dockerfile + docker-compose
 
 ## 项目状态与已知限制
