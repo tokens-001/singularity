@@ -9,9 +9,14 @@
 覆盖：①②③④⑦⑧ 全自动；⑤⑥ 需要知道 CLI 的子命令名 ⇒ 自动发现不了时**打印 `--help`
 并让人补 `--stats-cmd`**（**不猜**：猜错了会把"命令不对"读成"功能不对"）。
 
+**2026-11-02 起按 §七的 80 分制计分**：8 条各 12.5 分，总分 ≥80 算 ③ 达成。
+⑤⑥ 机械核不了 ⇒ 用 `--manual` 给人给的分；失败任务用 `--unknown-failures` 报
+（**不填按最坏算**，上限 79 分）。
+
 跑法：
-  `.venv/bin/python scripts/acceptance_check.py <project_id> [--stats-cmd "python -m pkg stat --level"]`
-退出码：0 = 能机械核的条全过；1 = 有不过的；2 = 参数/环境问题（**别读成"没成"**）。
+  `.venv/bin/python scripts/acceptance_check.py <project_id> \
+      [--stats-cmd "..."] [--manual 5=1,6=2/3] [--unknown-failures 0]`
+退出码：0 = 总分 ≥80；1 = 没到；2 = 参数/环境问题（**别读成"没成"**）。
 """
 from __future__ import annotations
 
@@ -94,19 +99,49 @@ class Check:
         self.passed = cond if self.passed is None else (self.passed and cond)
         return cond
 
-    def na(self, note: str):
+    def pending(self, note: str):
+        """要人判分（⑤⑥）—— **不是通过**，这一条不打分，等 `--manual`。"""
         self.notes.append("◐ " + note)
         return True
 
-    def report(self) -> bool:
-        mark = "✅" if self.passed else ("◐" if self.passed is None else "❌")
-        print(f"{mark} 第{self.n}条 {self.title}")
+    def skipped(self, note: str):
+        """判据明确允许的「不适用」—— 按满分记（§三 第 7 条）。"""
+        self.notes.append("◐ " + note)
+        self.passed = True
+        return True
+
+    def score(self, manual: float | None = None) -> float:
+        """0~1。⑤⑥ 只看人给的分；其余看机械判定（没判定 ⇒ 0，不许默认通过）。"""
+        if self.n in (5, 6):
+            return 0.0 if manual is None else max(0.0, min(1.0, manual))
+        return 1.0 if self.passed else 0.0
+
+    def report(self, score: float) -> bool:
+        mark = "✅" if score >= 1 else ("❌" if score <= 0 else "◐")
+        print(f"{mark} 第{self.n}条 {self.title}  [{score * 12.5:.1f}/12.5]")
         for n in self.notes:
             print("     " + n)
-        return bool(self.passed)
+        return score >= 1
 
 
-def grade(pid: str, stats_cmd: str = "") -> int:
+def _total(checks: list[Check], manual: dict[int, float] | None = None) -> float:
+    """8 条各 12.5 分（§七）。抽出来是为了让计分逻辑能被单测钉住。"""
+    m = manual or {}
+    return sum(c.score(m.get(c.n)) for c in checks) * 12.5
+
+
+def _final_score(checks: list[Check], manual: dict[int, float] | None = None,
+                 unknown_failures: int | None = None) -> float:
+    """最终分：**先舍 2 位**（0.6×12.5 这类浮点会落到 79.99…），再按未知失败封顶 79。"""
+    total = round(_total(checks, manual), 2)
+    if unknown_failures is None or unknown_failures:
+        total = min(total, 79.0)
+    return total
+
+
+def grade(pid: str, stats_cmd: str = "", manual: dict[int, float] | None = None,
+          unknown_failures: int | None = None) -> int:
+    manual = manual or {}
     proj = proj_mod.load(pid)
     if proj is None:
         print(f"❗ 读不到项目 {pid}"); return 2
@@ -176,10 +211,10 @@ def grade(pid: str, stats_cmd: str = "") -> int:
                    [sys.executable, *stats_cmd.split()[1:]], cwd=work)
         c.notes.append(f"     命令：{stats_cmd} ⇒ 退 {got.returncode}")
         c.notes.append("     输出：" + (got.stdout or got.stderr).strip()[:300].replace("\n", " ⏎ "))
-        c.na("**逐项对表要人看**（上面是原始输出，对照 "
-             f"{ACCEPT/'expected.json'} 的 level_counts / source_counts / 时间窗）")
+        c.pending("**逐项对表要人看**（上面是原始输出，对照 "
+                  f"{ACCEPT/'expected.json'} 的 level_counts / source_counts / 时间窗）")
     else:
-        c.na("没给 `--stats-cmd` ⇒ **不知道主统计命令叫什么**，这条留给人核（不猜）")
+        c.pending("没给 `--stats-cmd` ⇒ **不知道主统计命令叫什么**，这条留给人核（不猜）")
 
     c = Check(6, "边界不崩（空/全坏/文件不存在）"); checks.append(c)
     if work and pkg:
@@ -193,7 +228,7 @@ def grade(pid: str, stats_cmd: str = "") -> int:
             c.notes.append(f"     {label}: 退 {r.returncode}，{'❌ 吐了 traceback' if tb else '没吐 traceback'} "
                            f"| {(blob.strip().splitlines() or [''])[-1][:80]}")
         if not stats_cmd:
-            c.na("同上：没给 `--stats-cmd` ⇒ 留给人核")
+            c.pending("同上：没给 `--stats-cmd` ⇒ 留给人核")
     else:
         c.ok(False, "没解出包 ⇒ 这条没法核（**不是通过**）")
 
@@ -202,7 +237,7 @@ def grade(pid: str, stats_cmd: str = "") -> int:
         has_tests = any(p.name.startswith("test_") and p.suffix == ".py"
                         for p in work.rglob("test_*.py"))
         if not has_tests:
-            c.na("包里没有测试文件 ⇒ **记为「不适用」并写进报告**（§三第 7 条明写不许静默跳过）")
+            c.skipped("包里没有测试文件 ⇒ **记为「不适用」并写进报告**（§三第 7 条明写不许静默跳过）")
         else:
             p = _run([sys.executable, "-m", "pytest", "-q"], cwd=work)
             c.ok(p.returncode == 0, f"解包后 pytest 退 {p.returncode}：{(p.stdout or '').strip()[-160:]}")
@@ -230,21 +265,50 @@ def grade(pid: str, stats_cmd: str = "") -> int:
         shutil.rmtree(work, ignore_errors=True)
 
     print(f"\n=== ③ 判分：{proj.name}（{pid}）===")
+    missing = [n for n in (5, 6) if n not in manual]
+    if missing:
+        print(f"⚠️ 第 {'/'.join(map(str, missing))} 条没给 `--manual` ⇒ 按 0 分算（机械核不了）")
     # ⚠️ **别写 `all(c.report() for c in checks)`** —— `all()` 会短路，
     # 第一条不过后面就**不打印**了，看着像"只核了一条"（第一版就是这么写的）。
-    results = [c.report() for c in checks]
-    all_ok = all(results)
-    print("\n" + ("✅ 能机械核的条全过 —— **⑤ 的时间窗/计数、⑥ 的人话**还要人对着表看一遍"
-                  if all_ok else "⛔ 有不过的条 —— 逐条看上面"))
-    return 0 if all_ok else 1
+    scores = [c.score(manual.get(c.n)) for c in checks]
+    for c, s in zip(checks, scores, strict=True):
+        c.report(s)
+    if unknown_failures is None:
+        print("\n⚠️ 没给 `--unknown-failures` ⇒ 按最坏算（有未查清的失败），上限 79 分")
+    total = _final_score(checks, manual, unknown_failures)
+    ok = total >= 80
+    print(f"\n总分：{total:.1f}/100（达标线 80）" + ("  ✅ ③ 达成" if ok else "  ⛔ 未达成"))
+    return 0 if ok else 1
+
+
+def _manual(s: str) -> dict[int, float]:
+    """`5=0.67,6=2/3` ⇒ `{5: 0.67, 6: 0.666…}`。只收 ⑤⑥（其余条机械判）。"""
+    out: dict[int, float] = {}
+    for part in filter(None, (p.strip() for p in s.split(","))):
+        k, _, v = part.partition("=")
+        if not k.isdigit() or not v:
+            raise argparse.ArgumentTypeError(f"看不懂的分数：{part}（写成 5=0.67 这样）")
+        n = int(k)
+        if n not in (5, 6):
+            raise argparse.ArgumentTypeError("--manual 只接受 5 / 6（这两条要人判）")
+        try:
+            val = float(v.split("/")[0]) / float(v.split("/")[1]) if "/" in v else float(v)
+        except (ValueError, ZeroDivisionError, IndexError):
+            raise argparse.ArgumentTypeError(f"看不懂的分数：{part}（写 0~1 或 2/3）")
+        out[n] = max(0.0, min(1.0, val))
+    return out
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("project_id")
     ap.add_argument("--stats-cmd", default="", help="主统计命令，例如 `python -m pkg stat --level`")
+    ap.add_argument("--manual", type=_manual, default={},
+                    help="⑤⑥ 的人判分：`5=0.67,6=2/3`（0~1）")
+    ap.add_argument("--unknown-failures", type=int, default=None,
+                    help="本轮未查清的失败任务数；不填按最坏算（上限 79 分）")
     a = ap.parse_args(argv)
-    return grade(a.project_id, a.stats_cmd)
+    return grade(a.project_id, a.stats_cmd, a.manual, a.unknown_failures)
 
 
 if __name__ == "__main__":

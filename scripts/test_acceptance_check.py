@@ -102,6 +102,38 @@ def main() -> int:
     return 0 if ok else 1
 
 
+def _mk_checks(*, fail: tuple[int, ...] = ()) -> list:
+    checks = []
+    for n in range(1, 9):
+        c = ac.Check(n, f"第{n}条")
+        if n in (5, 6):
+            c.pending("人核")
+        elif n == 7:
+            c.skipped("不适用")
+        else:
+            c.ok(n not in fail, "ok" if n not in fail else "fail")
+        checks.append(c)
+    return checks
+
+
+def test_scoring_80():
+    """80 分制的算法本身要钉住：掉一条也能过、⑤⑥ 按比例给分（§七）。"""
+    def score(*, fail: tuple[int, ...] = (), manual: dict | None = None) -> float:
+        return round(ac._total(_mk_checks(fail=fail), manual), 2)
+
+    assert score(manual={5: 0.4, 6: 0.0}) == 80.0      # 机械 75 + ⑤ 5 分 = 刚好 80
+    assert score(manual={5: 1.0, 6: 1.0}) == 100.0     # 全过
+    assert score(fail=(4,), manual={5: 1.0, 6: 1.0}) == 87.5   # 掉一条仍过（80 分制的意义）
+    assert score(fail=(4,), manual={5: 1.0, 6: 0.5}) == 81.25
+    assert score(fail=(4,), manual={5: 0.5, 6: 0.5}) == 75.0   # 掉一条 + ⑤⑥ 半过 = 不过
+
+    # 边界：62.5 + 0.6×12.5 + 0.8×12.5 = 80，浮点不许掉到 79.99 判不过
+    assert ac._final_score(_mk_checks(fail=(4,)), {5: 0.6, 6: 0.8}, 0) == 80.0
+    # 未知失败（含没声明）⇒ 封顶 79
+    assert ac._final_score(_mk_checks(fail=(4,)), {5: 0.6, 6: 0.8}, 1) == 79.0
+    assert ac._final_score(_mk_checks(fail=(4,)), {5: 0.6, 6: 0.8}, None) == 79.0
+
+
 if __name__ == "__main__":
     sys.exit(main())
 
